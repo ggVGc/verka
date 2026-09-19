@@ -448,7 +448,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 mod tests {
     use super::testing::{self, rendered};
     use super::*;
-    use styra_protocol::event::{AgentEvent, TurnUsage};
+    use styra_protocol::event::{AgentEvent, TurnOutcome, TurnUsage};
 
     #[test]
     fn token_counts_read_as_k_and_m_past_a_thousand() {
@@ -523,6 +523,7 @@ mod tests {
         assert_eq!(status_color(&app.activity.status), palette::WARNING);
 
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
         assert!(rendered(&app).contains("idle"));

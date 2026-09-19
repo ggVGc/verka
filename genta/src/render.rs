@@ -102,6 +102,7 @@ fn render_event(out: &mut String, event: &AgentEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::TurnOutcome;
 
     #[test]
     fn a_codex_log_renders_as_a_tagged_transcript() {
@@ -171,6 +172,7 @@ mod tests {
                 text: "done".into(),
             },
             AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Completed,
                 usage: Default::default(),
             },
         ];

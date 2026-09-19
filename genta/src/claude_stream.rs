@@ -2,7 +2,7 @@
 
 use crate::agent::claude_submission;
 use crate::appserver::Action;
-use crate::event::{AgentEvent, TurnUsage};
+use crate::event::{AgentEvent, TurnOutcome, TurnUsage};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -136,6 +136,7 @@ impl ClaudeStream {
                 vec![
                     Action::Info("Claude interrupted the active turn".to_owned()),
                     Action::Event(AgentEvent::TurnCompleted {
+                        outcome: TurnOutcome::Completed,
                         usage: TurnUsage::default(),
                     }),
                 ]
@@ -159,6 +160,7 @@ impl ClaudeStream {
             })];
             if pending.text.is_some() {
                 actions.push(Action::Event(AgentEvent::TurnCompleted {
+                    outcome: TurnOutcome::Completed,
                     usage: TurnUsage::default(),
                 }));
             }

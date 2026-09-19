@@ -924,6 +924,7 @@ M.types.AgentEvent = {
     { name = "turn_completed", payload = {
       kind = "struct",
       fields = {
+        { name = "outcome", required = false, type = { kind = "ref", name = "TurnOutcome" } },
         { name = "usage", required = false, type = { kind = "ref", name = "TurnUsage" } },
       },
     } },
@@ -1213,6 +1214,32 @@ M.types.InteractionUpdate = {
     { name = "quota", payload = { kind = "newtype", type = { kind = "ref", name = "QuotaEvent" } } },
     { name = "working_directory_changed", payload = { kind = "newtype", type = { kind = "string", path = true } } },
     { name = "ended", payload = { kind = "newtype", type = { kind = "ref", name = "InteractionEnd" } } },
+  },
+}
+
+--- How a turn ended, as far as the provider stated it.
+---
+--- A turn that failed is still a turn that ended, and both providers say so on
+--- the line that ends it — Claude in the `result`'s `subtype` and `is_error`,
+--- the app-server in `turn.status` and `turn.error`. Reading the failure as an
+--- error and nothing else, which is what Claude's decoder used to do, left a
+--- failed turn with no ending at all: no end-of-turn line in the log, and a
+--- client waiting for a `TurnCompleted` that was never coming.
+---
+--- What it does not cover is why a turn ended *early* by the operator's own
+--- doing. An interrupt looks like an ordinary ending on the wire, so only the
+--- client that asked for it knows.
+M.types.TurnOutcome = {
+  kind = "enum",
+  tagging = { style = "internal", tag = "outcome" },
+  variants = {
+    { name = "completed", payload = { kind = "unit" } },
+    { name = "failed", payload = {
+      kind = "struct",
+      fields = {
+        { name = "message", required = true, type = { kind = "string" } },
+      },
+    } },
   },
 }
 
@@ -1581,6 +1608,13 @@ M.InteractionUpdate = {
   QUOTA = "quota",
   WORKING_DIRECTORY_CHANGED = "working_directory_changed",
   ENDED = "ended",
+}
+
+M.enums.TurnOutcome = { "completed", "failed" }
+--- Wire spellings of `TurnOutcome`.
+M.TurnOutcome = {
+  COMPLETED = "completed",
+  FAILED = "failed",
 }
 
 M.enums.BranchDirection = { "from", "to" }

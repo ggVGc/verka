@@ -11,7 +11,7 @@ use crate::app::App;
 use crate::timeline::{Entry, Step};
 use styra_protocol::agent::Effort;
 use styra_protocol::contract;
-use styra_protocol::event::AgentEvent;
+use styra_protocol::event::{AgentEvent, TurnOutcome};
 use styra_protocol::Contract;
 use styra_protocol::InteractionEnd;
 
@@ -119,7 +119,7 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
     // only knowable from the events around it.
     app.activity.fill_usage(&mut event);
     match &event {
-        AgentEvent::TurnCompleted { usage } => {
+        AgentEvent::TurnCompleted { outcome, usage } => {
             // The status line follows the thread's running total, which is
             // what the tracker has just filled in if the provider did not
             // send one. A turn that reported nothing at all leaves the
@@ -127,10 +127,17 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
             if let Some(total) = &usage.total {
                 app.activity.latest_usage = Some(total.clone());
             }
+            // A turn that gave up says so on the line that ends it. An error
+            // notification may have said the same thing a moment earlier —
+            // the app-server sends both — and the one already recorded is
+            // kept, being the more specific of two accounts of one failure.
+            if let TurnOutcome::Failed { message } = outcome {
+                app.activity.note_turn_error_unless_known(message.clone());
+            }
             if app.activity.status.is_active() {
-                // Why this turn ended is the client's own knowledge: the agent
-                // reports one `TurnCompleted` whether it finished or the
-                // operator cut it off.
+                // Why this turn ended is still partly the client's own
+                // knowledge: an interrupt looks like any other ending, so only
+                // the client that asked for it can say so.
                 let reason = app.activity.take_turn_end_reason();
                 app.activity.status = app.activity.idle_or_background(reason);
             }

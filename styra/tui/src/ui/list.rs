@@ -985,7 +985,7 @@ mod tests {
 
         assert_eq!(list_offset_with_scrolloff(0, Some(2), &heights, 17), 1);
     }
-    use styra_protocol::event::{TokenUsage, TurnUsage};
+    use styra_protocol::event::{TokenUsage, TurnOutcome, TurnUsage};
 
     fn progress(in_status: Duration, since_event: Option<Duration>) -> Progress {
         Progress {
@@ -1102,6 +1102,7 @@ mod tests {
             text: "done".into(),
         });
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
         app.activity.note_progress();
@@ -1642,6 +1643,7 @@ mod tests {
     fn usage_is_shown_once_recorded() {
         let mut app = testing::app("s1");
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage {
                 turn: Some(TokenUsage {
                     input_tokens: 12,
@@ -1671,6 +1673,7 @@ mod tests {
             });
         }
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
         let screen = rendered(&app);

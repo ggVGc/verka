@@ -934,6 +934,7 @@ defmodule Styra.Protocol do
         %{name: "turn_completed", payload: %{
           kind: :struct,
           fields: [
+            %{name: "outcome", required: false, type: %{kind: :ref, name: "TurnOutcome"}},
             %{name: "usage", required: false, type: %{kind: :ref, name: "TurnUsage"}}
           ]
         }},
@@ -1223,6 +1224,32 @@ defmodule Styra.Protocol do
         %{name: "quota", payload: %{kind: :newtype, type: %{kind: :ref, name: "QuotaEvent"}}},
         %{name: "working_directory_changed", payload: %{kind: :newtype, type: %{kind: :string, path: true}}},
         %{name: "ended", payload: %{kind: :newtype, type: %{kind: :ref, name: "InteractionEnd"}}}
+      ]
+    },
+
+    # How a turn ended, as far as the provider stated it.
+    #
+    # A turn that failed is still a turn that ended, and both providers say so on
+    # the line that ends it — Claude in the `result`'s `subtype` and `is_error`,
+    # the app-server in `turn.status` and `turn.error`. Reading the failure as an
+    # error and nothing else, which is what Claude's decoder used to do, left a
+    # failed turn with no ending at all: no end-of-turn line in the log, and a
+    # client waiting for a `TurnCompleted` that was never coming.
+    #
+    # What it does not cover is why a turn ended *early* by the operator's own
+    # doing. An interrupt looks like an ordinary ending on the wire, so only the
+    # client that asked for it knows.
+    "TurnOutcome" => %{
+      kind: :enum,
+      tagging: %{style: :internal, tag: "outcome"},
+      variants: [
+        %{name: "completed", payload: %{kind: :unit}},
+        %{name: "failed", payload: %{
+          kind: :struct,
+          fields: [
+            %{name: "message", required: true, type: %{kind: :string}}
+          ]
+        }}
       ]
     },
 
@@ -3020,9 +3047,10 @@ defmodule Styra.Protocol.AgentEvent do
   def turn_started, do: "turn_started"
 
   @doc ~S"""
-  The turn ended. `usage` states what it cost and what the thread has
-  cost so far, as far as either is known — see `TurnUsage`, and
-  `UsageTracker`, which fills in whichever half the provider left out.
+  The turn ended, for better or worse — see `TurnOutcome`. `usage`
+  states what it cost and what the thread has cost so far, as far as
+  either is known — see `TurnUsage`, and `UsageTracker`, which fills
+  in whichever half the provider left out.
   """
   def turn_completed, do: "turn_completed"
 
@@ -3577,6 +3605,62 @@ defmodule Styra.Protocol.InteractionUpdate do
   The agent process ended; no further events will arrive.
   """
   def ended, do: "ended"
+end
+
+defmodule Styra.Protocol.TurnOutcome do
+  @moduledoc ~S"""
+  Wire spellings of `TurnOutcome`.
+
+  How a turn ended, as far as the provider stated it.
+
+  A turn that failed is still a turn that ended, and both providers say so on
+  the line that ends it — Claude in the `result`'s `subtype` and `is_error`,
+  the app-server in `turn.status` and `turn.error`. Reading the failure as an
+  error and nothing else, which is what Claude's decoder used to do, left a
+  failed turn with no ending at all: no end-of-turn line in the log, and a
+  client waiting for a `TurnCompleted` that was never coming.
+
+  What it does not cover is why a turn ended *early* by the operator's own
+  doing. An interrupt looks like an ordinary ending on the wire, so only the
+  client that asked for it knows.
+  """
+
+  @spellings [
+    {:completed, "completed"},
+    {:failed, "failed"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  @doc ~S"""
+  The turn ran its course.
+  """
+  def completed, do: "completed"
+
+  @doc ~S"""
+  The turn gave up, with what the provider said about it.
+  """
+  def failed, do: "failed"
 end
 
 defmodule Styra.Protocol.BranchDirection do

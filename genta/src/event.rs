@@ -70,6 +70,28 @@ impl TokenUsage {
     }
 }
 
+/// How a turn ended, as far as the provider stated it.
+///
+/// A turn that failed is still a turn that ended, and both providers say so on
+/// the line that ends it — Claude in the `result`'s `subtype` and `is_error`,
+/// the app-server in `turn.status` and `turn.error`. Reading the failure as an
+/// error and nothing else, which is what Claude's decoder used to do, left a
+/// failed turn with no ending at all: no end-of-turn line in the log, and a
+/// client waiting for a `TurnCompleted` that was never coming.
+///
+/// What it does not cover is why a turn ended *early* by the operator's own
+/// doing. An interrupt looks like an ordinary ending on the wire, so only the
+/// client that asked for it knows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum TurnOutcome {
+    /// The turn ran its course.
+    #[default]
+    Completed,
+    /// The turn gave up, with what the provider said about it.
+    Failed { message: String },
+}
+
 /// What a turn cost, and what the thread has cost through the end of it.
 ///
 /// No provider reports both, and they do not report the same one: the
@@ -135,10 +157,13 @@ pub enum AgentEvent {
         effort: Option<String>,
     },
     TurnStarted,
-    /// The turn ended. `usage` states what it cost and what the thread has
-    /// cost so far, as far as either is known — see [`TurnUsage`], and
-    /// [`UsageTracker`], which fills in whichever half the provider left out.
+    /// The turn ended, for better or worse — see [`TurnOutcome`]. `usage`
+    /// states what it cost and what the thread has cost so far, as far as
+    /// either is known — see [`TurnUsage`], and [`UsageTracker`], which fills
+    /// in whichever half the provider left out.
     TurnCompleted {
+        #[serde(default)]
+        outcome: TurnOutcome,
         #[serde(default)]
         usage: TurnUsage,
     },
@@ -456,7 +481,20 @@ impl AgentEvent {
     /// `system:compact_boundary`), and thinking-only prose — that carry little
     /// signal turn over turn. The UI hides these by default so the list reads
     /// as the agent's actual work.
+    ///
+    /// A turn that *failed* is the exception among the turn markers: it is the
+    /// only report of that failure Claude makes, and an operator who has the
+    /// bookkeeping hidden still needs to be told the turn gave up.
     pub fn is_minor(&self) -> bool {
+        if matches!(
+            self,
+            AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Failed { .. },
+                ..
+            }
+        ) {
+            return false;
+        }
         matches!(
             self,
             AgentEvent::ThreadStarted { .. }
@@ -491,25 +529,34 @@ impl AgentEvent {
                 _ => format!("session {thread_id}"),
             },
             AgentEvent::TurnStarted => "turn started".into(),
-            AgentEvent::TurnCompleted { usage } => {
+            AgentEvent::TurnCompleted { outcome, usage } => {
                 let spend = |usage: &TokenUsage| {
                     format!(
                         "in {} · out {} · cached {}",
                         usage.input_tokens, usage.output_tokens, usage.cached_input_tokens
                     )
                 };
+                // A failure leads with why, since that is what the line is
+                // there to report; the figures follow, because a turn that
+                // gave up still spent what it spent.
+                let ending = match outcome {
+                    TurnOutcome::Completed => "turn complete".to_owned(),
+                    TurnOutcome::Failed { message } => {
+                        format!("turn failed: {}", first_line(message))
+                    }
+                };
                 match (&usage.turn, &usage.total) {
                     (Some(turn), Some(total)) => format!(
-                        "turn complete · this turn {} (thread total {})",
+                        "{ending} · this turn {} (thread total {})",
                         spend(turn),
                         spend(total)
                     ),
-                    (Some(turn), None) => format!("turn complete · this turn {}", spend(turn)),
-                    (None, Some(total)) => format!("turn complete · thread total {}", spend(total)),
+                    (Some(turn), None) => format!("{ending} · this turn {}", spend(turn)),
+                    (None, Some(total)) => format!("{ending} · thread total {}", spend(total)),
                     // Nothing was reported and nothing could be reconstructed
                     // — say only what is known, rather than three zeros that
                     // read as a turn that cost nothing.
-                    (None, None) => "turn complete".into(),
+                    (None, None) => ending,
                 }
             }
             AgentEvent::UsageUpdated { usage } => format!(
@@ -630,8 +677,14 @@ impl AgentEvent {
                 vec![DetailBlock::Text(lines.join("\n"))]
             }
             AgentEvent::TurnStarted => Vec::new(),
-            AgentEvent::TurnCompleted { usage } => {
+            AgentEvent::TurnCompleted { outcome, usage } => {
                 let mut lines = Vec::new();
+                // In full, not flattened to its first line as the summary has
+                // it: a provider's failure often runs to a paragraph, and this
+                // is the one place it can be read.
+                if let TurnOutcome::Failed { message } = outcome {
+                    lines.push(message.clone());
+                }
                 if let Some(turn) = &usage.turn {
                     lines.push(format!("this turn:    {}", spend_detail(turn)));
                 }
@@ -935,10 +988,12 @@ fn decode_appserver_notification(method: &str, params: &Value) -> AgentEvent {
             effort: None,
         },
         "turn/started" => AgentEvent::TurnStarted,
-        // `turn/completed` is the actual end-of-turn signal; it carries no
-        // usage figures of its own, so both halves are left unknown here and
-        // reconstructed from the running totals by `UsageTracker`.
+        // `turn/completed` is the actual end-of-turn signal. It carries no
+        // usage figures of its own — both halves are left unknown here and
+        // reconstructed from the running totals by `UsageTracker` — but it
+        // does say whether the turn got there, and with what error if not.
         "turn/completed" => AgentEvent::TurnCompleted {
+            outcome: appserver_turn_outcome(params.get("turn").unwrap_or(&Value::Null)),
             usage: TurnUsage::default(),
         },
         // Fires after every step within a turn (each tool call, each model
@@ -1008,6 +1063,18 @@ fn decode_appserver_item(item: &Value, completed: bool) -> AgentEvent {
         _ => AgentEvent::Unknown {
             wire_type: format!("item:{kind}"),
         },
+    }
+}
+
+/// How a `turn/completed` says its turn went. Any status but `failed` is the
+/// turn running its course — including `interrupted`, which the client that
+/// asked for the interrupt reads as its own doing, not as a failure.
+fn appserver_turn_outcome(turn: &Value) -> TurnOutcome {
+    if string(turn, "status") != Some("failed") {
+        return TurnOutcome::Completed;
+    }
+    TurnOutcome::Failed {
+        message: clean_terminal_text(&error_message(turn)),
     }
 }
 
@@ -1087,6 +1154,7 @@ fn decode_codex_value(value: &Value) -> AgentEvent {
         // total — for a one-shot run the two coincide, but the distinction is
         // the honest one to record.
         "turn.completed" => AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage {
                 turn: value
                     .get("usage")
@@ -1094,7 +1162,18 @@ fn decode_codex_value(value: &Value) -> AgentEvent {
                 total: None,
             },
         },
-        "turn.failed" | "error" => AgentEvent::Error {
+        // `turn.failed` ends the turn as surely as `turn.completed` does, so
+        // it is an ending that states why, not a bare error: read as the
+        // latter it left the turn with no end at all. A `turn.failed` reports
+        // no usage. A bare `error` line is not an ending — the run may carry
+        // on — and stays one.
+        "turn.failed" => AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Failed {
+                message: clean_terminal_text(&error_message(value)),
+            },
+            usage: TurnUsage::default(),
+        },
+        "error" => AgentEvent::Error {
             message: clean_terminal_text(&error_message(value)),
         },
         "item.started" | "item.updated" | "item.completed" => {
@@ -1480,14 +1559,20 @@ fn decode_claude_result(value: &Value) -> AgentEvent {
         .get("is_error")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if is_error || subtype.starts_with("error") {
-        return AgentEvent::Error {
+    // A `result` is the end of Claude's turn whether the turn went well or
+    // not, and it is the only line that says so: reading a failed one as an
+    // error alone left the turn with no ending, and a client waiting on one.
+    let outcome = if is_error || subtype.starts_with("error") {
+        TurnOutcome::Failed {
             message: clean_terminal_text(&error_message(value)),
-        };
-    }
+        }
+    } else {
+        TurnOutcome::Completed
+    };
     // Claude's `result` states what the turn spent and nothing about the
     // thread; the running total is added up by `UsageTracker`.
     AgentEvent::TurnCompleted {
+        outcome,
         usage: TurnUsage {
             turn: value.get("usage").map(claude_usage),
             total: None,
@@ -1570,7 +1655,7 @@ impl UsageTracker {
             AgentEvent::ThreadStarted { .. } => *self = Self::default(),
             AgentEvent::TurnStarted => self.turn_start = self.running.clone(),
             AgentEvent::UsageUpdated { usage } => self.running = Some(usage.clone()),
-            AgentEvent::TurnCompleted { usage } => {
+            AgentEvent::TurnCompleted { usage, .. } => {
                 if usage.turn.is_none() {
                     usage.turn = self
                         .running
@@ -1948,6 +2033,7 @@ mod tests {
         assert_eq!(
             usage,
             AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Completed,
                 usage: TurnUsage {
                     turn: Some(TokenUsage {
                         input_tokens: 10,
@@ -2433,6 +2519,7 @@ mod tests {
         assert_eq!(
             usage,
             AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Completed,
                 usage: TurnUsage {
                     turn: Some(TokenUsage {
                         input_tokens: 12,
@@ -2449,15 +2536,23 @@ mod tests {
             "turn complete · this turn in 12 · out 3 · cached 8"
         );
 
+        // A failed `result` is still the turn's ending, and states why.
+        let failed = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit the turn limit"}"#,
+        );
         assert_eq!(
-            decode_line(
-                Protocol::ClaudeJsonl,
-                r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit the turn limit"}"#,
-            ),
-            AgentEvent::Error {
-                message: "hit the turn limit".into()
+            failed,
+            AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Failed {
+                    message: "hit the turn limit".into()
+                },
+                usage: TurnUsage::default(),
             }
         );
+        assert_eq!(failed.summary(), "turn failed: hit the turn limit");
+        // Bookkeeping the operator can hide, a failure is not.
+        assert!(!failed.is_minor());
     }
 
     #[test]
@@ -2474,13 +2569,18 @@ mod tests {
             }
         );
 
+        // `turn.failed` ends the turn; the prose comes through as the
+        // ending's own account of why.
         assert_eq!(
             decode_line(
                 Protocol::CodexJsonl,
                 r#"{"type":"turn.failed","error":{"error":{"message":"You have run out of credits."}}}"#,
             ),
-            AgentEvent::Error {
-                message: "You have run out of credits.".into()
+            AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Failed {
+                    message: "You have run out of credits.".into()
+                },
+                usage: TurnUsage::default(),
             }
         );
     }
@@ -2492,8 +2592,11 @@ mod tests {
                 Protocol::ClaudeJsonl,
                 r#"{"type":"result","subtype":"error_during_execution","is_error":true}"#,
             ),
-            AgentEvent::Error {
-                message: "agent reported an error (error_during_execution)".into()
+            AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Failed {
+                    message: "agent reported an error (error_during_execution)".into()
+                },
+                usage: TurnUsage::default(),
             }
         );
     }
@@ -2736,11 +2839,67 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Completed,
                 usage: TurnUsage::default()
             }
         );
         // Nothing is invented for the figures the notification does not carry.
         assert_eq!(event.summary(), "turn complete");
+    }
+
+    /// The app-server states a failure on the ending itself, so the ending is
+    /// what reports it — an `error` notification may or may not have arrived
+    /// first, and the turn ended either way.
+    #[test]
+    fn an_appserver_turn_that_failed_ends_saying_why() {
+        let event = decode_line(
+            Protocol::CodexAppServer,
+            r#"{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"t1","status":"failed",
+               "error":{"message":"You've hit your usage limit.","codexErrorInfo":"usageLimitExceeded"}}}}"#,
+        );
+        assert_eq!(
+            event,
+            AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Failed {
+                    message: "You've hit your usage limit.".into()
+                },
+                usage: TurnUsage::default(),
+            }
+        );
+        assert_eq!(event.summary(), "turn failed: You've hit your usage limit.");
+
+        // An interrupted turn is not a failed one: the client that asked for
+        // the interrupt is the only thing that knows it happened.
+        let interrupted = decode_line(
+            Protocol::CodexAppServer,
+            r#"{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"t1","status":"interrupted"}}}"#,
+        );
+        assert_eq!(
+            interrupted,
+            AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Completed,
+                usage: TurnUsage::default(),
+            }
+        );
+    }
+
+    /// The summary flattens a long failure to its first line; the detail pane
+    /// is where the whole of it can be read.
+    #[test]
+    fn a_failed_ending_keeps_the_whole_message_in_its_detail() {
+        let event = AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Failed {
+                message: "the model refused\nand said so at length".into(),
+            },
+            usage: TurnUsage::default(),
+        };
+        assert_eq!(event.summary(), "turn failed: the model refused");
+        assert_eq!(
+            event.detail(),
+            vec![DetailBlock::Text(
+                "the model refused\nand said so at length".into()
+            )]
+        );
     }
 
     /// The app-server states a running thread total and nothing at the turn's
@@ -2760,6 +2919,7 @@ mod tests {
                 usage: total(100, 10),
             },
             AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Completed,
                 usage: TurnUsage::default(),
             },
             AgentEvent::TurnStarted,
@@ -2770,12 +2930,14 @@ mod tests {
             tracker.observe(&mut event);
         }
         let mut second = AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         };
         tracker.observe(&mut second);
         assert_eq!(
             second,
             AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Completed,
                 usage: TurnUsage {
                     turn: Some(total(150, 30)),
                     total: Some(total(250, 40)),
@@ -2801,13 +2963,19 @@ mod tests {
             }),
             total: None,
         };
-        let mut first = AgentEvent::TurnCompleted { usage: turn(12) };
+        let mut first = AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
+            usage: turn(12),
+        };
         tracker.observe(&mut first);
-        let mut second = AgentEvent::TurnCompleted { usage: turn(30) };
+        let mut second = AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
+            usage: turn(30),
+        };
         tracker.observe(&mut second);
 
         let totals = |event: &AgentEvent| match event {
-            AgentEvent::TurnCompleted { usage } => (
+            AgentEvent::TurnCompleted { usage, .. } => (
                 usage.turn.as_ref().unwrap().input_tokens,
                 usage.total.as_ref().unwrap().input_tokens,
             ),
@@ -2822,12 +2990,14 @@ mod tests {
     #[test]
     fn an_ending_with_nothing_reported_states_nothing() {
         let mut event = AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         };
         UsageTracker::default().observe(&mut event);
         assert_eq!(
             event,
             AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Completed,
                 usage: TurnUsage::default()
             }
         );
@@ -2839,6 +3009,7 @@ mod tests {
     #[test]
     fn the_two_usage_lines_are_told_apart() {
         let ending = AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         };
         assert_eq!(ending.tag(), "turn");

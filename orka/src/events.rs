@@ -15,7 +15,7 @@ use std::time::Duration;
 // The event vocabulary and its decoders live in Genta, the shared
 // coding-agent library; Orka re-exports them so downstream modules keep their
 // import paths.
-pub use genta::event::{clean_terminal_text, AgentEvent, TokenUsage};
+pub use genta::event::{clean_terminal_text, AgentEvent, TokenUsage, TurnOutcome};
 
 /// Provider-independent blocks used by every human-facing work-log view.
 ///
@@ -157,13 +157,22 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
         }
         // The work log reports one running figure, so a turn's end contributes
         // the thread total it ended at; an attempt whose provider reported
-        // neither figure has no usage to log.
-        AgentEvent::TurnCompleted { usage } => match usage.total.as_ref().or(usage.turn.as_ref()) {
-            Some(usage) => WorkLogBlock::Usage {
-                usage: usage.clone(),
-            },
-            None => return Vec::new(),
-        },
+        // neither figure has no usage to log. A turn that failed says so
+        // first — the failure is the news, and the spend is the footnote.
+        AgentEvent::TurnCompleted { outcome, usage } => {
+            let mut blocks = Vec::new();
+            if let TurnOutcome::Failed { message } = outcome {
+                blocks.push(WorkLogBlock::Error {
+                    message: clean(message),
+                });
+            }
+            if let Some(usage) = usage.total.as_ref().or(usage.turn.as_ref()) {
+                blocks.push(WorkLogBlock::Usage {
+                    usage: usage.clone(),
+                });
+            }
+            return blocks;
+        }
         AgentEvent::UsageUpdated { usage } => WorkLogBlock::Usage {
             usage: usage.clone(),
         },
@@ -509,6 +518,39 @@ impl<W: Write> RichRenderer<W> {
 mod tests {
     use super::*;
 
+    /// A turn that failed is an ending that says why, so the work log gets
+    /// both halves of it: the failure, then what the attempt spent getting
+    /// there.
+    #[test]
+    fn a_failed_ending_logs_the_failure_and_the_spend() {
+        let blocks = event_blocks(&AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Failed {
+                message: "out of credits".into(),
+            },
+            usage: genta::event::TurnUsage {
+                turn: Some(TokenUsage {
+                    input_tokens: 12,
+                    ..Default::default()
+                }),
+                total: None,
+            },
+        });
+        assert!(matches!(
+            blocks.as_slice(),
+            [
+                WorkLogBlock::Error { message },
+                WorkLogBlock::Usage { usage }
+            ] if message == "out of credits" && usage.input_tokens == 12
+        ));
+
+        // An ending that reported neither figure has nothing to log.
+        assert!(event_blocks(&AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
+            usage: genta::event::TurnUsage::default(),
+        })
+        .is_empty());
+    }
+
     #[test]
     fn decodes_command_message_file_and_usage_events() {
         assert!(matches!(
@@ -525,7 +567,7 @@ mod tests {
         ));
         assert!(matches!(
             decode_codex_line(r#"{"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":8,"output_tokens":3}}"#),
-            AgentEvent::TurnCompleted { usage } if matches!(&usage.turn, Some(turn) if turn.input_tokens == 12 && turn.output_tokens == 3)
+            AgentEvent::TurnCompleted { usage, .. } if matches!(&usage.turn, Some(turn) if turn.input_tokens == 12 && turn.output_tokens == 3)
         ));
     }
 

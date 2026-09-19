@@ -556,6 +556,16 @@ impl Activity {
         self.turn_error = Some(message.into());
     }
 
+    /// The same, for a failure reported by the turn's own ending. A provider
+    /// that announces the error and then fails the turn describes one failure
+    /// twice; the announcement came first and is usually the fuller of the
+    /// two, so it stands.
+    pub fn note_turn_error_unless_known(&mut self, message: impl Into<String>) {
+        if self.turn_error.is_none() {
+            self.turn_error = Some(message.into());
+        }
+    }
+
     /// The refusal this interaction is under, taken rather than read: it
     /// explains one state, and the state it explains has just been reached.
     pub fn take_refusal(&mut self) -> Option<RateLimit> {
@@ -909,6 +919,25 @@ mod tests {
         assert_eq!(activity.take_turn_end_reason(), IdleReason::Interrupted);
 
         activity.note_turn_error("context window exceeded");
+        assert_eq!(
+            activity.take_turn_end_reason(),
+            IdleReason::Failed {
+                message: "context window exceeded".into()
+            }
+        );
+
+        // An ending that reports its own failure fills the gap for a provider
+        // that never announced one separately...
+        activity.note_turn_error_unless_known("the turn failed");
+        assert_eq!(
+            activity.take_turn_end_reason(),
+            IdleReason::Failed {
+                message: "the turn failed".into()
+            }
+        );
+        // ...but the announcement, where there was one, is the account kept.
+        activity.note_turn_error("context window exceeded");
+        activity.note_turn_error_unless_known("the turn failed");
         assert_eq!(
             activity.take_turn_end_reason(),
             IdleReason::Failed {

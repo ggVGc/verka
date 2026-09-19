@@ -1125,7 +1125,7 @@ mod tests {
     use crate::activity::{EndReason, IdleReason, StopReason};
     use crate::launcher::LaunchColumn;
     use styra_protocol::agent::{Effort, PROVIDERS};
-    use styra_protocol::event::{TokenUsage, TurnUsage};
+    use styra_protocol::event::{TokenUsage, TurnOutcome, TurnUsage};
     use styra_protocol::RawLine;
     use styra_protocol::{Answer, AnswerValue, FileLocation};
 
@@ -1436,11 +1436,45 @@ mod tests {
         assert!(!app.timeline.entries[2].expanded);
     }
 
+    /// A turn that failed ends like any other, and the reason it ends with is
+    /// the one it carries. Claude reports the failure only on the line that
+    /// ends the turn, so before that ending existed this session sat running
+    /// forever with nothing to say.
+    #[test]
+    fn a_failed_ending_ends_the_turn_with_its_own_reason() {
+        let mut app = app();
+        app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Failed {
+                message: "hit the turn limit".into(),
+            },
+            usage: TurnUsage::default(),
+        });
+        assert_eq!(
+            app.activity.status,
+            Status::Idle(IdleReason::Failed {
+                message: "hit the turn limit".into()
+            })
+        );
+        // And the row is visible with the bookkeeping hidden, which it is here.
+        assert!(!app.timeline.show_minor);
+        assert!(
+            (0..app.timeline.entries.len()).any(|idx| app.timeline.is_visible(idx)
+                && matches!(
+                    &app.timeline.entries[idx].event,
+                    AgentEvent::TurnCompleted {
+                        outcome: TurnOutcome::Failed { .. },
+                        ..
+                    }
+                ))
+        );
+    }
+
     #[test]
     fn status_follows_turn_lifecycle_and_captures_usage() {
         let mut app = app();
         assert_eq!(app.activity.status, Status::Running);
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage {
                 turn: Some(TokenUsage {
                     input_tokens: 7,
@@ -1500,6 +1534,7 @@ mod tests {
             detail: r#"{"command":"cargo test","run_in_background":true}"#.into(),
         });
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Background);
@@ -1536,6 +1571,7 @@ mod tests {
         });
         app.push_event(AgentEvent::BackgroundTasks { running: 1 });
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Background);
@@ -1548,6 +1584,7 @@ mod tests {
             Status::Idle(IdleReason::BackgroundFinished)
         );
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Idle(IdleReason::TurnComplete));
@@ -1570,6 +1607,7 @@ mod tests {
             output: "Task completed successfully".into(),
         });
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Background);
@@ -1616,6 +1654,7 @@ mod tests {
         // The app-server's real end-of-turn signal carries no usage of its
         // own; the last reported usage must survive it, not reset to zero.
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Idle(IdleReason::TurnComplete));
@@ -1770,6 +1809,7 @@ mod tests {
         });
 
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
 
@@ -2616,6 +2656,7 @@ mod tests {
             text: "b\nmore b".into(),
         });
         app.push_event(AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
 

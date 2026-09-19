@@ -324,14 +324,18 @@ consumes. It is intentionally the same shape as Orka's `AgentEvent`:
 - `ThreadStarted { thread_id, model, effort }` — the model and reasoning
   effort are the agent's own report of what the session resolved to, absent
   where it does not name them (Claude Code reports a model but no effort)
-- `TurnStarted` / `TurnCompleted { usage }`
+- `TurnStarted` / `TurnCompleted { outcome, usage }` — the ending a turn gets
+  whether it ran its course or gave up, since every provider says which on the
+  line that ends it; reading a failure as an `Error` alone left a failed turn
+  with no ending, and a client waiting on one
 - `CommandStarted { command }` / `CommandCompleted { command, status,
   exit_code, output }`
 - `FileChanged { paths }`
 - `ToolStarted { name, detail }` / `ToolCompleted { name, status }`
 - `PlanUpdated { text }`
 - `AgentMessage { text }`
-- `Error { message }`
+- `Error { message }` — an error the turn survived, or one reported outside a
+  turn; a failure that ended the turn is that turn's `outcome` instead
 - `Unknown { wire_type }` — a recognised envelope Styra has no view for; carried
   but not rendered.
 - `Malformed { error }` — an undecodable line; kept visible as an error rather
