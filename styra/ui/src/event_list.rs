@@ -60,6 +60,10 @@ pub struct EventListView<'a> {
     pub can_configure_launch: bool,
     pub selection_name: String,
     pub requested_offset: usize,
+    /// Whether an explicit move toward older entries permits scrolloff to
+    /// reveal rows above the current viewport anchor. Live content updates do
+    /// not set this: a row changing height must not look like navigation.
+    pub moved_backward: bool,
     pub protocol: Protocol,
     pub links: LinkDisplay,
     pub status: EventListStatus,
@@ -217,6 +221,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         position,
         &item_heights,
         viewport_height,
+        view.moved_backward,
     );
     clip_boundary_entry(
         &mut items,
@@ -283,6 +288,7 @@ fn list_offset_with_scrolloff(
     selected: Option<usize>,
     heights: &[usize],
     viewport_height: usize,
+    moved_backward: bool,
 ) -> usize {
     let Some(selected) = selected else {
         return current.min(heights.len().saturating_sub(1));
@@ -307,7 +313,8 @@ fn list_offset_with_scrolloff(
     // Moving upward may have put the selection against the top. Pull earlier
     // items back in while they fit and do not reduce the number of occupied
     // rows (they can displace content at the bottom of the viewport).
-    while offset > 0 && rows_before_selection(offset, selected, heights) < margin {
+    while moved_backward && offset > 0 && rows_before_selection(offset, selected, heights) < margin
+    {
         let candidate = offset - 1;
         if heights[candidate..=selected].iter().sum::<usize>() > viewport_height
             || visible_rows(candidate, heights, viewport_height)
@@ -1089,23 +1096,23 @@ mod tests {
         // tail after it, following the live row legitimately advances the
         // viewport to item 5.
         let tall_live_row = [1, 1, 1, 1, 1, 5, 1];
-        let anchored = list_offset_with_scrolloff(
-            0,
-            selected,
-            &tall_live_row,
-            viewport_height,
-        );
+        let anchored =
+            list_offset_with_scrolloff(0, selected, &tall_live_row, viewport_height, false);
         assert_eq!(anchored, 5);
 
         // The same selected row is replaced by a one-line update. No
         // navigation occurred, so its item anchor should not change.
         let short_live_row = [1, 1, 1, 1, 1, 1, 1];
-        let after_update = list_offset_with_scrolloff(
-            anchored,
-            selected,
-            &short_live_row,
-            viewport_height,
-        );
+        let after_update =
+            list_offset_with_scrolloff(anchored, selected, &short_live_row, viewport_height, false);
         assert_eq!(after_update, anchored);
+    }
+
+    #[test]
+    fn backward_navigation_still_restores_scrolloff_above_the_selection() {
+        let heights = [1, 1, 1, 1, 1, 1, 1];
+        let offset = list_offset_with_scrolloff(5, Some(4), &heights, 6, true);
+
+        assert_eq!(offset, 2, "two rows of scrolloff above the selection");
     }
 }

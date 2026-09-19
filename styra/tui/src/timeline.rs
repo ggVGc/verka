@@ -89,6 +89,10 @@ pub struct Timeline {
     /// accounts for wrapped and expanded row heights, so navigation can keep
     /// a vim-like margin above and below the selection.
     pub list_offset: usize,
+    /// Selection index used for the last rendered frame. Comparing it with
+    /// `selected` distinguishes deliberate upward navigation from a live row
+    /// merely changing height between frames.
+    pub rendered_selection: Option<usize>,
 }
 
 impl Default for Timeline {
@@ -101,6 +105,7 @@ impl Default for Timeline {
             show_minor: false,
             conversation_only: true,
             list_offset: 0,
+            rendered_selection: None,
         }
     }
 }

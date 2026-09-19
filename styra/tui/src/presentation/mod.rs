@@ -408,6 +408,7 @@ fn draw_main(
 pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback) {
     if let Some(offset) = feedback.list_offset {
         app.timeline.list_offset = offset;
+        app.timeline.rendered_selection = Some(app.timeline.selected);
     }
     for scroll in &feedback.scroll {
         match &scroll.panel {
