@@ -30,7 +30,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, PipeWriter, Write};
 use std::os::fd::OwnedFd;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -192,6 +192,30 @@ pub struct Interaction {
     stderr: Option<JoinHandle<()>>,
 }
 
+/// Translate a provider's sandbox cwd through the Workspace mount. A provider
+/// is not trusted to name arbitrary host paths: the reported directory must be
+/// absolute, beneath the sandbox-side Workspace, and free of `..` components.
+fn host_working_directory(
+    reported: &str,
+    sandbox_workspace: &Path,
+    host_workspace: &Path,
+) -> Option<PathBuf> {
+    let reported = Path::new(reported);
+    if !reported.is_absolute() {
+        return None;
+    }
+    let relative = reported.strip_prefix(sandbox_workspace).ok()?;
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return None;
+    }
+    Some(host_workspace.join(relative))
+}
+
 impl Interaction {
     /// Launch the agent and start the worker and reader threads. Returns the
     /// interaction and the receiver the UI polls for updates.
@@ -206,6 +230,11 @@ impl Interaction {
             .broker
             .as_ref()
             .map(|broker| broker.control.source.clone());
+        // The agent reports paths inside the sandbox, while the UI names host
+        // paths. Keep this particular mount's two ends beside the reader so a
+        // provider's cwd metadata never leaks a sandbox-only path onto screen.
+        let workspace_host = spec.workspace.source.clone();
+        let workspace_sandbox = spec.workspace.destination.clone();
         let request = build_request(&spec);
         let protocol = spec.profile.protocol;
 
@@ -299,6 +328,10 @@ impl Interaction {
         let reader_stdin = Arc::clone(&stdin);
         let reader_client = appserver.clone();
         let reader_claude = claude_stream.clone();
+        let reader_workspace_host = workspace_host.clone();
+        let reader_workspace_sandbox = workspace_sandbox.clone();
+        let reported_working_directory = Arc::new(Mutex::new(None::<PathBuf>));
+        let reader_reported_working_directory = Arc::clone(&reported_working_directory);
         let reader = std::thread::Builder::new()
             .name("styra-reader".into())
             .spawn(move || {
@@ -312,6 +345,38 @@ impl Interaction {
                             let raw = line.trim_end_matches(['\r', '\n']);
                             if raw.is_empty() {
                                 continue;
+                            }
+                            if let Some(reported) = crate::event::reported_cwd(protocol, raw) {
+                                if let Some(host_directory) = host_working_directory(
+                                    &reported,
+                                    &reader_workspace_sandbox,
+                                    &reader_workspace_host,
+                                ) {
+                                    let changed = reader_reported_working_directory
+                                        .lock()
+                                        .map(|mut previous| {
+                                            if previous.as_ref() == Some(&host_directory) {
+                                                false
+                                            } else {
+                                                *previous = Some(host_directory.clone());
+                                                true
+                                            }
+                                        })
+                                        .unwrap_or(false);
+                                    if changed {
+                                        // Codex reads cwd again from Styra on the next
+                                        // turn, so retain a directory it reports rather
+                                        // than overwriting it with the old value.
+                                        if let Some(client) = &reader_client {
+                                            client.set_cwd(reported);
+                                        }
+                                        let _ = reader_updates.send(
+                                            InteractionUpdate::WorkingDirectoryChanged(
+                                                host_directory,
+                                            ),
+                                        );
+                                    }
+                                }
                             }
                             if let Ok(mut journal) = reader_journal.lock() {
                                 let _ = journal.record_agent_line(raw);
@@ -982,6 +1047,27 @@ mod tests {
                 base: spec.base.clone(),
             },
         )
+    }
+
+    #[test]
+    fn reported_cwd_is_translated_only_when_it_stays_in_the_workspace() {
+        let sandbox = Path::new("/sandbox/project");
+        let host = Path::new("/home/operator/project");
+
+        assert_eq!(
+            host_working_directory("/sandbox/project/crates/ui", sandbox, host),
+            Some(PathBuf::from("/home/operator/project/crates/ui"))
+        );
+        assert_eq!(
+            host_working_directory("/sandbox/project", sandbox, host),
+            Some(PathBuf::from("/home/operator/project"))
+        );
+        assert_eq!(host_working_directory("relative", sandbox, host), None);
+        assert_eq!(
+            host_working_directory("/sandbox/project/../secrets", sandbox, host),
+            None
+        );
+        assert_eq!(host_working_directory("/etc", sandbox, host), None);
     }
 
     /// A backend that speaks a tiny protocol: for each submission line it reads
