@@ -155,11 +155,18 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
                 content: markdown_blocks(text),
             }
         }
-        AgentEvent::TurnCompleted { usage } | AgentEvent::UsageUpdated { usage } => {
-            WorkLogBlock::Usage {
+        // The work log reports one running figure, so a turn's end contributes
+        // the thread total it ended at; an attempt whose provider reported
+        // neither figure has no usage to log.
+        AgentEvent::TurnCompleted { usage } => match usage.total.as_ref().or(usage.turn.as_ref()) {
+            Some(usage) => WorkLogBlock::Usage {
                 usage: usage.clone(),
-            }
-        }
+            },
+            None => return Vec::new(),
+        },
+        AgentEvent::UsageUpdated { usage } => WorkLogBlock::Usage {
+            usage: usage.clone(),
+        },
         AgentEvent::Error { message } => WorkLogBlock::Error {
             message: clean(message),
         },
@@ -518,7 +525,7 @@ mod tests {
         ));
         assert!(matches!(
             decode_codex_line(r#"{"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":8,"output_tokens":3}}"#),
-            AgentEvent::TurnCompleted { usage } if usage.input_tokens == 12 && usage.output_tokens == 3
+            AgentEvent::TurnCompleted { usage } if matches!(&usage.turn, Some(turn) if turn.input_tokens == 12 && turn.output_tokens == 3)
         ));
     }
 

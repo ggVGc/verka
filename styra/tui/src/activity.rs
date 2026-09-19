@@ -11,7 +11,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use styra_protocol::event::TokenUsage;
+use styra_protocol::event::{AgentEvent, TokenUsage, UsageTracker};
 use styra_protocol::{InteractionActivity, InteractionActivityReason, InteractionSummary};
 
 /// The wall clock in the epoch milliseconds the server dates an interaction's
@@ -401,9 +401,14 @@ pub struct Activity {
     /// invariant of its own: what needs guarding is everything below, which
     /// is why they are private and this is not.
     pub status: Status,
-    /// The usage figure from the most recent turn, or the running total
-    /// mid-turn for providers that report as they go.
+    /// What the thread has spent so far — a running total, not the last
+    /// turn's own spend, so the status line keeps climbing across turns
+    /// instead of resetting to whatever the latest one cost.
     pub latest_usage: Option<TokenUsage>,
+    /// Reconstructs whichever half of a turn's usage its provider left out,
+    /// so the end-of-turn row can state both what the turn cost and what the
+    /// thread has cost. Neither figure is available from a single event.
+    usage: UsageTracker,
     /// When the status last changed, and the status that was current then.
     /// Status is written from several places, so the moment it changed is
     /// noticed in one place — [`Activity::note_progress`] — rather than at
@@ -442,6 +447,7 @@ impl Default for Activity {
         Self {
             status: Status::Running,
             latest_usage: None,
+            usage: UsageTracker::default(),
             since: Instant::now(),
             noted: Status::Running,
             last_event_at: None,
@@ -456,6 +462,13 @@ impl Default for Activity {
 }
 
 impl Activity {
+    /// Let a freshly arrived event state its spend in full: a turn's end says
+    /// what the turn cost and what the thread has cost, whichever of the two
+    /// its provider actually reported.
+    pub fn fill_usage(&mut self, event: &mut AgentEvent) {
+        self.usage.observe(event);
+    }
+
     /// Notice a status change made since the last frame, so [`Self::progress`]
     /// can report how long the session has been in its current state. Called
     /// once per event-loop iteration, just before rendering.

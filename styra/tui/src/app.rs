@@ -1125,7 +1125,7 @@ mod tests {
     use crate::activity::{EndReason, IdleReason, StopReason};
     use crate::launcher::LaunchColumn;
     use styra_protocol::agent::{Effort, PROVIDERS};
-    use styra_protocol::event::TokenUsage;
+    use styra_protocol::event::{TokenUsage, TurnUsage};
     use styra_protocol::RawLine;
     use styra_protocol::{Answer, AnswerValue, FileLocation};
 
@@ -1441,12 +1441,17 @@ mod tests {
         let mut app = app();
         assert_eq!(app.activity.status, Status::Running);
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage {
-                input_tokens: 7,
-                ..Default::default()
+            usage: TurnUsage {
+                turn: Some(TokenUsage {
+                    input_tokens: 7,
+                    ..Default::default()
+                }),
+                total: None,
             },
         });
         assert_eq!(app.activity.status, Status::Idle(IdleReason::TurnComplete));
+        // A provider that reports only what the turn cost still moves the
+        // running total the status line shows.
         assert_eq!(app.activity.latest_usage.as_ref().unwrap().input_tokens, 7);
 
         app.push_event(AgentEvent::UserMessage {
@@ -1495,7 +1500,7 @@ mod tests {
             detail: r#"{"command":"cargo test","run_in_background":true}"#.into(),
         });
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage::default(),
+            usage: TurnUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Background);
         assert_eq!(
@@ -1531,7 +1536,7 @@ mod tests {
         });
         app.push_event(AgentEvent::BackgroundTasks { running: 1 });
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage::default(),
+            usage: TurnUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Background);
 
@@ -1543,7 +1548,7 @@ mod tests {
             Status::Idle(IdleReason::BackgroundFinished)
         );
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage::default(),
+            usage: TurnUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Idle(IdleReason::TurnComplete));
     }
@@ -1565,7 +1570,7 @@ mod tests {
             output: "Task completed successfully".into(),
         });
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage::default(),
+            usage: TurnUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Background);
     }
@@ -1611,7 +1616,7 @@ mod tests {
         // The app-server's real end-of-turn signal carries no usage of its
         // own; the last reported usage must survive it, not reset to zero.
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage::default(),
+            usage: TurnUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Idle(IdleReason::TurnComplete));
         assert_eq!(app.activity.latest_usage.as_ref().unwrap().input_tokens, 20);
@@ -1765,7 +1770,7 @@ mod tests {
         });
 
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage::default(),
+            usage: TurnUsage::default(),
         });
 
         assert_eq!(
@@ -2611,7 +2616,7 @@ mod tests {
             text: "b\nmore b".into(),
         });
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage::default(),
+            usage: TurnUsage::default(),
         });
 
         // Hidden by default; no toggle needed to get here.

@@ -11,7 +11,7 @@ use crate::app::App;
 use crate::timeline::{Entry, Step};
 use styra_protocol::agent::Effort;
 use styra_protocol::contract;
-use styra_protocol::event::{AgentEvent, TokenUsage};
+use styra_protocol::event::AgentEvent;
 use styra_protocol::Contract;
 use styra_protocol::InteractionEnd;
 
@@ -22,7 +22,7 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
     // contract's instructions. Show what they wrote and note what they asked
     // for; the framing is boilerplate the list repeating adds nothing, and
     // the raw view still holds the line exactly as it went out.
-    let (event, contract) = unframed(event);
+    let (mut event, contract) = unframed(event);
     // Set before the replacement paths below, all of which return early:
     // a command or tool finishing is activity like any other.
     app.activity.note_event_received();
@@ -113,13 +113,19 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
     if event.updates_thinking() && refresh_thinking(app, &event) {
         return;
     }
+    // Before the row is built from it: a turn's end reports at most one of the
+    // two figures it should show — the app-server sends neither with it, and
+    // Claude sends the turn's spend but no total — and what it leaves out is
+    // only knowable from the events around it.
+    app.activity.fill_usage(&mut event);
     match &event {
         AgentEvent::TurnCompleted { usage } => {
-            // The app-server protocol's `turn/completed` carries no usage
-            // figures of its own (a default, empty one); keep whatever the
-            // last `UsageUpdated` reported rather than blanking the display.
-            if *usage != TokenUsage::default() {
-                app.activity.latest_usage = Some(usage.clone());
+            // The status line follows the thread's running total, which is
+            // what the tracker has just filled in if the provider did not
+            // send one. A turn that reported nothing at all leaves the
+            // display as it was rather than blanking it.
+            if let Some(total) = &usage.total {
+                app.activity.latest_usage = Some(total.clone());
             }
             if app.activity.status.is_active() {
                 // Why this turn ended is the client's own knowledge: the agent

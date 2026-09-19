@@ -39,6 +39,56 @@ pub struct TokenUsage {
     pub reasoning_output_tokens: u64,
 }
 
+impl TokenUsage {
+    /// What was spent between `earlier` and here. Saturating, because a
+    /// provider that resets or re-reports a counter must not produce a
+    /// nonsense figure; `None` means nothing was spent before this point.
+    pub fn since(&self, earlier: Option<&TokenUsage>) -> TokenUsage {
+        let Some(earlier) = earlier else {
+            return self.clone();
+        };
+        TokenUsage {
+            input_tokens: self.input_tokens.saturating_sub(earlier.input_tokens),
+            cached_input_tokens: self
+                .cached_input_tokens
+                .saturating_sub(earlier.cached_input_tokens),
+            output_tokens: self.output_tokens.saturating_sub(earlier.output_tokens),
+            reasoning_output_tokens: self
+                .reasoning_output_tokens
+                .saturating_sub(earlier.reasoning_output_tokens),
+        }
+    }
+
+    /// The two spends added together.
+    pub fn plus(&self, other: &TokenUsage) -> TokenUsage {
+        TokenUsage {
+            input_tokens: self.input_tokens + other.input_tokens,
+            cached_input_tokens: self.cached_input_tokens + other.cached_input_tokens,
+            output_tokens: self.output_tokens + other.output_tokens,
+            reasoning_output_tokens: self.reasoning_output_tokens + other.reasoning_output_tokens,
+        }
+    }
+}
+
+/// What a turn cost, and what the thread has cost through the end of it.
+///
+/// No provider reports both, and they do not report the same one: the
+/// app-server sends a running thread total in its own notification and
+/// nothing at all with the turn's end, while Claude and `codex exec` report
+/// the turn's own spend and never a total. Each decoder fills only the half
+/// its wire line actually states — an absent figure stays `None` rather than
+/// becoming a zero that reads like a real measurement — and [`UsageTracker`]
+/// derives the other half from the run of events around it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnUsage {
+    /// What this turn alone spent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<TokenUsage>,
+    /// What the thread has spent through the end of this turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<TokenUsage>,
+}
+
 /// A provider-reported or locally reconstructed file change.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileChange {
@@ -85,10 +135,14 @@ pub enum AgentEvent {
         effort: Option<String>,
     },
     TurnStarted,
+    /// The turn ended. `usage` states what it cost and what the thread has
+    /// cost so far, as far as either is known — see [`TurnUsage`], and
+    /// [`UsageTracker`], which fills in whichever half the provider left out.
     TurnCompleted {
-        usage: TokenUsage,
+        #[serde(default)]
+        usage: TurnUsage,
     },
-    /// A token-usage snapshot that arrives independently of a turn's end (the
+    /// A running thread total that arrives independently of a turn's end (the
     /// app-server protocol reports it after every step within a turn, not just
     /// the last). Updates the usage display without signalling that the agent
     /// has gone idle — see `TurnCompleted` for the actual end-of-turn signal.
@@ -368,8 +422,11 @@ impl AgentEvent {
         match self {
             AgentEvent::UserMessage { .. } => "user",
             AgentEvent::ThreadStarted { .. } => "thread",
-            AgentEvent::TurnStarted => "turn",
-            AgentEvent::TurnCompleted { .. } | AgentEvent::UsageUpdated { .. } => "usage",
+            // A turn's end is a turn event, tagged to pair with its start; the
+            // `usage` tag stays with the running totals alone, so a reader can
+            // tell a turn boundary from a mid-turn tick at a glance.
+            AgentEvent::TurnStarted | AgentEvent::TurnCompleted { .. } => "turn",
+            AgentEvent::UsageUpdated { .. } => "usage",
             AgentEvent::CommandStarted { .. } | AgentEvent::CommandCompleted { .. } => "shell",
             AgentEvent::FileChanged { .. } | AgentEvent::DiffUpdated { .. } => "files",
             AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. }
@@ -434,8 +491,29 @@ impl AgentEvent {
                 _ => format!("session {thread_id}"),
             },
             AgentEvent::TurnStarted => "turn started".into(),
-            AgentEvent::TurnCompleted { usage } | AgentEvent::UsageUpdated { usage } => format!(
-                "in {} · out {} · cached {}",
+            AgentEvent::TurnCompleted { usage } => {
+                let spend = |usage: &TokenUsage| {
+                    format!(
+                        "in {} · out {} · cached {}",
+                        usage.input_tokens, usage.output_tokens, usage.cached_input_tokens
+                    )
+                };
+                match (&usage.turn, &usage.total) {
+                    (Some(turn), Some(total)) => format!(
+                        "turn complete · this turn {} (thread total {})",
+                        spend(turn),
+                        spend(total)
+                    ),
+                    (Some(turn), None) => format!("turn complete · this turn {}", spend(turn)),
+                    (None, Some(total)) => format!("turn complete · thread total {}", spend(total)),
+                    // Nothing was reported and nothing could be reconstructed
+                    // — say only what is known, rather than three zeros that
+                    // read as a turn that cost nothing.
+                    (None, None) => "turn complete".into(),
+                }
+            }
+            AgentEvent::UsageUpdated { usage } => format!(
+                "thread total · in {} · out {} · cached {}",
                 usage.input_tokens, usage.output_tokens, usage.cached_input_tokens
             ),
             AgentEvent::CommandStarted { command } => {
@@ -552,13 +630,24 @@ impl AgentEvent {
                 vec![DetailBlock::Text(lines.join("\n"))]
             }
             AgentEvent::TurnStarted => Vec::new(),
-            AgentEvent::TurnCompleted { usage } | AgentEvent::UsageUpdated { usage } => {
+            AgentEvent::TurnCompleted { usage } => {
+                let mut lines = Vec::new();
+                if let Some(turn) = &usage.turn {
+                    lines.push(format!("this turn:    {}", spend_detail(turn)));
+                }
+                if let Some(total) = &usage.total {
+                    lines.push(format!("thread total: {}", spend_detail(total)));
+                }
+                if lines.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![DetailBlock::Text(lines.join("\n"))]
+                }
+            }
+            AgentEvent::UsageUpdated { usage } => {
                 vec![DetailBlock::Text(format!(
-                    "input {} · cached input {} · output {} · reasoning {}",
-                    usage.input_tokens,
-                    usage.cached_input_tokens,
-                    usage.output_tokens,
-                    usage.reasoning_output_tokens
+                    "thread total: {}",
+                    spend_detail(usage)
                 ))]
             }
             AgentEvent::CommandStarted { command } => {
@@ -847,9 +936,10 @@ fn decode_appserver_notification(method: &str, params: &Value) -> AgentEvent {
         },
         "turn/started" => AgentEvent::TurnStarted,
         // `turn/completed` is the actual end-of-turn signal; it carries no
-        // usage figures of its own.
+        // usage figures of its own, so both halves are left unknown here and
+        // reconstructed from the running totals by `UsageTracker`.
         "turn/completed" => AgentEvent::TurnCompleted {
-            usage: TokenUsage::default(),
+            usage: TurnUsage::default(),
         },
         // Fires after every step within a turn (each tool call, each model
         // round), not just the last one, so it must not be treated as
@@ -993,11 +1083,16 @@ fn decode_codex_value(value: &Value) -> AgentEvent {
             effort: None,
         },
         "turn.started" => AgentEvent::TurnStarted,
+        // `codex exec` reports what the turn itself spent, never a thread
+        // total — for a one-shot run the two coincide, but the distinction is
+        // the honest one to record.
         "turn.completed" => AgentEvent::TurnCompleted {
-            usage: value
-                .get("usage")
-                .and_then(|usage| serde_json::from_value(usage.clone()).ok())
-                .unwrap_or_default(),
+            usage: TurnUsage {
+                turn: value
+                    .get("usage")
+                    .and_then(|usage| serde_json::from_value(usage.clone()).ok()),
+                total: None,
+            },
         },
         "turn.failed" | "error" => AgentEvent::Error {
             message: clean_terminal_text(&error_message(value)),
@@ -1390,8 +1485,13 @@ fn decode_claude_result(value: &Value) -> AgentEvent {
             message: clean_terminal_text(&error_message(value)),
         };
     }
+    // Claude's `result` states what the turn spent and nothing about the
+    // thread; the running total is added up by `UsageTracker`.
     AgentEvent::TurnCompleted {
-        usage: claude_usage(value.get("usage").unwrap_or(&Value::Null)),
+        usage: TurnUsage {
+            turn: value.get("usage").map(claude_usage),
+            total: None,
+        },
     }
 }
 
@@ -1435,6 +1535,73 @@ fn changes_diff(item: &Value) -> Option<String> {
         .filter(|diff| !diff.is_empty())
         .collect::<Vec<_>>();
     (!diffs.is_empty()).then(|| clean_terminal_text(&diffs.join("\n")))
+}
+
+/// Reconstructs the half of [`TurnUsage`] the provider did not report.
+///
+/// Decoding is per line and stateless, but neither figure can be had from one
+/// line alone: a turn's own spend only exists as the difference between two of
+/// the app-server's running totals, and a thread total only exists as the sum
+/// of Claude's per-turn ones. So the events run past this on the way to being
+/// shown — [`render_events`](crate::render::render_events) for a recorded log,
+/// the host's own ingest for a live session — and each `TurnCompleted` leaves
+/// it stating both figures.
+///
+/// A provider that reports neither (an interrupt the host synthesizes an
+/// ending for) still leaves both `None`: an unknown figure stays unknown.
+#[derive(Clone, Debug, Default)]
+pub struct UsageTracker {
+    /// The last running total seen, for providers that send them. Only ever
+    /// written from `UsageUpdated` — a per-turn figure must not land here, or
+    /// the next turn would be measured against the wrong baseline.
+    running: Option<TokenUsage>,
+    /// The running total as it stood when the current turn began.
+    turn_start: Option<TokenUsage>,
+    /// Per-turn spends added up, which is the only thread total available for
+    /// a provider that never sends one. `None` until a turn has reported one.
+    accumulated: Option<TokenUsage>,
+}
+
+impl UsageTracker {
+    /// Note what this event says about spend, and fill in what a turn's end
+    /// leaves out.
+    pub fn observe(&mut self, event: &mut AgentEvent) {
+        match event {
+            AgentEvent::ThreadStarted { .. } => *self = Self::default(),
+            AgentEvent::TurnStarted => self.turn_start = self.running.clone(),
+            AgentEvent::UsageUpdated { usage } => self.running = Some(usage.clone()),
+            AgentEvent::TurnCompleted { usage } => {
+                if usage.turn.is_none() {
+                    usage.turn = self
+                        .running
+                        .as_ref()
+                        .map(|end| end.since(self.turn_start.as_ref()));
+                }
+                if let Some(turn) = &usage.turn {
+                    self.accumulated = Some(match &self.accumulated {
+                        Some(total) => total.plus(turn),
+                        None => turn.clone(),
+                    });
+                }
+                if usage.total.is_none() {
+                    usage.total = self.running.clone().or_else(|| self.accumulated.clone());
+                }
+                self.turn_start = self.running.clone();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// One spend, spelled out in full for a detail pane.
+fn spend_detail(usage: &TokenUsage) -> String {
+    format!(
+        "input {} · cached input {} · output {} · reasoning {}",
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+        usage.reasoning_output_tokens
+    )
 }
 
 fn diff_paths(diff: &str) -> Vec<String> {
@@ -1781,15 +1948,21 @@ mod tests {
         assert_eq!(
             usage,
             AgentEvent::TurnCompleted {
-                usage: TokenUsage {
-                    input_tokens: 10,
-                    output_tokens: 3,
-                    cached_input_tokens: 2,
-                    reasoning_output_tokens: 0,
+                usage: TurnUsage {
+                    turn: Some(TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 3,
+                        cached_input_tokens: 2,
+                        reasoning_output_tokens: 0,
+                    }),
+                    total: None,
                 }
             }
         );
-        assert_eq!(usage.summary(), "in 10 · out 3 · cached 2");
+        assert_eq!(
+            usage.summary(),
+            "turn complete · this turn in 10 · out 3 · cached 2"
+        );
     }
 
     #[test]
@@ -2260,15 +2433,21 @@ mod tests {
         assert_eq!(
             usage,
             AgentEvent::TurnCompleted {
-                usage: TokenUsage {
-                    input_tokens: 12,
-                    cached_input_tokens: 8,
-                    output_tokens: 3,
-                    reasoning_output_tokens: 0,
+                usage: TurnUsage {
+                    turn: Some(TokenUsage {
+                        input_tokens: 12,
+                        cached_input_tokens: 8,
+                        output_tokens: 3,
+                        reasoning_output_tokens: 0,
+                    }),
+                    total: None,
                 }
             }
         );
-        assert_eq!(usage.summary(), "in 12 · out 3 · cached 8");
+        assert_eq!(
+            usage.summary(),
+            "turn complete · this turn in 12 · out 3 · cached 8"
+        );
 
         assert_eq!(
             decode_line(
@@ -2557,9 +2736,122 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::TurnCompleted {
-                usage: TokenUsage::default()
+                usage: TurnUsage::default()
             }
         );
+        // Nothing is invented for the figures the notification does not carry.
+        assert_eq!(event.summary(), "turn complete");
+    }
+
+    /// The app-server states a running thread total and nothing at the turn's
+    /// end, so what the turn itself cost is the distance between the totals
+    /// either side of it.
+    #[test]
+    fn a_turn_between_two_running_totals_reports_both_figures() {
+        let mut tracker = UsageTracker::default();
+        let total = |input: u64, output: u64| TokenUsage {
+            input_tokens: input,
+            output_tokens: output,
+            ..Default::default()
+        };
+        for mut event in [
+            AgentEvent::TurnStarted,
+            AgentEvent::UsageUpdated {
+                usage: total(100, 10),
+            },
+            AgentEvent::TurnCompleted {
+                usage: TurnUsage::default(),
+            },
+            AgentEvent::TurnStarted,
+            AgentEvent::UsageUpdated {
+                usage: total(250, 40),
+            },
+        ] {
+            tracker.observe(&mut event);
+        }
+        let mut second = AgentEvent::TurnCompleted {
+            usage: TurnUsage::default(),
+        };
+        tracker.observe(&mut second);
+        assert_eq!(
+            second,
+            AgentEvent::TurnCompleted {
+                usage: TurnUsage {
+                    turn: Some(total(150, 30)),
+                    total: Some(total(250, 40)),
+                },
+            }
+        );
+        assert_eq!(
+            second.summary(),
+            "turn complete · this turn in 150 · out 30 · cached 0 \
+             (thread total in 250 · out 40 · cached 0)"
+        );
+    }
+
+    /// Claude states what each turn cost and never a thread total, so the
+    /// total is the turns added up.
+    #[test]
+    fn per_turn_figures_add_up_into_the_thread_total() {
+        let mut tracker = UsageTracker::default();
+        let turn = |input: u64| TurnUsage {
+            turn: Some(TokenUsage {
+                input_tokens: input,
+                ..Default::default()
+            }),
+            total: None,
+        };
+        let mut first = AgentEvent::TurnCompleted { usage: turn(12) };
+        tracker.observe(&mut first);
+        let mut second = AgentEvent::TurnCompleted { usage: turn(30) };
+        tracker.observe(&mut second);
+
+        let totals = |event: &AgentEvent| match event {
+            AgentEvent::TurnCompleted { usage } => (
+                usage.turn.as_ref().unwrap().input_tokens,
+                usage.total.as_ref().unwrap().input_tokens,
+            ),
+            other => panic!("not a turn ending: {other:?}"),
+        };
+        assert_eq!(totals(&first), (12, 12));
+        assert_eq!(totals(&second), (30, 42));
+    }
+
+    /// An ending the host synthesized for an interrupt reports nothing, and a
+    /// figure that was never measured must not be shown as zero.
+    #[test]
+    fn an_ending_with_nothing_reported_states_nothing() {
+        let mut event = AgentEvent::TurnCompleted {
+            usage: TurnUsage::default(),
+        };
+        UsageTracker::default().observe(&mut event);
+        assert_eq!(
+            event,
+            AgentEvent::TurnCompleted {
+                usage: TurnUsage::default()
+            }
+        );
+        assert!(event.detail().is_empty());
+    }
+
+    /// A turn's end is a turn event; only the running totals are tagged as
+    /// usage, and each says which of the two figures it is.
+    #[test]
+    fn the_two_usage_lines_are_told_apart() {
+        let ending = AgentEvent::TurnCompleted {
+            usage: TurnUsage::default(),
+        };
+        assert_eq!(ending.tag(), "turn");
+        assert_eq!(AgentEvent::TurnStarted.tag(), ending.tag());
+
+        let running = AgentEvent::UsageUpdated {
+            usage: TokenUsage {
+                input_tokens: 9,
+                ..Default::default()
+            },
+        };
+        assert_eq!(running.tag(), "usage");
+        assert_eq!(running.summary(), "thread total · in 9 · out 0 · cached 0");
     }
 
     #[test]

@@ -300,9 +300,16 @@ event stream, so it has two cooperating parts:
   every line through this client; the client forwards decoded events and answers
   control traffic.
 
-The turn's token usage arrives as `thread/tokenUsage/updated` just before
-`turn/completed` (which itself carries none), so that notification is what maps
-to `TurnCompleted` — flipping the status line to `waiting` between turns. The
+Token usage arrives as `thread/tokenUsage/updated`, a running thread total
+reported after every step within a turn; `turn/completed` is the end-of-turn
+signal and carries no figures at all. Only the latter maps to `TurnCompleted`
+— flipping the status line to `waiting` between turns — while the former is a
+`UsageUpdated` that moves the display without ending anything. Neither figure
+an operator wants to read is available from one event: what a turn cost is the
+distance between the totals either side of it, and for Claude, which reports
+per-turn spend and no total, the total is the turns added up. `UsageTracker`
+holds that little state and fills in whichever half the provider left out, so
+the end-of-turn row states both. The
 server exits on stdin end-of-input, so stopping a session tears it down cleanly.
 Threads are started with `approvalPolicy: never` and a `danger-full-access`
 inner sandbox: approvals never stall a turn, and real isolation stays Driva's.

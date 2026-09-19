@@ -5,7 +5,7 @@
 //! Orka — into a readable text transcript through the same decoders a live
 //! session uses.
 
-use crate::event::{decode_line, AgentEvent, DetailBlock, Protocol};
+use crate::event::{decode_line, AgentEvent, DetailBlock, Protocol, UsageTracker};
 
 /// Render a whole session log: decode each line and lay the events out as a
 /// tagged transcript. Multi-line bodies (agent messages, plans, command
@@ -30,7 +30,23 @@ pub fn render(log: &str, protocol: Protocol, all: bool, show_minor: bool) -> Str
 /// wire lines to decode.
 pub fn render_events(events: &[AgentEvent], all: bool, show_minor: bool) -> String {
     let mut out = String::new();
+    // A turn's end states what the turn cost and what the thread has cost, but
+    // no provider reports both; running the log past a tracker is what makes
+    // the end-of-turn line able to say either.
+    let mut usage = UsageTracker::default();
     for event in events {
+        let mut filled;
+        let event = match event {
+            AgentEvent::ThreadStarted { .. }
+            | AgentEvent::TurnStarted
+            | AgentEvent::UsageUpdated { .. }
+            | AgentEvent::TurnCompleted { .. } => {
+                filled = event.clone();
+                usage.observe(&mut filled);
+                &filled
+            }
+            _ => event,
+        };
         if !all && matches!(event, AgentEvent::Unknown { .. }) {
             continue;
         }
@@ -167,6 +183,31 @@ mod tests {
         let shown = render_events(&events, false, true);
         assert!(shown.contains("t-1"));
         assert!(shown.contains("turn started"));
+    }
+
+    /// The end of a turn reads as a turn boundary that states what the turn
+    /// cost, and the mid-turn snapshots read as the running totals they are —
+    /// even for a provider (this one) that reports only the totals.
+    #[test]
+    fn a_turn_ends_with_a_line_of_its_own_stating_both_figures() {
+        let log = concat!(
+            r#"{"method":"turn/started","params":{}}"#,
+            "\n",
+            r#"{"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"inputTokens":100,"outputTokens":10}}}}"#,
+            "\n",
+            r#"{"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"inputTokens":180,"outputTokens":25}}}}"#,
+            "\n",
+            r#"{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"t1","status":"completed"}}}"#,
+            "\n",
+        );
+        assert_eq!(
+            render(log, Protocol::CodexAppServer, false, true),
+            "    turn turn started\n\
+             \x20  usage thread total · in 100 · out 10 · cached 0\n\
+             \x20  usage thread total · in 180 · out 25 · cached 0\n\
+             \x20   turn turn complete · this turn in 180 · out 25 · cached 0 \
+             (thread total in 180 · out 25 · cached 0)\n"
+        );
     }
 
     #[test]

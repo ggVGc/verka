@@ -985,7 +985,7 @@ mod tests {
 
         assert_eq!(list_offset_with_scrolloff(0, Some(2), &heights, 17), 1);
     }
-    use styra_protocol::event::TokenUsage;
+    use styra_protocol::event::{TokenUsage, TurnUsage};
 
     fn progress(in_status: Duration, since_event: Option<Duration>) -> Progress {
         Progress {
@@ -1102,7 +1102,7 @@ mod tests {
             text: "done".into(),
         });
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage::default(),
+            usage: TurnUsage::default(),
         });
         app.activity.note_progress();
 
@@ -1642,14 +1642,41 @@ mod tests {
     fn usage_is_shown_once_recorded() {
         let mut app = testing::app("s1");
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage {
-                input_tokens: 12,
-                output_tokens: 3,
-                ..Default::default()
+            usage: TurnUsage {
+                turn: Some(TokenUsage {
+                    input_tokens: 12,
+                    output_tokens: 3,
+                    ..Default::default()
+                }),
+                total: None,
             },
         });
         let screen = rendered(&app);
         assert!(screen.contains("in 12"));
+    }
+
+    /// The list's own end-of-turn row says what the turn cost and what the
+    /// thread has cost, for a provider that reports only running totals and
+    /// nothing at all with the ending itself.
+    #[test]
+    fn the_end_of_turn_row_states_the_turn_and_the_thread_total() {
+        let mut app = testing::app("s1");
+        app.timeline.show_minor = true;
+        for input in [100, 180] {
+            app.push_event(AgentEvent::UsageUpdated {
+                usage: TokenUsage {
+                    input_tokens: input,
+                    ..Default::default()
+                },
+            });
+        }
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: TurnUsage::default(),
+        });
+        let screen = rendered(&app);
+        assert!(screen.contains("turn complete"), "{screen}");
+        assert!(screen.contains("this turn in 180"), "{screen}");
+        assert!(screen.contains("thread total · in 100"), "{screen}");
     }
 
     #[test]

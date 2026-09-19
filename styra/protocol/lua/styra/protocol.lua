@@ -924,7 +924,7 @@ M.types.AgentEvent = {
     { name = "turn_completed", payload = {
       kind = "struct",
       fields = {
-        { name = "usage", required = true, type = { kind = "ref", name = "TokenUsage" } },
+        { name = "usage", required = false, type = { kind = "ref", name = "TurnUsage" } },
       },
     } },
     { name = "usage_updated", payload = {
@@ -1213,6 +1213,23 @@ M.types.InteractionUpdate = {
     { name = "quota", payload = { kind = "newtype", type = { kind = "ref", name = "QuotaEvent" } } },
     { name = "working_directory_changed", payload = { kind = "newtype", type = { kind = "string", path = true } } },
     { name = "ended", payload = { kind = "newtype", type = { kind = "ref", name = "InteractionEnd" } } },
+  },
+}
+
+--- What a turn cost, and what the thread has cost through the end of it.
+---
+--- No provider reports both, and they do not report the same one: the
+--- app-server sends a running thread total in its own notification and
+--- nothing at all with the turn's end, while Claude and `codex exec` report
+--- the turn's own spend and never a total. Each decoder fills only the half
+--- its wire line actually states — an absent figure stays `None` rather than
+--- becoming a zero that reads like a real measurement — and `UsageTracker`
+--- derives the other half from the run of events around it.
+M.types.TurnUsage = {
+  kind = "struct",
+  fields = {
+    { name = "turn", required = false, type = { kind = "optional", inner = { kind = "ref", name = "TokenUsage" } } },
+    { name = "total", required = false, type = { kind = "optional", inner = { kind = "ref", name = "TokenUsage" } } },
   },
 }
 

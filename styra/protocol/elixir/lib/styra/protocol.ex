@@ -934,7 +934,7 @@ defmodule Styra.Protocol do
         %{name: "turn_completed", payload: %{
           kind: :struct,
           fields: [
-            %{name: "usage", required: true, type: %{kind: :ref, name: "TokenUsage"}}
+            %{name: "usage", required: false, type: %{kind: :ref, name: "TurnUsage"}}
           ]
         }},
         %{name: "usage_updated", payload: %{
@@ -1223,6 +1223,23 @@ defmodule Styra.Protocol do
         %{name: "quota", payload: %{kind: :newtype, type: %{kind: :ref, name: "QuotaEvent"}}},
         %{name: "working_directory_changed", payload: %{kind: :newtype, type: %{kind: :string, path: true}}},
         %{name: "ended", payload: %{kind: :newtype, type: %{kind: :ref, name: "InteractionEnd"}}}
+      ]
+    },
+
+    # What a turn cost, and what the thread has cost through the end of it.
+    #
+    # No provider reports both, and they do not report the same one: the
+    # app-server sends a running thread total in its own notification and
+    # nothing at all with the turn's end, while Claude and `codex exec` report
+    # the turn's own spend and never a total. Each decoder fills only the half
+    # its wire line actually states — an absent figure stays `None` rather than
+    # becoming a zero that reads like a real measurement — and `UsageTracker`
+    # derives the other half from the run of events around it.
+    "TurnUsage" => %{
+      kind: :struct,
+      fields: [
+        %{name: "turn", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "TokenUsage"}}},
+        %{name: "total", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "TokenUsage"}}}
       ]
     },
 
@@ -3002,10 +3019,15 @@ defmodule Styra.Protocol.AgentEvent do
 
   def turn_started, do: "turn_started"
 
+  @doc ~S"""
+  The turn ended. `usage` states what it cost and what the thread has
+  cost so far, as far as either is known — see `TurnUsage`, and
+  `UsageTracker`, which fills in whichever half the provider left out.
+  """
   def turn_completed, do: "turn_completed"
 
   @doc ~S"""
-  A token-usage snapshot that arrives independently of a turn's end (the
+  A running thread total that arrives independently of a turn's end (the
   app-server protocol reports it after every step within a turn, not just
   the last). Updates the usage display without signalling that the agent
   has gone idle — see `TurnCompleted` for the actual end-of-turn signal.
