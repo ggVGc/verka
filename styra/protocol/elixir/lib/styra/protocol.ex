@@ -86,6 +86,13 @@ defmodule Styra.Protocol do
           ]
         }},
         %{name: "resume_session", payload: %{kind: :newtype, type: %{kind: :ref, name: "ResumeSession"}}},
+        %{name: "create_session_worktree", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "convert_session_provider", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -264,6 +271,7 @@ defmodule Styra.Protocol do
         %{name: "session_plan", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}},
         %{name: "templates", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "TemplateSummary"}}}},
         %{name: "session_resumed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionInfo"}}},
+        %{name: "session_worktree_created", payload: %{kind: :unit}},
         %{name: "session_converted", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_branched", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_renamed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
@@ -1385,6 +1393,7 @@ defmodule Styra.Protocol do
     "plan_session",
     "list_templates",
     "resume_session",
+    "create_session_worktree",
     "convert_session_provider",
     "branch_session",
     "rename_session",
@@ -1991,6 +2000,18 @@ defmodule Styra.Protocol do
     def resume_session!(data), do: Styra.Protocol.build!("resume_session", data)
 
     @doc ~S"""
+    Create and associate a linked Git worktree for an existing Session.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def create_session_worktree(data), do: Styra.Protocol.build("create_session_worktree", data)
+
+    @doc "`create_session_worktree/1`, raising on a request the server would refuse."
+    def create_session_worktree!(data), do: Styra.Protocol.build!("create_session_worktree", data)
+
+    @doc ~S"""
     Convert a stored Session's native provider transcript (Codex rollout or
     Claude project JSONL) to the other interactive provider's format,
     using Genta's session conversion. The source Session and its native
@@ -2342,6 +2363,7 @@ defmodule Styra.Protocol.Response do
     {:session_plan, "session_plan"},
     {:templates, "templates"},
     {:session_resumed, "session_resumed"},
+    {:session_worktree_created, "session_worktree_created"},
     {:session_converted, "session_converted"},
     {:session_branched, "session_branched"},
     {:session_renamed, "session_renamed"},
@@ -2405,6 +2427,7 @@ defmodule Styra.Protocol.Response do
   def templates, do: "templates"
 
   def session_resumed, do: "session_resumed"
+  def session_worktree_created, do: "session_worktree_created"
 
   def session_converted, do: "session_converted"
 

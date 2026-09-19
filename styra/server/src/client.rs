@@ -96,6 +96,14 @@ impl Client {
         }
     }
 
+    /// Give an existing Session its own linked Git worktree and branch.
+    pub fn create_session_worktree(&self, id: &str) -> Result<()> {
+        match self.request(Request::CreateSessionWorktree { id: id.to_owned() })? {
+            Response::SessionWorktreeCreated => Ok(()),
+            other => unexpected("session_worktree_created", other),
+        }
+    }
+
     /// Convert a stored Session's native transcript to the other interactive
     /// provider's format and return the new sibling Session it was written
     /// to. The source Session is untouched.

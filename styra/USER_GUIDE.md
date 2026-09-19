@@ -70,6 +70,7 @@ live interactions.
 | Key | Use |
 | --- | --- |
 | `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send first prompt in a new Git workspace and branch / insert editor newline |
+| `W` (existing session) | create and associate a linked workspace and branch; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `s` / `S` | interrupt the active turn / stop its interaction |
 | `n` / `N` | new session / stop then start a new session |

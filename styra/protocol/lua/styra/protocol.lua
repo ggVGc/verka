@@ -76,6 +76,13 @@ M.types.Request = {
       },
     } },
     { name = "resume_session", payload = { kind = "newtype", type = { kind = "ref", name = "ResumeSession" } } },
+    { name = "create_session_worktree", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "convert_session_provider", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -254,6 +261,7 @@ M.types.Response = {
     { name = "session_plan", payload = { kind = "newtype", type = { kind = "ref", name = "DrivaOptions" } } },
     { name = "templates", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "TemplateSummary" } } } },
     { name = "session_resumed", payload = { kind = "newtype", type = { kind = "ref", name = "SessionInfo" } } },
+    { name = "session_worktree_created", payload = { kind = "unit" } },
     { name = "session_converted", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "session_branched", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "session_renamed", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
@@ -1355,7 +1363,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1368,6 +1376,7 @@ M.Request = {
   PLAN_SESSION = "plan_session",
   LIST_TEMPLATES = "list_templates",
   RESUME_SESSION = "resume_session",
+  CREATE_SESSION_WORKTREE = "create_session_worktree",
   CONVERT_SESSION_PROVIDER = "convert_session_provider",
   BRANCH_SESSION = "branch_session",
   RENAME_SESSION = "rename_session",
@@ -1396,7 +1405,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_worktree_created", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
@@ -1409,6 +1418,7 @@ M.Response = {
   SESSION_PLAN = "session_plan",
   TEMPLATES = "templates",
   SESSION_RESUMED = "session_resumed",
+  SESSION_WORKTREE_CREATED = "session_worktree_created",
   SESSION_CONVERTED = "session_converted",
   SESSION_BRANCHED = "session_branched",
   SESSION_RENAMED = "session_renamed",
@@ -2082,6 +2092,14 @@ end
 ---   selection  Selection|null  (optional)
 function M.request.resume_session(data)
   return M.build("resume_session", data)
+end
+
+--- Create and associate a linked Git worktree for an existing Session.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.create_session_worktree(data)
+  return M.build("create_session_worktree", data)
 end
 
 --- Convert a stored Session's native provider transcript (Codex rollout or

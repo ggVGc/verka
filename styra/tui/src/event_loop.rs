@@ -922,6 +922,16 @@ pub fn run(
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
+            Some(Request::CreateSessionWorktree) => {
+                match client.create_session_worktree(&app.session_id) {
+                    Ok(()) => app.show_action_message(
+                        "created and associated a linked workspace; it will be used when this Session next launches",
+                    ),
+                    Err(error) => app.show_action_message(format!(
+                        "could not create a linked workspace: {error}"
+                    )),
+                }
+            }
             Some(Request::ApplySelection) => {
                 let Attachment::Attached { .. } = live else {
                     continue;

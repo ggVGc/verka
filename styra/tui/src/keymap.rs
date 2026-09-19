@@ -57,6 +57,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "live interactions/sessions/Workspaces",
     },
     ReferenceRow::Binding {
+        keys: "W (existing session)",
+        action: "create and associate a Git branch and workspace",
+    },
+    ReferenceRow::Binding {
         keys: "T (main / interactions)",
         action: "edit the current or selected interaction's tags",
     },

@@ -289,6 +289,12 @@ pub enum Request {
         workspace_id: String,
     },
     ResumeSession(ResumeSession),
+    /// Create and associate a linked Git worktree for an existing Session.
+    /// Refused when it already has one; the association is used on its next
+    /// launch or resume.
+    CreateSessionWorktree {
+        id: String,
+    },
     /// Convert a stored Session's native provider transcript (Codex rollout or
     /// Claude project JSONL) to the other interactive provider's format,
     /// using Genta's session conversion. The source Session and its native
@@ -458,6 +464,7 @@ pub enum Response {
     SessionPlan(DrivaOptions),
     Templates(Vec<TemplateSummary>),
     SessionResumed(SessionInfo),
+    SessionWorktreeCreated,
     SessionConverted(SessionSummary),
     SessionBranched(SessionSummary),
     SessionRenamed(SessionSummary),
@@ -642,6 +649,15 @@ mod tests {
             json["data"].get("selection").is_none(),
             "a resume that keeps the stored selection names none"
         );
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    #[test]
+    fn a_session_worktree_request_names_the_existing_session() {
+        let request = Request::CreateSessionWorktree { id: "styra-1".into() };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "create_session_worktree");
+        assert_eq!(json["data"]["id"], "styra-1");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 

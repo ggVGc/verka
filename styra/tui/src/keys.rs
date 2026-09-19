@@ -190,6 +190,9 @@ pub fn handle_list_key(
         }
         KeyCode::Char('a') if app.view != View::Files => return app.ask(Request::Interactions),
         KeyCode::Char('V') => return app.ask(Request::Workspace),
+        KeyCode::Char('W') if !app.session_id.is_empty() => {
+            return app.ask(Request::CreateSessionWorktree)
+        }
         KeyCode::Char('A') => return app.ask(Request::Sessions),
         KeyCode::Char('N') => return app.ask(Request::Reset),
         KeyCode::Char('n') => return app.ask(Request::NewSession),
@@ -806,6 +809,28 @@ mod tests {
         press(&mut app, KeyModifiers::NONE);
         assert_eq!(app.take_request(), Some(Request::Interactions));
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn uppercase_w_requests_a_worktree_for_an_existing_session() {
+        let root = tree("session-worktree");
+        let mut app = app(&root);
+        app.enter_list();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Char('W'), KeyModifiers::SHIFT),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+
+        assert_eq!(app.take_request(), Some(Request::CreateSessionWorktree));
         let _ = std::fs::remove_dir_all(root);
     }
 

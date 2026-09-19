@@ -316,6 +316,8 @@ pub enum Request {
     Reset,
     /// Return to the blank start screen without stopping the current interaction.
     NewSession,
+    /// Give the current Session a linked Git workspace and branch.
+    CreateSessionWorktree,
     /// Open the selected entry in the Files view in the configured opener.
     EditFile,
     /// Open the live Session's sandbox shell in a terminal window of its own.

@@ -748,6 +748,20 @@ impl ServerState {
         )
         .map(Some)
     }
+
+    fn create_session_worktree(&self, id: &str) -> Result<()> {
+        let session = self.stored_summary(id)?;
+        let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
+        let path = crate::workspace::worktrees_dir(&self.inner.store_root, &workspace.id).join(id);
+        if path.exists() {
+            anyhow::bail!("this Session already has a linked workspace; creating another is not possible");
+        }
+        let Some(worktrees) = self.workspace_worktrees(&workspace, true)? else {
+            anyhow::bail!("the Workspace is not inside a Git working tree");
+        };
+        worktrees.checkout(id, None)?;
+        Ok(())
+    }
     pub fn new(store_root: PathBuf, socket: PathBuf) -> Self {
         Self::with_socket(store_root, Some(socket), None)
     }
@@ -2174,6 +2188,10 @@ impl ServerState {
             }
             Request::ResumeSession(request) => {
                 Ok(Response::SessionResumed(self.resume_session(request)?))
+            }
+            Request::CreateSessionWorktree { id } => {
+                self.create_session_worktree(&id)?;
+                Ok(Response::SessionWorktreeCreated)
             }
             Request::ConvertSessionProvider { id } => Ok(Response::SessionConverted(
                 self.convert_session_provider(&id)?,
