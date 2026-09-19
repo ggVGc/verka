@@ -69,7 +69,7 @@ live interactions.
 
 | Key | Use |
 | --- | --- |
-| `Enter` / `Alt+Enter` | send message / insert editor newline |
+| `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send first prompt in a new Git workspace and branch / insert editor newline |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `s` / `S` | interrupt the active turn / stop its interaction |
 | `n` / `N` | new session / stop then start a new session |
@@ -78,7 +78,6 @@ live interactions.
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
 | `Ctrl+A` | go to the next interaction that went idle unseen |
-| `W` | run future launches in a linked worktree of their own, or stop doing so |
 | `L` | choose provider, model, and effort |
 
 Sending a message to a stopped or viewed Session automatically attempts native
@@ -212,9 +211,9 @@ These are related but independent Workspace features:
 | Feature | How it is enabled | What a future interaction receives |
 | --- | --- | --- |
 | **Git checkout association** | When the TUI creates a Workspace, it finds the nearest enclosing checkout and records its canonical root automatically. | The checkout is mounted read-only at its host path; its Git metadata/common directory is writable, so Git can operate on that checkout. |
-| **Linked worktrees** | Press `W` to opt the current Workspace in. | A branch and linked checkout of its own, mounted writable at `/tmp/styra/workspace`, plus the repository's shared Git metadata. |
+| **Linked worktrees** | Send the first prompt with `Ctrl+Enter`. | A branch and linked checkout of its own, mounted writable at `/tmp/styra/workspace`, plus the repository's shared Git metadata. |
 
-The automatic association is visible in Workspace metadata. Press `d`, then
+The automatic repository association is visible in Workspace metadata. Press `d`, then
 `G`, to replace it; enter any path inside the checkout and Styra stores its
 root. Submit an empty path to clear it. A non-TUI client can also update it
 through the local socket API:
@@ -229,9 +228,8 @@ Use `"git_repository":null` to clear the association. The checkout must exist
 and be inside a Git repository.
 
 The repository worktrees are made from is discovered from the **Workspace host
-directory**, not from the optional checkout association, so `W` only has an
-effect when that directory is inside a Git working tree. `W` affects future
-launches only and does not delete existing worktrees.
+directory**, not from the optional checkout association, so the first-prompt
+`Ctrl+Enter` action only has an effect when that directory is inside a Git working tree.
 
 There is nothing to ask the agent for: before an interaction starts, Styra
 creates a branch named after the work and its Session

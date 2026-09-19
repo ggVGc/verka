@@ -163,7 +163,11 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
         preceding,
         notice: None,
         text: &app.composer.text,
-        placeholder: "type a message, Enter to send",
+        placeholder: if app.session_id.is_empty() {
+            "Enter to send · Ctrl+Enter to send in a new Git workspace"
+        } else {
+            "type a message, Enter to send"
+        },
         cursor: app.focus == Focus::Input,
     }
 }
@@ -329,7 +333,6 @@ fn draw_main(
     let footer = styra_ui::footer::FooterView {
         help_key: crate::keymap::HELP,
         working_directory: &working_directory,
-        worktrees_enabled: app.workspace.worktrees_enabled,
         idle_interactions: app.interactions.idle_notification_count(),
         quota: &quota_alert,
         auto_retry: app.auto_retry,

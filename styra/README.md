@@ -86,10 +86,10 @@ workspaces/<WORKSPACE-ID>/
     diagnostics.log
 ```
 
-Linked worktrees are off by default. Press `W` in the interface to opt a
-Workspace in; the footer always shows `worktrees: ON` or `worktrees: OFF`. When
-enabled and the Workspace's host directory is inside a Git working tree, Styra
-discovers that repository on the host and, before each interaction starts,
+Linked worktrees are off by default. Send a new session's first prompt with
+`Ctrl+Enter` to create its branch and worktree as part of that submission.
+When selected and the Workspace's host directory is inside a Git working tree,
+Styra discovers that repository on the host and, before that interaction starts,
 creates a branch `styra/<SESSION-ID>` checked out at
 `worktrees/<SESSION-ID>`. That checkout is the interaction's workspace: Driva
 mounts it read-write at `/tmp/styra/workspace` and mounts the repository's
@@ -159,7 +159,6 @@ Operations:
 | `list_workspaces` | none | `workspaces` |
 | `workspace` | Workspace id | `workspace` |
 | `set_workspace_git_repository` | Workspace id and optional Git repository path | `workspace_git_repository_updated` |
-| `set_workspace_worktrees_enabled` | Workspace id and enabled state | `workspace_worktrees_updated` |
 | `create_session` | Workspace id, provider/model/effort selection, this launch's own policy, optional message | `session_created` |
 | `plan_session` | Workspace id and the same launch inputs, creating nothing | `session_plan` |
 | `list_templates` | Workspace id | `templates` |

@@ -734,8 +734,9 @@ impl ServerState {
     fn workspace_worktrees(
         &self,
         workspace: &WorkspaceSummary,
+        create_worktree: bool,
     ) -> Result<Option<crate::worktree::Worktrees>> {
-        if !workspace.worktrees_enabled {
+        if !create_worktree {
             return Ok(None);
         }
         let Some(repository) = crate::git::discover(&workspace.host_path)? else {
@@ -819,7 +820,7 @@ impl ServerState {
             .map(crate::git::mounts)
             .transpose()?
             .unwrap_or_default();
-        let worktrees = self.workspace_worktrees(&owning_workspace)?;
+        let worktrees = self.workspace_worktrees(&owning_workspace, request.create_worktree)?;
         let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
         let layout = launch_layout(worktrees.as_ref(), &workspace);
@@ -1197,7 +1198,7 @@ impl ServerState {
             .map(crate::git::mounts)
             .transpose()?
             .unwrap_or_default();
-        let worktrees = self.workspace_worktrees(&owning_workspace)?;
+        let worktrees = self.workspace_worktrees(&owning_workspace, request.create_worktree)?;
         let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
         let layout = launch_layout(worktrees.as_ref(), &workspace);
@@ -1310,7 +1311,12 @@ impl ServerState {
             .map(crate::git::mounts)
             .transpose()?
             .unwrap_or_default();
-        let worktrees = self.workspace_worktrees(&owning_workspace)?;
+        // A worktree belongs to the Session that explicitly created it. Never
+        // create one merely because this Workspace once had the old preference.
+        let has_worktree = crate::workspace::worktrees_dir(&self.inner.store_root, &owning_workspace.id)
+            .join(&request.id)
+            .is_dir();
+        let worktrees = self.workspace_worktrees(&owning_workspace, has_worktree)?;
         let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
         let layout = launch_layout(worktrees.as_ref(), &workspace);
@@ -2145,23 +2151,6 @@ impl ServerState {
                         &self.inner.store_root,
                         &workspace_id,
                         git_repository.as_deref(),
-                    )?,
-                ))
-            }
-            Request::SetWorkspaceWorktreesEnabled {
-                workspace_id,
-                enabled,
-            } => {
-                let _metadata = self
-                    .inner
-                    .workspace_metadata
-                    .lock()
-                    .expect("server workspace metadata lock poisoned");
-                Ok(Response::WorkspaceWorktreesUpdated(
-                    crate::workspace::set_worktrees_enabled(
-                        &self.inner.store_root,
-                        &workspace_id,
-                        enabled,
                     )?,
                 ))
             }
@@ -3106,12 +3095,10 @@ mod tests {
         let workspace = crate::workspace::create(&store, &host, None).unwrap();
         let worktrees_path = crate::workspace::worktrees_dir(&store, &workspace.id);
 
-        assert!(state.workspace_worktrees(&workspace).unwrap().is_none());
+        assert!(state.workspace_worktrees(&workspace, false).unwrap().is_none());
         assert!(!worktrees_path.exists());
 
-        let workspace =
-            crate::workspace::set_worktrees_enabled(&store, &workspace.id, true).unwrap();
-        assert!(state.workspace_worktrees(&workspace).unwrap().is_some());
+        assert!(state.workspace_worktrees(&workspace, true).unwrap().is_some());
         assert!(worktrees_path.is_dir());
 
         std::fs::remove_dir_all(store).ok();
@@ -3212,6 +3199,7 @@ mod tests {
                 workspace_id: workspace.id,
                 selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
                 launch: LaunchPolicy::default(),
+                create_worktree: false,
             })
             .unwrap();
         let canonical = worktree.canonicalize().unwrap();
@@ -3251,14 +3239,13 @@ mod tests {
 
         let state = ServerState::new(store.clone(), store.with_extension("sock"));
         let workspace = crate::workspace::create(&store, &host, None).unwrap();
-        let workspace =
-            crate::workspace::set_worktrees_enabled(&store, &workspace.id, true).unwrap();
 
         let plan = state
             .plan_session(crate::protocol::PlanSession {
                 workspace_id: workspace.id.clone(),
                 selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
                 launch: LaunchPolicy::default(),
+                create_worktree: true,
             })
             .unwrap();
 
@@ -3318,6 +3305,7 @@ mod tests {
                     workspace_id: workspace.id.clone(),
                     selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
                     launch,
+                    create_worktree: false,
                 })
                 .unwrap();
             plan.mounts

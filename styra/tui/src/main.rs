@@ -548,7 +548,6 @@ mod cli_tests {
             name: None,
             host_path: host_path.into(),
             git_repository: None,
-            worktrees_enabled: false,
             path: format!("/store/{id}").into(),
             session_count: 0,
             age: "now".into(),

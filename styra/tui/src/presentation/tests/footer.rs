@@ -42,16 +42,7 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("? keybinds"));
         assert!(screen.contains("/tmp/styra/workspace"));
-        assert!(screen.contains("W worktrees: OFF"));
         assert!(!screen.contains("j/k next/prev"));
-    }
-
-    #[test]
-    fn footer_makes_enabled_worktree_creation_visible() {
-        let mut app = test_support::app("s1");
-        app.workspace.worktrees_enabled = true;
-
-        assert!(rendered(&app).contains("W worktrees: ON"));
     }
 
     /// An armed rate-limit retry has to be visible from the interaction the

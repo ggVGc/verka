@@ -33,6 +33,7 @@ fn main() -> anyhow::Result<()> {
         workspace_id: workspace.id,
         selection: styra_server::agent::Selection::new(styra_server::agent::Provider::Codex),
         launch: Default::default(),
+        create_worktree: false,
         message: Some(prompt),
         name: None,
         contract: None,

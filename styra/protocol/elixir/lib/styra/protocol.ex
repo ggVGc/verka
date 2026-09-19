@@ -69,14 +69,6 @@ defmodule Styra.Protocol do
             %{name: "git_repository", required: true, type: %{kind: :optional, inner: %{kind: :string, path: true}}}
           ]
         }},
-        %{name: "set_workspace_worktrees_enabled", payload: %{
-          kind: :struct,
-          deny_unknown_fields: true,
-          fields: [
-            %{name: "workspace_id", required: true, type: %{kind: :string}},
-            %{name: "enabled", required: true, type: %{kind: :boolean}}
-          ]
-        }},
         %{name: "workspace_launch", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -267,7 +259,6 @@ defmodule Styra.Protocol do
         %{name: "workspaces", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "WorkspaceSummary"}}}},
         %{name: "workspace", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
         %{name: "workspace_git_repository_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
-        %{name: "workspace_worktrees_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
         %{name: "workspace_launch", payload: %{kind: :newtype, type: %{kind: :ref, name: "LaunchPolicy"}}},
         %{name: "session_created", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionInfo"}}},
         %{name: "session_plan", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}},
@@ -331,6 +322,7 @@ defmodule Styra.Protocol do
         %{name: "workspace_id", required: true, type: %{kind: :string}},
         %{name: "selection", required: true, type: %{kind: :ref, name: "Selection"}},
         %{name: "launch", required: false, type: %{kind: :ref, name: "LaunchPolicy"}},
+        %{name: "create_worktree", required: false, type: %{kind: :boolean}},
         %{name: "message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "name", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "contract", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Contract"}}}
@@ -346,7 +338,8 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "workspace_id", required: true, type: %{kind: :string}},
         %{name: "selection", required: true, type: %{kind: :ref, name: "Selection"}},
-        %{name: "launch", required: false, type: %{kind: :ref, name: "LaunchPolicy"}}
+        %{name: "launch", required: false, type: %{kind: :ref, name: "LaunchPolicy"}},
+        %{name: "create_worktree", required: false, type: %{kind: :boolean}}
       ]
     },
 
@@ -492,7 +485,6 @@ defmodule Styra.Protocol do
         %{name: "name", required: true, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "host_path", required: true, type: %{kind: :string, path: true}},
         %{name: "git_repository", required: false, type: %{kind: :optional, inner: %{kind: :string, path: true}}},
-        %{name: "worktrees_enabled", required: false, type: %{kind: :boolean}},
         %{name: "path", required: true, type: %{kind: :string, path: true}},
         %{name: "session_count", required: true, type: %{kind: :number, integer: true}},
         %{name: "age", required: true, type: %{kind: :string}},
@@ -1388,7 +1380,6 @@ defmodule Styra.Protocol do
     "list_workspaces",
     "workspace",
     "set_workspace_git_repository",
-    "set_workspace_worktrees_enabled",
     "workspace_launch",
     "create_session",
     "plan_session",
@@ -1929,20 +1920,6 @@ defmodule Styra.Protocol do
     def set_workspace_git_repository!(data), do: Styra.Protocol.build!("set_workspace_git_repository", data)
 
     @doc ~S"""
-    Opt launches in this Workspace in or out of running in a linked
-    worktree of their own rather than in the Workspace directory itself.
-
-    Fields of `data`:
-
-      * `workspace_id`  string
-      * `enabled     `  boolean
-    """
-    def set_workspace_worktrees_enabled(data), do: Styra.Protocol.build("set_workspace_worktrees_enabled", data)
-
-    @doc "`set_workspace_worktrees_enabled/1`, raising on a request the server would refuse."
-    def set_workspace_worktrees_enabled!(data), do: Styra.Protocol.build!("set_workspace_worktrees_enabled", data)
-
-    @doc ~S"""
     Read the server-owned Workspace launch policy without touching the
     Workspace's last-accessed timestamp. Used as a lightweight change feed
     by clients displaying the Driva options view.
@@ -2360,7 +2337,6 @@ defmodule Styra.Protocol.Response do
     {:workspaces, "workspaces"},
     {:workspace, "workspace"},
     {:workspace_git_repository_updated, "workspace_git_repository_updated"},
-    {:workspace_worktrees_updated, "workspace_worktrees_updated"},
     {:workspace_launch, "workspace_launch"},
     {:session_created, "session_created"},
     {:session_plan, "session_plan"},
@@ -2419,7 +2395,6 @@ defmodule Styra.Protocol.Response do
 
   def workspace_git_repository_updated, do: "workspace_git_repository_updated"
 
-  def workspace_worktrees_updated, do: "workspace_worktrees_updated"
 
   def workspace_launch, do: "workspace_launch"
 

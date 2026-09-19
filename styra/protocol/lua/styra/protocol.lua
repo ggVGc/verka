@@ -59,14 +59,6 @@ M.types.Request = {
         { name = "git_repository", required = true, type = { kind = "optional", inner = { kind = "string", path = true } } },
       },
     } },
-    { name = "set_workspace_worktrees_enabled", payload = {
-      kind = "struct",
-      deny_unknown_fields = true,
-      fields = {
-        { name = "workspace_id", required = true, type = { kind = "string" } },
-        { name = "enabled", required = true, type = { kind = "boolean" } },
-      },
-    } },
     { name = "workspace_launch", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -257,7 +249,6 @@ M.types.Response = {
     { name = "workspaces", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "WorkspaceSummary" } } } },
     { name = "workspace", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
     { name = "workspace_git_repository_updated", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
-    { name = "workspace_worktrees_updated", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
     { name = "workspace_launch", payload = { kind = "newtype", type = { kind = "ref", name = "LaunchPolicy" } } },
     { name = "session_created", payload = { kind = "newtype", type = { kind = "ref", name = "SessionInfo" } } },
     { name = "session_plan", payload = { kind = "newtype", type = { kind = "ref", name = "DrivaOptions" } } },
@@ -321,6 +312,7 @@ M.types.CreateSession = {
     { name = "workspace_id", required = true, type = { kind = "string" } },
     { name = "selection", required = true, type = { kind = "ref", name = "Selection" } },
     { name = "launch", required = false, type = { kind = "ref", name = "LaunchPolicy" } },
+    { name = "create_worktree", required = false, type = { kind = "boolean" } },
     { name = "message", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "name", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "contract", required = false, type = { kind = "optional", inner = { kind = "ref", name = "Contract" } } },
@@ -337,6 +329,7 @@ M.types.PlanSession = {
     { name = "workspace_id", required = true, type = { kind = "string" } },
     { name = "selection", required = true, type = { kind = "ref", name = "Selection" } },
     { name = "launch", required = false, type = { kind = "ref", name = "LaunchPolicy" } },
+    { name = "create_worktree", required = false, type = { kind = "boolean" } },
   },
 }
 
@@ -482,7 +475,6 @@ M.types.WorkspaceSummary = {
     { name = "name", required = true, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "host_path", required = true, type = { kind = "string", path = true } },
     { name = "git_repository", required = false, type = { kind = "optional", inner = { kind = "string", path = true } } },
-    { name = "worktrees_enabled", required = false, type = { kind = "boolean" } },
     { name = "path", required = true, type = { kind = "string", path = true } },
     { name = "session_count", required = true, type = { kind = "number", integer = true } },
     { name = "age", required = true, type = { kind = "string" } },
@@ -1363,7 +1355,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "set_workspace_git_repository", "set_workspace_worktrees_enabled", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1371,7 +1363,6 @@ M.Request = {
   LIST_WORKSPACES = "list_workspaces",
   WORKSPACE = "workspace",
   SET_WORKSPACE_GIT_REPOSITORY = "set_workspace_git_repository",
-  SET_WORKSPACE_WORKTREES_ENABLED = "set_workspace_worktrees_enabled",
   WORKSPACE_LAUNCH = "workspace_launch",
   CREATE_SESSION = "create_session",
   PLAN_SESSION = "plan_session",
@@ -1405,7 +1396,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_git_repository_updated", "workspace_worktrees_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
@@ -1413,7 +1404,6 @@ M.Response = {
   WORKSPACES = "workspaces",
   WORKSPACE = "workspace",
   WORKSPACE_GIT_REPOSITORY_UPDATED = "workspace_git_repository_updated",
-  WORKSPACE_WORKTREES_UPDATED = "workspace_worktrees_updated",
   WORKSPACE_LAUNCH = "workspace_launch",
   SESSION_CREATED = "session_created",
   SESSION_PLAN = "session_plan",
@@ -2041,16 +2031,6 @@ end
 ---   git_repository  path|null
 function M.request.set_workspace_git_repository(data)
   return M.build("set_workspace_git_repository", data)
-end
-
---- Opt launches in this Workspace in or out of running in a linked
---- worktree of their own rather than in the Workspace directory itself.
----
---- Fields of `data`:
----   workspace_id  string
----   enabled       boolean
-function M.request.set_workspace_worktrees_enabled(data)
-  return M.build("set_workspace_worktrees_enabled", data)
 end
 
 --- Read the server-owned Workspace launch policy without touching the

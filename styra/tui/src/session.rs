@@ -277,11 +277,13 @@ pub fn create_session(
     selection: &Selection,
     seed: Option<&str>,
     contract: Option<Contract>,
+    create_worktree: bool,
 ) -> Result<SessionInfo> {
     client.create_session(&CreateSession {
         workspace_id: workspace_id.to_owned(),
         selection: selection.clone(),
         launch: launch.clone(),
+        create_worktree,
         message: seed.map(str::to_owned),
         name: None,
         contract,
@@ -311,6 +313,7 @@ pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str) {
         workspace_id: workspace_id.to_owned(),
         selection: selection.clone(),
         launch: overlay,
+        create_worktree: false,
     });
     match planned {
         Ok(options) => app.launch.plan(selection, effective, Some(options)),
@@ -341,7 +344,7 @@ pub fn launch_live_session(
 ) -> Result<(App, SessionInfo)> {
     // The CLI's trailing prompt opens a conversation, not a typed question;
     // asking for a shape is a per-turn choice made in the interface.
-    let info = create_session(client, launch, workspace_id, selection, seed, None)?;
+    let info = create_session(client, launch, workspace_id, selection, seed, None, false)?;
     let mut app = App::new(info.selection.clone(), info.id.clone());
     app.launch.interaction = launch.clone();
     app.session_name = info.name.clone();
@@ -711,7 +714,6 @@ mod tests {
             name: None,
             host_path: host_path.into(),
             git_repository: None,
-            worktrees_enabled: false,
             path: format!("/state/workspaces/{id}").into(),
             session_count: 0,
             age: "now".into(),

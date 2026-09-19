@@ -65,10 +65,6 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "go to the next interaction that went idle unseen",
     },
     ReferenceRow::Binding {
-        keys: "W",
-        action: "toggle worktree creation for future launches",
-    },
-    ReferenceRow::Binding {
         keys: "w (interactions)",
         action: "current Workspace / all Workspaces",
     },
@@ -255,6 +251,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
     ReferenceRow::Binding {
         keys: "Enter",
         action: "send message",
+    },
+    ReferenceRow::Binding {
+        keys: "Ctrl+Enter (first prompt)",
+        action: "send in a new Git branch and workspace",
     },
     ReferenceRow::Binding {
         keys: "/cd <directory>",

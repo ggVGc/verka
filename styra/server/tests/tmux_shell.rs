@@ -152,6 +152,7 @@ done
             workspace_id: owning_workspace.id,
             selection: styra_server::agent::Selection::new(styra_server::agent::Provider::Codex),
             launch: Default::default(),
+            create_worktree: false,
             message: None,
             name: None,
             contract: None,

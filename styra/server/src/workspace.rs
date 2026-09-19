@@ -20,10 +20,6 @@ struct WorkspaceMeta {
     host_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     git_repository: Option<PathBuf>,
-    /// Opt-in because preparing linked worktrees changes the host repository
-    /// and is not required by ordinary sessions.
-    #[serde(default)]
-    worktrees_enabled: bool,
     created_at_ms: u64,
     #[serde(default)]
     last_accessed_at_ms: Option<u64>,
@@ -83,7 +79,6 @@ pub fn create_with_repository(
         name,
         host_path: host_path.clone(),
         git_repository: git_repository.clone(),
-        worktrees_enabled: false,
         created_at_ms,
         last_accessed_at_ms: Some(created_at_ms),
         launch: LaunchPolicy::default(),
@@ -94,7 +89,6 @@ pub fn create_with_repository(
         name: meta.name,
         host_path,
         git_repository,
-        worktrees_enabled: false,
         path,
         session_count: 0,
         age: "just now".into(),
@@ -171,7 +165,6 @@ fn summary_from_meta(path: &Path, meta: WorkspaceMeta, now: u64) -> Result<Works
         name: meta.name,
         host_path: meta.host_path,
         git_repository: meta.git_repository,
-        worktrees_enabled: meta.worktrees_enabled,
         path: path.to_path_buf(),
         session_count,
         age: humanize_age(now, meta.created_at_ms),
@@ -193,23 +186,6 @@ pub fn set_git_repository(
     }
     let mut meta = read_meta(&path)?;
     meta.git_repository = git_repository.map(validate_git_repository).transpose()?;
-    write_meta(&path, &meta)?;
-    summary_from_meta(&path, meta, now_ms())
-}
-
-/// Enable or disable linked-worktree creation for subsequent launches in a
-/// Workspace. Disabling does not delete worktrees already created by an agent.
-pub fn set_worktrees_enabled(
-    store_root: &Path,
-    id: &str,
-    enabled: bool,
-) -> Result<WorkspaceSummary> {
-    let path = workspace_dir(store_root, id);
-    if !path.is_dir() {
-        anyhow::bail!("Workspace {id:?} was not found");
-    }
-    let mut meta = read_meta(&path)?;
-    meta.worktrees_enabled = enabled;
     write_meta(&path, &meta)?;
     summary_from_meta(&path, meta, now_ms())
 }
@@ -356,7 +332,6 @@ mod tests {
         assert_eq!(first.host_path, host.canonicalize().unwrap());
         assert!(first.path.join("workspace.json").is_file());
         assert!(first.path.join("sessions").is_dir());
-        assert!(!first.worktrees_enabled);
         assert!(!first.path.join("worktrees").exists());
 
         let listed = list(&store).unwrap();
@@ -432,33 +407,10 @@ mod tests {
         let mut json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
         json.as_object_mut().unwrap().remove("launch");
-        json.as_object_mut().unwrap().remove("worktrees_enabled");
         std::fs::write(&meta_path, serde_json::to_string(&json).unwrap()).unwrap();
 
         let reread = get(&store, &workspace.id).unwrap();
         assert!(reread.launch.is_empty());
-        assert!(!reread.worktrees_enabled);
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
-    }
-
-    #[test]
-    fn worktree_creation_is_opt_in_and_durable() {
-        let store = temp_dir("worktree-setting-store");
-        let host = temp_dir("worktree-setting-host");
-        git_init(&host);
-        let workspace = create(&store, &host, None).unwrap();
-
-        assert!(!workspace.worktrees_enabled);
-        assert!(!workspace.path.join("worktrees").exists());
-
-        let enabled = set_worktrees_enabled(&store, &workspace.id, true).unwrap();
-        assert!(enabled.worktrees_enabled);
-        assert!(get(&store, &workspace.id).unwrap().worktrees_enabled);
-
-        let disabled = set_worktrees_enabled(&store, &workspace.id, false).unwrap();
-        assert!(!disabled.worktrees_enabled);
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();

@@ -58,6 +58,10 @@ pub struct CreateSession {
     /// requests; the server resolves both after merging.
     #[serde(default)]
     pub launch: LaunchPolicy,
+    /// Create a linked Git worktree and branch for this session. This is a
+    /// per-session choice; Workspaces never create them automatically.
+    #[serde(default)]
+    pub create_worktree: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// Optional operator-facing name. When absent, the server derives one
@@ -82,6 +86,9 @@ pub struct PlanSession {
     pub selection: Selection,
     #[serde(default)]
     pub launch: LaunchPolicy,
+    /// Whether the prospective session should get its own linked worktree.
+    #[serde(default)]
+    pub create_worktree: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,12 +270,6 @@ pub enum Request {
     SetWorkspaceGitRepository {
         workspace_id: String,
         git_repository: Option<PathBuf>,
-    },
-    /// Opt launches in this Workspace in or out of running in a linked
-    /// worktree of their own rather than in the Workspace directory itself.
-    SetWorkspaceWorktreesEnabled {
-        workspace_id: String,
-        enabled: bool,
     },
     /// Read the server-owned Workspace launch policy without touching the
     /// Workspace's last-accessed timestamp. Used as a lightweight change feed
@@ -452,7 +453,6 @@ pub enum Response {
     Workspaces(Vec<WorkspaceSummary>),
     Workspace(WorkspaceSummary),
     WorkspaceGitRepositoryUpdated(WorkspaceSummary),
-    WorkspaceWorktreesUpdated(WorkspaceSummary),
     WorkspaceLaunch(LaunchPolicy),
     SessionCreated(SessionInfo),
     SessionPlan(DrivaOptions),
@@ -556,6 +556,7 @@ mod tests {
                 effort: crate::agent::Effort::XHigh,
             },
             launch: LaunchPolicy::default(),
+            create_worktree: false,
             message: None,
             name: None,
             contract: None,
@@ -583,6 +584,7 @@ mod tests {
                 }],
                 ignore_workspace: false,
             },
+            create_worktree: false,
         });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "plan_session");
@@ -730,19 +732,6 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[test]
-    fn workspace_worktree_creation_can_be_enabled_explicitly() {
-        let request = Request::SetWorkspaceWorktreesEnabled {
-            workspace_id: "w-1".into(),
-            enabled: true,
-        };
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["operation"], "set_workspace_worktrees_enabled");
-        assert_eq!(json["data"]["workspace_id"], "w-1");
-        assert_eq!(json["data"]["enabled"], true);
-        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 
     #[test]

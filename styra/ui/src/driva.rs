@@ -87,7 +87,6 @@ pub struct DrivaWorkspace {
     pub id: Option<String>,
     pub name: Option<String>,
     pub given_name: Option<String>,
-    pub worktrees_enabled: bool,
     pub git_repository: Option<PathBuf>,
     pub host_path: Option<PathBuf>,
     pub server_path: Option<PathBuf>,
@@ -768,7 +767,8 @@ fn private_root_groups(options: &DrivaOptions) -> Vec<Vec<Line<'static>>> {
 
 /// The complete durable Workspace snapshot retained by the client. These are
 /// all fields the server's `WorkspaceSummary` reports, rather than only the
-/// name and worktree toggle that happen to be used elsewhere in the UI.
+/// name and first-prompt worktree choice that happen to be used elsewhere in
+/// the UI.
 fn workspace_lines(app: &DrivaView) -> Vec<Line<'static>> {
     let mut lines = vec![section_line("Workspace")];
     lines.push(detail_field_line(
@@ -835,12 +835,7 @@ fn workspace_lines(app: &DrivaView) -> Vec<Line<'static>> {
     lines.push(detail_field_line(
         "capabilities",
         &format!(
-            "worktrees {} · network {} · {} template(s) · {} mount(s)",
-            if app.workspace.worktrees_enabled {
-                "on"
-            } else {
-                "off"
-            },
+            "network {} · {} template(s) · {} mount(s)",
             if standing.grants_network() {
                 "on"
             } else {

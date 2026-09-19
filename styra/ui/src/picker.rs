@@ -827,7 +827,6 @@ mod tests {
             name: Some(name.into()),
             host_path: PathBuf::from(format!("/home/op/{id}")),
             git_repository: None,
-            worktrees_enabled: false,
             path: PathBuf::from(format!("/state/workspaces/{id}")),
             session_count,
             age: "2h ago".into(),

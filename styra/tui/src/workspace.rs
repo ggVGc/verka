@@ -28,8 +28,6 @@ pub struct Location {
     /// The name actually stored by the server, kept separately because
     /// `name` above applies the host-directory display fallback.
     pub given_name: Option<String>,
-    /// Whether future launches expose linked-worktree creation.
-    pub worktrees_enabled: bool,
     /// Canonical Git checkout the server has associated with this Workspace.
     pub git_repository: Option<PathBuf>,
     /// Canonical host directory in the durable Workspace metadata. This can
@@ -62,7 +60,6 @@ impl Location {
         self.id = Some(workspace.id.clone());
         self.name = Some(display_name(workspace));
         self.given_name = workspace.name.clone();
-        self.worktrees_enabled = workspace.worktrees_enabled;
         self.git_repository = workspace.git_repository.clone();
         self.host_path = Some(workspace.host_path.clone());
         self.server_path = Some(workspace.path.clone());
@@ -131,7 +128,6 @@ mod tests {
             name: name.map(str::to_owned),
             host_path: host_path.into(),
             git_repository: None,
-            worktrees_enabled: false,
             path: format!("/state/workspaces/{id}").into(),
             session_count: 0,
             age: "now".into(),

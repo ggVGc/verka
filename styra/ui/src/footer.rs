@@ -25,7 +25,6 @@ pub struct Segment {
 pub struct FooterView<'a> {
     pub help_key: &'a str,
     pub working_directory: &'a str,
-    pub worktrees_enabled: bool,
     pub idle_interactions: usize,
     pub quota: &'a [Segment],
     pub auto_retry: bool,
@@ -34,11 +33,6 @@ pub struct FooterView<'a> {
 pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
     let keybinds = format!(" {} keybinds", view.help_key);
     let keybinds_width = keybinds.width().min(area.width as usize) as u16;
-    let worktrees = format!(
-        " W worktrees: {} ",
-        if view.worktrees_enabled { "ON" } else { "OFF" }
-    );
-    let worktrees_width = worktrees.width().min(area.width as usize) as u16;
     let idle = (view.idle_interactions > 0).then(|| {
         format!(
             " ^a {} interaction{} idle ",
@@ -50,23 +44,21 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         .as_deref()
         .map(UnicodeWidthStr::width)
         .unwrap_or_default()
-        .min(area.width.saturating_sub(worktrees_width) as usize) as u16;
+        .min(area.width as usize) as u16;
     let quota_width = view
         .quota
         .iter()
         .map(|segment| segment.text.width())
         .sum::<usize>()
-        .min(area.width.saturating_sub(worktrees_width) as usize) as u16;
+        .min(area.width as usize) as u16;
     let retry = view.auto_retry.then_some(" R rate-limit retry: on ");
     let retry_width = retry.map(UnicodeWidthStr::width).unwrap_or_default().min(
         area.width
-            .saturating_sub(worktrees_width)
             .saturating_sub(quota_width) as usize,
     ) as u16;
     let directory_width = view.working_directory.width().min(
         area.width
             .saturating_sub(keybinds_width)
-            .saturating_sub(worktrees_width)
             .saturating_sub(idle_width)
             .saturating_sub(retry_width)
             .saturating_sub(quota_width) as usize,
@@ -78,7 +70,6 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             Constraint::Length(quota_width),
             Constraint::Length(retry_width),
             Constraint::Length(idle_width),
-            Constraint::Length(worktrees_width),
             Constraint::Length(directory_width),
         ])
         .split(area);
@@ -131,23 +122,11 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
     }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            worktrees,
-            Style::default().fg(if view.worktrees_enabled {
-                palette::SUCCESS
-            } else {
-                palette::INACTIVE
-            }),
-        )))
-        .right_aligned(),
-        chunks[4],
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
             view.working_directory.to_owned(),
             Style::default().fg(palette::ADDITIONAL_INFO),
         )))
         .right_aligned(),
-        chunks[5],
+        chunks[4],
     );
 }
 
@@ -202,7 +181,6 @@ mod tests {
             &FooterView {
                 help_key: "?",
                 working_directory: "/workspace",
-                worktrees_enabled: true,
                 idle_interactions: 2,
                 quota: &quota,
                 auto_retry: true,
@@ -213,7 +191,6 @@ mod tests {
             "codex: 80%",
             "rate-limit retry: on",
             "2 interactions idle",
-            "worktrees: ON",
             "/workspace",
         ] {
             assert!(output.contains(expected), "missing {expected}: {output}");
@@ -226,7 +203,6 @@ mod tests {
             &FooterView {
                 help_key: "?",
                 working_directory: "/a/very/long/directory",
-                worktrees_enabled: false,
                 idle_interactions: 0,
                 quota: &[],
                 auto_retry: false,

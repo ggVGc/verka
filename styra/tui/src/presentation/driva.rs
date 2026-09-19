@@ -33,7 +33,6 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
         id: app.workspace.id.clone(),
         name: app.workspace.name.clone(),
         given_name: app.workspace.given_name.clone(),
-        worktrees_enabled: app.workspace.worktrees_enabled,
         git_repository: app.workspace.git_repository.clone(),
         host_path: app.workspace.host_path.clone(),
         server_path: app.workspace.server_path.clone(),
