@@ -350,13 +350,6 @@ impl Status {
             InteractionActivity::Stopped => Status::Stopped(StopReason::reported(reason)),
         }
     }
-
-    /// Whether the operator can send a message into this session as it
-    /// stands. A stopped or ended one takes a resume first — which the next
-    /// message triggers, but which is not the same as being sent.
-    pub fn accepts_messages(&self) -> bool {
-        matches!(self, Status::Running | Status::Idle(_) | Status::Background)
-    }
 }
 /// How long the session has been in its current state, and how long since
 /// anything last arrived from the agent.

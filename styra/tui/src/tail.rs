@@ -44,6 +44,7 @@ impl<T> Tail<T> {
         self.scroll_back = 0;
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }

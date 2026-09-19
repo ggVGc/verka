@@ -98,6 +98,7 @@ impl RawView {
         }
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
     }

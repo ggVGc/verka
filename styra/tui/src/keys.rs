@@ -755,7 +755,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn uppercase_g_in_details_opens_the_git_checkout_prompt_prefilled() {
         let root = tree("git-checkout-prompt");
         let mut app = app(&root);

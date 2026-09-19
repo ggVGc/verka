@@ -57,13 +57,9 @@ impl Notices {
         }
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.shown.is_empty()
-    }
-
-    /// How many are on screen, for the panel to size itself by.
-    pub fn len(&self) -> usize {
-        self.shown.len()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Notice> {
