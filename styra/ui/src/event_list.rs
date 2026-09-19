@@ -1063,7 +1063,7 @@ fn format_scaled(tokens: u64, unit: u64, suffix: char) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::format_tokens;
+    use super::{format_tokens, list_offset_with_scrolloff};
 
     #[test]
     fn token_counts_read_as_k_and_m_past_a_thousand() {
@@ -1073,5 +1073,39 @@ mod tests {
         assert_eq!(format_tokens(126_400), "126k");
         assert_eq!(format_tokens(1_350_000), "1.3M");
         assert_eq!(format_tokens(12_000_000), "12M");
+    }
+
+    /// A live row can change height without the selection moving: streamed
+    /// thinking replaces the previous thinking body, and task/tool completion
+    /// replaces its in-flight row.  The viewport must remain anchored when a
+    /// replacement is shorter; revealing older entries makes the interaction
+    /// log appear to jump backwards even though the operator did nothing.
+    #[test]
+    fn shrinking_live_tail_entry_does_not_reveal_older_entries() {
+        let viewport_height = 6;
+        let selected = Some(5);
+
+        // Five old one-line rows precede a five-line live row. With the status
+        // tail after it, following the live row legitimately advances the
+        // viewport to item 5.
+        let tall_live_row = [1, 1, 1, 1, 1, 5, 1];
+        let anchored = list_offset_with_scrolloff(
+            0,
+            selected,
+            &tall_live_row,
+            viewport_height,
+        );
+        assert_eq!(anchored, 5);
+
+        // The same selected row is replaced by a one-line update. No
+        // navigation occurred, so its item anchor should not change.
+        let short_live_row = [1, 1, 1, 1, 1, 1, 1];
+        let after_update = list_offset_with_scrolloff(
+            anchored,
+            selected,
+            &short_live_row,
+            viewport_height,
+        );
+        assert_eq!(after_update, anchored);
     }
 }
