@@ -56,10 +56,13 @@ pub fn create(
     host_path: &Path,
     name: Option<String>,
 ) -> Result<WorkspaceSummary> {
-    create_with_repository(store_root, host_path, name, None)
+    create_with_repository(&crate::git::SystemGit, store_root, host_path, name, None)
 }
 
+/// `git` answers the questions that validate the association; a Workspace
+/// created without a repository never asks it anything.
 pub fn create_with_repository(
+    git: &dyn crate::git::Git,
     store_root: &Path,
     host_path: &Path,
     name: Option<String>,
@@ -68,7 +71,9 @@ pub fn create_with_repository(
     let host_path = host_path
         .canonicalize()
         .with_context(|| format!("workspace directory {} must exist", host_path.display()))?;
-    let git_repository = git_repository.map(validate_git_repository).transpose()?;
+    let git_repository = git_repository
+        .map(|path| validate_git_repository(git, path))
+        .transpose()?;
     let created_at_ms = now_ms();
     let id = new_id(created_at_ms);
     let path = workspace_dir(store_root, &id);
@@ -176,6 +181,7 @@ fn summary_from_meta(path: &Path, meta: WorkspaceMeta, now: u64) -> Result<Works
 
 /// Replace a Workspace's durable Git checkout association.
 pub fn set_git_repository(
+    git: &dyn crate::git::Git,
     store_root: &Path,
     id: &str,
     git_repository: Option<&Path>,
@@ -185,7 +191,9 @@ pub fn set_git_repository(
         anyhow::bail!("Workspace {id:?} was not found");
     }
     let mut meta = read_meta(&path)?;
-    meta.git_repository = git_repository.map(validate_git_repository).transpose()?;
+    meta.git_repository = git_repository
+        .map(|path| validate_git_repository(git, path))
+        .transpose()?;
     write_meta(&path, &meta)?;
     summary_from_meta(&path, meta, now_ms())
 }
@@ -193,9 +201,9 @@ pub fn set_git_repository(
 /// Resolve every path needed at launch before making the association durable.
 /// This prevents malformed linked-worktree metadata from poisoning all future
 /// launches in the Workspace.
-fn validate_git_repository(path: &Path) -> Result<PathBuf> {
-    let root = crate::git::repository_root(path)?;
-    crate::git::mounts(&root)?;
+fn validate_git_repository(git: &dyn crate::git::Git, path: &Path) -> Result<PathBuf> {
+    let root = git.repository_root(path)?;
+    git.mounts(&root)?;
     Ok(root)
 }
 
@@ -304,21 +312,12 @@ fn humanize_age(now_ms: u64, created_at_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::FakeGit;
 
     fn temp_dir(tag: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("styra-workspace-{tag}-{}", new_id(now_ms())));
         std::fs::create_dir_all(&root).unwrap();
         root
-    }
-
-    fn git_init(directory: &Path) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(directory)
-            .args(["init", "--quiet"])
-            .status()
-            .unwrap();
-        assert!(status.success());
     }
 
     #[test]
@@ -421,11 +420,15 @@ mod tests {
         let store = temp_dir("git-store");
         let host = temp_dir("git-host");
         let repository = temp_dir("git-repository");
-        git_init(&repository);
+        let git = FakeGit::new();
+        git.init(&repository);
         std::fs::create_dir(repository.join("subdir")).unwrap();
 
+        // Associating a subdirectory stores the checkout root, so every later
+        // launch mounts the repository and not the fragment that named it.
         let workspace =
-            create_with_repository(&store, &host, None, Some(&repository.join("subdir"))).unwrap();
+            create_with_repository(&git, &store, &host, None, Some(&repository.join("subdir")))
+                .unwrap();
         let expected = repository.canonicalize().unwrap();
         assert_eq!(
             workspace.git_repository.as_deref(),
@@ -438,9 +441,9 @@ mod tests {
         let metadata = std::fs::read_to_string(workspace.path.join(WORKSPACE_META_FILE)).unwrap();
         assert!(metadata.contains("git_repository"));
 
-        let cleared = set_git_repository(&store, &workspace.id, None).unwrap();
+        let cleared = set_git_repository(&git, &store, &workspace.id, None).unwrap();
         assert_eq!(cleared.git_repository, None);
-        let restored = set_git_repository(&store, &workspace.id, Some(&repository)).unwrap();
+        let restored = set_git_repository(&git, &store, &workspace.id, Some(&repository)).unwrap();
         assert_eq!(restored.git_repository.as_deref(), Some(expected.as_path()));
 
         std::fs::remove_dir_all(store).ok();
@@ -453,10 +456,14 @@ mod tests {
         let store = temp_dir("invalid-git-store");
         let host = temp_dir("invalid-git-host");
         let repository = temp_dir("invalid-git-repository");
+        // A directory with a `.git` that names nothing: the layout reader
+        // would call it a checkout, and Git would not. The association has to
+        // believe Git, or every launch in this Workspace fails later instead.
         std::fs::write(repository.join(".git"), "not a gitdir pointer\n").unwrap();
+        let git = FakeGit::new();
         let workspace = create(&store, &host, None).unwrap();
 
-        let error = set_git_repository(&store, &workspace.id, Some(&repository)).unwrap_err();
+        let error = set_git_repository(&git, &store, &workspace.id, Some(&repository)).unwrap_err();
         assert!(error.to_string().contains("not inside a Git repository"));
         assert_eq!(get(&store, &workspace.id).unwrap().git_repository, None);
 

@@ -39,6 +39,10 @@ pub struct ServerState {
 
 struct ServerInner {
     store_root: PathBuf,
+    /// How this server asks Git about the operator's checkouts. A real server
+    /// spawns `git`; a test builds the same server around an in-memory Git and
+    /// so exercises every launch path without a repository on disk.
+    git: Arc<dyn crate::git::Git>,
     /// The socket the server is bound to, removed on an explicit shutdown so
     /// the next client sees no stale socket to trip over. `None` for a server
     /// running in its client's process, which has no socket to clean up and no
@@ -739,10 +743,11 @@ impl ServerState {
         if !create_worktree {
             return Ok(None);
         }
-        let Some(repository) = crate::git::discover(&workspace.host_path)? else {
+        let Some(repository) = self.inner.git.discover(&workspace.host_path)? else {
             return Ok(None);
         };
         crate::worktree::Worktrees::prepare(
+            self.inner.git.clone(),
             repository,
             crate::workspace::worktrees_dir(&self.inner.store_root, &workspace.id),
         )
@@ -754,7 +759,9 @@ impl ServerState {
         let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
         let path = crate::workspace::worktrees_dir(&self.inner.store_root, &workspace.id).join(id);
         if path.exists() {
-            anyhow::bail!("this Session already has a linked workspace; creating another is not possible");
+            anyhow::bail!(
+                "this Session already has a linked workspace; creating another is not possible"
+            );
         }
         let Some(worktrees) = self.workspace_worktrees(&workspace, true)? else {
             anyhow::bail!("the Workspace is not inside a Git working tree");
@@ -763,16 +770,34 @@ impl ServerState {
         Ok(())
     }
     pub fn new(store_root: PathBuf, socket: PathBuf) -> Self {
-        Self::with_socket(store_root, Some(socket), None)
+        Self::with_socket(
+            crate::git::SystemGit::shared(),
+            store_root,
+            Some(socket),
+            None,
+        )
     }
 
     /// A server for a host process that drives it directly, with no socket
     /// bound and so nothing listening for other clients.
     pub(crate) fn in_process(store_root: PathBuf, lock: std::fs::File) -> Self {
-        Self::with_socket(store_root, None, Some(lock))
+        Self::with_socket(
+            crate::git::SystemGit::shared(),
+            store_root,
+            None,
+            Some(lock),
+        )
+    }
+
+    /// A server whose Git is supplied rather than spawned, for tests. Every
+    /// other part of the server is the real one, so what a test drives here is
+    /// the launch logic itself and not a reimplementation of it.
+    pub fn with_git(git: Arc<dyn crate::git::Git>, store_root: PathBuf) -> Self {
+        Self::with_socket(git, store_root, None, None)
     }
 
     fn with_socket(
+        git: Arc<dyn crate::git::Git>,
         store_root: PathBuf,
         socket: Option<PathBuf>,
         standalone_lock: Option<std::fs::File>,
@@ -793,6 +818,7 @@ impl ServerState {
         let state = Self {
             inner: Arc::new(ServerInner {
                 quota: Arc::new(crate::quota::QuotaLog::open(&store_root)),
+                git,
                 store_root,
                 socket,
                 control_root,
@@ -831,7 +857,7 @@ impl ServerState {
         let repository_mounts = owning_workspace
             .git_repository
             .as_deref()
-            .map(crate::git::mounts)
+            .map(|root| self.inner.git.mounts(root))
             .transpose()?
             .unwrap_or_default();
         let worktrees = self.workspace_worktrees(&owning_workspace, request.create_worktree)?;
@@ -1209,7 +1235,7 @@ impl ServerState {
         let repository_mounts = owning_workspace
             .git_repository
             .as_deref()
-            .map(crate::git::mounts)
+            .map(|root| self.inner.git.mounts(root))
             .transpose()?
             .unwrap_or_default();
         let worktrees = self.workspace_worktrees(&owning_workspace, request.create_worktree)?;
@@ -1322,14 +1348,15 @@ impl ServerState {
         let repository_mounts = owning_workspace
             .git_repository
             .as_deref()
-            .map(crate::git::mounts)
+            .map(|root| self.inner.git.mounts(root))
             .transpose()?
             .unwrap_or_default();
         // A worktree belongs to the Session that explicitly created it. Never
         // create one merely because this Workspace once had the old preference.
-        let has_worktree = crate::workspace::worktrees_dir(&self.inner.store_root, &owning_workspace.id)
-            .join(&request.id)
-            .is_dir();
+        let has_worktree =
+            crate::workspace::worktrees_dir(&self.inner.store_root, &owning_workspace.id)
+                .join(&request.id)
+                .is_dir();
         let worktrees = self.workspace_worktrees(&owning_workspace, has_worktree)?;
         let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
@@ -2131,6 +2158,7 @@ impl ServerState {
                 git_repository,
             }) => Ok(Response::WorkspaceCreated(
                 crate::workspace::create_with_repository(
+                    self.inner.git.as_ref(),
                     &self.inner.store_root,
                     &host_path,
                     name,
@@ -2162,6 +2190,7 @@ impl ServerState {
                     .expect("server workspace metadata lock poisoned");
                 Ok(Response::WorkspaceGitRepositoryUpdated(
                     crate::workspace::set_git_repository(
+                        self.inner.git.as_ref(),
                         &self.inner.store_root,
                         &workspace_id,
                         git_repository.as_deref(),
@@ -2891,6 +2920,7 @@ fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
 mod tests {
     use super::*;
     use crate::client::Client;
+    use crate::git::Git as _;
     use crate::protocol::{AttributedMount, MountOrigin};
     use driva::{Mount, MountAccess};
 
@@ -3102,21 +3132,22 @@ mod tests {
         std::fs::remove_dir_all(&store).ok();
         std::fs::remove_dir_all(&host).ok();
         std::fs::create_dir_all(&host).unwrap();
-        assert!(std::process::Command::new("git")
-            .arg("-C")
-            .arg(&host)
-            .args(["init", "--quiet"])
-            .status()
-            .unwrap()
-            .success());
-        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let state = ServerState::with_git(git, store.clone());
         let workspace = crate::workspace::create(&store, &host, None).unwrap();
         let worktrees_path = crate::workspace::worktrees_dir(&store, &workspace.id);
 
-        assert!(state.workspace_worktrees(&workspace, false).unwrap().is_none());
+        assert!(state
+            .workspace_worktrees(&workspace, false)
+            .unwrap()
+            .is_none());
         assert!(!worktrees_path.exists());
 
-        assert!(state.workspace_worktrees(&workspace, true).unwrap().is_some());
+        assert!(state
+            .workspace_worktrees(&workspace, true)
+            .unwrap()
+            .is_some());
         assert!(worktrees_path.is_dir());
 
         std::fs::remove_dir_all(store).ok();
@@ -3182,35 +3213,23 @@ mod tests {
         std::fs::remove_dir_all(&store).ok();
         std::fs::remove_dir_all(&host).ok();
         std::fs::create_dir_all(&host).unwrap();
-        let git = |arguments: &[&str]| {
-            assert!(std::process::Command::new("git")
-                .arg("-C")
-                .arg(&host)
-                .args(arguments)
-                .status()
-                .unwrap()
-                .success());
-        };
-        git(&["init", "--quiet"]);
-        git(&["config", "user.email", "test@example.com"]);
-        git(&["config", "user.name", "test"]);
-        git(&["commit", "--quiet", "--allow-empty", "-m", "root"]);
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
         let worktree = host.join(".worktrees/sandbox-base");
-        git(&[
-            "worktree",
-            "add",
-            "--quiet",
-            "-b",
-            "sandbox-base",
-            worktree.to_str().unwrap(),
-        ]);
+        git.create_worktree(&host, "sandbox-base", &worktree)
+            .unwrap();
 
-        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        let state = ServerState::with_git(git.clone(), store.clone());
         // Exactly what a client launching from inside the worktree records:
         // the nearest enclosing checkout is the worktree itself.
-        let workspace =
-            crate::workspace::create_with_repository(&store, &worktree, None, Some(&worktree))
-                .unwrap();
+        let workspace = crate::workspace::create_with_repository(
+            git.as_ref(),
+            &store,
+            &worktree,
+            None,
+            Some(&worktree),
+        )
+        .unwrap();
 
         let plan = state
             .plan_session(crate::protocol::PlanSession {
@@ -3252,10 +3271,10 @@ mod tests {
         std::fs::remove_dir_all(&store).ok();
         std::fs::remove_dir_all(&host).ok();
         std::fs::create_dir_all(&host).unwrap();
-        crate::git::fixture::init(&host);
-        crate::git::fixture::commit_empty(&host, "root");
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
 
-        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        let state = ServerState::with_git(git, store.clone());
         let workspace = crate::workspace::create(&store, &host, None).unwrap();
 
         let plan = state
