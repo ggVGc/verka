@@ -816,6 +816,9 @@ mod tests {
         let root = tree("session-worktree");
         let mut app = app(&root);
         app.enter_list();
+        // `W` only means anything for a session that exists; the guard on the
+        // key reads the id the list is sitting on.
+        app.session_id = "session-1".into();
         let client = Client::new(root.join("missing.sock"));
         let mut live = Attachment::Detached;
         let mut pending_fold = false;
