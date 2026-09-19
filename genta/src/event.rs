@@ -939,6 +939,33 @@ pub fn decode_line(protocol: Protocol, line: &str) -> AgentEvent {
     }
 }
 
+/// Return the working directory an agent reports on one inbound wire line.
+///
+/// This is deliberately separate from [`AgentEvent`]: a directory is live
+/// session metadata, not an event for the conversation timeline. Claude Code
+/// puts it at the top level of its stream records; Codex's app-server returns
+/// it while opening a thread (and has used both result and notification
+/// shapes). The one-shot Codex transcript format keeps it in `session_meta`.
+///
+/// The caller must still verify that the path belongs to the workspace before
+/// trusting or presenting it.
+pub fn reported_cwd(protocol: Protocol, line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    let cwd = match protocol {
+        Protocol::ClaudeJsonl => string(&value, "cwd"),
+        Protocol::CodexJsonl => value
+            .get("payload")
+            .filter(|_| string(&value, "type") == Some("session_meta"))
+            .and_then(|payload| string(payload, "cwd")),
+        Protocol::CodexAppServer => value
+            .pointer("/result/cwd")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/params/cwd").and_then(Value::as_str))
+            .or_else(|| value.pointer("/params/thread/cwd").and_then(Value::as_str)),
+    }?;
+    (!cwd.is_empty()).then(|| cwd.to_owned())
+}
+
 /// Decode one `codex app-server` line. Notifications (which carry a `method`)
 /// map to events; requests and responses are control traffic and decode to
 /// [`AgentEvent::Unknown`] so they are carried without cluttering the list.
@@ -2813,6 +2840,35 @@ mod tests {
                 model: None,
                 effort: None,
             }
+        );
+    }
+
+    #[test]
+    fn reported_cwd_reads_each_provider_wire_shape() {
+        assert_eq!(
+            reported_cwd(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"assistant","cwd":"/workspace/crates/ui","message":{}}"#,
+            ),
+            Some("/workspace/crates/ui".into())
+        );
+        assert_eq!(
+            reported_cwd(
+                Protocol::CodexAppServer,
+                r#"{"id":2,"result":{"thread":{"id":"t-9"},"cwd":"/workspace/crates/ui"}}"#,
+            ),
+            Some("/workspace/crates/ui".into())
+        );
+        assert_eq!(
+            reported_cwd(
+                Protocol::CodexJsonl,
+                r#"{"type":"session_meta","payload":{"cwd":"/workspace"}}"#,
+            ),
+            Some("/workspace".into())
+        );
+        assert_eq!(
+            reported_cwd(Protocol::ClaudeJsonl, r#"{"type":"assistant"}"#),
+            None
         );
     }
 
