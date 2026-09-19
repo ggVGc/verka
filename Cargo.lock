@@ -1923,6 +1923,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "styra-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm 0.28.1",
+ "libc",
+ "protocol",
+ "pulldown-cmark",
+ "ratatui",
+ "serde_json",
+ "tui-markdown",
+ "unicode-width",
+]
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2250,12 +2265,10 @@ dependencies = [
  "libc",
  "protocol",
  "pulldown-cmark",
- "ratatui",
  "serde",
  "serde_json",
  "server",
- "tui-markdown",
- "unicode-width",
+ "styra-ui",
 ]
 
 [[package]]

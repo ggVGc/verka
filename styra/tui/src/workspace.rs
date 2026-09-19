@@ -6,7 +6,7 @@
 //! Both fall back to the directory this client was started in — a replayed
 //! journal has no live Workspace but its paths still have to resolve — and
 //! that fallback was written three times, in [`crate::app`],
-//! [`crate::ui::files`] and [`crate::ui::footer`].
+//! [`crate::presentation::files`] and [`crate::presentation::footer`].
 //!
 //! The Session on screen is not here: a Session names the durable Workspace it
 //! belongs to, but the Workspace outlives it and the operator switches

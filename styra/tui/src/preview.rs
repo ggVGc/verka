@@ -10,7 +10,7 @@
 //!
 //! Which entry the panel is *pointed at* is not here: that is a question about
 //! the timeline, and only [`App`](crate::app::App) has both.
-//! [`crate::ui::preview`] renders it.
+//! [`crate::presentation::preview`] renders it.
 
 use styra_protocol::event::PresentationMode;
 

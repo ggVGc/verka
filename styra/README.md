@@ -196,10 +196,13 @@ printf '%s\n' '{"operation":"health"}' \
 ```
 
 The server and its client interface are the `server` crate in `styra/server`
-(library `styra_server`, binary `styra-server`); the `styra` TUI is the `tui`
-crate in `styra/tui`, a separate crate depending on it. The Rust
-wire types are in `styra_server::api`, and the blocking client used by the TUI
-is `styra_server::Client`.
+(library `styra_server`, binary `styra-server`); the `styra` application is the
+`tui` crate in `styra/tui`. Terminal ownership and all rendering live in the
+separate `styra-ui` crate. The application passes presentation models through
+an object-safe `Ui` trait whose methods expose each rendering operation
+directly; the Ratatui implementation also supports an in-memory test backend.
+The Rust wire types are in `styra_server::api`, and the blocking client used by
+the TUI is `styra_server::Client`.
 
 The launch picker selects a provider, model, and effort. Providers:
 

@@ -3,7 +3,7 @@
 //!
 //! State and column arithmetic only. [`App`](crate::app::App) carries an open
 //! picker as `launcher`, [`crate::keys::handle_launcher_key`] drives it, and
-//! [`crate::ui::launcher`] draws it.
+//! [`crate::presentation::launcher`] draws it.
 
 use styra_protocol::agent::{Provider, Selection, PROVIDERS};
 

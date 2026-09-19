@@ -2,7 +2,7 @@
 //! running, and the operator's place in it.
 //!
 //! Held apart from [`App`](crate::app::App) because none of it depends on the
-//! Interaction currently on screen. [`crate::ui::interactions`] renders it.
+//! Interaction currently on screen. [`crate::presentation::interactions`] renders it.
 
 use std::time::{Duration, Instant};
 
@@ -91,7 +91,7 @@ impl LiveInteractions {
             .collect()
     }
 
-    /// The visible indices in the order [`crate::ui::interactions`] draws
+    /// The visible indices in the order [`crate::presentation::interactions`] draws
     /// them: in All scope the entries are grouped under their Workspace
     /// heading, so j/k has to walk that order rather than the raw item order.
     pub fn display_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
@@ -383,7 +383,7 @@ pub fn first_live_in_workspace(
 }
 
 /// `visible` re-ordered so each Workspace's entries are contiguous, in the
-/// order the Workspaces themselves first appear: what [`crate::ui::interactions`]
+/// order the Workspaces themselves first appear: what [`crate::presentation::interactions`]
 /// draws under its Workspace headings, and so what walking the list has to
 /// follow rather than the activity-sorted item order.
 fn grouped_by_workspace(interactions: &[InteractionSummary], visible: Vec<usize>) -> Vec<usize> {

@@ -5,7 +5,7 @@
 //! the client only has to know that [`App`] carries a [`Launch`], that the
 //! event loop hands keys to [`crate::keys`] which call the free functions
 //! below, and that [`App::can_edit_launch`] says whether any of it applies.
-//! Rendering is the matching [`crate::ui::driva`] module.
+//! Rendering is the matching [`crate::presentation::driva`] module.
 //!
 //! The two layers are the whole shape of this module. The Workspace's standing
 //! policy applies to every launch there and outlives every interaction in it;
@@ -45,22 +45,6 @@ pub enum LaunchScope {
 }
 
 impl LaunchScope {
-    /// What this layer is called where it titles its own pane.
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Workspace => "Workspace",
-            Self::Interaction => "this interaction",
-        }
-    }
-
-    /// The same, for the middle of a sentence.
-    pub fn phrase(self) -> &'static str {
-        match self {
-            Self::Workspace => "the Workspace",
-            Self::Interaction => "this interaction",
-        }
-    }
-
     /// What editing this layer changes, as a message names it.
     pub fn subject(self) -> &'static str {
         match self {

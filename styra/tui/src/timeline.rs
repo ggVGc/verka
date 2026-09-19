@@ -11,7 +11,6 @@
 //! deliberately does not hold. [`crate::app::App`] carries a [`Timeline`] and
 //! joins the two.
 
-use std::cell::Cell;
 use styra_protocol::event::{AgentEvent, DetailBlock};
 use styra_protocol::Contract;
 
@@ -38,7 +37,7 @@ pub struct Entry {
 impl Entry {
     /// Whether this entry has anything to show beyond its one-line summary —
     /// the same test that decides whether the list shows a fold arrow next
-    /// to it. `crate::ui`'s detail rendering always drops the body's first
+    /// to it. `crate::presentation`'s detail rendering always drops the body's first
     /// line (it invariably restates the summary — the command, the
     /// message's first line, ...), so one line of detail alone doesn't
     /// count; this mirrors that exactly rather than checking the raw,
@@ -89,7 +88,7 @@ pub struct Timeline {
     /// First visible item in the event list. Rendering updates this after it
     /// accounts for wrapped and expanded row heights, so navigation can keep
     /// a vim-like margin above and below the selection.
-    pub list_offset: Cell<usize>,
+    pub list_offset: usize,
 }
 
 impl Default for Timeline {
@@ -101,7 +100,7 @@ impl Default for Timeline {
             follow: true,
             show_minor: false,
             conversation_only: true,
-            list_offset: Cell::new(0),
+            list_offset: 0,
         }
     }
 }

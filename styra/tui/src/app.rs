@@ -10,10 +10,9 @@
 //! is refused while an interaction is running.
 //!
 //! This module is pure state and transitions — no terminal, no threads, no IO —
-//! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
+//! so the whole interaction model is unit-testable. [`crate::presentation`] renders it and
 //! `main` feeds it input and session updates.
 
-use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use styra_protocol::agent::{Provider, Selection};
@@ -133,7 +132,7 @@ pub struct Scroll {
     /// Lines scrolled down from the top. Only ever shown through
     /// [`Scroll::clamped`], so it may sit past what currently fits.
     pub offset: u16,
-    limit: Cell<u16>,
+    limit: u16,
 }
 
 /// Lines moved by one PageUp/PageDown press.
@@ -142,12 +141,12 @@ const SCROLL_PAGE: u16 = 10;
 impl Scroll {
     /// The offset to render at: what was asked for, held to what actually fits.
     pub fn clamped(&self) -> u16 {
-        self.offset.min(self.limit.get())
+        self.offset.min(self.limit)
     }
 
     /// Record the furthest the renderer can actually scroll at this width.
-    pub fn note_limit(&self, limit: u16) {
-        self.limit.set(limit);
+    pub fn note_limit(&mut self, limit: u16) {
+        self.limit = limit;
     }
 
     pub fn reset(&mut self) {
@@ -161,10 +160,7 @@ impl Scroll {
     }
 
     pub fn page_down(&mut self) {
-        self.offset = self
-            .clamped()
-            .saturating_add(SCROLL_PAGE)
-            .min(self.limit.get());
+        self.offset = self.clamped().saturating_add(SCROLL_PAGE).min(self.limit);
     }
 
     pub fn page_up(&mut self) {
@@ -172,7 +168,7 @@ impl Scroll {
     }
 
     pub fn line_down(&mut self) {
-        self.offset = self.clamped().saturating_add(1).min(self.limit.get());
+        self.offset = self.clamped().saturating_add(1).min(self.limit);
     }
 
     pub fn line_up(&mut self) {

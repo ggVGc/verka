@@ -3,6 +3,9 @@
 Ordered, independently reviewable tasks realizing [`DESIGN.md`](DESIGN.md).
 Each is committed on its own. Check off as completed.
 
+The planned extraction of rendering into a separate UI crate is tracked in
+[`UI-REFACTOR-TASKS.md`](UI-REFACTOR-TASKS.md).
+
 - [x] **1. Scaffold.** Crate `Cargo.toml` (driva path dep, ratatui/crossterm,
   serde/serde_json, anyhow, clap), `README.md`, this task list, and a minimal
   `main.rs` that compiles and runs. Wire into `build_all.sh`.

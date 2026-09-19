@@ -1,8 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
-use std::io::Stdout;
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -17,12 +14,13 @@ use crate::keys;
 use crate::launch::{self, LaunchScope};
 use crate::picker;
 use crate::preferences;
+use crate::presentation;
 use crate::session::{self, Attachment};
-use crate::ui;
 use styra_protocol::{
     InteractionSummary, LogEntry, TemplateSummary, WorkspaceLaunchChange, WorkspaceSummary,
 };
 use styra_server::Client;
+use styra_ui::Ui;
 
 /// What the interactive loop returned control to `main` for.
 pub enum RunOutcome {
@@ -409,7 +407,7 @@ pub fn stops_current_interaction(outcome: &RunOutcome, live: &Attachment) -> boo
 /// The event loop: apply pending session updates, render, and handle input
 /// until the operator quits or asks to switch sessions.
 pub fn run(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    terminal: &mut dyn Ui,
     app: &mut App,
     client: &Client,
     live: &mut Attachment,
@@ -501,12 +499,36 @@ pub fn run(
         }
 
         app.activity.note_progress();
-        terminal.draw(|frame| ui::render(frame, app))?;
-
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
+        if app.help.is_open() {
+            let rows = presentation::help_rows();
+            let feedback =
+                terminal.render_help(&rows, crate::keymap::CLOSE_REFERENCE, app.help.offset())?;
+            if let Some(scroll) = feedback
+                .scroll
+                .iter()
+                .find(|scroll| scroll.panel == styra_ui::PanelId::Help)
+            {
+                app.help
+                    .apply_feedback(scroll.limit, scroll.effective_offset);
+            }
+        } else if let Some(launcher) = &app.launcher {
+            let launcher = presentation::launcher_view(launcher);
+            terminal.render_launcher(&launcher)?;
+        } else if let Some(picker) = &app.template_picker {
+            match &picker.templates {
+                Some(templates) => {
+                    terminal.render_template_picker(templates, &picker.chosen, picker.cursor)?;
+                }
+                None => {
+                    terminal.render_template_picker_loading()?;
+                }
+            }
+        } else {
+            let feedback = presentation::draw_application(terminal, app)?;
+            presentation::apply_feedback(app, &feedback);
         }
-        let Event::Key(key) = event::read()? else {
+
+        let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
             continue;
         };
         if key.kind != KeyEventKind::Press {

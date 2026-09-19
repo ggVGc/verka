@@ -7,7 +7,7 @@
 //! outside the sandbox has to be left exactly as it is.
 //!
 //! That resolution was written twice — once in `App::selected_file_path` to
-//! decide what `e` opens, and once in [`crate::ui::files`] to decide what to
+//! decide what `e` opens, and once in [`crate::presentation::files`] to decide what to
 //! draw — including the grouping and sort that pair a row with its file. Two
 //! copies of an ordering is one copy too many when a disagreement between them
 //! means opening the wrong file.
@@ -195,7 +195,7 @@ pub fn entry_text(entry: &Entry) -> String {
 /// Every stretch of `text` that could be a path, in the order it appears.
 ///
 /// Agent replies are markdown, so they are read as markdown: the same
-/// `pulldown-cmark` the message renderer uses ([`crate::ui`]) walks the text,
+/// `pulldown-cmark` the message renderer uses ([`crate::presentation`]) walks the text,
 /// and a link's destination is taken as the parser reports it. That is the
 /// whole reason for parsing rather than scanning — in
 /// `[monitor.c:484](/home/me/src/monitor.c:484)` the destination *is* the

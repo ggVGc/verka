@@ -43,7 +43,12 @@ impl Help {
     }
 
     /// Record the furthest the renderer can scroll, which only it knows.
-    pub fn note_limit(&self, limit: u16) {
+    pub fn note_limit(&mut self, limit: u16) {
+        self.scroll.note_limit(limit);
+    }
+
+    pub fn apply_feedback(&mut self, limit: u16, effective_offset: u16) {
+        self.scroll.offset = effective_offset;
         self.scroll.note_limit(limit);
     }
 

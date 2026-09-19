@@ -9,8 +9,8 @@ use styra_protocol::agent::Selection;
 use styra_protocol::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SendMessage, SessionInfo,
 };
-use styra_server::Client;
 use styra_protocol::{Contract, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary};
+use styra_server::Client;
 
 /// How long a Session remains in the picker's default recent-conversation
 /// view. Older history is still available with its explicit "show all" key.
@@ -91,13 +91,6 @@ impl SessionOrder {
         match self {
             Self::LastActivity => Self::Created,
             Self::Created => Self::LastActivity,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::LastActivity => "last activity",
-            Self::Created => "created",
         }
     }
 }

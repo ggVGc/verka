@@ -9,7 +9,7 @@
 //!
 //! An answer whose value is absent is not the same as no answer: it is a reply
 //! that missed its contract, which is shown rather than discarded so the
-//! operator can re-read it under another shape. [`crate::ui::answer`] renders
+//! operator can re-read it under another shape. [`crate::presentation::answer`] renders
 //! it.
 
 use styra_protocol::{Answer, AnswerValue, FileLocation};

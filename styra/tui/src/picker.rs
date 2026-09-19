@@ -1,16 +1,14 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
-use std::io::Stdout;
+use crossterm::event::{Event, KeyCode, KeyEventKind};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use styra_server::Client;
 use styra_protocol::{InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
+use styra_server::Client;
 
 use crate::launch::LaunchScope;
+use crate::presentation;
 use crate::session::{is_recent_session, session_tree_depths, sort_sessions_tree, SessionOrder};
-use crate::ui;
+use styra_ui::Ui;
 
 /// How long the cursor must rest on a Session or Workspace before its preview
 /// is loaded.
@@ -22,6 +20,15 @@ const PREVIEW_SETTLE: Duration = Duration::from_millis(120);
 /// live. Rare enough to leave a long-open picker idle, frequent enough that a
 /// turn ending is visible without the operator moving the cursor.
 const LIVENESS_REFRESH: Duration = Duration::from_secs(2);
+
+/// Ordering remains a TUI decision because it controls keyboard navigation;
+/// the UI receives only the corresponding presentation label.
+fn picker_order(order: SessionOrder) -> styra_ui::picker::SessionOrder {
+    match order {
+        SessionOrder::LastActivity => styra_ui::picker::SessionOrder::LastActivity,
+        SessionOrder::Created => styra_ui::picker::SessionOrder::Creation,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // The picker yields at most one of these per run, so the size difference never
@@ -39,7 +46,7 @@ pub enum WorkspaceChoice {
 /// `current_id` is in the list, it opens selected even if another root or
 /// branch sorts above it.
 pub fn run_session_picker(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    terminal: &mut dyn Ui,
     client: &Client,
     sessions: &mut [styra_protocol::SessionSummary],
     current_id: Option<&str>,
@@ -123,18 +130,20 @@ pub fn run_session_picker(
         // Until the settle timer fires and the load returns, the pane says so:
         // an empty conversation and an unread one look nothing alike.
         let preview = if settle_from.is_some() {
-            ui::Preview::Loading
+            presentation::Preview::Loading
         } else {
-            ui::Preview::Ready(&preview_updates)
+            presentation::Preview::Ready(&preview_updates)
         };
-        terminal.draw(|frame| {
-            ui::render_picker(frame, &sessions, selected, order, preview, filter.as_deref(), searching)
-        })?;
+        terminal.render_session_picker(
+            &sessions,
+            selected,
+            picker_order(order),
+            preview,
+            filter.as_deref(),
+            searching,
+        )?;
 
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
+        let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
@@ -158,7 +167,8 @@ pub fn run_session_picker(
                 _ => continue,
             }
             let cursor_id = sessions.get(selected).map(|session| session.id.clone());
-            sessions = picker_sessions(&all_sessions, showing_all, now_ms, order, filter.as_deref());
+            sessions =
+                picker_sessions(&all_sessions, showing_all, now_ms, order, filter.as_deref());
             selected = cursor_id
                 .and_then(|id| sessions.iter().position(|session| session.id == id))
                 .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
@@ -201,7 +211,8 @@ pub fn run_session_picker(
             KeyCode::Char('a') => {
                 let cursor_id = sessions.get(selected).map(|session| session.id.clone());
                 showing_all = !showing_all;
-                sessions = picker_sessions(&all_sessions, showing_all, now_ms, order, filter.as_deref());
+                sessions =
+                    picker_sessions(&all_sessions, showing_all, now_ms, order, filter.as_deref());
                 selected = cursor_id
                     .and_then(|id| sessions.iter().position(|session| session.id == id))
                     .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
@@ -255,7 +266,9 @@ fn picker_sessions(
     order: SessionOrder,
     filter: Option<&str>,
 ) -> Vec<styra_protocol::SessionSummary> {
-    let filter = filter.map(str::to_lowercase).filter(|filter| !filter.is_empty());
+    let filter = filter
+        .map(str::to_lowercase)
+        .filter(|filter| !filter.is_empty());
     let mut displayed = sessions
         .iter()
         .filter(|session| {
@@ -321,7 +334,7 @@ fn initial_session_selection(
 /// dismisses it, so an error from an in-picker action (e.g. a failed
 /// conversion) is seen rather than lost.
 fn show_message(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    terminal: &mut dyn Ui,
     sessions: &[styra_protocol::SessionSummary],
     selected: usize,
     order: SessionOrder,
@@ -329,11 +342,17 @@ fn show_message(
     message: &str,
 ) -> Result<()> {
     loop {
-        terminal.draw(|frame| {
-            ui::render_picker(frame, sessions, selected, order, ui::Preview::Ready(&[]), None, false);
-            ui::render_message_popup(frame, title, message);
-        })?;
-        if let Event::Key(key) = event::read()? {
+        terminal.render_session_picker_message(
+            sessions,
+            selected,
+            picker_order(order),
+            presentation::Preview::Ready(&[]),
+            None,
+            false,
+            title,
+            message,
+        )?;
+        if let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? {
             if key.kind == KeyEventKind::Press {
                 return Ok(());
             }
@@ -342,7 +361,7 @@ fn show_message(
 }
 
 fn read_session_name(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    terminal: &mut dyn Ui,
     sessions: &[styra_protocol::SessionSummary],
     selected: usize,
     order: SessionOrder,
@@ -350,11 +369,16 @@ fn read_session_name(
 ) -> Result<Option<String>> {
     let mut value = initial.to_owned();
     loop {
-        terminal.draw(|frame| {
-            ui::render_picker(frame, sessions, selected, order, ui::Preview::Ready(&[]), None, false);
-            ui::render_name_prompt(frame, &value);
-        })?;
-        let Event::Key(key) = event::read()? else {
+        terminal.render_session_picker_name_prompt(
+            sessions,
+            selected,
+            picker_order(order),
+            presentation::Preview::Ready(&[]),
+            None,
+            false,
+            &value,
+        )?;
+        let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
@@ -381,7 +405,7 @@ fn read_session_name(
 /// liveness marker is refreshed as the picker sits open, so a Workspace whose
 /// agent finishes or goes idle says so without the ordering shifting.
 pub fn run_workspace_picker(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    terminal: &mut dyn Ui,
     client: &Client,
     workspaces: &mut [WorkspaceSummary],
 ) -> Result<Option<WorkspaceChoice>> {
@@ -419,17 +443,12 @@ pub fn run_workspace_picker(
         // Until the settle timer fires and the load returns, the pane says so:
         // a Workspace with no Sessions and an unread one look nothing alike.
         let preview = if settle_from.is_some() {
-            ui::SessionsPreview::Loading
+            presentation::SessionsPreview::Loading
         } else {
-            ui::SessionsPreview::Ready(&preview_sessions)
+            presentation::SessionsPreview::Ready(&preview_sessions)
         };
-        terminal.draw(|frame| {
-            ui::render_workspace_picker(frame, workspaces, selected, &interactions, preview)
-        })?;
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
+        terminal.render_workspace_picker(workspaces, selected, &interactions, preview)?;
+        let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
@@ -707,7 +726,8 @@ mod tests {
         );
         let all = picker_sessions(&sessions, true, now_ms, SessionOrder::LastActivity, None);
         assert_eq!(all.len(), 3);
-        let recent_again = picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity, None);
+        let recent_again =
+            picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity, None);
         assert_eq!(recent_again, recent);
     }
 
@@ -728,7 +748,10 @@ mod tests {
         );
 
         assert_eq!(
-            matches.iter().map(|session| session.id.as_str()).collect::<Vec<_>>(),
+            matches
+                .iter()
+                .map(|session| session.id.as_str())
+                .collect::<Vec<_>>(),
             ["prompted"]
         );
     }

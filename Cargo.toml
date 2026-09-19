@@ -13,6 +13,7 @@ members = [
     "styra/cli",
     "styra/protocol",
     "styra/server",
+    "styra/ui",
     "styra/tui",
 ]
 
@@ -50,3 +51,4 @@ orka = { path = "orka" }
 nota = { path = "nota" }
 server = { path = "styra/server" }
 protocol = { path = "styra/protocol" }
+styra-ui = { path = "styra/ui" }

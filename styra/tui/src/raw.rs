@@ -7,7 +7,7 @@
 //! which could leave the selection following a line that is no longer the
 //! last one. Here it is stated once, and the fields it holds are private.
 //!
-//! [`crate::ui::raw`] renders it.
+//! [`crate::presentation::raw`] renders it.
 
 use styra_protocol::RawLine;
 
@@ -30,11 +30,8 @@ impl ProviderRawView {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
-    }
-    pub fn iter(&self) -> impl Iterator<Item = &String> {
-        self.lines.iter()
+    pub fn as_slice(&self) -> &[String] {
+        &self.lines
     }
     pub fn selected_index(&self) -> usize {
         self.selected
@@ -109,8 +106,8 @@ impl RawView {
         self.lines.get(index)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &RawLine> {
-        self.lines.iter()
+    pub fn as_slice(&self) -> &[RawLine] {
+        &self.lines
     }
 
     /// The index the line pushed next will land on, for an event that wants to

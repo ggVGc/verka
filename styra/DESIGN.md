@@ -53,9 +53,9 @@ Styra is split at a versioned, local JSON boundary:
 
 ```text
 styra TUI ──Unix socket──> styra-server ──> Genta protocol ──> agent
-other tools ─────────────>       │
-                                 ├──> Driva isolation
-                                 └──> XDG journal store
+    │                             │
+    └──> styra-ui ──> Ratatui    ├──> Driva isolation
+other tools ────────────────────> └──> XDG journal store
 ```
 
 `styra-server` owns Workspace metadata, durable Sessions, and live
@@ -65,11 +65,17 @@ newline-terminated JSON request and response. Live updates have monotonically
 increasing sequence numbers; clients poll with an `after` cursor, which
 supports reconnects and multiple independent observers.
 
-The TUI is an ordinary socket client. It owns presentation and input state, but
-never constructs an `Interaction`, opens a journal, decodes provider traffic, or
-calls Driva. The headless example uses the same client. Public wire types live
-in `api.rs`, the reusable Rust client in `client.rs`, and server dispatch in
-`server.rs`.
+The TUI is an ordinary socket client. It owns application state, input bindings,
+server effects, and the mapping into presentation models, but never constructs
+an `Interaction`, opens a journal, decodes provider traffic, or calls Driva.
+The separate `styra-ui` crate owns visual layout, Ratatui widgets, terminal
+setup/restoration, input polling, and layout-derived feedback such as scroll
+limits. Both the main loop and standalone pickers consume its object-safe `Ui`
+trait, whose methods expose rendering operations directly; presentation tests
+use the Ratatui implementation with an in-memory backend. Feedback is applied
+only after a successful draw, so rendering never mutates `App`. The headless
+example uses the same server client. Public wire types live in `api.rs`, the
+reusable Rust client in `client.rs`, and server dispatch in `server.rs`.
 
 That boundary is a `Client` method calling `ServerState::handle`, so it does not
 have to be a socket. In standalone mode (`styra --standalone`) the client builds
@@ -1230,9 +1236,9 @@ styra/server/            # the server application + its client interface library
     naming.rs            # an interaction's topic: what its branch and its Session are called
 
 styra/tui/               # the terminal client application
-  Cargo.toml             # package tui: [[bin]] styra; depends on server (path)
+  Cargo.toml             # package tui: [[bin]] styra; depends on server and styra-ui
   src/
-    main.rs              # CLI entry, terminal setup/teardown, event loop wiring
+    main.rs              # CLI entry and event-loop composition
     app.rs               # the App struct: what is left when each field below has a module
     timeline.rs          # the event list: rows, selection, filters, expansion
     ingest.rs            # how one AgentEvent changes that list and the status
@@ -1253,7 +1259,17 @@ styra/tui/               # the terminal client application
     mount.rs             # writing, reading and locating host mounts (pure)
     launcher.rs          # the agent/model/effort picker's state
     composer.rs          # the message buffer and prompt history
-    ui/                  # widget layout, one module per view
+    presentation/        # App-to-presentation adapters and boundary tests; contains no widgets
+
+styra/ui/                # package styra-ui, library styra_ui
+  src/
+    lib.rs               # Ui rendering operations, feedback, and terminal ownership
+    application.rs       # whole-screen composition and overlay precedence
+    event_list.rs        # event list and entry-log layout
+    preview.rs           # side-panel and fullscreen preview rendering
+    driva.rs             # launch-policy/details rendering
+    picker.rs            # session/workspace/template picker rendering
+    ...                  # shared chrome and the remaining focused renderers
 ```
 
 Each of those owns one field of [`App`] and everything that is only about it,

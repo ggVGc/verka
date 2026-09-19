@@ -3,9 +3,6 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
-use std::io::Stdout;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,6 +29,7 @@ mod notices;
 mod outbox;
 mod picker;
 mod preferences;
+mod presentation;
 mod preview;
 mod raw;
 mod references;
@@ -40,7 +38,6 @@ mod tag_picker;
 mod tail;
 mod terminal;
 mod timeline;
-mod ui;
 mod workspace;
 
 use app::{App, LaunchPolicy};
@@ -48,8 +45,9 @@ use cli::{Cli, CliCommand};
 use config::Defaults;
 use event_loop::RunOutcome;
 use session::Attachment;
-use styra_server::Client;
 use styra_protocol::{LogEntry, WorkspaceSummary};
+use styra_server::Client;
+use styra_ui::{RatatuiUi, Ui};
 
 /// Point the app at the Workspace it is now showing: its display name, and the
 /// standing launch policy every interaction started there is layered onto.
@@ -206,7 +204,7 @@ fn main() -> Result<()> {
     // below still report setup failures before taking over the terminal,
     // and the terminal the picker opened is reused below rather than torn
     // down and reopened.
-    let mut terminal: Option<Terminal<CrosstermBackend<Stdout>>> = None;
+    let mut terminal: Option<RatatuiUi> = None;
     let view_target: Option<PathBuf> = match &cli.view {
         Some(Some(path)) => Some(path.clone()),
         Some(None) => {
@@ -215,18 +213,18 @@ fn main() -> Result<()> {
                 println!("No sessions found by the Styra server");
                 return Ok(());
             }
-            let mut term = terminal::setup()?;
+            let mut term = RatatuiUi::new()?;
             match picker::run_session_picker(&mut term, &client, &mut sessions, None) {
                 Ok(Some(id)) => {
                     terminal = Some(term);
                     Some(PathBuf::from(id))
                 }
                 Ok(None) => {
-                    terminal::restore(&mut term)?;
+                    term.close()?;
                     return Ok(());
                 }
                 Err(error) => {
-                    terminal::restore(&mut term)?;
+                    term.close()?;
                     return Err(error);
                 }
             }
@@ -246,16 +244,16 @@ fn main() -> Result<()> {
         } else {
             let mut term = match terminal.take() {
                 Some(term) => term,
-                None => terminal::setup()?,
+                None => RatatuiUi::new()?,
             };
             let choice = match picker::run_workspace_picker(&mut term, &client, &mut workspaces) {
                 Ok(Some(choice)) => choice,
                 Ok(None) => {
-                    terminal::restore(&mut term)?;
+                    term.close()?;
                     return Ok(());
                 }
                 Err(error) => {
-                    terminal::restore(&mut term)?;
+                    term.close()?;
                     return Err(error);
                 }
             };
@@ -274,7 +272,7 @@ fn main() -> Result<()> {
             let workspace = match workspace {
                 Ok(workspace) => workspace,
                 Err(error) => {
-                    terminal::restore(&mut term)?;
+                    term.close()?;
                     return Err(error);
                 }
             };
@@ -371,7 +369,7 @@ fn main() -> Result<()> {
 
     let mut terminal = match terminal {
         Some(terminal) => terminal,
-        None => terminal::setup()?,
+        None => RatatuiUi::new()?,
     };
 
     // Runs until the operator quits. Workspace and Session selection only
@@ -467,7 +465,7 @@ fn main() -> Result<()> {
         refresh_workspace_context(&mut app, &client, &active_workspace);
     };
 
-    terminal::restore(&mut terminal)?;
+    terminal.close()?;
     result
 }
 
@@ -503,9 +501,9 @@ fn browse_shells(client: &Client) -> Result<()> {
         return Ok(());
     }
 
-    let mut terminal = terminal::setup()?;
+    let mut terminal = RatatuiUi::new()?;
     let choice = picker::run_session_picker(&mut terminal, client, &mut sessions, None);
-    terminal::restore(&mut terminal)?;
+    terminal.close()?;
     match choice? {
         Some(session) => attach_shell(client, &session),
         None => Ok(()),
