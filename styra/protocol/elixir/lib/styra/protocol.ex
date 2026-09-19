@@ -1945,12 +1945,13 @@ defmodule Styra.Protocol do
     @doc ~S"""
     Fields of `data`:
 
-      * `workspace_id`  string
-      * `selection   `  Selection
-      * `launch      `  LaunchPolicy  (optional)
-      * `message     `  string|null  (optional)
-      * `name        `  string|null  (optional)
-      * `contract    `  Contract|null  (optional)
+      * `workspace_id   `  string
+      * `selection      `  Selection
+      * `launch         `  LaunchPolicy  (optional)
+      * `create_worktree`  boolean  (optional)
+      * `message        `  string|null  (optional)
+      * `name           `  string|null  (optional)
+      * `contract       `  Contract|null  (optional)
     """
     def create_session(data), do: Styra.Protocol.build("create_session", data)
 
@@ -1963,9 +1964,10 @@ defmodule Styra.Protocol do
 
     Fields of `data`:
 
-      * `workspace_id`  string
-      * `selection   `  Selection
-      * `launch      `  LaunchPolicy  (optional)
+      * `workspace_id   `  string
+      * `selection      `  Selection
+      * `launch         `  LaunchPolicy  (optional)
+      * `create_worktree`  boolean  (optional)
     """
     def plan_session(data), do: Styra.Protocol.build("plan_session", data)
 
@@ -2001,6 +2003,8 @@ defmodule Styra.Protocol do
 
     @doc ~S"""
     Create and associate a linked Git worktree for an existing Session.
+    Refused when it already has one; the association is used on its next
+    launch or resume.
 
     Fields of `data`:
 
@@ -2417,7 +2421,6 @@ defmodule Styra.Protocol.Response do
 
   def workspace_git_repository_updated, do: "workspace_git_repository_updated"
 
-
   def workspace_launch, do: "workspace_launch"
 
   def session_created, do: "session_created"
@@ -2427,6 +2430,7 @@ defmodule Styra.Protocol.Response do
   def templates, do: "templates"
 
   def session_resumed, do: "session_resumed"
+
   def session_worktree_created, do: "session_worktree_created"
 
   def session_converted, do: "session_converted"

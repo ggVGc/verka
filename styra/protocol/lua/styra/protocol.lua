@@ -2054,12 +2054,13 @@ function M.request.workspace_launch(data)
 end
 
 --- Fields of `data`:
----   workspace_id  string
----   selection     Selection
----   launch        LaunchPolicy  (optional)
----   message       string|null  (optional)
----   name          string|null  (optional)
----   contract      Contract|null  (optional)
+---   workspace_id     string
+---   selection        Selection
+---   launch           LaunchPolicy  (optional)
+---   create_worktree  boolean  (optional)
+---   message          string|null  (optional)
+---   name             string|null  (optional)
+---   contract         Contract|null  (optional)
 function M.request.create_session(data)
   return M.build("create_session", data)
 end
@@ -2068,9 +2069,10 @@ end
 --- under. Creates nothing and touches no session state.
 ---
 --- Fields of `data`:
----   workspace_id  string
----   selection     Selection
----   launch        LaunchPolicy  (optional)
+---   workspace_id     string
+---   selection        Selection
+---   launch           LaunchPolicy  (optional)
+---   create_worktree  boolean  (optional)
 function M.request.plan_session(data)
   return M.build("plan_session", data)
 end
@@ -2095,6 +2097,8 @@ function M.request.resume_session(data)
 end
 
 --- Create and associate a linked Git worktree for an existing Session.
+--- Refused when it already has one; the association is used on its next
+--- launch or resume.
 ---
 --- Fields of `data`:
 ---   id  string
