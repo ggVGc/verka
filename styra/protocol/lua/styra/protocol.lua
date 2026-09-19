@@ -925,7 +925,7 @@ M.types.AgentEvent = {
       kind = "struct",
       fields = {
         { name = "outcome", required = false, type = { kind = "ref", name = "TurnOutcome" } },
-        { name = "usage", required = false, type = { kind = "ref", name = "TurnUsage" } },
+        { name = "usage", required = true, type = { kind = "ref", name = "TurnUsage" } },
       },
     } },
     { name = "usage_updated", payload = {
@@ -1252,8 +1252,16 @@ M.types.TurnOutcome = {
 --- its wire line actually states — an absent figure stays `None` rather than
 --- becoming a zero that reads like a real measurement — and `UsageTracker`
 --- derives the other half from the run of events around it.
+---
+--- Both halves are optional, so this accepts almost anything — including the
+--- bare `TokenUsage` that used to sit in `usage`'s place, which would come
+--- through as neither figure and drop what a peer on an older build actually
+--- said. `deny_unknown_fields` is what makes that a decode error instead of a
+--- silent loss: a client showing nothing where a number was reported is worse
+--- than one saying it could not read the line.
 M.types.TurnUsage = {
   kind = "struct",
+  deny_unknown_fields = true,
   fields = {
     { name = "turn", required = false, type = { kind = "optional", inner = { kind = "ref", name = "TokenUsage" } } },
     { name = "total", required = false, type = { kind = "optional", inner = { kind = "ref", name = "TokenUsage" } } },

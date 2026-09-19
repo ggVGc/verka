@@ -101,7 +101,15 @@ pub enum TurnOutcome {
 /// its wire line actually states — an absent figure stays `None` rather than
 /// becoming a zero that reads like a real measurement — and [`UsageTracker`]
 /// derives the other half from the run of events around it.
+///
+/// Both halves are optional, so this accepts almost anything — including the
+/// bare [`TokenUsage`] that used to sit in `usage`'s place, which would come
+/// through as neither figure and drop what a peer on an older build actually
+/// said. `deny_unknown_fields` is what makes that a decode error instead of a
+/// silent loss: a client showing nothing where a number was reported is worse
+/// than one saying it could not read the line.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TurnUsage {
     /// What this turn alone spent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,10 +169,15 @@ pub enum AgentEvent {
     /// states what it cost and what the thread has cost so far, as far as
     /// either is known — see [`TurnUsage`], and [`UsageTracker`], which fills
     /// in whichever half the provider left out.
+    ///
+    /// `outcome` defaults because its absence means something definite — an
+    /// ending that says nothing about how it went ran its course. `usage` does
+    /// not: an ending always serializes one, empty (`{}`) when neither figure
+    /// is known, so a missing `usage` is a line this build cannot read rather
+    /// than one with nothing to report.
     TurnCompleted {
         #[serde(default)]
         outcome: TurnOutcome,
-        #[serde(default)]
         usage: TurnUsage,
     },
     /// A running thread total that arrives independently of a turn's end (the
@@ -2879,6 +2892,59 @@ mod tests {
             AgentEvent::TurnCompleted {
                 outcome: TurnOutcome::Completed,
                 usage: TurnUsage::default(),
+            }
+        );
+    }
+
+    /// `usage` changed shape, from what one turn spent to both figures. A peer
+    /// on a build from before that sends the old shape, and the fields do not
+    /// collide, so without saying otherwise serde would read it as an ending
+    /// that reported nothing — dropping a figure that was measured and stated.
+    /// It has to fail instead.
+    #[test]
+    fn an_ending_in_the_old_usage_shape_is_a_decode_error() {
+        let old = r#"{"type":"turn_completed","usage":{"input_tokens":7,"output_tokens":3,
+            "cached_input_tokens":0,"reasoning_output_tokens":0}}"#;
+        assert!(serde_json::from_str::<AgentEvent>(old).is_err());
+
+        // An ending with nothing to report still carries a `usage`, so the
+        // empty object is the honest shape and has to keep decoding.
+        let empty = r#"{"type":"turn_completed","usage":{}}"#;
+        assert_eq!(
+            serde_json::from_str::<AgentEvent>(empty).unwrap(),
+            AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Completed,
+                usage: TurnUsage::default(),
+            }
+        );
+
+        // And that is what this build writes, so its own lines round-trip.
+        let ours = serde_json::to_string(&AgentEvent::TurnCompleted {
+            outcome: TurnOutcome::Failed {
+                message: "out of credits".into(),
+            },
+            usage: TurnUsage {
+                turn: Some(TokenUsage {
+                    input_tokens: 7,
+                    ..Default::default()
+                }),
+                total: None,
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<AgentEvent>(&ours).unwrap(),
+            AgentEvent::TurnCompleted {
+                outcome: TurnOutcome::Failed {
+                    message: "out of credits".into()
+                },
+                usage: TurnUsage {
+                    turn: Some(TokenUsage {
+                        input_tokens: 7,
+                        ..Default::default()
+                    }),
+                    total: None,
+                },
             }
         );
     }

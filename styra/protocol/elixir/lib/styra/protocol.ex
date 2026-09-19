@@ -935,7 +935,7 @@ defmodule Styra.Protocol do
           kind: :struct,
           fields: [
             %{name: "outcome", required: false, type: %{kind: :ref, name: "TurnOutcome"}},
-            %{name: "usage", required: false, type: %{kind: :ref, name: "TurnUsage"}}
+            %{name: "usage", required: true, type: %{kind: :ref, name: "TurnUsage"}}
           ]
         }},
         %{name: "usage_updated", payload: %{
@@ -1262,8 +1262,16 @@ defmodule Styra.Protocol do
     # its wire line actually states — an absent figure stays `None` rather than
     # becoming a zero that reads like a real measurement — and `UsageTracker`
     # derives the other half from the run of events around it.
+    #
+    # Both halves are optional, so this accepts almost anything — including the
+    # bare `TokenUsage` that used to sit in `usage`'s place, which would come
+    # through as neither figure and drop what a peer on an older build actually
+    # said. `deny_unknown_fields` is what makes that a decode error instead of a
+    # silent loss: a client showing nothing where a number was reported is worse
+    # than one saying it could not read the line.
     "TurnUsage" => %{
       kind: :struct,
+      deny_unknown_fields: true,
       fields: [
         %{name: "turn", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "TokenUsage"}}},
         %{name: "total", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "TokenUsage"}}}
@@ -3051,6 +3059,12 @@ defmodule Styra.Protocol.AgentEvent do
   states what it cost and what the thread has cost so far, as far as
   either is known — see `TurnUsage`, and `UsageTracker`, which fills
   in whichever half the provider left out.
+
+  `outcome` defaults because its absence means something definite — an
+  ending that says nothing about how it went ran its course. `usage` does
+  not: an ending always serializes one, empty (`{}`) when neither figure
+  is known, so a missing `usage` is a line this build cannot read rather
+  than one with nothing to report.
   """
   def turn_completed, do: "turn_completed"
 
