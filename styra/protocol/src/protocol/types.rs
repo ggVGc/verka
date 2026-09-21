@@ -677,6 +677,14 @@ pub enum InteractionActivityReason {
     /// The operator stopped the interaction (see
     /// [`crate::protocol::Request::StopInteraction`]).
     Paused,
+    /// The operator stopped the interaction because the work it was doing is
+    /// finished (see [`crate::protocol::Request::CompleteInteraction`]).
+    ///
+    /// Completion is a way of being [`InteractionActivity::Stopped`] rather
+    /// than a mark beside it: resuming the Session gives the interaction an
+    /// agent again, and an interaction that is working is not one the operator
+    /// has finished with.
+    Completed,
     /// The agent's process ended of its own accord. `exit_code` is `None` when
     /// it did not exit normally — killed, or ended before it ran at all.
     Exited {
@@ -701,7 +709,9 @@ impl InteractionActivityReason {
     pub fn explains_stopping(&self) -> bool {
         matches!(
             self,
-            InteractionActivityReason::Paused | InteractionActivityReason::RateLimited { .. }
+            InteractionActivityReason::Paused
+                | InteractionActivityReason::Completed
+                | InteractionActivityReason::RateLimited { .. }
         )
     }
 }
@@ -734,10 +744,6 @@ pub struct InteractionSummary {
     /// one is [`InteractionActivity::accepting`].
     #[serde(default)]
     pub activity: InteractionActivity,
-    /// Whether the operator has marked this interaction as completed.
-    /// Completed interactions are stopped and normally hidden by clients.
-    #[serde(default)]
-    pub completed: bool,
     /// How it came to be doing that, when there is something to say about it
     /// — see [`InteractionActivityReason`]. `None` while a turn is running:
     /// what a working interaction is doing is the whole answer.
@@ -773,6 +779,17 @@ pub struct InteractionSummary {
     /// pace, whichever interaction the client happens to be attached to.
     #[serde(default)]
     pub events: usize,
+}
+
+impl InteractionSummary {
+    /// Whether the operator has finished with this interaction: stopped, and
+    /// stopped for [`InteractionActivityReason::Completed`]. Reading it off
+    /// the state is what makes starting the Session again undo it — there is
+    /// no separate flag left behind to clear.
+    pub fn completed(&self) -> bool {
+        self.activity == InteractionActivity::Stopped
+            && self.activity_reason == Some(InteractionActivityReason::Completed)
+    }
 }
 
 /// Where a Session came from, when it was not launched fresh but branched

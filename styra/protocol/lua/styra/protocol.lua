@@ -649,7 +649,6 @@ M.types.InteractionSummary = {
     { name = "workspace", required = true, type = { kind = "string", path = true } },
     { name = "driva", required = true, type = { kind = "ref", name = "DrivaOptions" } },
     { name = "activity", required = false, type = { kind = "ref", name = "InteractionActivity" } },
-    { name = "completed", required = false, type = { kind = "boolean" } },
     { name = "activity_reason", required = false, type = { kind = "optional", inner = { kind = "ref", name = "InteractionActivityReason" } } },
     { name = "activity_since_ms", required = false, type = { kind = "number", integer = true } },
     { name = "idle_unseen", required = false, type = { kind = "boolean" } },
@@ -908,6 +907,7 @@ M.types.InteractionActivityReason = {
     } },
     { name = "background_finished", payload = { kind = "unit" } },
     { name = "paused", payload = { kind = "unit" } },
+    { name = "completed", payload = { kind = "unit" } },
     { name = "exited", payload = {
       kind = "struct",
       fields = {
@@ -1529,7 +1529,7 @@ M.InteractionActivity = {
   STOPPED = "stopped",
 }
 
-M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "exited", "server_restarted" }
+M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "completed", "exited", "server_restarted" }
 --- Wire spellings of `InteractionActivityReason`.
 M.InteractionActivityReason = {
   TURN_COMPLETED = "turn_completed",
@@ -1538,6 +1538,7 @@ M.InteractionActivityReason = {
   RATE_LIMITED = "rate_limited",
   BACKGROUND_FINISHED = "background_finished",
   PAUSED = "paused",
+  COMPLETED = "completed",
   EXITED = "exited",
   SERVER_RESTARTED = "server_restarted",
 }
@@ -2288,9 +2289,10 @@ function M.request.stop_interaction(data)
   return M.build("stop_interaction", data)
 end
 
---- Stop an interaction and mark its row completed. Completed rows remain
---- available to reopen, but clients normally hide them from the
---- interactions list.
+--- Stop an interaction because the operator is finished with it: it stops
+--- for `InteractionActivityReason::Completed`. The row stays listed and
+--- can be reopened, but clients normally hide completed rows; resuming the
+--- Session starts it again, and it is then no longer completed.
 ---
 --- Fields of `data`:
 ---   id  string

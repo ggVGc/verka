@@ -23,8 +23,10 @@ const LOAD_SETTLE: Duration = Duration::from_millis(120);
 pub struct LiveInteractions {
     pub open: bool,
     pub only_current_workspace: bool,
-    /// Completed interactions stay in the server roster, but are normally
-    /// out of the navigator until the operator asks to see them.
+    /// Completed interactions stay in the server's list, but are normally out
+    /// of the navigator until the operator asks to see them. Hiding them is
+    /// the listing's own business: the server keeps completion as the reason
+    /// an interaction is stopped, and says so about every row.
     pub show_completed: bool,
     pub items: Vec<InteractionSummary>,
     pub workspaces: Vec<WorkspaceSummary>,
@@ -89,7 +91,7 @@ impl LiveInteractions {
             .filter_map(|(index, interaction)| {
                 ((!self.only_current_workspace
                     || workspace_id.is_some_and(|id| interaction.workspace_id == id))
-                    && (self.show_completed || !interaction.completed))
+                    && (self.show_completed || !interaction.completed()))
                     .then_some(index)
             })
             .collect()
@@ -347,13 +349,41 @@ impl LiveInteractions {
             .iter()
             .position(|interaction| interaction.id == id)?;
         self.items.remove(removed);
-        // Whatever the caller does with the entry chosen here, the cursor is
-        // not left on the one that no longer exists.
-        self.rest();
         if self.items.is_empty() {
+            // Whatever the caller does next, the cursor is not left on the
+            // entry that no longer exists.
+            self.rest();
             return None;
         }
+        self.select_from(removed, workspace_id)
+    }
 
+    /// Select the entry that takes the place of one still listed but no longer
+    /// shown — the interaction the operator just completed, with completed
+    /// rows hidden. The row itself stays: it is the listing that filters it,
+    /// so nothing here removes it from the list.
+    pub fn select_past_hidden(
+        &mut self,
+        id: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        let hidden = self
+            .items
+            .iter()
+            .position(|interaction| interaction.id == id)?;
+        self.select_from(hidden, workspace_id)
+    }
+
+    /// The first visible entry at or after `from`, falling back to the last
+    /// one before it. If the current Workspace has no visible entries left,
+    /// reveal All rather than leave the navigator with nothing to select.
+    fn select_from(
+        &mut self,
+        from: usize,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        // The cursor is not left on an entry the navigator no longer offers.
+        self.rest();
         if self.visible_indices(workspace_id).is_empty() {
             self.only_current_workspace = false;
         }
@@ -361,7 +391,7 @@ impl LiveInteractions {
         visible
             .iter()
             .copied()
-            .find(|index| *index >= removed)
+            .find(|index| *index >= from)
             .or_else(|| visible.last().copied())
             .and_then(|index| self.items.get(index))
             .cloned()
@@ -430,7 +460,7 @@ fn is_idle(interaction: &InteractionSummary) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use styra_protocol::{DrivaOptions, InteractionActivity};
+    use styra_protocol::{DrivaOptions, InteractionActivity, InteractionActivityReason};
 
     fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
@@ -451,13 +481,20 @@ mod tests {
                 ..Default::default()
             },
             activity,
-            completed: false,
             activity_reason: None,
             activity_since_ms: 0,
             idle_unseen: false,
             last_message: None,
             events: 0,
         }
+    }
+
+    /// An interaction the operator finished with: stopped, and stopped for
+    /// that reason.
+    fn completed(id: &str) -> InteractionSummary {
+        let mut interaction = interaction(id, InteractionActivity::Stopped);
+        interaction.activity_reason = Some(InteractionActivityReason::Completed);
+        interaction
     }
 
     #[test]
@@ -512,11 +549,9 @@ mod tests {
     #[test]
     fn completed_interactions_are_hidden_until_toggled() {
         let mut live = LiveInteractions::default();
-        let mut completed = interaction("completed", InteractionActivity::Stopped);
-        completed.completed = true;
         live.open(
             vec![
-                completed,
+                completed("completed"),
                 interaction("active", InteractionActivity::Pending),
             ],
             vec![],
@@ -529,6 +564,41 @@ mod tests {
         );
         live.toggle_completed();
         assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1]);
+    }
+
+    /// Completion is the reason an interaction is stopped, so an interaction
+    /// started again is not completed any more — and the listing shows it
+    /// without anything having to clear a mark.
+    #[test]
+    fn an_interaction_started_again_is_no_longer_completed() {
+        let mut live = LiveInteractions::default();
+        live.open(vec![completed("finished")], vec![]);
+        assert!(live.visible_indices(Some("workspace")).is_empty());
+
+        live.refresh(vec![interaction("finished", InteractionActivity::Running)]);
+
+        assert_eq!(live.visible_indices(Some("workspace")), vec![0]);
+    }
+
+    /// Completing the interaction on screen leaves it listed — the navigator
+    /// is only filtering it — so the move is onto the next visible row.
+    #[test]
+    fn completing_an_interaction_selects_the_next_visible_one() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                completed("finished"),
+                interaction("next", InteractionActivity::Pending),
+            ],
+            vec![],
+        );
+
+        let next = live
+            .select_past_hidden("finished", Some("workspace"))
+            .unwrap();
+
+        assert_eq!(next.id, "next");
+        assert_eq!(live.items.len(), 2, "the completed row is still listed");
     }
 
     #[test]

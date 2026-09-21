@@ -303,9 +303,6 @@ struct ManagedInteraction {
     interaction: Interaction,
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     activity: Arc<CurrentActivity>,
-    /// Set by the operator when this interaction is finished. Kept on the
-    /// summary so the roster preserves it across a server restart.
-    completed: AtomicBool,
     /// Whether this interaction going idle is still news, and what makes it
     /// news at all: see [`IdleNotice`].
     idle: Arc<IdleNotice>,
@@ -478,7 +475,6 @@ impl ManagedInteraction {
             driva: self.driva.clone(),
             idle_unseen: activity == InteractionActivity::Pending && self.idle.unseen(),
             activity,
-            completed: self.completed.load(Ordering::Acquire),
             activity_reason: state.reason,
             activity_since_ms: state.since_ms,
             last_message: self.last_message(),
@@ -729,6 +725,17 @@ impl ManagedInteraction {
 
     fn stop(&self) {
         self.activity.stopped(InteractionActivityReason::Paused);
+        self.interaction.stop();
+    }
+
+    /// Stop the interaction as finished. Unlike [`Self::stop`] the reason is
+    /// asserted rather than offered: the operator saying the work is done is
+    /// news now, whatever the interaction had already stopped for.
+    fn complete(&self) {
+        self.activity.set(
+            InteractionActivity::Stopped,
+            Some(InteractionActivityReason::Completed),
+        );
         self.interaction.stop();
     }
 
@@ -1041,7 +1048,6 @@ impl ServerState {
             interaction,
             updates: Arc::clone(&updates),
             activity: Arc::clone(&activity),
-            completed: AtomicBool::new(false),
             idle: Arc::clone(&idle),
             events: Arc::clone(&events),
             workspace_id: request.workspace_id.clone(),
@@ -1547,7 +1553,6 @@ impl ServerState {
             interaction,
             updates: Arc::clone(&updates),
             activity: Arc::clone(&activity),
-            completed: AtomicBool::new(false),
             idle: Arc::clone(&idle),
             events: Arc::clone(&events),
             workspace_id: summary.workspace_id.clone(),
@@ -2480,9 +2485,7 @@ impl ServerState {
                     self.publish_roster();
                     return Ok(Response::Accepted);
                 }
-                let interaction = self.interaction(&id)?;
-                interaction.completed.store(true, Ordering::Release);
-                interaction.stop();
+                self.interaction(&id)?.complete();
                 self.publish_roster();
                 Ok(Response::Accepted)
             }

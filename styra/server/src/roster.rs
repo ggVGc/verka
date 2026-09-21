@@ -14,7 +14,9 @@
 //! restored row is therefore [`InteractionActivity::Stopped`] with
 //! [`InteractionActivityReason::ServerRestarted`], whatever it was doing when
 //! the previous run ended — which is both what is true and what tells the
-//! operator that resuming the Session is what would bring the agent back.
+//! operator that resuming the Session is what would bring the agent back. The
+//! exception is a row the operator had finished with: completion is itself why
+//! that one is stopped, and the restart has nothing to add to it.
 //!
 //! The mirrored row is the summary itself rather than a key to rebuild one
 //! from. Most of a summary could be re-derived from the Session's stored
@@ -80,8 +82,15 @@ impl Roster {
             // operator a conversation they cannot open.
             .filter(|entry| entry.session_path.is_dir())
             .map(|mut entry| {
+                // A row the operator had finished with keeps that as why it is
+                // stopped: the restart is not what ended it, and the
+                // completion would otherwise be lost with the reason.
+                let reason = match entry.summary.completed() {
+                    true => InteractionActivityReason::Completed,
+                    false => InteractionActivityReason::ServerRestarted,
+                };
                 entry.summary.activity = InteractionActivity::Stopped;
-                entry.summary.activity_reason = Some(InteractionActivityReason::ServerRestarted);
+                entry.summary.activity_reason = Some(reason);
                 // Deliberately not restored, for the reason the quota log does
                 // not restore its announcements: a notification is owed to the
                 // operator of the run that raised it, and this is not that run.
@@ -121,13 +130,14 @@ impl Roster {
     }
 
     /// Mark a restored, necessarily stopped row as completed. Unlike a live
-    /// interaction, it has no process left to stop.
+    /// interaction, it has no process left to stop: only the reason it is
+    /// stopped changes.
     pub fn complete(&self, id: &str) -> bool {
         let mut restored = self.lock();
         let Some(entry) = restored.get_mut(id) else {
             return false;
         };
-        entry.summary.completed = true;
+        entry.summary.activity_reason = Some(InteractionActivityReason::Completed);
         true
     }
 
@@ -247,7 +257,6 @@ mod tests {
             workspace: PathBuf::from("/tmp/project"),
             driva: Default::default(),
             activity: InteractionActivity::Running,
-            completed: false,
             activity_reason: None,
             activity_since_ms: 7,
             idle_unseen: true,
@@ -266,9 +275,7 @@ mod tests {
         let session = root.join("session-a");
         std::fs::create_dir_all(&session).unwrap();
 
-        let mut row = summary("session-a");
-        row.completed = true;
-        Roster::open(&root).publish(vec![(session, row)]);
+        Roster::open(&root).publish(vec![(session, summary("session-a"))]);
 
         let restored = Roster::open(&root).restored();
         assert_eq!(restored.len(), 1);
@@ -279,7 +286,6 @@ mod tests {
             Some(InteractionActivityReason::ServerRestarted)
         );
         assert_eq!(restored[0].last_message.as_deref(), Some("still going"));
-        assert!(restored[0].completed);
         // The previous run's notification is not this run's to raise.
         assert!(!restored[0].idle_unseen);
         std::fs::remove_dir_all(root).ok();
@@ -304,6 +310,8 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
+    /// Completion is why a row is stopped, so a restart — which stops every
+    /// row it brings back — must not overwrite it with its own reason.
     #[test]
     fn a_restored_row_can_be_marked_completed() {
         let root = store("complete");
@@ -315,7 +323,12 @@ mod tests {
         assert!(roster.complete("session-complete"));
         roster.publish(Vec::new());
 
-        assert!(Roster::open(&root).restored()[0].completed);
+        let restored = Roster::open(&root).restored();
+        assert!(restored[0].completed());
+        assert_eq!(
+            restored[0].activity_reason,
+            Some(InteractionActivityReason::Completed)
+        );
         std::fs::remove_dir_all(root).ok();
     }
 

@@ -385,8 +385,8 @@ impl Client {
         }
     }
 
-    /// Stop an interaction and mark it completed, which normally hides its
-    /// row from the interactions navigator.
+    /// Stop an interaction as finished, which normally hides its row from the
+    /// interactions navigator until the Session is started again.
     pub fn complete_interaction(&self, id: &str) -> Result<()> {
         match self.request(Request::CompleteInteraction { id: id.to_owned() })? {
             Response::Accepted => Ok(()),

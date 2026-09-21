@@ -792,21 +792,19 @@ pub fn run(
                         ));
                         continue;
                     }
+                    // Completion is a way of being stopped, so the row is still
+                    // listed and the server is what says so: take its word for
+                    // the new state rather than writing one here.
+                    if let Ok(interactions) = client.list_interactions() {
+                        app.interactions.refresh(interactions);
+                    }
                     if app.interactions.show_completed {
-                        if let Some(item) = app
-                            .interactions
-                            .items
-                            .iter_mut()
-                            .find(|item| item.id == interaction.id)
-                        {
-                            item.completed = true;
-                        }
                         continue;
                     }
                     let workspace_id = app.workspace.id.clone();
                     let Some(next) = app
                         .interactions
-                        .remove_and_select_next(&interaction.id, workspace_id.as_deref())
+                        .select_past_hidden(&interaction.id, workspace_id.as_deref())
                     else {
                         app.interactions.close();
                         return Ok(RunOutcome::Reset);

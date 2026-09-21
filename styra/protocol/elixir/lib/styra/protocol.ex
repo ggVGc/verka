@@ -659,7 +659,6 @@ defmodule Styra.Protocol do
         %{name: "workspace", required: true, type: %{kind: :string, path: true}},
         %{name: "driva", required: true, type: %{kind: :ref, name: "DrivaOptions"}},
         %{name: "activity", required: false, type: %{kind: :ref, name: "InteractionActivity"}},
-        %{name: "completed", required: false, type: %{kind: :boolean}},
         %{name: "activity_reason", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "InteractionActivityReason"}}},
         %{name: "activity_since_ms", required: false, type: %{kind: :number, integer: true}},
         %{name: "idle_unseen", required: false, type: %{kind: :boolean}},
@@ -918,6 +917,7 @@ defmodule Styra.Protocol do
         }},
         %{name: "background_finished", payload: %{kind: :unit}},
         %{name: "paused", payload: %{kind: :unit}},
+        %{name: "completed", payload: %{kind: :unit}},
         %{name: "exited", payload: %{
           kind: :struct,
           fields: [
@@ -2259,9 +2259,10 @@ defmodule Styra.Protocol do
     def stop_interaction!(data), do: Styra.Protocol.build!("stop_interaction", data)
 
     @doc ~S"""
-    Stop an interaction and mark its row completed. Completed rows remain
-    available to reopen, but clients normally hide them from the
-    interactions list.
+    Stop an interaction because the operator is finished with it: it stops
+    for `InteractionActivityReason::Completed`. The row stays listed and
+    can be reopened, but clients normally hide completed rows; resuming the
+    Session starts it again, and it is then no longer completed.
 
     Fields of `data`:
 
@@ -2968,6 +2969,7 @@ defmodule Styra.Protocol.InteractionActivityReason do
     {:rate_limited, "rate_limited"},
     {:background_finished, "background_finished"},
     {:paused, "paused"},
+    {:completed, "completed"},
     {:exited, "exited"},
     {:server_restarted, "server_restarted"}
   ]
@@ -3033,6 +3035,17 @@ defmodule Styra.Protocol.InteractionActivityReason do
   `crate::protocol::Request::StopInteraction`).
   """
   def paused, do: "paused"
+
+  @doc ~S"""
+  The operator stopped the interaction because the work it was doing is
+  finished (see `crate::protocol::Request::CompleteInteraction`).
+
+  Completion is a way of being `InteractionActivity::Stopped` rather
+  than a mark beside it: resuming the Session gives the interaction an
+  agent again, and an interaction that is working is not one the operator
+  has finished with.
+  """
+  def completed, do: "completed"
 
   @doc ~S"""
   The agent's process ended of its own accord. `exit_code` is `None` when

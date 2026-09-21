@@ -107,9 +107,10 @@ impl IdleReason {
                 resets_at_ms: *resets_at_ms,
             }),
             Some(InteractionActivityReason::BackgroundFinished) => IdleReason::BackgroundFinished,
-            // All three describe an interaction that stopped rather than one
-            // waiting for input, so as idle reasons they say nothing.
+            // Each of these describes an interaction that stopped rather than
+            // one waiting for input, so as idle reasons they say nothing.
             Some(InteractionActivityReason::Paused)
+            | Some(InteractionActivityReason::Completed)
             | Some(InteractionActivityReason::Exited { .. })
             | Some(InteractionActivityReason::ServerRestarted)
             | None => IdleReason::Reported,
@@ -137,6 +138,9 @@ pub enum StopReason {
     /// The operator paused the interaction (`S`): the agent was told to stop
     /// and the queued messages were cleared.
     Paused,
+    /// The operator finished with the interaction (`C`): stopped, and stopped
+    /// because the work it was doing is done.
+    Completed,
     /// A plan window refused the work and the Session is not waiting it out,
     /// so the interaction was stopped rather than left holding a process that
     /// cannot run anything.
@@ -164,6 +168,7 @@ impl StopReason {
     pub fn reported(reason: Option<&InteractionActivityReason>) -> Self {
         match reason {
             Some(InteractionActivityReason::Paused) => StopReason::Paused,
+            Some(InteractionActivityReason::Completed) => StopReason::Completed,
             Some(InteractionActivityReason::Exited { exit_code }) => StopReason::Exited {
                 exit_code: *exit_code,
             },
@@ -187,6 +192,7 @@ impl StopReason {
     pub fn label(&self) -> String {
         match self {
             StopReason::Paused => "you paused it".into(),
+            StopReason::Completed => "you completed it".into(),
             StopReason::RateLimited(limit) => format!("rate limited ({})", limit.window),
             StopReason::Failed { message } => format!("failed: {message}"),
             StopReason::Exited {
@@ -807,7 +813,6 @@ mod tests {
             workspace: std::path::PathBuf::from("/workspace"),
             driva: Default::default(),
             activity,
-            completed: false,
             activity_reason: reason,
             activity_since_ms: 0,
             idle_unseen: false,

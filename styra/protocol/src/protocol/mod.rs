@@ -394,9 +394,10 @@ pub enum Request {
     StopInteraction {
         id: String,
     },
-    /// Stop an interaction and mark its row completed. Completed rows remain
-    /// available to reopen, but clients normally hide them from the
-    /// interactions list.
+    /// Stop an interaction because the operator is finished with it: it stops
+    /// for [`InteractionActivityReason::Completed`]. The row stays listed and
+    /// can be reopened, but clients normally hide completed rows; resuming the
+    /// Session starts it again, and it is then no longer completed.
     CompleteInteraction {
         id: String,
     },
