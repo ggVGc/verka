@@ -233,8 +233,14 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         view.links,
     );
     let list = List::new(items).block(block);
+    // `ListState::select(None)` also resets the offset to zero, and this list
+    // renders with nothing selected whenever the selected entry is one the
+    // filters hide. Assign the field directly so that a computed offset is
+    // never thrown away: the offset this render reports back is persisted, so
+    // a zero here would scroll the interaction log to the top and keep it
+    // there rather than flickering for one frame.
+    *state.selected_mut() = position;
     *state.offset_mut() = offset;
-    state.select(position);
     frame.render_stateful_widget(list, area, &mut state);
     EventListFeedback {
         effective_offset: state.offset(),

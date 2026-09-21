@@ -35,7 +35,7 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
             matches!(&entry.event, AgentEvent::CommandStarted { command: started } if started == command)
         }) {
             entry.event = event;
-            follow_tail(app);
+            follow_visible_tail(app);
             return;
         }
     }
@@ -71,7 +71,7 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
             if finishes_background {
                 app.activity.note_background_finished();
             }
-            follow_tail(app);
+            follow_visible_tail(app);
             return;
         }
         // Claude's Edit/Write/MultiEdit tool calls surface as `FileChanged`
@@ -92,7 +92,7 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
                     };
                 }
             }
-            follow_tail(app);
+            follow_visible_tail(app);
             return;
         }
     }
@@ -340,16 +340,15 @@ fn refresh_thinking(app: &mut App, event: &AgentEvent) -> bool {
     true
 }
 
-/// Move the selection to the last row, for the paths that replaced one: the
-/// row they changed is the newest thing the agent has said.
-fn follow_tail(app: &mut App) {
-    if app.timeline.follow && !app.timeline.entries.is_empty() {
-        app.select_tail();
-    }
-}
-
-/// The same, but only when the last row is one the current filters actually
-/// show — a hidden minor event must not move the list's viewport.
+/// Move the selection to the last row while following — but only when that row
+/// is one the current filters actually show. A hidden event must not move the
+/// list's viewport, and the selection is what the viewport is anchored to, so
+/// landing on a hidden row leaves the list rendering with nothing selected and
+/// the offset with nothing to hold it in place.
+///
+/// This holds for the paths that replace a row as much as for the ones that
+/// append: a tool or command finishing is the newest thing the agent has done,
+/// but that says nothing about whether the operator can see it.
 fn follow_visible_tail(app: &mut App) {
     if app.timeline.follow
         && !app.timeline.entries.is_empty()
