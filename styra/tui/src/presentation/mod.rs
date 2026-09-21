@@ -181,7 +181,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
         View::Events => {
             let list = list::view(app);
             let navigator = app.interactions.open.then(|| interactions::view(app));
-            let entry_log = app.entry_log_open.then(|| entry_log::view(app));
+            let entry_log = app.entry_log.open.then(|| entry_log::view(app));
             let preview = app.preview.open.then(|| preview::view(app, false));
             draw_main(
                 ui,
@@ -443,8 +443,8 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
                 app.launch.scroll.note_limit(scroll.limit);
             }
             styra_ui::PanelId::EntryLog => {
-                app.entry_log.offset = scroll.effective_offset;
-                app.entry_log.note_limit(scroll.limit);
+                app.entry_log.scroll.offset = scroll.effective_offset;
+                app.entry_log.scroll.note_limit(scroll.limit);
             }
         }
     }

@@ -12,24 +12,38 @@
 //! Entries use the same collapsed, one-line rows as the main event list. This
 //! is a scoped interaction log, not a second detail reader: the operator can
 //! compare its compact sequence with the selected row immediately above it.
+//!
+//! The pane opens following the list selection, and `Tab` hands it the
+//! navigation keys, at which point it draws a cursor of its own and the
+//! preview shows whatever that cursor is on; see [`crate::entry_log`].
 
 use super::list::ui_link_display;
 use crate::app::App;
 pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
     let span = app.timeline.conversation_span();
+    // The cursor is only drawn while the pane holds the navigation keys:
+    // otherwise it follows the list, and a second highlighted row would read
+    // as a second selection the keys do not move.
+    let cursor = app
+        .entry_log
+        .focused()
+        .then(|| app.entry_log.cursor(span.len()))
+        .flatten();
     let entries = app.timeline.entries[span]
         .iter()
-        .map(|entry| styra_ui::event_list::EventEntry {
+        .enumerate()
+        .map(|(index, entry)| styra_ui::event_list::EventEntry {
             event: &entry.event,
             expanded: false,
             has_detail: entry.has_detail(),
             contract: entry.contract.as_ref(),
-            selected: false,
+            selected: cursor == Some(index),
         })
         .collect();
     styra_ui::event_list::EntryLogView {
         entries,
-        requested_scroll: app.entry_log.offset,
+        focused: app.entry_log.focused(),
+        requested_scroll: app.entry_log.scroll.offset,
         protocol: app.selection.provider.protocol(),
         links: ui_link_display(app.link_display),
     }
@@ -126,8 +140,8 @@ mod tests {
     }
 
     /// The pane occupies the bottom of the Events screen while the list stays
-    /// above it. Moving that list changes the pane's content; it does not turn
-    /// the pane into a second navigation target.
+    /// above it. Until `Tab` hands it the keys, moving that list is what
+    /// changes the pane's content.
     #[test]
     fn entry_log_is_a_selection_following_pane_below_the_event_list() {
         let mut app = app_with_two_turns();
@@ -148,6 +162,115 @@ mod tests {
         let screen = test_support::screen_sized(&app, 120, 30);
         let (_, y) = screen.find("git commit --amend");
         assert!(y > entry_log_y, "the pane followed the list selection");
+    }
+
+    /// `Tab` makes the pane the window the movement keys act on, and the
+    /// preview follows its cursor: the two panes are read as one pair, with the
+    /// preview showing whichever of them holds the keys.
+    #[test]
+    fn tab_moves_the_keys_to_the_pane_and_the_preview_follows_its_cursor() {
+        let mut app = app_with_two_turns();
+        app.timeline.conversation_only = true;
+        app.timeline.selected = 0;
+        app.toggle_entry_log();
+        app.preview.show();
+
+        // Before Tab the preview shows the list's selection: the message.
+        assert_eq!(
+            app.preview_entry().map(|entry| entry.event.tag()),
+            Some("user")
+        );
+
+        app.toggle_entry_log_focus();
+        assert!(app.entry_log.focused());
+        assert_eq!(
+            app.preview_entry().map(|entry| entry.event.tag()),
+            Some("user"),
+            "taking the keys leaves the preview on the entry it was showing"
+        );
+
+        app.entry_log_select_next();
+        assert_eq!(app.entry_log_index(), Some(1));
+        assert_eq!(
+            app.timeline.selected, 0,
+            "the event list keeps its own place"
+        );
+        assert!(test_support::rendered(&app).contains("cargo test backoff"));
+        assert_eq!(
+            app.preview_entry().map(|entry| entry.event.tag()),
+            Some("shell"),
+            "the preview shows the entry the pane's cursor is on"
+        );
+
+        // And back: the movement keys belong to the event list again, so the
+        // preview returns to following its selection.
+        app.toggle_entry_log_focus();
+        assert!(!app.entry_log.focused());
+        assert_eq!(app.entry_log_index(), None);
+        assert_eq!(
+            app.preview_entry().map(|entry| entry.event.tag()),
+            Some("user")
+        );
+    }
+
+    /// A stretch taller than the pane. The cursor is the operator's place in
+    /// it, so moving it past the bottom row scrolls the pane rather than
+    /// leaving the highlight off screen.
+    #[test]
+    fn the_pane_scrolls_to_keep_its_cursor_on_screen() {
+        let mut app = test_support::app("s1");
+        app.timeline.conversation_only = true;
+        app.push_event(AgentEvent::UserMessage {
+            text: "run everything".into(),
+        });
+        for index in 0..40 {
+            app.push_event(AgentEvent::CommandStarted {
+                command: format!("cargo test case-{index}"),
+            });
+        }
+        app.select_first();
+        app.toggle_entry_log();
+        app.toggle_entry_log_focus();
+
+        let screen = test_support::screen_sized(&app, 120, 30);
+        assert!(screen.body().contains("cargo test case-0"));
+        assert!(!screen.body().contains("cargo test case-39"));
+
+        app.entry_log_select_last();
+        let screen = test_support::screen_sized(&app, 120, 30);
+        assert!(screen.body().contains("cargo test case-39"));
+        assert!(!screen.body().contains("cargo test case-0"));
+        assert_eq!(
+            app.preview_entry()
+                .map(|entry| crate::files::entry_text(entry).contains("case-39")),
+            Some(true),
+            "the preview shows the entry the cursor reached"
+        );
+    }
+
+    /// Which window has the keys has to be visible, or the operator cannot
+    /// tell what `j` is about to move.
+    #[test]
+    fn the_pane_says_when_it_is_holding_the_navigation_keys() {
+        let mut app = app_with_two_turns();
+        app.timeline.selected = 0;
+        app.toggle_entry_log();
+        assert!(test_support::rendered(&app).contains("follows selection"));
+
+        app.toggle_entry_log_focus();
+        let screen = test_support::rendered(&app);
+        assert!(screen.contains("Tab: back to the list"));
+        assert!(!screen.contains("follows selection"));
+    }
+
+    /// `Tab` is the pane's key. With the pane closed there is only one window
+    /// on the Events screen, so it has nothing to move.
+    #[test]
+    fn tab_does_nothing_while_the_pane_is_closed() {
+        let mut app = app_with_two_turns();
+        app.toggle_entry_log_focus();
+        assert!(!app.entry_log.focused());
+        assert_eq!(app.entry_log_index(), None);
     }
 
     /// The scoped log belongs to the interaction-log pane on the left. A

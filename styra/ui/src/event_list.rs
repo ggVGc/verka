@@ -76,6 +76,11 @@ pub struct EventListFeedback {
 
 pub struct EntryLogView<'a> {
     pub entries: Vec<EventEntry<'a>>,
+    /// Whether this pane, rather than the event list above it, is holding the
+    /// navigation keys. A focused pane wears the active border and names the
+    /// key that hands them back; only then does any of its rows carry the
+    /// selection, so the screen never shows two cursors at once.
+    pub focused: bool,
     pub requested_scroll: u16,
     pub protocol: Protocol,
     pub links: LinkDisplay,
@@ -93,11 +98,22 @@ pub fn render_entry_log(
     area: Rect,
 ) -> EntryLogFeedback {
     use ratatui::widgets::{Block, Borders};
+    let (border, title) = if view.focused {
+        (
+            palette::ACCENT,
+            " entry log · Tab: back to the list · E: close ",
+        )
+    } else {
+        (
+            palette::INACTIVE,
+            " entry log · follows selection · Tab: read it · E: close ",
+        )
+    };
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::INACTIVE))
+        .border_style(Style::default().fg(border))
         .title(Span::styled(
-            " entry log · follows selection · E: close ",
+            title,
             Style::default().fg(palette::MUTED_TEXT),
         ));
     if view.entries.is_empty() {
@@ -137,7 +153,20 @@ pub fn render_entry_log(
         .len()
         .saturating_sub(viewport)
         .min(usize::from(u16::MAX)) as u16;
-    let effective = view.requested_scroll.min(limit);
+    let mut effective = view.requested_scroll.min(limit);
+    // Every row here is one line, so keeping the cursor on screen is a matter
+    // of holding the offset to the window around it. The cursor is the
+    // operator's place in the pane, so it wins over a stale scroll offset.
+    if let Some(cursor) = view.entries.iter().position(|entry| entry.selected) {
+        let cursor = cursor.min(usize::from(u16::MAX)) as u16;
+        let page = viewport.max(1) as u16 - 1;
+        if cursor < effective {
+            effective = cursor;
+        } else if cursor > effective.saturating_add(page) {
+            effective = cursor.saturating_sub(page);
+        }
+        effective = effective.min(limit);
+    }
     let mut state = ListState::default();
     *state.offset_mut() = usize::from(effective);
     frame.render_stateful_widget(List::new(items).block(block), area, &mut state);

@@ -24,6 +24,7 @@ use crate::activity::{Activity, RateLimit, Status};
 use crate::answer::AnswerView;
 use crate::branch::BranchPrompt;
 use crate::composer::Composer;
+use crate::entry_log::EntryLog;
 use crate::files::{self, FilesView};
 use crate::help::Help;
 use crate::ingest;
@@ -262,12 +263,11 @@ pub struct App {
     /// Unlike the raw/log views, the transcript reads as a document from the
     /// beginning rather than anchoring to the tail.
     pub transcript: Scroll,
-    /// Whether the entry-log pane is open below the event list, and how far
-    /// through the selected entry's log it is scrolled. It is deliberately a
-    /// pane state, not a [`View`]: the event list remains the active window
-    /// while this follows its selection.
-    pub entry_log_open: bool,
-    pub entry_log: Scroll,
+    /// The entry-log pane below the event list: whether it is open, which of
+    /// the two windows has the navigation keys, and where it is; see
+    /// [`EntryLog`]. It is deliberately a pane state, not a [`View`]: it and
+    /// the event list are on screen together, and `Tab` moves between them.
+    pub entry_log: EntryLog,
     /// Selected file in the Files view and whether it aggregates the session;
     /// see [`FilesView`].
     pub files: FilesView,
@@ -441,8 +441,7 @@ impl App {
             quota: Tail::default(),
             auto_retry: false,
             transcript: Scroll::default(),
-            entry_log_open: false,
-            entry_log: Scroll::default(),
+            entry_log: EntryLog::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
             references: None,
@@ -726,12 +725,91 @@ impl App {
     }
 
     /// Toggle the entry-log pane below the event list. Opening it returns to
-    /// the event list because that is the pane's control surface; it follows
-    /// the list selection rather than taking a selection of its own.
+    /// the event list, which is where the keys start: the pane opens following
+    /// the list selection, and `Tab` is what gives it a cursor of its own.
     pub fn toggle_entry_log(&mut self) {
         self.view = View::Events;
-        self.entry_log_open = !self.entry_log_open;
-        self.entry_log.reset();
+        self.entry_log.toggle();
+    }
+
+    /// Move the navigation keys between the event list and the entry-log pane,
+    /// which are the two windows the Events screen shows at once. Taking the
+    /// keys leaves the cursor on the entry the list was already on, so the
+    /// preview does not jump on the press itself.
+    pub fn toggle_entry_log_focus(&mut self) {
+        if !self.entry_log.open {
+            return;
+        }
+        if self.entry_log.focused() {
+            self.entry_log.unfocus();
+        } else {
+            let span = self.timeline.conversation_span();
+            let cursor = self.timeline.selected.saturating_sub(span.start);
+            self.entry_log.focus(cursor);
+        }
+        self.preview.scroll.reset();
+    }
+
+    /// How many entries the entry-log pane is showing: the selected message's
+    /// stretch, which is what its cursor moves within.
+    pub(crate) fn entry_log_len(&self) -> usize {
+        self.timeline.conversation_span().len()
+    }
+
+    /// Where the entry-log pane's cursor is in the timeline, while that pane
+    /// has the keys. `None` whenever the event list is the active window, so
+    /// callers can treat it as "the pane is not driving this".
+    pub(crate) fn entry_log_index(&self) -> Option<usize> {
+        if !self.entry_log.focused() {
+            return None;
+        }
+        let span = self.timeline.conversation_span();
+        let cursor = self.entry_log.cursor(span.len())?;
+        Some(span.start + cursor)
+    }
+
+    /// The entry the entry-log pane's cursor is on; see
+    /// [`Self::entry_log_index`].
+    pub(crate) fn entry_log_entry(&self) -> Option<&Entry> {
+        self.timeline.entries.get(self.entry_log_index()?)
+    }
+
+    /// Move the entry-log pane's cursor, when it is the window holding the
+    /// keys. The preview follows the cursor, so its offset — taken against
+    /// another entry's content — goes back to the top.
+    pub fn entry_log_select_next(&mut self) {
+        let len = self.entry_log_len();
+        self.entry_log.select_next(len);
+        self.preview.scroll.reset();
+    }
+
+    pub fn entry_log_select_prev(&mut self) {
+        let len = self.entry_log_len();
+        self.entry_log.select_prev(len);
+        self.preview.scroll.reset();
+    }
+
+    pub fn entry_log_page_down(&mut self) {
+        let len = self.entry_log_len();
+        self.entry_log.page_down(len);
+        self.preview.scroll.reset();
+    }
+
+    pub fn entry_log_page_up(&mut self) {
+        let len = self.entry_log_len();
+        self.entry_log.page_up(len);
+        self.preview.scroll.reset();
+    }
+
+    pub fn entry_log_select_first(&mut self) {
+        self.entry_log.select_first();
+        self.preview.scroll.reset();
+    }
+
+    pub fn entry_log_select_last(&mut self) {
+        let len = self.entry_log_len();
+        self.entry_log.select_last(len);
+        self.preview.scroll.reset();
     }
 
     /// True when the operator can still send messages.
@@ -760,7 +838,7 @@ impl App {
     pub(crate) fn select_tail(&mut self) {
         self.timeline.select_tail();
         self.preview.scroll.reset();
-        self.entry_log.reset();
+        self.entry_log.follow_list();
     }
 
     // --- List navigation ----------------------------------------------------
@@ -772,7 +850,7 @@ impl App {
     fn moved(&mut self, moved: bool) {
         if moved {
             self.preview.scroll.reset();
-            self.entry_log.reset();
+            self.entry_log.follow_list();
         }
     }
 
@@ -931,13 +1009,21 @@ impl App {
         }
     }
 
-    /// The entry the preview panel and the `y` shortcut act on: the selected
-    /// one, or — in [`PreviewTarget::Command`] — the newest shell entry. That
-    /// entry holds both the command and its result, since a completion
-    /// replaces its start row in place (see [`Self::push_event`]). Falls back
-    /// to the selection while no command has run yet, so the panel is never
-    /// blank just because the mode is on.
+    /// The entry the preview panel and the `y` shortcut act on: the one the
+    /// entry-log pane's cursor is on while that pane holds the navigation
+    /// keys, otherwise the selected one — or, in [`PreviewTarget::Command`],
+    /// the newest shell entry. That entry holds both the command and its
+    /// result, since a completion replaces its start row in place (see
+    /// [`Self::push_event`]). Falls back to the selection while no command has
+    /// run yet, so the panel is never blank just because the mode is on.
     pub fn preview_entry(&self) -> Option<&Entry> {
+        // The entry-log pane comes first, and ahead of the command mode: while
+        // it holds the keys it is the window the operator is moving, and a
+        // panel that did not follow that cursor would be showing something
+        // they are not looking at.
+        if let Some(entry) = self.entry_log_entry() {
+            return Some(entry);
+        }
         if self.preview.follows_command() {
             if let Some(entry) = self.timeline.newest_command() {
                 return Some(entry);
@@ -2488,16 +2574,16 @@ mod tests {
         app.select_first();
         app.toggle_entry_log();
         assert_eq!(app.view, View::Events);
-        assert!(app.entry_log_open);
+        assert!(app.entry_log.open);
 
-        app.entry_log.note_limit(10);
-        app.entry_log.line_down();
+        app.entry_log.scroll.note_limit(10);
+        app.entry_log.scroll.line_down();
         app.select_next_line();
         assert_eq!(app.timeline.selected, 1);
-        assert_eq!(app.entry_log.clamped(), 0, "a new selected entry");
+        assert_eq!(app.entry_log.scroll.clamped(), 0, "a new selected entry");
 
         app.toggle_entry_log();
-        assert!(!app.entry_log_open);
+        assert!(!app.entry_log.open);
     }
 
     #[test]

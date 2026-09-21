@@ -14,6 +14,7 @@ mod cli;
 mod clipboard;
 mod composer;
 mod config;
+mod entry_log;
 mod event_loop;
 mod files;
 mod help;

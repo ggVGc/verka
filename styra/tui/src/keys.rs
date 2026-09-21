@@ -212,10 +212,29 @@ pub fn handle_list_key(
             KeyCode::Char('c') => app.toggle_conversation_only(),
             KeyCode::Char('v') if app.preview.open => app.preview.toggle_mode(),
             KeyCode::Char('C') if app.preview.open => app.preview.toggle_target(),
+            // The Events screen shows two windows when the entry-log pane is
+            // open, and Tab is what moves the navigation keys between them.
+            KeyCode::Tab | KeyCode::BackTab if app.entry_log.open => app.toggle_entry_log_focus(),
+            // With the pane holding the keys, the movement keys walk its
+            // entries and the preview follows them. The list stands still, so
+            // the operator keeps their place in it.
+            KeyCode::Char('j' | 'J') | KeyCode::Down if app.entry_log.focused() => {
+                app.entry_log_select_next()
+            }
+            KeyCode::Char('k' | 'K') | KeyCode::Up if app.entry_log.focused() => {
+                app.entry_log_select_prev()
+            }
+            KeyCode::Char('g') if app.entry_log.focused() => app.entry_log_select_first(),
+            KeyCode::Char('G') if app.entry_log.focused() => app.entry_log_select_last(),
+            // A focused pane scrolls by moving its cursor: the pane always
+            // shows where the cursor is, so paging the offset on its own would
+            // be undone by the next draw.
+            KeyCode::PageDown if app.entry_log.focused() => app.entry_log_page_down(),
+            KeyCode::PageUp if app.entry_log.focused() => app.entry_log_page_up(),
             KeyCode::PageDown if app.preview.open => app.preview.scroll.page_down(),
             KeyCode::PageUp if app.preview.open => app.preview.scroll.page_up(),
-            KeyCode::PageDown if app.entry_log_open => app.entry_log.page_down(),
-            KeyCode::PageUp if app.entry_log_open => app.entry_log.page_up(),
+            KeyCode::PageDown if app.entry_log.open => app.entry_log.scroll.page_down(),
+            KeyCode::PageUp if app.entry_log.open => app.entry_log.scroll.page_up(),
             KeyCode::Char('J') | KeyCode::Down => app.select_next(),
             KeyCode::Char('K') | KeyCode::Up => app.select_prev(),
             KeyCode::Char('j') => app.select_next_line(),
