@@ -826,11 +826,26 @@ impl ServerState {
         .map(Some)
     }
 
+    /// Whether Session `id` already works in a checkout of its own.
+    ///
+    /// A worktree belongs to the Session that explicitly created it, so this
+    /// is what a launch path asks before deciding to make one — it must not
+    /// prepare anything, which is why it looks at the parent directly rather
+    /// than through [`Self::workspace_worktrees`]. The checkout is named after
+    /// the topic of the prompt that created it, so only the id it ends with
+    /// can be asked for here.
+    fn session_has_worktree(&self, workspace_id: &str, id: &str) -> bool {
+        crate::worktree::existing_checkout(
+            &crate::workspace::worktrees_dir(&self.inner.store_root, workspace_id),
+            id,
+        )
+        .is_some()
+    }
+
     fn create_session_worktree(&self, id: &str) -> Result<()> {
         let session = self.stored_summary(id)?;
         let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
-        let path = crate::workspace::worktrees_dir(&self.inner.store_root, &workspace.id).join(id);
-        if path.exists() {
+        if self.session_has_worktree(&workspace.id, id) {
             anyhow::bail!(
                 "this Session already has a linked workspace; creating another is not possible"
             );
@@ -1436,12 +1451,10 @@ impl ServerState {
             .map(|root| self.inner.git.mounts(root))
             .transpose()?
             .unwrap_or_default();
-        // A worktree belongs to the Session that explicitly created it. Never
-        // create one merely because this Workspace once had the old preference.
-        let has_worktree =
-            crate::workspace::worktrees_dir(&self.inner.store_root, &owning_workspace.id)
-                .join(&request.id)
-                .is_dir();
+        // Never create one merely because this Workspace once had the old
+        // preference: a resume returns to the checkout this Session has, or to
+        // the Workspace directory it has always worked in.
+        let has_worktree = self.session_has_worktree(&owning_workspace.id, &request.id);
         let worktrees = self.workspace_worktrees(&owning_workspace, has_worktree)?;
         let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
@@ -3462,6 +3475,51 @@ mod tests {
             .unwrap()
             .is_some());
         assert!(worktrees_path.is_dir());
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// A Session whose checkout was named after its first prompt still owns
+    /// that checkout after a restart. Nothing durable records the pairing, so
+    /// a resume rediscovers it from the id — and if it does not, the Session
+    /// comes back mounted on the operator's own directory with its branch and
+    /// its uncommitted work left behind, which is the bug this guards.
+    #[test]
+    fn a_named_checkout_is_still_found_by_the_session_that_owns_it() {
+        let store = temp_path("named-checkout-store");
+        let host = temp_path("named-checkout-host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let state = ServerState::with_git(git, store.clone());
+        let workspace = crate::workspace::create(&store, &host, None).unwrap();
+        let id = "1757000000000-1-0";
+
+        // Before anything is checked out there is nothing to find, and asking
+        // must not be what brings the parent directory into being.
+        assert!(!state.session_has_worktree(&workspace.id, id));
+        assert!(!crate::workspace::worktrees_dir(&store, &workspace.id).exists());
+
+        let worktrees = state
+            .workspace_worktrees(&workspace, true)
+            .unwrap()
+            .unwrap();
+        let checkout = worktrees
+            .checkout(id, Some("teach-the-picker-to-filter"))
+            .unwrap();
+
+        assert!(state.session_has_worktree(&workspace.id, id));
+        // The name is the topic's, which is why the bare id cannot be the
+        // thing looked for.
+        assert_eq!(
+            checkout.file_name().unwrap(),
+            "teach-the-picker-to-filter-1757000000000-1-0"
+        );
+        // A different Session in the same Workspace still has none of its own.
+        assert!(!state.session_has_worktree(&workspace.id, "1757000000000-1-1"));
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();

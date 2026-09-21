@@ -17,7 +17,7 @@
 use crate::agent::MountSpec;
 use crate::git::{Git, Repository};
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Branches Styra creates live under this prefix, so a checkout it owns is
@@ -80,26 +80,8 @@ impl Worktrees {
 
     /// The checkout already made for interaction `id`, whatever it ended up
     /// being called.
-    ///
-    /// The id is the last component of every name this module writes, so a
-    /// Session finds its own checkout without anything having to store the
-    /// mapping — including a Session created before naming existed, whose
-    /// checkout is the bare id.
     fn existing(&self, id: &str) -> Option<PathBuf> {
-        let bare = self.host_root.join(id);
-        if bare.exists() {
-            return Some(bare);
-        }
-        let suffix = format!("-{id}");
-        std::fs::read_dir(&self.host_root)
-            .ok()?
-            .flatten()
-            .map(|entry| entry.path())
-            .find(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.ends_with(&suffix))
-            })
+        existing_checkout(&self.host_root, id)
     }
 
     /// The repository's shared Git metadata, writable at its host path.
@@ -115,6 +97,32 @@ impl Worktrees {
             writable: true,
         }
     }
+}
+
+/// The checkout already made for interaction `id` under `host_root`, whatever
+/// it ended up being called, without preparing anything.
+///
+/// The id is the last component of every name this module writes, so a Session
+/// finds its own checkout without anything having to store the mapping —
+/// including a Session created before naming existed, whose checkout is the
+/// bare id. A caller that must know whether a Session has a checkout *before*
+/// it decides to make one asks here: [`Worktrees::prepare`] creates the parent
+/// directory, so it cannot be the thing that answers the question.
+pub fn existing_checkout(host_root: &Path, id: &str) -> Option<PathBuf> {
+    let bare = host_root.join(id);
+    if bare.exists() {
+        return Some(bare);
+    }
+    let suffix = format!("-{id}");
+    std::fs::read_dir(host_root)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(&suffix))
+        })
 }
 
 /// What the branch and the checkout are both called: the topic, then the
