@@ -229,6 +229,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 readings: &readings,
                 auto_retry: app.auto_retry,
                 scroll_back: app.quota.scroll_back(),
+                now_ms: quota::now_ms(),
             };
             draw_main(ui, app, MainView::Quota(&quota))
         }

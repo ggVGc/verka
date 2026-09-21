@@ -15,11 +15,16 @@ use styra_protocol::{agent::Provider, QuotaEvent, QuotaStatus};
 const WARNING: f64 = 0.75;
 const ERROR: f64 = 0.90;
 
+/// How many past readings the log shows when the panel is tall enough.
+const LOG_LINES: usize = 10;
+
 pub struct QuotaView<'a> {
     pub chrome: PanelChrome,
     pub readings: &'a [&'a QuotaEvent],
     pub auto_retry: bool,
     pub scroll_back: u16,
+    /// Time is supplied by the adapter so fixtures and mocks stay deterministic.
+    pub now_ms: u64,
 }
 
 pub fn render(frame: &mut Frame, view: &QuotaView<'_>, area: Rect) {
@@ -39,19 +44,90 @@ pub fn render(frame: &mut Frame, view: &QuotaView<'_>, area: Rect) {
         );
         return;
     }
-    let lines = view
-        .readings
-        .iter()
-        .map(|reading| line(reading))
-        .collect::<Vec<_>>();
-    let start = lines
-        .len()
-        .saturating_sub(area.height.saturating_sub(2) as usize)
-        .saturating_sub(view.scroll_back as usize) as u16;
-    frame.render_widget(Paragraph::new(lines).block(block).scroll((start, 0)), area);
+    let mut lines = summary_lines(view.readings, view.now_ms);
+    let height = area.height.saturating_sub(2) as usize;
+    let room = height.saturating_sub(lines.len() + 1).min(LOG_LINES);
+    if room > 0 {
+        lines.push(Line::from(Span::styled(
+            "  recent readings",
+            Style::default().fg(palette::INACTIVE),
+        )));
+        let log = view
+            .readings
+            .iter()
+            .map(|reading| line(reading, view.now_ms))
+            .collect::<Vec<_>>();
+        let end = log.len().saturating_sub(view.scroll_back as usize).max(1);
+        lines.extend(log[end.saturating_sub(room)..end].iter().cloned());
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn line(reading: &QuotaEvent) -> Line<'static> {
+/// The current state of every window a provider has reported, newest reading
+/// per window, so the panel opens on where the quotas stand rather than on
+/// history.
+fn summary_lines(readings: &[&QuotaEvent], now_ms: u64) -> Vec<Line<'static>> {
+    let mut current = newest_per_window(readings);
+    current.sort_by(|left, right| {
+        left.provider
+            .as_str()
+            .cmp(right.provider.as_str())
+            .then_with(|| left.window.cmp(&right.window))
+    });
+    current
+        .into_iter()
+        .map(|reading| {
+            let color = status_color(reading.status);
+            let mut spans = vec![
+                Span::styled(
+                    format!("  {:<8}", reading.provider.as_str()),
+                    Style::default()
+                        .fg(palette::TEXT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<10} ", reading.window),
+                    Style::default().fg(palette::MUTED_TEXT),
+                ),
+                Span::styled(
+                    format!("{:>5} ", reading.utilization_label()),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<10}", status_label(reading.status)),
+                    Style::default().fg(color),
+                ),
+            ];
+            spans.push(Span::styled(
+                match reading.resets_at_ms {
+                    Some(reset) if reset <= now_ms => "reset due".into(),
+                    Some(reset) => format!("resets {}", stamp(reset, now_ms)),
+                    None => "reset unknown".into(),
+                },
+                Style::default().fg(palette::MUTED_TEXT),
+            ));
+            Line::from(spans)
+        })
+        .collect()
+}
+
+/// The latest reading for each provider-and-window pair, in first-seen order.
+fn newest_per_window<'a>(readings: &[&'a QuotaEvent]) -> Vec<&'a QuotaEvent> {
+    let mut newest: Vec<&QuotaEvent> = Vec::new();
+    for reading in readings {
+        match newest
+            .iter_mut()
+            .find(|kept| kept.provider == reading.provider && kept.window == reading.window)
+        {
+            Some(kept) if kept.at_ms <= reading.at_ms => *kept = *reading,
+            Some(_) => {}
+            None => newest.push(*reading),
+        }
+    }
+    newest
+}
+
+fn line(reading: &QuotaEvent, now_ms: u64) -> Line<'static> {
     let color = status_color(reading.status);
     let mut spans = vec![
         Span::styled(
@@ -77,7 +153,7 @@ fn line(reading: &QuotaEvent) -> Line<'static> {
     ];
     if let Some(reset) = reading.resets_at_ms {
         spans.push(Span::styled(
-            format!("resets {} ", clock(reset)),
+            format!("resets {} ", stamp(reset, now_ms)),
             Style::default().fg(palette::MUTED_TEXT),
         ));
     }
@@ -96,17 +172,7 @@ fn line(reading: &QuotaEvent) -> Line<'static> {
 
 /// Time is supplied by the adapter so fixtures and mocks stay deterministic.
 pub fn footer_segments(readings: &[&QuotaEvent], now_ms: u64) -> Vec<Segment> {
-    let mut newest: Vec<&QuotaEvent> = Vec::new();
-    for reading in readings {
-        match newest
-            .iter_mut()
-            .find(|kept| kept.provider == reading.provider && kept.window == reading.window)
-        {
-            Some(kept) if kept.at_ms <= reading.at_ms => *kept = reading,
-            Some(_) => {}
-            None => newest.push(reading),
-        }
-    }
+    let newest = newest_per_window(readings);
     let codex = newest
         .iter()
         .copied()
@@ -194,6 +260,41 @@ fn status_label(status: QuotaStatus) -> &'static str {
 fn clock(at_ms: u64) -> String {
     minute_of_day(at_ms, local_offset_seconds(at_ms))
 }
+/// A reset on another day needs its date to be read at all, so a time alone is
+/// only enough while the moment shares `now_ms`'s local day.
+fn stamp(at_ms: u64, now_ms: u64) -> String {
+    let offset = local_offset_seconds(at_ms);
+    if local_day(at_ms, offset) == local_day(now_ms, local_offset_seconds(now_ms)) {
+        minute_of_day(at_ms, offset)
+    } else {
+        format!(
+            "{} {}",
+            civil_date(local_day(at_ms, offset)),
+            minute_of_day(at_ms, offset)
+        )
+    }
+}
+fn local_day(at_ms: u64, offset: i64) -> i64 {
+    ((at_ms / 1_000) as i64 + offset).div_euclid(24 * 60 * 60)
+}
+/// Days since the epoch to `YYYY-MM-DD`, by Howard Hinnant's civil-from-days.
+fn civil_date(days: i64) -> String {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
 fn minute_of_day(at_ms: u64, offset: i64) -> String {
     let minute = ((at_ms / 1_000) as i64 + offset)
         .div_euclid(60)
@@ -268,6 +369,7 @@ mod tests {
                         readings: &[&reading],
                         auto_retry: true,
                         scroll_back: 0,
+                        now_ms: 1_000,
                     },
                     frame.area(),
                 )
@@ -283,6 +385,85 @@ mod tests {
         for expected in ["81%", "codex", "5h", "rate-limit retry: on"] {
             assert!(output.contains(expected), "{output}");
         }
+    }
+    #[test]
+    fn view_summarises_current_state_with_dated_future_resets() {
+        let mut old = reading(Provider::Codex, "7d", QuotaStatus::Allowed, Some(0.10));
+        old.at_ms = 1_000;
+        let mut weekly = reading(Provider::Codex, "7d", QuotaStatus::Warning, Some(0.91));
+        weekly.at_ms = 2_000;
+        weekly.resets_at_ms = Some(2_000 + 7 * 24 * 3_600 * 1_000);
+        let mut terminal = Terminal::new(TestBackend::new(100, 10)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &QuotaView {
+                        chrome: chrome(),
+                        readings: &[&old, &weekly],
+                        auto_retry: true,
+                        scroll_back: 0,
+                        now_ms: 2_000,
+                    },
+                    frame.area(),
+                )
+            })
+            .unwrap();
+        let output = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        // One summary row for the window, showing the newest reading only.
+        assert_eq!(output.matches("7d").count(), 3, "{output}");
+        assert!(output.contains("resets 1970-01-0"), "{output}");
+        assert!(output.contains("recent readings"), "{output}");
+    }
+    #[test]
+    fn log_shows_only_what_fits_below_the_summary() {
+        let readings = (0..40)
+            .map(|index| {
+                let mut reading = reading(Provider::Codex, "5h", QuotaStatus::Allowed, Some(0.10));
+                reading.detail = Some(format!("entry{index}"));
+                reading
+            })
+            .collect::<Vec<_>>();
+        let borrowed = readings.iter().collect::<Vec<_>>();
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &QuotaView {
+                        chrome: chrome(),
+                        readings: &borrowed,
+                        auto_retry: false,
+                        scroll_back: 0,
+                        now_ms: 1_000,
+                    },
+                    frame.area(),
+                )
+            })
+            .unwrap();
+        let output = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(output.contains("entry39"), "{output}");
+        assert!(output.contains("entry30"), "{output}");
+        assert!(!output.contains("entry29"), "{output}");
+    }
+    #[test]
+    fn stamp_dates_only_moments_outside_the_current_day() {
+        assert_eq!(civil_date(0), "1970-01-01");
+        assert_eq!(civil_date(20_352), "2025-09-21");
+        assert_eq!(stamp(1_000, 2_000), minute_of_day(1_000, local_offset_seconds(1_000)));
+        assert!(stamp(8 * 24 * 3_600 * 1_000, 1_000).contains("1970-01-0"));
     }
     #[test]
     fn footer_keeps_concrete_codex_windows_and_tones() {

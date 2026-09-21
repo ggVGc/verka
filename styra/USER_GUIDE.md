@@ -158,8 +158,11 @@ When a plan window runs dry the provider refuses the turn and the agent process
 ends, leaving the session stopped with your last message unanswered. Press `Q`
 for the quota view and `R` there to have the session keep at it: once that
 window turns over, the server resumes the session and asks it the same turn
-again. The bottom border of that view says which way `R` is set, and the
-readings above it say which window is full and when it resets.
+again. The bottom border of that view says which way `R` is set. The top of it
+summarises where each provider's windows stand right now and when each one
+resets — a reset on a later day, such as a weekly Codex window, is shown with
+its date as well as its time — and below that sit the most recent readings,
+as many as the panel is tall enough for.
 
 The waiting is the server's, so it holds while Styra is closed and applies to
 whichever client next opens the session. `R` is answered for one session, is
