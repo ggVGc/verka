@@ -324,6 +324,10 @@ pub enum Request {
     /// The window is the operator's to configure, so the event loop — which
     /// holds the configuration — runs it rather than the key handler.
     OpenShell,
+    /// Open a host shell in the directory the interaction is working in, in a
+    /// terminal window of its own. Like [`Request::OpenShell`] the window is
+    /// configured, so the event loop runs it.
+    OpenDirectory,
     /// Open one already-resolved host path in the configured opener. Unlike
     /// [`Request::EditFile`] the path travels with the request, because the
     /// reference picker that asks for it closes as it does.

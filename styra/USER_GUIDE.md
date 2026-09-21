@@ -77,6 +77,7 @@ live interactions.
 | `B` | branch from history through, or only, the selected entry; opens the branch and leaves the source running |
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
+| `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
 | `Ctrl+A` | go to the next interaction that went idle unseen |
 | `L` | choose provider, model, and effort |

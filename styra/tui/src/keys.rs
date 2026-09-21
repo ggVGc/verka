@@ -162,6 +162,11 @@ pub fn handle_list_key(
             };
             return app.ask(Request::OpenShell);
         }
+        // Beside `!`, and deliberately not the same shell: `!` attaches to the
+        // agent's sandbox, `~` opens the operator's own shell on the host,
+        // standing where the interaction is working. That works with no live
+        // interaction — a finished one still has a directory to look at.
+        KeyCode::Char('~') => return app.ask(Request::OpenDirectory),
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
         // Global, unlike `y`: what it copies is the session's exchange, which
         // does not change with the view the operator happens to be in.
@@ -923,6 +928,32 @@ mod tests {
         assert!(app.timeline.selected_entry().unwrap().expanded);
         assert!(app.take_request().is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `~` asks for a terminal wherever the interaction is working, with no
+    /// live attachment needed: unlike `!`, which attaches to a running
+    /// sandbox, a finished interaction still has a directory to stand in.
+    #[test]
+    fn tilde_asks_for_a_terminal_in_the_interaction_directory() {
+        let root = tree("terminal-here");
+        let mut app = app(&root);
+        app.enter_list();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Char('~'), KeyModifiers::SHIFT),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+
+        assert_eq!(app.take_request(), Some(Request::OpenDirectory));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The path from reading a citation to reading the file: `F` over the reply

@@ -1108,6 +1108,22 @@ pub fn run(
                 open_path(app, config, &path);
             }
             Some(Request::OpenPath(path)) => open_path(app, config, &path),
+            Some(Request::OpenDirectory) => {
+                let Some(directory) = app.workspace.working_directory_or_current() else {
+                    app.show_action_message("no directory to open a terminal in");
+                    continue;
+                };
+                match crate::terminal::open_directory(&directory, config) {
+                    Ok(program) => app.show_action_message(format!(
+                        "opened {program} in {}",
+                        directory.display()
+                    )),
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not open a terminal in {}: {error:#}",
+                        directory.display()
+                    ))),
+                }
+            }
             Some(Request::OpenShell) => {
                 match crate::terminal::open_shell(client, &app.session_id, config) {
                     Ok(program) => app.show_action_message(format!("opened shell in {program}")),

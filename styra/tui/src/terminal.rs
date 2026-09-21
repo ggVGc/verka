@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::ffi::OsString;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use styra_server::Client;
 
@@ -53,9 +54,51 @@ pub fn open_shell(client: &Client, session: &str, config: &dyn Configuration) ->
     Ok(program)
 }
 
+/// Open an ordinary host shell in `directory`, and report the emulator it was
+/// opened in.
+///
+/// The sibling of [`open_shell`], and deliberately not the same thing: that one
+/// attaches to the agent's sandbox, while this is the operator's own shell on
+/// the host, standing where the interaction is working. Neither the emulator
+/// nor the shell is guessed at — the window is configured
+/// ([`Configuration::open_terminal`]) and the shell is the operator's `$SHELL`,
+/// with `sh` for the login that does not set one.
+pub fn open_directory(directory: &Path, config: &dyn Configuration) -> Result<String> {
+    let mut command = shell_in(directory, config);
+    let program = command.get_program().to_string_lossy().into_owned();
+    spawn_detached(&mut command)?;
+    Ok(program)
+}
+
+/// The command [`open_directory`] runs, built apart from running it so what it
+/// asks for can be examined.
+fn shell_in(directory: &Path, config: &dyn Configuration) -> Command {
+    let shell = std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("sh"));
+    let mut command = config.open_terminal(&[shell]);
+    // The emulator is spawned in the directory, and the shell it runs inherits
+    // that, so the operator lands where the agent is rather than wherever Styra
+    // was started.
+    command.current_dir(directory);
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Defaults;
+
+    #[test]
+    fn a_shell_opens_standing_in_the_directory_it_was_asked_for() {
+        let command = shell_in(Path::new("/home/me/project"), &Defaults);
+
+        assert_eq!(
+            command.get_current_dir(),
+            Some(Path::new("/home/me/project")),
+            "the window starts where the interaction is working"
+        );
+        let shell = std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("sh"));
+        assert_eq!(command.get_args().last(), Some(shell.as_os_str()));
+    }
 
     #[test]
     fn a_command_is_described_as_it_would_have_been_typed() {
