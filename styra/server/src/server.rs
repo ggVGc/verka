@@ -364,6 +364,33 @@ fn reset_releases(
     refused_by.provider == reset.provider && refused_by.window == reset.window
 }
 
+/// The three facts behind [`ManagedInteraction::awaiting_window`], asked apart
+/// from the interaction holding them so the decision can be stated — and
+/// tested — on its own.
+fn awaiting_window(
+    auto_retry: bool,
+    activity: InteractionActivity,
+    refused_by: Option<&crate::protocol::QuotaEvent>,
+) -> Option<crate::protocol::QuotaEvent> {
+    if !auto_retry {
+        return None;
+    }
+    // An interaction with a turn under way is not waiting for anything: the
+    // provider is serving it, whatever refused it earlier. Sending the held
+    // back turn now would ask it a second time, beside the one running.
+    if matches!(
+        activity,
+        InteractionActivity::Running | InteractionActivity::Background
+    ) {
+        return None;
+    }
+    // Being idle rather than stopped is not being unrefused. Claude reports a
+    // rate limit and keeps its process, so a refused session sits there taking
+    // messages that nothing will run until the window turns over — exactly the
+    // session a reset has to come back to.
+    refused_by.cloned()
+}
+
 /// Why the turn that just ended stopped, most specific answer first: a refused
 /// window is why it ran nothing at all, an interrupt is why it stopped short,
 /// an error is why it gave up, and otherwise it finished.
@@ -479,6 +506,30 @@ impl ManagedInteraction {
             .expect("interaction refusal lock poisoned") = Some(reading);
     }
 
+    /// Forget the refusal on record, because the provider behind it is serving
+    /// this interaction again.
+    ///
+    /// A refusal is only interesting until it stops being true, and it stops
+    /// being true silently: the window that refused a Codex turn is filed under
+    /// the plan itself, which no later reading ever reports on, and Claude's
+    /// next permitted reading names its window without saying anything about
+    /// the refusal before it. So a reading of any window from the same provider
+    /// that is not itself a refusal is the provider saying it is answering —
+    /// and a refusal left standing past that would have a later reset send a
+    /// turn this interaction has long since had an answer to.
+    fn note_serving(&self, provider: crate::agent::Provider) {
+        let mut refused = self
+            .refused_by
+            .lock()
+            .expect("interaction refusal lock poisoned");
+        if refused
+            .as_ref()
+            .is_some_and(|refusal| refusal.provider == provider)
+        {
+            *refused = None;
+        }
+    }
+
     /// Add one update to this interaction's history, as the collector thread
     /// does — for the things the server itself has to say into a stream the
     /// agent is no longer producing.
@@ -519,18 +570,14 @@ impl ManagedInteraction {
     /// one question — "is this interaction waiting for a window" — and it is
     /// asked of every interaction on every reset.
     fn awaiting_window(&self) -> Option<crate::protocol::QuotaEvent> {
-        if !self.auto_retry.load(Ordering::Acquire) {
-            return None;
-        }
-        // A refused interaction that is somehow still taking messages has not
-        // been stopped by the refusal, so there is nothing to resume.
-        if self.activity.activity().accepting() {
-            return None;
-        }
-        self.refused_by
-            .lock()
-            .expect("interaction refusal lock poisoned")
-            .clone()
+        awaiting_window(
+            self.auto_retry.load(Ordering::Acquire),
+            self.activity.activity(),
+            self.refused_by
+                .lock()
+                .expect("interaction refusal lock poisoned")
+                .as_ref(),
+        )
     }
 
     /// The last thing the agent said, as one clipped line. Scanned from the
@@ -3014,6 +3061,65 @@ mod tests {
         assert_eq!(
             turn_end_reason(Some(refusal.clone()), true, Some("refused".into())),
             refusal
+        );
+    }
+
+    /// Claude's refusal does not take its agent away: the CLI reports the
+    /// rate limit, the turn ends, and the session sits there idle and still
+    /// taking messages — "idle · after an error" once the operator's next ask
+    /// fails on the same spent window.
+    ///
+    /// The quota log hands the window's reset over on time, which is why the
+    /// view at the bottom of the screen turns over to `-`. The interaction it
+    /// refused must come back with it; being alive is not being unrefused,
+    /// and an operator who asked to wait the window out gets nothing at all
+    /// if a live-but-refused session is passed over.
+    #[test]
+    fn a_refused_interaction_still_taking_messages_comes_back_with_its_window() {
+        const CLAUDE_REJECTED: &str = r#"{"type":"rate_limit_event","rate_limit_info":
+            {"status":"rejected","resetsAt":1788290400,"rateLimitType":"five_hour",
+             "overageStatus":"rejected","overageDisabledReason":"out_of_credits",
+             "isUsingOverage":false}}"#;
+
+        // The refusal, as the wire stated it and the interaction recorded it.
+        let log = crate::quota::QuotaLog::new();
+        let refusal = log
+            .observe("s-1", crate::agent::Provider::Claude, 1, CLAUDE_REJECTED)
+            .rejected
+            .expect("the line refused the work");
+
+        // The agent survived it, so the turn merely ended. The operator asked
+        // again, the same window failed that turn with an error, and the
+        // interaction is left idle — accepting messages nothing will run.
+        let activity = CurrentActivity::new();
+        activity.set(
+            InteractionActivity::Pending,
+            Some(turn_end_reason(
+                None,
+                false,
+                Some("Claude usage limit reached".into()),
+            )),
+        );
+        assert_eq!(
+            activity.get().reason,
+            Some(InteractionActivityReason::Failed {
+                message: "Claude usage limit reached".into()
+            }),
+            "the state the operator is looking at: idle, after an error"
+        );
+
+        // The window comes back, and says so: this is the reset the quota
+        // view draws as turned over.
+        // Well past the grace the log holds a reported reset for.
+        let due = log.resets(refusal.resets_at_ms.expect("a reported reset") + 10 * 60 * 1_000);
+        assert_eq!(due.len(), 1, "the refused window turned over");
+        assert!(reset_releases(&refusal, &due[0]));
+
+        assert_eq!(
+            awaiting_window(true, activity.activity(), Some(&refusal)),
+            Some(refusal.clone()),
+            "a session told to wait the window out is asked again when it resets, \
+             whether or not its agent outlived the refusal"
         );
     }
 

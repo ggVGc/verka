@@ -39,6 +39,11 @@ pub enum RunOutcome {
 
 const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
 
+/// Quota readings change on the scale of whole interactions, not keystrokes,
+/// so this is slow enough to cost the server nothing and quick enough that the
+/// footer's warning is never meaningfully behind the account.
+const QUOTA_REFRESH: Duration = Duration::from_secs(5);
+
 /// Launch-policy work is serialized off the terminal thread. Serialization
 /// preserves the operator's edit order; the channel back to the root loop lets
 /// it keep rendering and consuming input while the daemon or filesystem is
@@ -396,6 +401,22 @@ pub fn refresh_quota(app: &mut App, client: &Client) {
     }
 }
 
+/// Take a fresh reading of the quota log on the loop's timer.
+///
+/// The attached session's own readings arrive on its update stream, but
+/// readings belong to the account: another session burning the plan down shows
+/// up here or not at all. Doing it on the timer rather than only on `Q` is what
+/// keeps the footer's warning true for an operator who never opens the view —
+/// and keeps the view itself moving while it is open.
+///
+/// Silent on failure, unlike [`refresh_quota`]: a server that cannot answer
+/// would otherwise log the same line every few seconds.
+fn poll_quota(app: &mut App, client: &Client) {
+    if let Ok(readings) = client.quota_log() {
+        app.quota.restock(readings);
+    }
+}
+
 /// Return the running interaction an in-client transition explicitly stops.
 pub fn stops_current_interaction(outcome: &RunOutcome, live: &Attachment) -> bool {
     match (outcome, live) {
@@ -424,6 +445,7 @@ pub fn run(
     let launch_effects = LaunchEffects::new(client.clone());
     let mut pending_fold = false;
     let mut interactions_refreshed = Instant::now();
+    let mut quota_refreshed = Instant::now();
     loop {
         let workspace_id = app.workspace.id.clone().unwrap_or_default();
         app.notices.expire();
@@ -468,6 +490,11 @@ pub fn run(
             if let Ok(interactions) = client.list_interactions() {
                 app.interactions.refresh(interactions);
             }
+        }
+
+        if quota_refreshed.elapsed() >= QUOTA_REFRESH {
+            quota_refreshed = Instant::now();
+            poll_quota(app, client);
         }
 
         // A cursor that has come to rest loads the interaction under it. Until

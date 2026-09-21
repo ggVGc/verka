@@ -44,6 +44,22 @@ impl<T> Tail<T> {
         self.scroll_back = 0;
     }
 
+    /// Take a fresh reading of the same list without moving the operator: a
+    /// view at the tail follows the new entries, a view scrolled back stays on
+    /// the entries it was reading, exactly as [`push`](Self::push) does.
+    ///
+    /// For a list refilled on a timer rather than on request, where
+    /// [`replace`](Self::replace)'s jump to the tail would fight the operator.
+    pub fn restock(&mut self, items: Vec<T>) {
+        let grown = items.len().saturating_sub(self.items.len()) as u16;
+        self.items = items;
+        let max = self.items.len().saturating_sub(1) as u16;
+        if self.scroll_back > 0 {
+            self.scroll_back = self.scroll_back.saturating_add(grown);
+        }
+        self.scroll_back = self.scroll_back.min(max);
+    }
+
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
@@ -148,6 +164,36 @@ mod tests {
 
         assert_eq!(tail.scroll_back(), 0);
         assert!(tail.is_empty());
+    }
+
+    /// The timer refill must not fight an operator reading back through the
+    /// readings, which a plain `replace` would do every few seconds.
+    #[test]
+    fn restocking_keeps_the_operators_place() {
+        let mut tail = tail(5);
+        tail.scroll_up();
+        tail.scroll_up();
+
+        tail.restock(vec![0, 1, 2, 3, 4, 5, 6]);
+
+        assert_eq!(tail.scroll_back(), 4, "still on the same two entries back");
+
+        tail.scroll_to_bottom();
+        tail.restock(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+
+        assert_eq!(tail.scroll_back(), 0, "a view at the tail follows it");
+    }
+
+    /// A shorter reading than the last one — the server trimmed its log —
+    /// cannot leave the view pointing past the first entry.
+    #[test]
+    fn restocking_a_shorter_list_clamps_the_view() {
+        let mut tail = tail(5);
+        tail.scroll_to_top();
+
+        tail.restock(vec![3, 4]);
+
+        assert_eq!(tail.scroll_back(), 1);
     }
 
     #[test]
