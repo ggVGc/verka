@@ -10,7 +10,7 @@ the command-line program are both written against it.
 | `lua/svara/api.lua` | **The API.** One function per interaction with the server. Mentions Neovim nowhere. |
 | `lua/svara/nvim.lua` | Neovim, as the six fields the API asks a *host* for. |
 | `lua/svara/protocol.lua` | Where the generated `styra.protocol` is found. |
-| `lua/svara/core.lua` | The one-shot `send_message` this plugin began as. |
+| `lua/svara/core.lua` | What the commands do: `send_message`, and `start` behind `:Svara`. |
 | `../styra/protocol/lua/styra/protocol.lua` | **The vocabulary**, generated, living where it is generated from. |
 
 ## The vocabulary, which is not here
@@ -58,6 +58,9 @@ by the server a round trip later.
 **The server.** `styra:health()`, `styra:shutdown()`.
 
 **Workspaces.** `styra:workspaces()`, `styra:workspace(id)`,
+`styra:workspace_for_path(directory)` — the Workspace covering an absolute
+directory, which may be anywhere beneath the Workspace's own; a directory no
+Workspace covers comes back as `nil` and why, like any other absence —
 `styra:create_workspace(host_path, { name, git_repository })`,
 `styra:set_workspace_git_repository(workspace_id, path)` — a `nil` path
 disassociates the Git checkout, and is sent as an explicit null —
@@ -162,6 +165,35 @@ blocking with it.
 ## Neovim
 
 Add this directory to Neovim's runtime path with your plugin manager, then run:
+
+```vim
+:Svara Why does resuming a branched session lose its tags?
+```
+
+`:Svara` starts a new interaction with the rest of the line as its first
+prompt, in the Workspace covering Neovim's working directory — `:Svara` asks
+the server which one that is, so there is no id to look up and nothing to
+configure per project. The same thing from Lua, where the directory, the name
+and the answer's contract can all be said:
+
+```lua
+local session, err = require("svara").start("what does this module trust?", {
+  directory = vim.fn.expand("%:p:h"),
+})
+```
+
+The model is `vim.g.svara_selection`, a profile name:
+
+```lua
+vim.g.svara_selection = "claude:claude-opus-5/xhigh"
+```
+
+With none set, the new interaction runs under the newest Session in that
+Workspace — a Workspace being worked in has already been launched under
+something. A Workspace with no Session yet and no `vim.g.svara_selection` says
+so rather than guessing, for the reason in [Selections](#selections).
+
+To send to a session that is already live, name it:
 
 ```vim
 :SvaraSend styra-7 Review this buffer

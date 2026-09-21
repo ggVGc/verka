@@ -3,6 +3,21 @@ if vim.g.loaded_svara then
 end
 vim.g.loaded_svara = true
 
+vim.api.nvim_create_user_command("Svara", function(command)
+  local session, err = require("svara").start(command.args)
+  if not session then
+    vim.notify("Svara: " .. err, vim.log.levels.ERROR)
+    return
+  end
+  vim.notify(
+    "Svara: " .. session.id .. " started on " .. require("svara").selection_name(session.selection),
+    vim.log.levels.INFO
+  )
+end, {
+  nargs = "+",
+  desc = "Start a Styra interaction in the Workspace over the working directory",
+})
+
 vim.api.nvim_create_user_command("SvaraSend", function(command)
   local session_id = command.fargs[1]
   local message = table.concat(command.fargs, " ", 2)

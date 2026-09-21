@@ -177,6 +177,100 @@ do
   assert(sent.data.message.contract == "lines")
 end
 
+-- The Workspace over a directory ----------------------------------------
+
+do
+  local styra, host = open({
+    ok({ type = "workspace_for_path", data = { id = "workspace-1", name = "verka" } }),
+    ok({ type = "workspace_for_path", data = vim.NIL }),
+  })
+
+  local workspace = assert(styra:workspace_for_path("/home/me/verka/styra/server"))
+  assert(workspace.id == "workspace-1", vim.inspect(workspace))
+  assert(host.last().operation == "workspace_for_path")
+  assert(host.last().data.path == "/home/me/verka/styra/server")
+
+  -- No Workspace over the directory is an absence with a reason, not a
+  -- null the caller has to recognise.
+  local none, err = styra:workspace_for_path("/tmp/elsewhere")
+  assert(not none)
+  assert(err:find("no Styra Workspace covers /tmp/elsewhere"), err)
+
+  -- A relative path would be resolved by the server, in its own directory.
+  local relative
+  relative, err = styra:workspace_for_path("server")
+  assert(not relative)
+  assert(err:find("absolute"), err)
+  assert(#host.sent == 2, "the relative path never left the editor")
+end
+
+-- Starting an interaction where the editor is ---------------------------
+
+do
+  local core = require("svara.core")
+  local styra, host = open({
+    ok({ type = "workspace_for_path", data = { id = "workspace-1", name = "verka" } }),
+    ok({
+      type = "stored_sessions",
+      data = {
+        {
+          id = "styra-9",
+          workspace_id = "workspace-1",
+          path = "/store/styra-9",
+          selection = { provider = "claude", model = "claude-opus-5", effort = "xhigh" },
+          age = "3h ago",
+        },
+      },
+    }),
+    ok({
+      type = "session_created",
+      data = {
+        id = "styra-10",
+        workspace_id = "workspace-1",
+        selection = { provider = "claude", model = "claude-opus-5", effort = "xhigh" },
+        workspace = "/home/me/verka",
+        journal_path = "/store/styra-10/journal.jsonl",
+        driva = {},
+      },
+    }),
+  })
+
+  local session = assert(core.start("review this buffer", {
+    directory = "/home/me/verka/styra/server",
+    host = host,
+    socket = styra.socket,
+  }))
+  assert(session.id == "styra-10", vim.inspect(session))
+
+  local requested = host.sent
+  assert(requested[1].operation == "workspace_for_path")
+  assert(requested[1].data.path == "/home/me/verka/styra/server")
+  assert(requested[3].operation == "create_session")
+  assert(requested[3].data.workspace_id == "workspace-1")
+  assert(requested[3].data.message == "review this buffer")
+  -- With nothing configured, the model comes from the Workspace's newest
+  -- Session rather than from a default this plugin would have to invent.
+  assert(requested[3].data.selection.model == "claude-opus-5")
+
+  -- The Workspace is the one question the command exists to avoid asking, so
+  -- a directory outside every Workspace fails there and sends nothing more.
+  local outside = fake_host({ ok({ type = "workspace_for_path", data = vim.NIL }) })
+  local started, err = core.start("hello", {
+    directory = "/tmp/elsewhere",
+    host = outside,
+    socket = "/tmp/test.sock",
+  })
+  assert(not started)
+  assert(err:find("no Styra Workspace covers"), err)
+  assert(#outside.sent == 1)
+
+  -- An empty prompt is refused before anything is opened.
+  local empty
+  empty, err = core.start("   ", { directory = "/home/me/verka", host = outside })
+  assert(not empty)
+  assert(err:find("needs a prompt"), err)
+end
+
 -- Nulls are said, not left out ------------------------------------------
 
 do

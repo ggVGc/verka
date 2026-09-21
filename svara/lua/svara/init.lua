@@ -34,4 +34,7 @@ M.answered = api.answered
 --- Send one message to a live session; see `svara.core`.
 M.send_message = require("svara.core").send_message
 
+--- Start an interaction in the Workspace over a directory; see `svara.core`.
+M.start = require("svara.core").start
+
 return M

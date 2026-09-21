@@ -319,6 +319,43 @@ function Client:workspace(id)
   return operate(self, "workspace", { id = named }, protocol.Response.WORKSPACE)
 end
 
+--- The Workspace a directory belongs to.
+---
+--- The directory may be the Workspace's own or anywhere beneath it, which is
+--- what makes this answerable from a working directory — the question an
+--- editor actually has. The innermost Workspace wins when they nest.
+---
+--- A directory no Workspace covers is an absence with a reason, returned the
+--- same way as a failure: from inside the editor both end as the same
+--- notification, and a caller wanting to tell them apart has `workspaces()`.
+---
+--- The path must be absolute. The server resolves it in its own process,
+--- where a relative path would mean a directory under the daemon rather than
+--- under the editor.
+function Client:workspace_for_path(path)
+  local directory, err = text_argument(path, "the directory")
+  if not directory then
+    return nil, err
+  end
+  if directory:sub(1, 1) ~= "/" then
+    return nil, directory .. " must be an absolute path"
+  end
+  local found, failure = operate(
+    self,
+    "workspace_for_path",
+    { path = directory },
+    protocol.Response.WORKSPACE_FOR_PATH
+  )
+  if not found then
+    return nil, failure
+  end
+  found = M.given(found)
+  if not found then
+    return nil, "no Styra Workspace covers " .. directory
+  end
+  return found
+end
+
 --- Create a Workspace over a host directory.
 ---@param host_path string
 ---@param options? { name?: string, git_repository?: string }
