@@ -79,6 +79,36 @@ function M.start(prompt, options)
   })
 end
 
+--- Where the operator is looking, as `path:line`, or nil.
+---
+--- `:Svara` puts this in front of the prompt, because the prompt is almost
+--- always about the thing on screen and saying so beats making the operator
+--- type the path. A buffer with no file behind it — a scratch buffer, the
+--- start screen — is no location, and then there is nothing to say.
+---@param window? integer
+---@return string? location
+function M.viewing(window)
+  window = window or 0
+  local buffer = vim.api.nvim_win_get_buf(window)
+  local path = vim.api.nvim_buf_get_name(buffer)
+  if path == "" then
+    return nil
+  end
+  local line = vim.api.nvim_win_get_cursor(window)[1]
+  return string.format("%s:%d", path, line)
+end
+
+--- The prompt `:Svara` sends: what is being viewed, then what was typed.
+---@param prompt string
+---@param location? string
+---@return string
+function M.prompt_from_view(prompt, location)
+  if not location or type(prompt) ~= "string" or prompt:match("^%s*$") then
+    return prompt
+  end
+  return string.format("%s\n\n%s", location, prompt)
+end
+
 ---Send a message to an existing, live Styra session.
 ---@param session_id string
 ---@param message string

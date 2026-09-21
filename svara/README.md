@@ -173,8 +173,13 @@ Add this directory to Neovim's runtime path with your plugin manager, then run:
 `:Svara` starts a new interaction with the rest of the line as its first
 prompt, in the Workspace covering Neovim's working directory — `:Svara` asks
 the server which one that is, so there is no id to look up and nothing to
-configure per project. The same thing from Lua, where the directory, the name
-and the answer's contract can all be said:
+configure per project. The prompt goes out with the file and line being viewed
+in front of it — `I am viewing /path/to/file.lua:42` — because a prompt typed
+in an editor is nearly always about what is on screen, and saying so beats
+typing the path. A buffer with no file behind it adds nothing.
+
+The same thing from Lua, where the directory, the name and the answer's
+contract can all be said, and the prompt is sent as written:
 
 ```lua
 local session, err = require("svara").start("what does this module trust?", {

@@ -4,7 +4,8 @@ end
 vim.g.loaded_svara = true
 
 vim.api.nvim_create_user_command("Svara", function(command)
-  local session, err = require("svara").start(command.args)
+  local core = require("svara.core")
+  local session, err = core.start(core.prompt_from_view(command.args, core.viewing()))
   if not session then
     vim.notify("Svara: " .. err, vim.log.levels.ERROR)
     return
