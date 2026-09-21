@@ -199,6 +199,17 @@ impl Client {
         }
     }
 
+    /// The Workspace covering a host directory, or `None` if none does. The
+    /// path may be anywhere beneath the Workspace's own directory.
+    pub fn workspace_for_path(&self, path: &Path) -> Result<Option<WorkspaceSummary>> {
+        match self.request(Request::WorkspaceForPath {
+            path: path.to_path_buf(),
+        })? {
+            Response::WorkspaceForPath(value) => Ok(value),
+            other => unexpected("workspace_for_path", other),
+        }
+    }
+
     pub fn set_workspace_git_repository(
         &self,
         workspace_id: &str,

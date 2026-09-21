@@ -265,6 +265,17 @@ pub enum Request {
     Workspace {
         id: String,
     },
+    /// Name the Workspace a host directory belongs to. The path need not be a
+    /// Workspace root: a directory anywhere beneath one answers with that
+    /// Workspace, so a client holding only a working directory — an editor,
+    /// a script run from a subdirectory — can find the Workspace over it
+    /// without listing them all and comparing paths itself. The innermost
+    /// Workspace wins when they nest, and the most recently accessed one when
+    /// several name the same directory. Answers with nothing rather than an
+    /// error when no Workspace covers the path, which is an ordinary answer.
+    WorkspaceForPath {
+        path: PathBuf,
+    },
     /// Associate (or disassociate) a Workspace with a Git checkout. The path
     /// may be anywhere inside the checkout; the server stores its root.
     SetWorkspaceGitRepository {
@@ -458,6 +469,8 @@ pub enum Response {
     WorkspaceCreated(WorkspaceSummary),
     Workspaces(Vec<WorkspaceSummary>),
     Workspace(WorkspaceSummary),
+    /// The Workspace covering a host directory, or nothing if none does.
+    WorkspaceForPath(Option<WorkspaceSummary>),
     WorkspaceGitRepositoryUpdated(WorkspaceSummary),
     WorkspaceLaunch(LaunchPolicy),
     SessionCreated(SessionInfo),

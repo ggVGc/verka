@@ -51,6 +51,13 @@ M.types.Request = {
         { name = "id", required = true, type = { kind = "string" } },
       },
     } },
+    { name = "workspace_for_path", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "path", required = true, type = { kind = "string", path = true } },
+      },
+    } },
     { name = "set_workspace_git_repository", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -255,6 +262,7 @@ M.types.Response = {
     { name = "workspace_created", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
     { name = "workspaces", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "WorkspaceSummary" } } } },
     { name = "workspace", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
+    { name = "workspace_for_path", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "ref", name = "WorkspaceSummary" } } } },
     { name = "workspace_git_repository_updated", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
     { name = "workspace_launch", payload = { kind = "newtype", type = { kind = "ref", name = "LaunchPolicy" } } },
     { name = "session_created", payload = { kind = "newtype", type = { kind = "ref", name = "SessionInfo" } } },
@@ -1363,13 +1371,14 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
   CREATE_WORKSPACE = "create_workspace",
   LIST_WORKSPACES = "list_workspaces",
   WORKSPACE = "workspace",
+  WORKSPACE_FOR_PATH = "workspace_for_path",
   SET_WORKSPACE_GIT_REPOSITORY = "set_workspace_git_repository",
   WORKSPACE_LAUNCH = "workspace_launch",
   CREATE_SESSION = "create_session",
@@ -1405,13 +1414,14 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_worktree_created", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_worktree_created", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
   WORKSPACE_CREATED = "workspace_created",
   WORKSPACES = "workspaces",
   WORKSPACE = "workspace",
+  WORKSPACE_FOR_PATH = "workspace_for_path",
   WORKSPACE_GIT_REPOSITORY_UPDATED = "workspace_git_repository_updated",
   WORKSPACE_LAUNCH = "workspace_launch",
   SESSION_CREATED = "session_created",
@@ -2031,6 +2041,21 @@ end
 ---   id  string
 function M.request.workspace(data)
   return M.build("workspace", data)
+end
+
+--- Name the Workspace a host directory belongs to. The path need not be a
+--- Workspace root: a directory anywhere beneath one answers with that
+--- Workspace, so a client holding only a working directory — an editor,
+--- a script run from a subdirectory — can find the Workspace over it
+--- without listing them all and comparing paths itself. The innermost
+--- Workspace wins when they nest, and the most recently accessed one when
+--- several name the same directory. Answers with nothing rather than an
+--- error when no Workspace covers the path, which is an ordinary answer.
+---
+--- Fields of `data`:
+---   path  path
+function M.request.workspace_for_path(data)
+  return M.build("workspace_for_path", data)
 end
 
 --- Associate (or disassociate) a Workspace with a Git checkout. The path

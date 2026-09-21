@@ -61,6 +61,13 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "workspace_for_path", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "path", required: true, type: %{kind: :string, path: true}}
+          ]
+        }},
         %{name: "set_workspace_git_repository", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -265,6 +272,7 @@ defmodule Styra.Protocol do
         %{name: "workspace_created", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
         %{name: "workspaces", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "WorkspaceSummary"}}}},
         %{name: "workspace", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
+        %{name: "workspace_for_path", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "WorkspaceSummary"}}}},
         %{name: "workspace_git_repository_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
         %{name: "workspace_launch", payload: %{kind: :newtype, type: %{kind: :ref, name: "LaunchPolicy"}}},
         %{name: "session_created", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionInfo"}}},
@@ -1387,6 +1395,7 @@ defmodule Styra.Protocol do
     "create_workspace",
     "list_workspaces",
     "workspace",
+    "workspace_for_path",
     "set_workspace_git_repository",
     "workspace_launch",
     "create_session",
@@ -1915,6 +1924,25 @@ defmodule Styra.Protocol do
     def workspace!(data), do: Styra.Protocol.build!("workspace", data)
 
     @doc ~S"""
+    Name the Workspace a host directory belongs to. The path need not be a
+    Workspace root: a directory anywhere beneath one answers with that
+    Workspace, so a client holding only a working directory — an editor,
+    a script run from a subdirectory — can find the Workspace over it
+    without listing them all and comparing paths itself. The innermost
+    Workspace wins when they nest, and the most recently accessed one when
+    several name the same directory. Answers with nothing rather than an
+    error when no Workspace covers the path, which is an ordinary answer.
+
+    Fields of `data`:
+
+      * `path`  path
+    """
+    def workspace_for_path(data), do: Styra.Protocol.build("workspace_for_path", data)
+
+    @doc "`workspace_for_path/1`, raising on a request the server would refuse."
+    def workspace_for_path!(data), do: Styra.Protocol.build!("workspace_for_path", data)
+
+    @doc ~S"""
     Associate (or disassociate) a Workspace with a Git checkout. The path
     may be anywhere inside the checkout; the server stores its root.
 
@@ -2361,6 +2389,7 @@ defmodule Styra.Protocol.Response do
     {:workspace_created, "workspace_created"},
     {:workspaces, "workspaces"},
     {:workspace, "workspace"},
+    {:workspace_for_path, "workspace_for_path"},
     {:workspace_git_repository_updated, "workspace_git_repository_updated"},
     {:workspace_launch, "workspace_launch"},
     {:session_created, "session_created"},
@@ -2418,6 +2447,11 @@ defmodule Styra.Protocol.Response do
   def workspaces, do: "workspaces"
 
   def workspace, do: "workspace"
+
+  @doc ~S"""
+  The Workspace covering a host directory, or nothing if none does.
+  """
+  def workspace_for_path, do: "workspace_for_path"
 
   def workspace_git_repository_updated, do: "workspace_git_repository_updated"
 

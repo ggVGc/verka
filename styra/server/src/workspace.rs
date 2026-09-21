@@ -127,6 +127,56 @@ pub fn list(store_root: &Path) -> Result<Vec<WorkspaceSummary>> {
     Ok(workspaces)
 }
 
+/// The Workspace covering a host directory, or `None` if none does.
+///
+/// `path` may be the Workspace's own host directory or anywhere beneath it,
+/// which is what makes this answerable from a working directory rather than
+/// from a Workspace root a client would have to know already.
+///
+/// Two rules settle the cases where more than one Workspace answers. The
+/// innermost wins, so a Workspace over a subdirectory of another is not
+/// shadowed by its parent; and among Workspaces over the *same* directory —
+/// which Styra allows deliberately, two bodies of work in one checkout — the
+/// most recently accessed wins, the same order the pickers show them in.
+///
+/// The path is canonicalized, so symlinked and relative spellings of one
+/// directory find the same Workspace. A path that does not exist cannot be
+/// canonicalized and therefore cannot be inside anything: that is an error,
+/// not an empty answer, because it is a mistake by the caller rather than a
+/// directory Styra happens not to know.
+/// The path must be absolute: the server resolves it in its own process, and
+/// a relative path would quietly mean a directory under the daemon's working
+/// directory rather than the caller's.
+pub fn for_path(store_root: &Path, path: &Path) -> Result<Option<WorkspaceSummary>> {
+    if !path.is_absolute() {
+        anyhow::bail!(
+            "{} must be an absolute path; the server resolves it, not the caller's shell",
+            path.display()
+        );
+    }
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("directory {} must exist", path.display()))?;
+    let mut best: Option<WorkspaceSummary> = None;
+    for workspace in list(store_root)? {
+        if !path.starts_with(&workspace.host_path) {
+            continue;
+        }
+        let deeper = match &best {
+            // `list` is already ordered by access, newest first, so the first
+            // Workspace at a given depth is the one to keep.
+            Some(current) => {
+                workspace.host_path.components().count() > current.host_path.components().count()
+            }
+            None => true,
+        };
+        if deeper {
+            best = Some(workspace);
+        }
+    }
+    Ok(best)
+}
+
 pub fn get(store_root: &Path, id: &str) -> Result<WorkspaceSummary> {
     let path = workspace_dir(store_root, id);
     if !path.is_dir() {
@@ -141,8 +191,21 @@ pub fn access(store_root: &Path, id: &str) -> Result<WorkspaceSummary> {
     if !path.is_dir() {
         anyhow::bail!("Workspace {id:?} was not found");
     }
+    // An access has to leave this Workspace at the front of `list`, and the
+    // wall clock alone cannot promise that: two Workspaces touched inside one
+    // millisecond tie, and the tie is broken by creation time, which would
+    // leave a just-accessed Workspace behind a newer one. So the new reading
+    // is stepped past every other Workspace's as well as past its own.
+    let latest = list(store_root)?
+        .iter()
+        .map(|workspace| workspace.last_accessed_at_ms)
+        .max()
+        .unwrap_or(0);
     let mut meta = read_meta(&path)?;
-    let previous = meta.last_accessed_at_ms.unwrap_or(meta.created_at_ms);
+    let previous = meta
+        .last_accessed_at_ms
+        .unwrap_or(meta.created_at_ms)
+        .max(latest);
     meta.last_accessed_at_ms = Some(now_ms().max(previous.saturating_add(1)));
     write_meta(&path, &meta)?;
     summary_from_meta(&path, meta, now_ms())
@@ -470,6 +533,51 @@ mod tests {
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
         std::fs::remove_dir_all(repository).ok();
+    }
+
+    /// The question an editor asks: "I am in this directory — whose work is
+    /// it?" A subdirectory has to answer with the Workspace above it, or the
+    /// caller is left comparing paths itself.
+    #[test]
+    fn a_directory_finds_the_innermost_workspace_over_it() {
+        let store = temp_dir("for-path-store");
+        let host = temp_dir("for-path-host");
+        let nested = host.join("crates/inner");
+        std::fs::create_dir_all(host.join("src/deep")).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        let outer = create(&store, &host, Some("outer".into())).unwrap();
+
+        assert_eq!(for_path(&store, &host).unwrap().unwrap().id, outer.id);
+        assert_eq!(
+            for_path(&store, &host.join("src/deep"))
+                .unwrap()
+                .unwrap()
+                .id,
+            outer.id
+        );
+
+        // A Workspace over a subdirectory is not shadowed by the one above it.
+        let inner = create(&store, &nested, Some("inner".into())).unwrap();
+        assert_eq!(for_path(&store, &nested).unwrap().unwrap().id, inner.id);
+        assert_eq!(for_path(&store, &host).unwrap().unwrap().id, outer.id);
+
+        // Two Workspaces over one directory: the most recently accessed wins,
+        // the order the pickers show them in.
+        let sibling = create(&store, &host, Some("sibling".into())).unwrap();
+        assert_eq!(for_path(&store, &host).unwrap().unwrap().id, sibling.id);
+        access(&store, &outer.id).unwrap();
+        assert_eq!(for_path(&store, &host).unwrap().unwrap().id, outer.id);
+
+        // A directory no Workspace covers is an ordinary empty answer; one
+        // that does not exist is the caller's mistake.
+        let elsewhere = temp_dir("for-path-elsewhere");
+        assert!(for_path(&store, &elsewhere).unwrap().is_none());
+        assert!(for_path(&store, &host.join("missing")).is_err());
+        assert!(for_path(&store, Path::new("src")).is_err());
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+        std::fs::remove_dir_all(elsewhere).ok();
     }
 
     #[test]

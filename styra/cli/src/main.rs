@@ -29,6 +29,13 @@ enum Command {
     Health,
     /// List live interactions as JSON.
     Interactions,
+    /// Print the Workspace covering a directory as JSON, or `null` if none
+    /// does. The directory may be anywhere beneath the Workspace's own, and
+    /// defaults to the current one.
+    Workspace {
+        #[arg(default_value = ".")]
+        directory: PathBuf,
+    },
     /// List durable sessions in a Workspace as JSON.
     Sessions {
         #[arg(long)]
@@ -68,10 +75,27 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let socket = cli.socket.unwrap_or(default_socket()?);
+    // Only fall back when nothing was named: `unwrap_or` would evaluate the
+    // default first and fail on an unset `XDG_RUNTIME_DIR` even when
+    // `--socket` said where to go.
+    let socket = match cli.socket {
+        Some(socket) => socket,
+        None => default_socket()?,
+    };
     match cli.command {
         Command::Health => print_response(exchange(&socket, Request::Health)?)?,
         Command::Interactions => print_response(exchange(&socket, Request::ListInteractions)?)?,
+        // Resolved here rather than sent as typed: the server resolves what it
+        // is given in its own process, where a relative path means something
+        // else entirely.
+        Command::Workspace { directory } => print_response(exchange(
+            &socket,
+            Request::WorkspaceForPath {
+                path: directory
+                    .canonicalize()
+                    .with_context(|| format!("directory {} must exist", directory.display()))?,
+            },
+        )?)?,
         Command::Sessions { workspace } => print_response(exchange(
             &socket,
             Request::ListSessions {

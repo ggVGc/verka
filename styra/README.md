@@ -160,6 +160,7 @@ Operations:
 | `create_workspace` | host path, optional name, and optional Git repository path | `workspace_created` |
 | `list_workspaces` | none | `workspaces` |
 | `workspace` | Workspace id | `workspace` |
+| `workspace_for_path` | an absolute host directory, the Workspace's own or anywhere beneath it | `workspace_for_path` (the innermost Workspace over it, or null) |
 | `set_workspace_git_repository` | Workspace id and optional Git repository path | `workspace_git_repository_updated` |
 | `create_session` | Workspace id, provider/model/effort selection, this launch's own policy, optional message | `session_created` |
 | `plan_session` | Workspace id and the same launch inputs, creating nothing | `session_plan` |

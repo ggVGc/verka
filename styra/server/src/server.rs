@@ -2262,6 +2262,9 @@ impl ServerState {
                     &id,
                 )?))
             }
+            Request::WorkspaceForPath { path } => Ok(Response::WorkspaceForPath(
+                crate::workspace::for_path(&self.inner.store_root, &path)?,
+            )),
             Request::SetWorkspaceGitRepository {
                 workspace_id,
                 git_repository,
