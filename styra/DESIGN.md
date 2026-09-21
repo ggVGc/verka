@@ -1034,6 +1034,39 @@ stopped Interaction from the server. The next available Interaction becomes
 current without closing the navigator; deleting the last one closes it and
 returns Styra to its blank default state.
 
+#### The list survives a restart
+
+An Interaction leaves the server's list only when the operator removes it.
+Everything else — a turn ending, an agent exiting, a plan window refusing the
+work — leaves it there, stopped, because a stopped Interaction is still the
+conversation the operator was having and still the row they go back to. A
+restart used to be the one exception: the list lived in the server's memory
+alone, so the next run came up empty and every open conversation had to be
+found again among the stored Sessions.
+
+So the list is mirrored into `roster.jsonl` in the store, beside the quota log,
+and read back on the way up. It is rewritten whole and atomically whenever the
+list changes and once more as the server goes down, so a graceful shutdown
+records each row as it finally stood rather than as it stood when it opened.
+The mirrored row is the summary itself rather than a key to rebuild one from:
+most of a summary could be re-derived from the Session's stored metadata, but
+the Driva policy could not — it is what that launch resolved against this host,
+and re-deriving it would answer what a launch *now* would get while claiming to
+describe the run that happened.
+
+What comes back is the rows, not the agents. The processes died with the server
+that owned them and nothing restarts them, so a restored row is `Stopped` with
+the reason `server_restarted` — which is both what is true and what says that
+resuming the Session is how an agent comes back. Loading one replays its
+history out of the journal, the same reconstruction a resume seeds its stream
+with, so the conversation reads; asking it for updates yields none, because
+nothing is producing any. Removing it takes the row away for good. A row whose
+Session directory has since been deleted is dropped on the way in rather than
+listed as a conversation that cannot be opened. Deliberately *not* restored is
+the unseen-idle notification, for the reason the quota log does not restore its
+announcements: a notification is owed to the operator of the run that raised
+it, and this is not that run.
+
 ### Starting sends nothing on its own
 
 A bare `styra` invocation does not spawn the agent process by itself. It lands

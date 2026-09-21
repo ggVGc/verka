@@ -107,8 +107,11 @@ impl IdleReason {
                 resets_at_ms: *resets_at_ms,
             }),
             Some(InteractionActivityReason::BackgroundFinished) => IdleReason::BackgroundFinished,
+            // All three describe an interaction that stopped rather than one
+            // waiting for input, so as idle reasons they say nothing.
             Some(InteractionActivityReason::Paused)
             | Some(InteractionActivityReason::Exited { .. })
+            | Some(InteractionActivityReason::ServerRestarted)
             | None => IdleReason::Reported,
         }
     }
@@ -142,6 +145,10 @@ pub enum StopReason {
     Failed { message: String },
     /// The agent's process ended of its own accord.
     Exited { exit_code: Option<i32> },
+    /// The interaction outlived the server run that owned it: it is listed
+    /// again because it was never closed, but its agent went down with that
+    /// run and resuming the Session is what brings one back.
+    ServerRestarted,
     /// The server still lists the interaction, but its agent no longer accepts
     /// messages and said nothing about why — a stale record a client must
     /// treat as stopped rather than queue against.
@@ -170,6 +177,7 @@ impl StopReason {
                 window: window.clone(),
                 resets_at_ms: *resets_at_ms,
             }),
+            Some(InteractionActivityReason::ServerRestarted) => StopReason::ServerRestarted,
             _ => StopReason::NotAccepting,
         }
     }
@@ -185,6 +193,7 @@ impl StopReason {
                 exit_code: Some(code),
             } => format!("the agent exited ({code})"),
             StopReason::Exited { exit_code: None } => "the agent exited".into(),
+            StopReason::ServerRestarted => "the server restarted".into(),
             StopReason::NotAccepting => "no longer accepting messages".into(),
         }
     }

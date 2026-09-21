@@ -122,6 +122,7 @@ pub mod interaction;
 pub mod journal;
 pub mod naming;
 pub mod quota;
+pub mod roster;
 pub mod server;
 pub mod tooling;
 pub mod workspace;

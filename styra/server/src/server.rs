@@ -69,6 +69,10 @@ struct ServerInner {
     /// taken on one session is what every other session is also spending, and
     /// kept in the store so a restart reopens knowing where each window stood.
     quota: Arc<crate::quota::QuotaLog>,
+    /// The open-Interaction list, mirrored into the store so a restart lists
+    /// the conversations the operator never closed rather than starting empty.
+    /// Holds the rows a previous run left; see [`crate::roster`].
+    roster: crate::roster::Roster,
 }
 
 /// The server owns every process represented by its interaction map. When the
@@ -85,6 +89,15 @@ impl Drop for ServerInner {
             .interactions
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Mirrored one last time before the agents go: each row as it finally
+        // stood, so the next run lists what the operator was actually left
+        // with rather than what each interaction looked like when it opened.
+        self.roster.publish(
+            interactions
+                .values()
+                .map(|managed| (managed.session_path.clone(), managed.summary()))
+                .collect(),
+        );
         for interaction in interactions.values() {
             interaction.stop();
         }
@@ -868,6 +881,7 @@ impl ServerState {
         let state = Self {
             inner: Arc::new(ServerInner {
                 quota: Arc::new(crate::quota::QuotaLog::open(&store_root)),
+                roster: crate::roster::Roster::open(&store_root),
                 git,
                 store_root,
                 socket,
@@ -1261,9 +1275,14 @@ impl ServerState {
                     .lock()
                     .expect("server interaction lock poisoned")
                     .remove(&id);
+                self.publish_roster();
                 return Err(error);
             }
         }
+        // Mirrored once the launch has actually taken, so a Session whose seed
+        // turn could not be sent — and which is not in the list — is not left
+        // in the store's copy of it either.
+        self.publish_roster();
 
         Ok(SessionInfo {
             id,
@@ -1739,6 +1758,10 @@ impl ServerState {
             .lock()
             .expect("server interaction lock poisoned")
             .insert(request.id.clone(), managed);
+        // This run owns the Session again, so a row a previous run left for it
+        // is superseded rather than listed twice.
+        self.inner.roster.forget(&request.id);
+        self.publish_roster();
 
         Ok(SessionInfo {
             id: request.id,
@@ -1930,6 +1953,55 @@ impl ServerState {
             .get(id)
             .cloned()
             .with_context(|| format!("no live interaction for session {id:?}"))
+    }
+
+    /// Open a row a previous run left, if `id` names one.
+    ///
+    /// There is no agent and no live update stream behind it, so the history
+    /// is replayed out of the Session's journal — the same reconstruction a
+    /// resume seeds its stream with. What the operator gets is the
+    /// conversation, readable, marked stopped; sending to it takes a resume,
+    /// which is the request that actually starts an agent.
+    fn load_restored(&self, id: &str) -> Result<Option<LoadedInteraction>> {
+        let Some((summary, session_path)) = self.inner.roster.restored_session(id) else {
+            return Ok(None);
+        };
+        let meta = journal::read_session_meta(&session_path)?;
+        let replayed = replayed_session_updates(&session_path, meta.protocol)?;
+        let next = replayed
+            .last()
+            .map(|update| update.sequence)
+            .unwrap_or_default();
+        Ok(Some(LoadedInteraction {
+            summary,
+            updates: Updates {
+                updates: replayed,
+                next,
+            },
+            // Messages queued against the previous run's Interaction are
+            // waiting for an agent that a resume will launch; that resume
+            // reloads them itself, so nothing is lost by not showing them on
+            // an Interaction that cannot send anything.
+            queued: Vec::new(),
+        }))
+    }
+
+    /// Mirror the open-Interaction list into the store. Called wherever that
+    /// list changes — an Interaction opening, resuming, or being closed — and
+    /// again as the server goes down; see [`crate::roster`].
+    fn publish_roster(&self) {
+        let rows = {
+            let interactions = self
+                .inner
+                .interactions
+                .lock()
+                .expect("server interaction lock poisoned");
+            interactions
+                .values()
+                .map(|managed| (managed.session_path.clone(), managed.summary()))
+                .collect()
+        };
+        self.inner.roster.publish(rows);
     }
 
     /// Give the quota log's clock a turn: pick up whatever the windows that
@@ -2395,6 +2467,14 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::CloseInteraction { id } => {
+                // Closing a row a previous run left is the whole of the work:
+                // there is no agent to stop and no queue to clear, only the
+                // listing to take away — and it must not come back.
+                if self.inner.roster.holds(&id) {
+                    self.inner.roster.forget(&id);
+                    self.publish_roster();
+                    return Ok(Response::Accepted);
+                }
                 let interaction = self.interaction(&id)?;
                 interaction.stop();
                 // Queued messages would otherwise be waiting for an interaction
@@ -2405,9 +2485,13 @@ impl ServerState {
                     .lock()
                     .expect("server interaction lock poisoned")
                     .remove(&id);
+                self.publish_roster();
                 Ok(Response::Accepted)
             }
             Request::LoadInteraction { id } => {
+                if let Some(loaded) = self.load_restored(&id)? {
+                    return Ok(Response::InteractionLoaded(loaded));
+                }
                 let interaction = self.interaction(&id)?;
                 // Loading is the point at which an operator can actually see
                 // the interaction. Listing it must leave an idle notification
@@ -2431,6 +2515,16 @@ impl ServerState {
                 }))
             }
             Request::Updates { id, after, raw } => {
+                // A row a previous run left has no stream of its own: its
+                // whole history arrived with the load, and no agent is going
+                // to add to it. Say so plainly rather than failing, since a
+                // client showing it polls this every frame.
+                if self.inner.roster.holds(&id) {
+                    return Ok(Response::Updates(Updates {
+                        updates: Vec::new(),
+                        next: after,
+                    }));
+                }
                 let interaction = self.interaction(&id)?;
                 // Asking for an interaction's stream is a client drawing it, so
                 // this is where the server learns which interactions are in
@@ -2464,6 +2558,12 @@ impl ServerState {
                     .values()
                     .map(|managed| managed.summary())
                     .collect();
+                drop(interactions);
+                // Interactions a previous run had open and the operator never
+                // closed. They are listed beside this run's own, stopped: the
+                // conversation is still theirs to go back to, and only the
+                // agent is gone. See [`crate::roster`].
+                summaries.extend(self.inner.roster.restored());
                 // Newest first: the id embeds a millisecond timestamp, so a
                 // descending id sort orders interactions by creation time.
                 summaries.sort_by(|a, b| b.id.cmp(&a.id));

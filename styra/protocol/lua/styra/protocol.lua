@@ -906,6 +906,7 @@ M.types.InteractionActivityReason = {
         { name = "exit_code", required = false, type = { kind = "optional", inner = { kind = "number", integer = true } } },
       },
     } },
+    { name = "server_restarted", payload = { kind = "unit" } },
   },
 }
 
@@ -1519,7 +1520,7 @@ M.InteractionActivity = {
   STOPPED = "stopped",
 }
 
-M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "exited" }
+M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "exited", "server_restarted" }
 --- Wire spellings of `InteractionActivityReason`.
 M.InteractionActivityReason = {
   TURN_COMPLETED = "turn_completed",
@@ -1529,6 +1530,7 @@ M.InteractionActivityReason = {
   BACKGROUND_FINISHED = "background_finished",
   PAUSED = "paused",
   EXITED = "exited",
+  SERVER_RESTARTED = "server_restarted",
 }
 
 M.enums.AgentEvent = { "user_message", "thread_started", "turn_started", "turn_completed", "usage_updated", "command_started", "command_completed", "file_changed", "diff_updated", "tool_started", "tool_completed", "plan_updated", "agent_message", "thinking", "error", "model_changed", "branched", "task_started", "task_progress", "task_completed", "background_tasks", "unknown", "malformed" }

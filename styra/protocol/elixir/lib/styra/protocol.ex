@@ -915,7 +915,8 @@ defmodule Styra.Protocol do
           fields: [
             %{name: "exit_code", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}}
           ]
-        }}
+        }},
+        %{name: "server_restarted", payload: %{kind: :unit}}
       ]
     },
 
@@ -2944,7 +2945,8 @@ defmodule Styra.Protocol.InteractionActivityReason do
     {:rate_limited, "rate_limited"},
     {:background_finished, "background_finished"},
     {:paused, "paused"},
-    {:exited, "exited"}
+    {:exited, "exited"},
+    {:server_restarted, "server_restarted"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -3014,6 +3016,14 @@ defmodule Styra.Protocol.InteractionActivityReason do
   it did not exit normally — killed, or ended before it ran at all.
   """
   def exited, do: "exited"
+
+  @doc ~S"""
+  The server that ran this interaction stopped, and the agent with it.
+  The interaction is listed again because the operator never closed it,
+  but nothing of the previous run's process survived: resuming the
+  Session is what brings an agent back.
+  """
+  def server_restarted, do: "server_restarted"
 end
 
 defmodule Styra.Protocol.AgentEvent do

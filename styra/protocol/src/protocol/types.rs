@@ -683,6 +683,11 @@ pub enum InteractionActivityReason {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
     },
+    /// The server that ran this interaction stopped, and the agent with it.
+    /// The interaction is listed again because the operator never closed it,
+    /// but nothing of the previous run's process survived: resuming the
+    /// Session is what brings an agent back.
+    ServerRestarted,
 }
 
 impl InteractionActivityReason {
