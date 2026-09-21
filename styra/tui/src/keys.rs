@@ -569,6 +569,22 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Whether this keypress submits the first prompt into a new Git workspace.
+///
+/// Ctrl-Enter is a distinct first-prompt submission: it creates the Session's
+/// branch and linked workspace as it sends the prompt, with no standing option
+/// to leak into a later Session.
+///
+/// Asked from outside as well as here, because branching takes long enough to
+/// be worth saying on screen before the send blocks on it.
+pub fn creates_worktree(app: &App, key: KeyEvent) -> bool {
+    key.code == KeyCode::Enter
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && app.session_id.is_empty()
+        // Nothing is sent, and so nothing is branched, for a blank box.
+        && !app.composer.text.trim().is_empty()
+}
+
 pub fn handle_input_key(
     app: &mut App,
     client: &Client,
@@ -576,12 +592,7 @@ pub fn handle_input_key(
     live: &mut Attachment,
     key: KeyEvent,
 ) {
-    // Ctrl-Enter is a distinct first-prompt submission: it creates the
-    // Session's branch and linked workspace as it sends the prompt, with no
-    // standing option to leak into a later Session.
-    let create_worktree = key.code == KeyCode::Enter
-        && key.modifiers.contains(KeyModifiers::CONTROL)
-        && app.session_id.is_empty();
+    let create_worktree = creates_worktree(app, key);
     match key.code {
         KeyCode::Esc => app.enter_list(),
         // Choosing a shape is part of writing the message, so it lives in the
@@ -670,6 +681,15 @@ pub fn handle_input_key(
                                 app.workspace.id = Some(info.workspace_id);
                                 app.session_id = info.id.clone();
                                 app.session_name = info.name;
+                                if create_worktree {
+                                    // Closes the "creating…" notice the event
+                                    // loop put up, and says where the branch
+                                    // this Session now works in landed.
+                                    app.show_action_message(format!(
+                                        "new Git workspace ready: {}",
+                                        info.workspace.display()
+                                    ));
+                                }
                                 app.workspace.enter(info.workspace);
                                 app.launch.record(info.driva);
                                 app.push_log(LogEntry::info(format!(
@@ -812,6 +832,38 @@ mod tests {
 
         press(&mut app, KeyModifiers::NONE);
         assert_eq!(app.take_request(), Some(Request::Interactions));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The event loop asks this before dispatching the key, so that it can
+    /// paint the "creating…" notice over the pause the branching costs. It has
+    /// to agree with the send itself about which presses actually branch.
+    #[test]
+    fn only_a_typed_first_prompt_sent_with_control_enter_branches() {
+        let root = tree("creates-worktree");
+        let mut app = app(&root);
+        let press = |modifiers| KeyEvent::new(KeyCode::Enter, modifiers);
+
+        app.composer.set("start here".into());
+        assert!(creates_worktree(&app, press(KeyModifiers::CONTROL)));
+        assert!(
+            !creates_worktree(&app, press(KeyModifiers::NONE)),
+            "a plain Enter sends into the current workspace"
+        );
+
+        app.composer.set("   ".into());
+        assert!(
+            !creates_worktree(&app, press(KeyModifiers::CONTROL)),
+            "a blank box sends nothing, so it branches nothing"
+        );
+
+        app.composer.set("continue".into());
+        app.session_id = "session-1".into();
+        assert!(
+            !creates_worktree(&app, press(KeyModifiers::CONTROL)),
+            "branching is a first-prompt choice only"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

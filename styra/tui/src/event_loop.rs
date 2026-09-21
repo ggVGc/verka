@@ -876,7 +876,19 @@ pub fn run(
                     &mut pending_fold,
                     preferences_path,
                 ),
-                Focus::Input => keys::handle_input_key(app, client, &workspace_id, live, key),
+                Focus::Input => {
+                    // Ctrl-Enter branches the repository and checks out a
+                    // linked worktree before the prompt is even sent, which
+                    // takes long enough to look like a hang. The send is
+                    // synchronous, so the only moment left to say what is
+                    // happening is this one: put the notice up and paint it
+                    // before handing the key over.
+                    if keys::creates_worktree(app, key) {
+                        app.show_action_message("creating a new Git workspace…");
+                        presentation::draw_application(terminal, app)?;
+                    }
+                    keys::handle_input_key(app, client, &workspace_id, live, key)
+                }
             }
         }
 
