@@ -68,6 +68,7 @@ pub fn render(frame: &mut Frame, view: &QuotaView<'_>, area: Rect) {
 /// history.
 fn summary_lines(readings: &[&QuotaEvent], now_ms: u64) -> Vec<Line<'static>> {
     let mut current = newest_per_window(readings);
+    current.retain(|reading| !superseded(reading, readings));
     current.sort_by(|left, right| {
         left.provider
             .as_str()
@@ -109,6 +110,23 @@ fn summary_lines(readings: &[&QuotaEvent], now_ms: u64) -> Vec<Line<'static>> {
             Line::from(spans)
         })
         .collect()
+}
+
+/// Whether a spent window has since been contradicted by the provider.
+///
+/// A refusal is filed under a window of its own (`plan`), which no later
+/// success ever reports on, so nothing supersedes it by window and the summary
+/// would call the plan spent for good. But a reading only exists because a turn
+/// ran and the provider answered it, so any later permitted or filling reading
+/// from the same provider is that provider saying it is serving again — the
+/// refusal is then history, and history is what the log below is for.
+fn superseded(reading: &QuotaEvent, readings: &[&QuotaEvent]) -> bool {
+    reading.status == QuotaStatus::Exhausted
+        && readings.iter().any(|later| {
+            later.provider == reading.provider
+                && later.status != QuotaStatus::Exhausted
+                && later.at_ms > reading.at_ms
+        })
 }
 
 /// The latest reading for each provider-and-window pair, in first-seen order.
@@ -420,6 +438,33 @@ mod tests {
         assert_eq!(output.matches("7d").count(), 3, "{output}");
         assert!(output.contains("resets 1970-01-0"), "{output}");
         assert!(output.contains("recent readings"), "{output}");
+    }
+    #[test]
+    fn a_later_serving_reading_retires_a_spent_plan_from_the_summary() {
+        let mut refusal = reading(Provider::Codex, "plan", QuotaStatus::Exhausted, None);
+        refusal.at_ms = 1_000;
+        let mut served = reading(Provider::Codex, "5h", QuotaStatus::Allowed, Some(0.04));
+        served.at_ms = 2_000;
+        let summary = summary_lines(&[&refusal, &served], 2_000)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<String>();
+        assert!(!summary.contains("exhausted"), "{summary}");
+        assert!(summary.contains("5h"), "{summary}");
+        // Until the provider serves again the refusal is the standing fact.
+        let still = summary_lines(&[&refusal], 2_000)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<String>();
+        assert!(still.contains("exhausted"), "{still}");
+        // Another provider's success says nothing about this one.
+        let mut elsewhere = reading(Provider::Claude, "five_hour", QuotaStatus::Allowed, None);
+        elsewhere.at_ms = 3_000;
+        let across = summary_lines(&[&refusal, &elsewhere], 3_000)
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<String>();
+        assert!(across.contains("exhausted"), "{across}");
     }
     #[test]
     fn log_shows_only_what_fits_below_the_summary() {
