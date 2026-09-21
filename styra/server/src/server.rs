@@ -350,6 +350,9 @@ struct HeldBack {
     /// The interaction's own half of the launch policy, so the Session comes
     /// back in the sandbox the operator granted it rather than a plainer one.
     launch: LaunchPolicy,
+    /// Whether the agent outlived the refusal and still takes messages, in
+    /// which case the turn goes straight to it rather than through a resume.
+    alive: bool,
 }
 
 /// Whether a window coming back is the one that refused this work.
@@ -564,7 +567,7 @@ impl ManagedInteraction {
 
     /// The window that refused this interaction's work, if this interaction is
     /// one a reset should come back to: it has to have been refused, to have
-    /// stopped, and to have been told to keep at it.
+    /// been told to keep at it, and not to be running a turn already.
     ///
     /// All three are asked here rather than at the call site, because they are
     /// one question — "is this interaction waiting for a window" — and it is
@@ -1186,6 +1189,13 @@ impl ServerState {
                         if let Some(managed) = refused.upgrade() {
                             managed.note_refused(refusal);
                         }
+                    } else if observed.serving {
+                        // The provider answered, so whatever refused this
+                        // interaction earlier is history and must not send a
+                        // turn again when it resets.
+                        if let Some(managed) = refused.upgrade() {
+                            managed.note_serving(quota_provider);
+                        }
                     }
                     let announcements = observed.announce;
                     if let InteractionUpdate::Ended(end) = &update {
@@ -1680,6 +1690,13 @@ impl ServerState {
                         if let Some(managed) = refused.upgrade() {
                             managed.note_refused(refusal);
                         }
+                    } else if observed.serving {
+                        // The provider answered, so whatever refused this
+                        // interaction earlier is history and must not send a
+                        // turn again when it resets.
+                        if let Some(managed) = refused.upgrade() {
+                            managed.note_serving(quota_provider);
+                        }
                     }
                     let announcements = observed.announce;
                     if let InteractionUpdate::Ended(end) = &update {
@@ -1936,28 +1953,41 @@ impl ServerState {
     /// The candidates are collected before any of them is resumed, because
     /// resuming takes the same lock that listing them does — and takes as long
     /// as launching a sandbox, which is not a lock to hold across.
+    ///
+    /// A refusal does not always take the agent with it — Claude reports the
+    /// limit and keeps its process, leaving the session idle behind a window
+    /// that will not run anything — so one that is still alive is asked again
+    /// where it stands, and only a session whose agent is gone is revived
+    /// first.
     fn retry_after_reset(&self, reset: &crate::quota::WindowReset) {
         for held in self.held_back_by(reset) {
-            let HeldBack { id, turn, launch } = held;
-            if let Err(error) = self.resume_session(ResumeSession {
-                id: id.clone(),
+            let HeldBack {
+                id,
+                turn,
                 launch,
-                // An unattended retry revives the Session exactly as it was
-                // held back: there is no operator here to have chosen
-                // otherwise.
-                selection: None,
-            }) {
-                // The refused interaction is still the one in the map, so its
-                // own stream is where an operator will look for the reason
-                // their session did not come back after all.
-                self.say(
-                    &id,
-                    LogEntry::error(format!(
-                        "the {} window has reset, but this Session could not be resumed: {error:#}",
-                        reset.window
-                    )),
-                );
-                continue;
+                alive,
+            } = held;
+            if !alive {
+                if let Err(error) = self.resume_session(ResumeSession {
+                    id: id.clone(),
+                    launch,
+                    // An unattended retry revives the Session exactly as it
+                    // was held back: there is no operator here to have chosen
+                    // otherwise.
+                    selection: None,
+                }) {
+                    // The refused interaction is still the one in the map, so
+                    // its own stream is where an operator will look for the
+                    // reason their session did not come back after all.
+                    self.say(
+                        &id,
+                        LogEntry::error(format!(
+                            "the {} window has reset, but this Session could not be resumed: {error:#}",
+                            reset.window
+                        )),
+                    );
+                    continue;
+                }
             }
             self.say(
                 &id,
@@ -1966,9 +1996,13 @@ impl ServerState {
                     reset.window
                 )),
             );
-            let sent = self
-                .interaction(&id)
-                .and_then(|interaction| interaction.send_message(SendMessage::new(&turn)));
+            let sent = self.interaction(&id).and_then(|interaction| {
+                interaction.send_message(SendMessage::new(&turn))?;
+                // Asked again, so the refusal has been acted on: what happens
+                // to this turn is the new turn's business.
+                interaction.note_serving(reset.provider);
+                Ok(())
+            });
             if let Err(error) = sent {
                 self.say(
                     &id,
@@ -1978,9 +2012,10 @@ impl ServerState {
         }
     }
 
-    /// The interactions `reset`'s window is holding: ones it refused, that it
-    /// stopped, and that were told to keep at it — with the turn each was
-    /// refused in the middle of, and the policy it was launched under.
+    /// The interactions `reset`'s window is holding: ones it refused and that
+    /// were told to keep at it — with the turn each was refused in the middle
+    /// of, the policy it was launched under, and whether its agent is still
+    /// there to be asked.
     fn held_back_by(&self, reset: &crate::quota::WindowReset) -> Vec<HeldBack> {
         let interactions = self
             .inner
@@ -2010,6 +2045,7 @@ impl ServerState {
                 id,
                 turn,
                 launch: managed.launch.clone(),
+                alive: managed.activity.activity().accepting(),
             });
         }
         held
@@ -3120,6 +3156,56 @@ mod tests {
             Some(refusal.clone()),
             "a session told to wait the window out is asked again when it resets, \
              whether or not its agent outlived the refusal"
+        );
+    }
+
+    /// The other side of asking a live session again: an interaction with a
+    /// turn under way is being served, whatever refused it earlier, and a
+    /// reset arriving mid-turn must not ask the same question beside it.
+    #[test]
+    fn a_turn_under_way_is_not_waiting_for_a_window() {
+        let refusal = crate::protocol::QuotaEvent {
+            at_ms: 1,
+            session_id: "s-1".into(),
+            provider: crate::agent::Provider::Claude,
+            window: "five_hour".into(),
+            status: crate::protocol::QuotaStatus::Exhausted,
+            utilization: None,
+            resets_at_ms: Some(1_788_290_400_000),
+            detail: None,
+        };
+
+        for busy in [
+            InteractionActivity::Running,
+            InteractionActivity::Background,
+        ] {
+            assert_eq!(awaiting_window(true, busy, Some(&refusal)), None);
+        }
+        for waiting in [InteractionActivity::Pending, InteractionActivity::Stopped] {
+            assert_eq!(
+                awaiting_window(true, waiting, Some(&refusal)),
+                Some(refusal.clone())
+            );
+            // Without the operator's standing answer there is nobody to ask
+            // again for, whatever the window does.
+            assert_eq!(awaiting_window(false, waiting, Some(&refusal)), None);
+        }
+    }
+
+    /// A refusal is only interesting until the provider contradicts it, and it
+    /// is contradicted silently — by serving. Left standing, it would have the
+    /// next reset send a turn this session has long since had an answer to.
+    #[test]
+    fn a_provider_serving_again_retires_the_refusal_on_record() {
+        const CLAUDE_ALLOWED: &str = r#"{"type":"rate_limit_event","rate_limit_info":
+            {"status":"allowed","resetsAt":1788290400,"rateLimitType":"five_hour"}}"#;
+
+        let log = crate::quota::QuotaLog::new();
+        let observed = log.observe("s-1", crate::agent::Provider::Claude, 2, CLAUDE_ALLOWED);
+        assert!(observed.rejected.is_none());
+        assert!(
+            observed.serving,
+            "a reading exists because the provider answered a turn"
         );
     }
 

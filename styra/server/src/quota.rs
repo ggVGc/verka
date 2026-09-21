@@ -153,6 +153,13 @@ pub struct Observed {
     /// only the first, since it is the caller's business whose work was
     /// refused rather than whether the news is new.
     pub rejected: Option<QuotaEvent>,
+    /// Whether the line carried a reading that is not a refusal — any window
+    /// of this provider reporting room, or merely filling up.
+    ///
+    /// A reading exists because a turn ran and the provider answered it, so
+    /// this is the provider saying it is serving: it is what retires a refusal
+    /// recorded earlier, which nothing else ever contradicts by name.
+    pub serving: bool,
 }
 
 /// A server-wide, bounded, store-backed log of the quota readings seen on any
@@ -237,6 +244,8 @@ impl QuotaLog {
             self.note_availability(&reading);
             if reading.status == QuotaStatus::Exhausted {
                 observed.rejected = Some(reading.clone());
+            } else {
+                observed.serving = true;
             }
             self.record(reading);
         }
