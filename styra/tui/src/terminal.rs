@@ -60,9 +60,8 @@ pub fn open_shell(client: &Client, session: &str, config: &dyn Configuration) ->
 /// The sibling of [`open_shell`], and deliberately not the same thing: that one
 /// attaches to the agent's sandbox, while this is the operator's own shell on
 /// the host, standing where the interaction is working. Neither the emulator
-/// nor the shell is guessed at — the window is configured
-/// ([`Configuration::open_terminal`]) and the shell is the operator's `$SHELL`,
-/// with `sh` for the login that does not set one.
+/// nor the shell is guessed at — both are configured
+/// ([`Configuration::open_terminal`] and [`Configuration::shell`]).
 pub fn open_directory(directory: &Path, config: &dyn Configuration) -> Result<String> {
     let mut command = shell_in(directory, config);
     let program = command.get_program().to_string_lossy().into_owned();
@@ -73,8 +72,7 @@ pub fn open_directory(directory: &Path, config: &dyn Configuration) -> Result<St
 /// The command [`open_directory`] runs, built apart from running it so what it
 /// asks for can be examined.
 fn shell_in(directory: &Path, config: &dyn Configuration) -> Command {
-    let shell = std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("sh"));
-    let mut command = config.open_terminal(&[shell]);
+    let mut command = config.open_terminal(&config.shell());
     // The emulator is spawned in the directory, and the shell it runs inherits
     // that, so the operator lands where the agent is rather than wherever Styra
     // was started.
@@ -96,8 +94,11 @@ mod tests {
             Some(Path::new("/home/me/project")),
             "the window starts where the interaction is working"
         );
-        let shell = std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("sh"));
-        assert_eq!(command.get_args().last(), Some(shell.as_os_str()));
+        assert_eq!(
+            command.get_args().last(),
+            Defaults.shell().last().map(OsString::as_os_str),
+            "the configured shell, not this process's environment"
+        );
     }
 
     #[test]

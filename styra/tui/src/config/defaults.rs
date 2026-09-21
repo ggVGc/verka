@@ -23,6 +23,9 @@ const TERMINAL: &str = "urxvt";
 /// How that emulator is told what to run in the window it opens.
 const RUN: &str = "-e";
 
+/// The shell opened in an interaction's working directory.
+const SHELL: &str = "fish";
+
 impl Configuration for Defaults {
     fn open_file(&self, path: &Path) -> Command {
         let mut command = in_terminal();
@@ -34,6 +37,10 @@ impl Configuration for Defaults {
         let mut command = in_terminal();
         command.args(argv);
         command
+    }
+
+    fn shell(&self) -> Vec<OsString> {
+        vec![OsString::from(SHELL)]
     }
 }
 
@@ -67,6 +74,11 @@ mod tests {
                 OsStr::new("/work/src/monitor.c"),
             ]
         );
+    }
+
+    #[test]
+    fn the_interaction_directory_opens_in_fish() {
+        assert_eq!(Defaults.shell(), [OsString::from("fish")]);
     }
 
     #[test]

@@ -34,4 +34,14 @@ pub trait Configuration {
     /// then matched against a table of known emulators; an operator who
     /// configures it says so once here instead.
     fn open_terminal(&self, argv: &[OsString]) -> Command;
+
+    /// The shell the `~` key gives the operator in the interaction's working
+    /// directory.
+    ///
+    /// Configured rather than read from `$SHELL`, for the same reason the
+    /// emulator above is: Styra's own environment is whatever started it, which
+    /// is not necessarily the shell the operator wants to be dropped into. It
+    /// is a program name and its arguments, so a shell that needs to be told
+    /// not to read a profile can say so.
+    fn shell(&self) -> Vec<OsString>;
 }
