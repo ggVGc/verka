@@ -394,6 +394,12 @@ pub enum Request {
     StopInteraction {
         id: String,
     },
+    /// Stop an interaction and mark its row completed. Completed rows remain
+    /// available to reopen, but clients normally hide them from the
+    /// interactions list.
+    CompleteInteraction {
+        id: String,
+    },
     /// Stop an interaction and drop the server's record of it, so the Session
     /// is only what is stored on disk: it no longer appears in the
     /// current-interactions list and can be resumed like any other history.
@@ -667,7 +673,9 @@ mod tests {
 
     #[test]
     fn a_session_worktree_request_names_the_existing_session() {
-        let request = Request::CreateSessionWorktree { id: "styra-1".into() };
+        let request = Request::CreateSessionWorktree {
+            id: "styra-1".into(),
+        };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "create_session_worktree");
         assert_eq!(json["data"]["id"], "styra-1");

@@ -303,6 +303,9 @@ struct ManagedInteraction {
     interaction: Interaction,
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     activity: Arc<CurrentActivity>,
+    /// Set by the operator when this interaction is finished. Kept on the
+    /// summary so the roster preserves it across a server restart.
+    completed: AtomicBool,
     /// Whether this interaction going idle is still news, and what makes it
     /// news at all: see [`IdleNotice`].
     idle: Arc<IdleNotice>,
@@ -475,6 +478,7 @@ impl ManagedInteraction {
             driva: self.driva.clone(),
             idle_unseen: activity == InteractionActivity::Pending && self.idle.unseen(),
             activity,
+            completed: self.completed.load(Ordering::Acquire),
             activity_reason: state.reason,
             activity_since_ms: state.since_ms,
             last_message: self.last_message(),
@@ -1037,6 +1041,7 @@ impl ServerState {
             interaction,
             updates: Arc::clone(&updates),
             activity: Arc::clone(&activity),
+            completed: AtomicBool::new(false),
             idle: Arc::clone(&idle),
             events: Arc::clone(&events),
             workspace_id: request.workspace_id.clone(),
@@ -1542,6 +1547,7 @@ impl ServerState {
             interaction,
             updates: Arc::clone(&updates),
             activity: Arc::clone(&activity),
+            completed: AtomicBool::new(false),
             idle: Arc::clone(&idle),
             events: Arc::clone(&events),
             workspace_id: summary.workspace_id.clone(),
@@ -2464,6 +2470,20 @@ impl ServerState {
             }
             Request::StopInteraction { id } => {
                 self.interaction(&id)?.stop();
+                Ok(Response::Accepted)
+            }
+            Request::CompleteInteraction { id } => {
+                // Restored rows already stopped when the previous server
+                // exited. They are still selectable in the navigator but are
+                // not represented by a live `ManagedInteraction` here.
+                if self.inner.roster.complete(&id) {
+                    self.publish_roster();
+                    return Ok(Response::Accepted);
+                }
+                let interaction = self.interaction(&id)?;
+                interaction.completed.store(true, Ordering::Release);
+                interaction.stop();
+                self.publish_roster();
                 Ok(Response::Accepted)
             }
             Request::CloseInteraction { id } => {

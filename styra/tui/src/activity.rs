@@ -807,6 +807,7 @@ mod tests {
             workspace: std::path::PathBuf::from("/workspace"),
             driva: Default::default(),
             activity,
+            completed: false,
             activity_reason: reason,
             activity_since_ms: 0,
             idle_unseen: false,

@@ -26,6 +26,11 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
                 .unwrap_or("Current Workspace"),
         )
     };
+    let completion_filter = if app.interactions.show_completed {
+        "completed shown"
+    } else {
+        "completed hidden"
+    };
     let mut rows = Vec::new();
     let mut heading = None;
     for index in ordered {
@@ -71,6 +76,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             loading: loading == Some(interaction.id.as_str()),
             newly_idle: interaction.activity == styra_protocol::InteractionActivity::Pending
                 && interaction.idle_unseen,
+            completed: interaction.completed,
             tags: &interaction.tags,
             last_message: interaction.last_message.as_deref(),
         });
@@ -78,6 +84,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
     InteractionNavigator {
         scope,
         all_workspaces,
+        completion_filter: Cow::Borrowed(completion_filter),
         rows,
     }
 }

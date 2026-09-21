@@ -385,6 +385,15 @@ impl Client {
         }
     }
 
+    /// Stop an interaction and mark it completed, which normally hides its
+    /// row from the interactions navigator.
+    pub fn complete_interaction(&self, id: &str) -> Result<()> {
+        match self.request(Request::CompleteInteraction { id: id.to_owned() })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
     /// Stop an interaction and remove it from the server's list, leaving the
     /// Session as stored history like any other one on disk.
     pub fn close_interaction(&self, id: &str) -> Result<()> {

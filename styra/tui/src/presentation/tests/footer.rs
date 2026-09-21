@@ -27,6 +27,7 @@ mod tests {
                 ..Default::default()
             },
             activity,
+            completed: false,
             activity_reason: None,
             activity_since_ms: 0,
             idle_unseen: false,

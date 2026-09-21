@@ -578,11 +578,9 @@ fn sort_workspaces(workspaces: &mut [WorkspaceSummary], interactions: &[Interact
 }
 
 fn has_live_interaction(workspace: &WorkspaceSummary, interactions: &[InteractionSummary]) -> bool {
-    interactions
-        .iter()
-        .any(|interaction| {
-            interaction.activity.accepting() && interaction.workspace_id == workspace.id
-        })
+    interactions.iter().any(|interaction| {
+        interaction.activity.accepting() && interaction.workspace_id == workspace.id
+    })
 }
 
 #[cfg(test)]
@@ -627,6 +625,7 @@ mod tests {
                 ..Default::default()
             },
             activity,
+            completed: false,
             activity_reason: None,
             activity_since_ms: 0,
             idle_unseen: false,

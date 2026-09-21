@@ -31,6 +31,7 @@ pub enum InteractionRow<'a> {
         selected: bool,
         loading: bool,
         newly_idle: bool,
+        completed: bool,
         tags: &'a [String],
         last_message: Option<&'a str>,
     },
@@ -39,6 +40,7 @@ pub enum InteractionRow<'a> {
 pub struct InteractionNavigator<'a> {
     pub scope: Cow<'a, str>,
     pub all_workspaces: bool,
+    pub completion_filter: Cow<'a, str>,
     pub rows: Vec<InteractionRow<'a>>,
 }
 
@@ -72,8 +74,8 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(format!(
-            " {} · live interactions · j/k move · {jump}T tags · Enter close · S stop · D delete stopped · w scope · a close ",
-            view.scope
+            " {} · interactions · {} · j/k move · {jump}T tags · Enter close · C complete · S stop · D delete stopped · w scope · c completed · a close ",
+            view.scope, view.completion_filter
         ));
     let width = area.width.saturating_sub(2);
     let items = view.rows.iter().map(|row| row_item(row, width));
@@ -107,6 +109,7 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
         current,
         loading,
         newly_idle,
+        completed,
         tags,
         last_message,
         ..
@@ -143,6 +146,14 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
     if *newly_idle {
         main.push(Span::styled(
             " · NEWLY IDLE",
+            Style::default()
+                .fg(palette::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if *completed {
+        main.push(Span::styled(
+            " · COMPLETED",
             Style::default()
                 .fg(palette::SUCCESS)
                 .add_modifier(Modifier::BOLD),
@@ -208,6 +219,7 @@ mod tests {
         let view = InteractionNavigator {
             scope: "All".into(),
             all_workspaces: true,
+            completion_filter: "completed hidden".into(),
             rows: vec![
                 InteractionRow::Workspace("Payments".into()),
                 InteractionRow::Interaction {
@@ -218,6 +230,7 @@ mod tests {
                     selected: true,
                     loading: false,
                     newly_idle: true,
+                    completed: false,
                     tags: &tags,
                     last_message: Some("The checks are green."),
                 },
@@ -236,6 +249,7 @@ mod tests {
         let view = InteractionNavigator {
             scope: "Payments".into(),
             all_workspaces: false,
+            completion_filter: "completed hidden".into(),
             rows: vec![
                 InteractionRow::Interaction {
                     name: "shown below".into(),
@@ -245,6 +259,7 @@ mod tests {
                     selected: false,
                     loading: false,
                     newly_idle: false,
+                    completed: false,
                     tags: &[],
                     last_message: None,
                 },
@@ -256,6 +271,7 @@ mod tests {
                     selected: true,
                     loading: true,
                     newly_idle: false,
+                    completed: false,
                     tags: &[],
                     last_message: None,
                 },

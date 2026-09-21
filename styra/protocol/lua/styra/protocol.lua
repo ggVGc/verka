@@ -186,6 +186,13 @@ M.types.Request = {
         { name = "id", required = true, type = { kind = "string" } },
       },
     } },
+    { name = "complete_interaction", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "close_interaction", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -642,6 +649,7 @@ M.types.InteractionSummary = {
     { name = "workspace", required = true, type = { kind = "string", path = true } },
     { name = "driva", required = true, type = { kind = "ref", name = "DrivaOptions" } },
     { name = "activity", required = false, type = { kind = "ref", name = "InteractionActivity" } },
+    { name = "completed", required = false, type = { kind = "boolean" } },
     { name = "activity_reason", required = false, type = { kind = "optional", inner = { kind = "ref", name = "InteractionActivityReason" } } },
     { name = "activity_since_ms", required = false, type = { kind = "number", integer = true } },
     { name = "idle_unseen", required = false, type = { kind = "boolean" } },
@@ -1372,7 +1380,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "complete_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1402,6 +1410,7 @@ M.Request = {
   CLEAR_QUEUED_MESSAGES = "clear_queued_messages",
   INTERRUPT_INTERACTION = "interrupt_interaction",
   STOP_INTERACTION = "stop_interaction",
+  COMPLETE_INTERACTION = "complete_interaction",
   CLOSE_INTERACTION = "close_interaction",
   LOAD_INTERACTION = "load_interaction",
   UPDATES = "updates",
@@ -2277,6 +2286,16 @@ end
 ---   id  string
 function M.request.stop_interaction(data)
   return M.build("stop_interaction", data)
+end
+
+--- Stop an interaction and mark its row completed. Completed rows remain
+--- available to reopen, but clients normally hide them from the
+--- interactions list.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.complete_interaction(data)
+  return M.build("complete_interaction", data)
 end
 
 --- Stop an interaction and drop the server's record of it, so the Session

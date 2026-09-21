@@ -734,6 +734,10 @@ pub struct InteractionSummary {
     /// one is [`InteractionActivity::accepting`].
     #[serde(default)]
     pub activity: InteractionActivity,
+    /// Whether the operator has marked this interaction as completed.
+    /// Completed interactions are stopped and normally hidden by clients.
+    #[serde(default)]
+    pub completed: bool,
     /// How it came to be doing that, when there is something to say about it
     /// — see [`InteractionActivityReason`]. `None` while a turn is running:
     /// what a working interaction is doing is the whole answer.

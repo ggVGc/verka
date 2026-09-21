@@ -777,6 +777,43 @@ pub fn run(
                     app.interactions.toggle_workspace_scope();
                     continue;
                 }
+                KeyCode::Char('c') => {
+                    app.interactions.toggle_completed();
+                    continue;
+                }
+                KeyCode::Char('C') => {
+                    let Some(interaction) = app.interactions.current(&app.session_id).cloned()
+                    else {
+                        continue;
+                    };
+                    if let Err(error) = client.complete_interaction(&interaction.id) {
+                        app.show_action_message(format!(
+                            "could not complete interaction: {error:#}"
+                        ));
+                        continue;
+                    }
+                    if app.interactions.show_completed {
+                        if let Some(item) = app
+                            .interactions
+                            .items
+                            .iter_mut()
+                            .find(|item| item.id == interaction.id)
+                        {
+                            item.completed = true;
+                        }
+                        continue;
+                    }
+                    let workspace_id = app.workspace.id.clone();
+                    let Some(next) = app
+                        .interactions
+                        .remove_and_select_next(&interaction.id, workspace_id.as_deref())
+                    else {
+                        app.interactions.close();
+                        return Ok(RunOutcome::Reset);
+                    };
+                    make_interaction_current(app, live, client, standing_launch, next);
+                    continue;
+                }
                 KeyCode::Char('D') => {
                     let Some(interaction) = app.interactions.current(&app.session_id).cloned()
                     else {

@@ -120,6 +120,17 @@ impl Roster {
         self.lock().contains_key(id)
     }
 
+    /// Mark a restored, necessarily stopped row as completed. Unlike a live
+    /// interaction, it has no process left to stop.
+    pub fn complete(&self, id: &str) -> bool {
+        let mut restored = self.lock();
+        let Some(entry) = restored.get_mut(id) else {
+            return false;
+        };
+        entry.summary.completed = true;
+        true
+    }
+
     /// Drop a restored row: the operator closed it, or this run has revived
     /// the Session and owns a live Interaction for it instead.
     pub fn forget(&self, id: &str) {
@@ -236,6 +247,7 @@ mod tests {
             workspace: PathBuf::from("/tmp/project"),
             driva: Default::default(),
             activity: InteractionActivity::Running,
+            completed: false,
             activity_reason: None,
             activity_since_ms: 7,
             idle_unseen: true,
@@ -254,7 +266,9 @@ mod tests {
         let session = root.join("session-a");
         std::fs::create_dir_all(&session).unwrap();
 
-        Roster::open(&root).publish(vec![(session, summary("session-a"))]);
+        let mut row = summary("session-a");
+        row.completed = true;
+        Roster::open(&root).publish(vec![(session, row)]);
 
         let restored = Roster::open(&root).restored();
         assert_eq!(restored.len(), 1);
@@ -265,6 +279,7 @@ mod tests {
             Some(InteractionActivityReason::ServerRestarted)
         );
         assert_eq!(restored[0].last_message.as_deref(), Some("still going"));
+        assert!(restored[0].completed);
         // The previous run's notification is not this run's to raise.
         assert!(!restored[0].idle_unseen);
         std::fs::remove_dir_all(root).ok();
@@ -286,6 +301,21 @@ mod tests {
         roster.publish(Vec::new());
 
         assert!(Roster::open(&root).restored().is_empty());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_restored_row_can_be_marked_completed() {
+        let root = store("complete");
+        let session = root.join("session-complete");
+        std::fs::create_dir_all(&session).unwrap();
+        Roster::open(&root).publish(vec![(session, summary("session-complete"))]);
+
+        let roster = Roster::open(&root);
+        assert!(roster.complete("session-complete"));
+        roster.publish(Vec::new());
+
+        assert!(Roster::open(&root).restored()[0].completed);
         std::fs::remove_dir_all(root).ok();
     }
 

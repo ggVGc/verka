@@ -23,6 +23,9 @@ const LOAD_SETTLE: Duration = Duration::from_millis(120);
 pub struct LiveInteractions {
     pub open: bool,
     pub only_current_workspace: bool,
+    /// Completed interactions stay in the server roster, but are normally
+    /// out of the navigator until the operator asks to see them.
+    pub show_completed: bool,
     pub items: Vec<InteractionSummary>,
     pub workspaces: Vec<WorkspaceSummary>,
     /// Where the cursor is while that is not the Interaction on screen.
@@ -84,9 +87,10 @@ impl LiveInteractions {
             .iter()
             .enumerate()
             .filter_map(|(index, interaction)| {
-                (!self.only_current_workspace
+                ((!self.only_current_workspace
                     || workspace_id.is_some_and(|id| interaction.workspace_id == id))
-                .then_some(index)
+                    && (self.show_completed || !interaction.completed))
+                    .then_some(index)
             })
             .collect()
     }
@@ -326,6 +330,10 @@ impl LiveInteractions {
         self.only_current_workspace = !self.only_current_workspace;
     }
 
+    pub fn toggle_completed(&mut self) {
+        self.show_completed = !self.show_completed;
+    }
+
     /// Remove an interaction and select the entry now occupying its place.
     /// If the current Workspace has no entries left, reveal All so the next
     /// interaction can still become current without closing the navigator.
@@ -443,6 +451,7 @@ mod tests {
                 ..Default::default()
             },
             activity,
+            completed: false,
             activity_reason: None,
             activity_since_ms: 0,
             idle_unseen: false,
@@ -498,6 +507,28 @@ mod tests {
             live.current("two").unwrap().last_message.as_deref(),
             Some("new response")
         );
+    }
+
+    #[test]
+    fn completed_interactions_are_hidden_until_toggled() {
+        let mut live = LiveInteractions::default();
+        let mut completed = interaction("completed", InteractionActivity::Stopped);
+        completed.completed = true;
+        live.open(
+            vec![
+                completed,
+                interaction("active", InteractionActivity::Pending),
+            ],
+            vec![],
+        );
+
+        assert_eq!(
+            live.visible_indices(Some("workspace")),
+            vec![0],
+            "completed rows are hidden by default"
+        );
+        live.toggle_completed();
+        assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1]);
     }
 
     #[test]

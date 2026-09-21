@@ -196,6 +196,13 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "complete_interaction", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "close_interaction", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -652,6 +659,7 @@ defmodule Styra.Protocol do
         %{name: "workspace", required: true, type: %{kind: :string, path: true}},
         %{name: "driva", required: true, type: %{kind: :ref, name: "DrivaOptions"}},
         %{name: "activity", required: false, type: %{kind: :ref, name: "InteractionActivity"}},
+        %{name: "completed", required: false, type: %{kind: :boolean}},
         %{name: "activity_reason", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "InteractionActivityReason"}}},
         %{name: "activity_since_ms", required: false, type: %{kind: :number, integer: true}},
         %{name: "idle_unseen", required: false, type: %{kind: :boolean}},
@@ -1419,6 +1427,7 @@ defmodule Styra.Protocol do
     "clear_queued_messages",
     "interrupt_interaction",
     "stop_interaction",
+    "complete_interaction",
     "close_interaction",
     "load_interaction",
     "updates",
@@ -2248,6 +2257,20 @@ defmodule Styra.Protocol do
 
     @doc "`stop_interaction/1`, raising on a request the server would refuse."
     def stop_interaction!(data), do: Styra.Protocol.build!("stop_interaction", data)
+
+    @doc ~S"""
+    Stop an interaction and mark its row completed. Completed rows remain
+    available to reopen, but clients normally hide them from the
+    interactions list.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def complete_interaction(data), do: Styra.Protocol.build("complete_interaction", data)
+
+    @doc "`complete_interaction/1`, raising on a request the server would refuse."
+    def complete_interaction!(data), do: Styra.Protocol.build!("complete_interaction", data)
 
     @doc ~S"""
     Stop an interaction and drop the server's record of it, so the Session
