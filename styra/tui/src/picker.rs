@@ -562,19 +562,42 @@ pub enum TemplatePickerAction {
 }
 
 /// Order Workspaces for the picker: those holding a live interaction first,
-/// then the rest, and within each group the most recently accessed first.
+/// then the rest, and within each group the most recently worked in first.
 ///
 /// A live interaction is one the server is still accepting input for, whether
 /// it is idle and waiting on the operator or busy with a turn. Those are the
 /// Workspaces the operator has work in flight in, so they belong above ones
 /// only recency speaks for.
+///
+/// Recency is the Workspace's most recent interaction — the latest moment any
+/// of its Interactions last did something — because that is when work last
+/// happened there. Opening the Workspace in a picker is a weaker signal and
+/// only speaks for a Workspace whose Interactions say nothing: one with no
+/// Interaction on the list at all, or whose Interactions come from a server
+/// too old to date them.
 fn sort_workspaces(workspaces: &mut [WorkspaceSummary], interactions: &[InteractionSummary]) {
     workspaces.sort_by(|a, b| {
         has_live_interaction(b, interactions)
             .cmp(&has_live_interaction(a, interactions))
-            .then_with(|| b.last_accessed_at_ms.cmp(&a.last_accessed_at_ms))
+            .then_with(|| {
+                last_worked_at_ms(b, interactions).cmp(&last_worked_at_ms(a, interactions))
+            })
             .then_with(|| b.created_at_ms.cmp(&a.created_at_ms))
     });
+}
+
+/// When work last happened in a Workspace: its most recent Interaction's
+/// activity, falling back to the recorded access when no Interaction of its
+/// own dates it. Both readings are epoch milliseconds on the server's clock,
+/// so the two kinds of Workspace still compare against each other.
+fn last_worked_at_ms(workspace: &WorkspaceSummary, interactions: &[InteractionSummary]) -> u64 {
+    interactions
+        .iter()
+        .filter(|interaction| interaction.workspace_id == workspace.id)
+        .map(|interaction| interaction.activity_since_ms)
+        .max()
+        .filter(|since_ms| *since_ms > 0)
+        .unwrap_or(workspace.last_accessed_at_ms)
 }
 
 fn has_live_interaction(workspace: &WorkspaceSummary, interactions: &[InteractionSummary]) -> bool {
@@ -815,6 +838,47 @@ mod tests {
                 .map(|workspace| workspace.id.as_str())
                 .collect::<Vec<_>>(),
             ["idle", "running", "untouched", "stopped"]
+        );
+    }
+
+    /// What orders the list is when work last happened in a Workspace, not
+    /// when the operator last opened one: a Workspace whose agent said
+    /// something an hour after it was last opened has to lead the one that was
+    /// opened since and then left alone.
+    #[test]
+    fn workspaces_sort_by_their_most_recent_interaction() {
+        let mut workspaces = vec![
+            workspace("opened-since", 500),
+            workspace("worked-in", 100),
+            workspace("never-touched", 300),
+        ];
+        let interactions = vec![
+            InteractionSummary {
+                activity_since_ms: 900,
+                ..interaction_in("recent", "worked-in", InteractionActivity::Stopped)
+            },
+            // The Workspace is dated by its *most recent* interaction, so an
+            // older sibling does not drag it back down the list.
+            InteractionSummary {
+                activity_since_ms: 200,
+                ..interaction_in("stale", "worked-in", InteractionActivity::Stopped)
+            },
+            // A server too old to date its interactions says nothing about
+            // when this Workspace was worked in; its access still does.
+            InteractionSummary {
+                activity_since_ms: 0,
+                ..interaction_in("undated", "opened-since", InteractionActivity::Stopped)
+            },
+        ];
+
+        sort_workspaces(&mut workspaces, &interactions);
+
+        assert_eq!(
+            workspaces
+                .iter()
+                .map(|workspace| workspace.id.as_str())
+                .collect::<Vec<_>>(),
+            ["worked-in", "opened-since", "never-touched"]
         );
     }
 }
