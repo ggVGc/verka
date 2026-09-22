@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use crate::activity::Status;
 use crate::app::{App, Focus, LaunchPolicy, Request};
 use crate::config::Configuration;
-use crate::keymap::HELP;
 use crate::keys;
 use crate::launch::{self, LaunchScope};
 use crate::picker;
@@ -527,9 +526,17 @@ pub fn run(
 
         app.activity.note_progress();
         if app.help.is_open() {
-            let rows = presentation::help_rows();
-            let feedback =
-                terminal.render_help(&rows, crate::keymap::CLOSE_REFERENCE, app.help.offset())?;
+            // The reference is for the window underneath it, which cannot
+            // change while it is open, so it is read from the app rather than
+            // remembered when `?` was pressed.
+            let window = presentation::current_window(app);
+            let rows = presentation::help_rows(window);
+            let feedback = terminal.render_help(
+                window.name(),
+                &rows,
+                crate::keymap::CLOSE_REFERENCE,
+                app.help.offset(),
+            )?;
             if let Some(scroll) = feedback
                 .scroll
                 .iter()
@@ -559,6 +566,42 @@ pub fn run(
             continue;
         };
         if key.kind != KeyEventKind::Press {
+            continue;
+        }
+
+        // While the reference is open it is modal, so none of the commands
+        // described by it can accidentally act on the window underneath. It
+        // comes before every other modal because it can be opened over them.
+        if app.help.is_open() {
+            match key.code {
+                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => app.help.close(),
+                // The reference is taller than a short terminal, so the
+                // sections at the end have to be reachable.
+                KeyCode::Char('j') | KeyCode::Down => app.help.line_down(),
+                KeyCode::Char('k') | KeyCode::Up => app.help.line_up(),
+                KeyCode::PageDown => app.help.page_down(),
+                KeyCode::PageUp => app.help.page_up(),
+                KeyCode::Char('g') => app.help.scroll_to_top(),
+                _ => {}
+            }
+            continue;
+        }
+
+        // `?` describes whichever window is showing, so every key-driven one
+        // answers it — the launcher, the template chooser and the modal
+        // overlays included. The prompts that take typed text are excluded:
+        // there a `?` is a character of what is being typed.
+        if key.code == KeyCode::Char('?')
+            && app.insert.is_none()
+            && app.git_repository_prompt.is_none()
+            && app.launch.prompt.is_none()
+            && !app
+                .tag_picker
+                .as_ref()
+                .is_some_and(|picker| picker.new_tag.is_some())
+            && (app.focus == Focus::List || app.launcher.is_some() || app.template_picker.is_some())
+        {
+            app.help.open();
             continue;
         }
 
@@ -612,29 +655,13 @@ pub fn run(
         }
 
         // The list of files a reply cites is modal: while it is open nothing
-        // underneath it can be acted on, `?` included.
+        // underneath it can be acted on.
         if app.references.is_some() {
             keys::handle_references_key(app, key);
             // Choosing a file closes the picker and asks for that file. It has
             // to open on this key rather than sit behind the next one.
             if let Some(Request::OpenPath(path)) = app.take_open_path_request() {
                 open_path(app, config, &path);
-            }
-            continue;
-        }
-        // While the reference is open it is modal, so none of the commands
-        // described by it can accidentally act on the session underneath.
-        if app.help.is_open() {
-            match key.code {
-                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => app.help.close(),
-                // The reference is taller than a short terminal, so the
-                // sections at the end have to be reachable.
-                KeyCode::Char('j') | KeyCode::Down => app.help.line_down(),
-                KeyCode::Char('k') | KeyCode::Up => app.help.line_up(),
-                KeyCode::PageDown => app.help.page_down(),
-                KeyCode::PageUp => app.help.page_up(),
-                KeyCode::Char('g') => app.help.scroll_to_top(),
-                _ => {}
             }
             continue;
         }
@@ -711,12 +738,6 @@ pub fn run(
             }
             continue;
         }
-        // In input focus, `?` is message text rather than a shortcut.
-        if app.focus == Focus::List && key.code == KeyCode::Char(HELP.chars().next().unwrap()) {
-            app.help.open();
-            continue;
-        }
-
         // The embedded interaction list owns navigation while it is open.
         // Moving its cursor makes that interaction current once the cursor
         // rests, so the list can be walked across faster than interactions can

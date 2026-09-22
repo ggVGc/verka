@@ -63,7 +63,10 @@ paths are from the Workspace root and absolute paths must remain inside it.
 
 ## Everyday controls
 
-`?` opens the in-app key reference. `i` or `Tab` enters the message editor;
+`?` opens the in-app key reference for whichever window is showing — the event
+list, the session or Workspace picker, the launcher, the interaction list, or
+any of the modal choosers — so the screens themselves carry no strip of
+shortcuts along their top. `i` or `Tab` enters the message editor;
 `Esc` or `Tab` returns to the event list. `q` quits the client without stopping
 live interactions.
 

@@ -23,7 +23,7 @@ pub fn render_branch(frame: &mut Frame, prompt: BranchPromptView, frame_area: Re
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" branch from selected entry · Enter choose · q cancel ");
+        .title(" branch from selected entry · ? keys ");
     let list = List::new([
         ListItem::new(Line::from("entire interaction through this entry")),
         ListItem::new(Line::from("only this entry")),
@@ -61,7 +61,7 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" Interaction tags · Space toggle · n new · Enter save · Esc cancel ");
+        .title(" Interaction tags · ? keys ");
     let inside = block.inner(popup);
     frame.render_widget(block, popup);
     let rows = picker
@@ -144,7 +144,7 @@ pub fn render_references(frame: &mut Frame, references: ReferencesView<'_>, fram
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(Span::styled(
-            " files in this entry · Enter open · q cancel ",
+            " files in this entry · ? keys ",
             Style::default().fg(palette::MUTED_TEXT),
         ));
     let items = references.items.iter().map(|reference| {

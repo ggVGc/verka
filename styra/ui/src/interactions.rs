@@ -65,16 +65,13 @@ pub fn height(view: &InteractionNavigator<'_>, available: u16) -> u16 {
 }
 
 pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
-    let jump = if view.all_workspaces {
-        "ctrl-j/k workspace · "
-    } else {
-        ""
-    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
+        // Scope and completion filter are state the list cannot be read
+        // without; the commands that change them are behind `?`.
         .title(format!(
-            " {} · interactions · {} · j/k move · {jump}T tags · Enter close · C complete · S stop · D delete stopped · w scope · c completed · a close ",
+            " {} · interactions · {} · ? keys ",
             view.scope, view.completion_filter
         ));
     let width = area.width.saturating_sub(2);

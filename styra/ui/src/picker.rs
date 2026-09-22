@@ -166,8 +166,12 @@ fn session_picker_title(order: SessionOrder, filter: Option<&str>, searching: bo
         .map(|filter| format!(" · filter: {filter}"))
         .unwrap_or_default();
     let searching = searching.then_some(" · searching").unwrap_or("");
+    // The shortcuts live behind `?` rather than along this line: only a few
+    // ever fit, and the ones that did crowded out the state — the filter, and
+    // which way the list is sorted — that the operator cannot get anywhere
+    // else.
     format!(
-        " styra · choose a session{filter}{searching} · / filter · j/k move · J/K roots · g/G ends · Enter open · r rename · x convert provider · s sort: {} · a history · q cancel ",
+        " styra · sessions{filter}{searching} · sort: {} · ? keys ",
         order.label(),
     )
 }
@@ -331,9 +335,7 @@ pub fn render_workspace_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(
-            " styra \u{b7} choose a Workspace \u{b7} Enter open \u{b7} c create \u{b7} q cancel ",
-        );
+        .title(" styra \u{b7} Workspaces \u{b7} ? keys ");
     if workspaces.is_empty() {
         render_placeholder(
             frame,
@@ -512,7 +514,7 @@ pub fn render_template_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" styra · Driva templates · Space toggle · Enter apply · q cancel ")
+        .title(" styra · Driva templates · ? keys ")
         .title_bottom(Line::from(Span::styled(
             " layered in the order chosen; a later template wins on conflict ",
             Style::default().fg(palette::MUTED_TEXT),
@@ -719,7 +721,7 @@ mod tests {
             picker_summary("s-2", "claude", "3h ago"),
         ];
         let screen = rendered_picker(&sessions, 0);
-        assert!(screen.contains("choose a session"));
+        assert!(screen.contains("styra · sessions"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("2m ago"));
         assert!(screen.contains("s-1"));
@@ -873,7 +875,7 @@ mod tests {
         let mut workspace = workspace_summary("retry", "retry work", 3);
         workspace.host_path = PathBuf::from("/home/op/retry");
         let screen = rendered_workspace_picker(&[workspace], 0, &[], SessionsPreview::Ready(&[]));
-        assert!(screen.contains("choose a Workspace"), "{screen}");
+        assert!(screen.contains("styra \u{b7} Workspaces"), "{screen}");
         assert!(screen.contains("retry work"), "{screen}");
         assert!(screen.contains("3 sessions"), "{screen}");
         assert!(screen.contains("/home/op/retry"), "{screen}");

@@ -30,7 +30,7 @@ pub enum LauncherColumn {
 }
 
 pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
-    let hint = " j/k choose · Tab/h/l column · Enter select · D save default · q cancel ";
+    let hint = " ? keys ";
     let frame_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))

@@ -11,9 +11,13 @@ pub enum HelpRow<'a> {
     Blank,
 }
 
+/// Render the reference for one window. `window` names the screen the rows
+/// belong to: `?` answers for what is on display, so the frame has to say
+/// which display that is.
 pub fn render(
     frame: &mut Frame,
     area: Rect,
+    window: &str,
     rows: &[HelpRow<'_>],
     close_key: &str,
     scroll: u16,
@@ -46,7 +50,7 @@ pub fn render(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" styra · keybinds ");
+        .title(format!(" styra · {window} · keybinds "));
     frame.render_widget(
         Paragraph::new(Text::from(lines))
             .block(block)

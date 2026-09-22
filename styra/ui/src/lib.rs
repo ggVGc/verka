@@ -124,6 +124,7 @@ pub trait Ui {
 
     fn render_help(
         &mut self,
+        window: &str,
         rows: &[help::HelpRow<'_>],
         close_key: &str,
         requested_scroll: u16,
@@ -262,12 +263,20 @@ where
 
     fn render_help(
         &mut self,
+        window: &str,
         rows: &[help::HelpRow<'_>],
         close_key: &str,
         requested_scroll: u16,
     ) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
-            let limit = help::render(frame, frame.area(), rows, close_key, requested_scroll);
+            let limit = help::render(
+                frame,
+                frame.area(),
+                window,
+                rows,
+                close_key,
+                requested_scroll,
+            );
             RenderFeedback {
                 scroll: vec![ScrollFeedback {
                     panel: PanelId::Help,
@@ -436,11 +445,12 @@ where
 
     fn render_help(
         &mut self,
+        window: &str,
         rows: &[help::HelpRow<'_>],
         close_key: &str,
         requested_scroll: u16,
     ) -> UiResult<RenderFeedback> {
-        TerminalUi::render_help(self, rows, close_key, requested_scroll)
+        TerminalUi::render_help(self, window, rows, close_key, requested_scroll)
     }
 
     fn render_launcher(&mut self, view: &launcher::LauncherView) -> UiResult<RenderFeedback> {

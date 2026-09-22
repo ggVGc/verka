@@ -118,9 +118,47 @@ pub(crate) fn launcher_view(
     }
 }
 
-pub(crate) fn help_rows() -> Vec<styra_ui::help::HelpRow<'static>> {
-    crate::keymap::REFERENCE
-        .iter()
+/// Which window `?` should describe: the topmost thing on screen. The modal
+/// overlays and the standalone chooser screens cover the session view, so they
+/// answer before it does.
+pub(crate) fn current_window(app: &App) -> crate::keymap::Window {
+    use crate::keymap::Window;
+    if app.launcher.is_some() {
+        return Window::Launcher;
+    }
+    if app.template_picker.is_some() {
+        return Window::TemplatePicker;
+    }
+    if app.branch_prompt.is_some() {
+        return Window::Branch;
+    }
+    if app.references.is_some() {
+        return Window::References;
+    }
+    if app.tag_picker.is_some() {
+        return Window::Tags;
+    }
+    if app.interactions.open {
+        return Window::Interactions;
+    }
+    match app.view {
+        View::Events => Window::Events,
+        View::Raw => Window::Raw,
+        View::Log => Window::Log,
+        View::Quota => Window::Quota,
+        View::Transcript => Window::Transcript,
+        View::Driva => Window::Driva,
+        View::Files => Window::Files,
+        View::Answer => Window::Answer,
+        View::Preview => Window::Preview,
+    }
+}
+
+/// The reference rows for one window, in the UI's vocabulary.
+pub(crate) fn help_rows(window: crate::keymap::Window) -> Vec<styra_ui::help::HelpRow<'static>> {
+    window
+        .reference()
+        .into_iter()
         .map(|row| match row {
             crate::keymap::ReferenceRow::Section(name) => styra_ui::help::HelpRow::Section(name),
             crate::keymap::ReferenceRow::Binding { keys, action } => {

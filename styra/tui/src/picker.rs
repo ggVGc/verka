@@ -5,6 +5,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use styra_protocol::{InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 use styra_server::Client;
 
+use crate::help::Help;
+use crate::keymap::Window;
 use crate::launch::LaunchScope;
 use crate::presentation;
 use crate::session::{is_recent_session, session_tree_depths, sort_sessions_tree, SessionOrder};
@@ -45,6 +47,10 @@ pub enum WorkspaceChoice {
 /// prompt. Esc abandons an active search, then backs out. When
 /// `current_id` is in the list, it opens selected even if another root or
 /// branch sorts above it.
+///
+/// `?` shows the whole list of those keys. The picker's own title says only
+/// what the list cannot be read without — the filter, and the sort — because
+/// a strip of shortcuts along the top can never hold all of them anyway.
 pub fn run_session_picker(
     terminal: &mut dyn Ui,
     client: &Client,
@@ -67,6 +73,7 @@ pub fn run_session_picker(
     // Loading is a blocking round-trip, so holding `j` must not queue one load
     // per row it passes over; the load waits for the cursor to settle.
     let mut settle_from: Option<Instant> = None;
+    let mut help = Help::default();
     loop {
         if let Some(selected_session) = sessions.get(selected) {
             if preview_id != selected_session.id {
@@ -134,19 +141,28 @@ pub fn run_session_picker(
         } else {
             presentation::Preview::Ready(&preview_updates)
         };
-        terminal.render_session_picker(
-            &sessions,
-            selected,
-            picker_order(order),
-            preview,
-            filter.as_deref(),
-            searching,
-        )?;
+        if help.is_open() {
+            render_help(terminal, Window::SessionPicker, &mut help)?;
+        } else {
+            terminal.render_session_picker(
+                &sessions,
+                selected,
+                picker_order(order),
+                preview,
+                filter.as_deref(),
+                searching,
+            )?;
+        }
 
         let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        // The reference is modal: it describes the list underneath, so none of
+        // what it describes acts while it is up.
+        if handle_help_key(&mut help, key.code) {
             continue;
         }
         if searching {
@@ -181,6 +197,7 @@ pub fn run_session_picker(
                 selected = initial_session_selection(&sessions, current_id);
             }
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+            KeyCode::Char('?') => help.open(),
             KeyCode::Char('/') => {
                 filter = Some(String::new());
                 searching = true;
@@ -257,6 +274,44 @@ pub fn run_session_picker(
             _ => {}
         }
     }
+}
+
+/// Draw the reference for `window` over the picker, and record how far it can
+/// actually scroll — the renderer is the only thing that knows the height.
+fn render_help(terminal: &mut dyn Ui, window: Window, help: &mut Help) -> Result<()> {
+    let rows = presentation::help_rows(window);
+    let feedback = terminal.render_help(
+        window.name(),
+        &rows,
+        crate::keymap::CLOSE_REFERENCE,
+        help.offset(),
+    )?;
+    if let Some(scroll) = feedback
+        .scroll
+        .iter()
+        .find(|scroll| scroll.panel == styra_ui::PanelId::Help)
+    {
+        help.apply_feedback(scroll.limit, scroll.effective_offset);
+    }
+    Ok(())
+}
+
+/// Handle a key while the reference is open, reporting whether it owned it.
+/// The reference is modal, so it owns every key until it is closed.
+fn handle_help_key(help: &mut Help, code: KeyCode) -> bool {
+    if !help.is_open() {
+        return false;
+    }
+    match code {
+        KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => help.close(),
+        KeyCode::Char('j') | KeyCode::Down => help.line_down(),
+        KeyCode::Char('k') | KeyCode::Up => help.line_up(),
+        KeyCode::PageDown => help.page_down(),
+        KeyCode::PageUp => help.page_up(),
+        KeyCode::Char('g') => help.scroll_to_top(),
+        _ => {}
+    }
+    true
 }
 
 fn picker_sessions(
@@ -398,7 +453,7 @@ fn read_session_name(
 
 /// The Workspace picker loop: j/k or arrows to move, Enter to open a
 /// Workspace, `c` to create one for the current directory, Esc or q to back
-/// out.
+/// out, and `?` for that list on screen.
 ///
 /// The list is ordered once on entry, by [`sort_workspaces`]. A Workspace the
 /// operator opens is not reordered under them while they look at it — but its
@@ -421,6 +476,7 @@ pub fn run_workspace_picker(
     let mut preview_id = String::new();
     let mut preview_sessions: Vec<styra_protocol::SessionSummary> = Vec::new();
     let mut settle_from: Option<Instant> = None;
+    let mut help = Help::default();
     loop {
         if let Some(workspace) = workspaces.get(selected) {
             if preview_id != workspace.id {
@@ -447,15 +503,23 @@ pub fn run_workspace_picker(
         } else {
             presentation::SessionsPreview::Ready(&preview_sessions)
         };
-        terminal.render_workspace_picker(workspaces, selected, &interactions, preview)?;
+        if help.is_open() {
+            render_help(terminal, Window::WorkspacePicker, &mut help)?;
+        } else {
+            terminal.render_workspace_picker(workspaces, selected, &interactions, preview)?;
+        }
         let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
             continue;
         }
+        if handle_help_key(&mut help, key.code) {
+            continue;
+        }
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+            KeyCode::Char('?') => help.open(),
             KeyCode::Char('j') | KeyCode::Down => {
                 selected = (selected + 1).min(workspaces.len().saturating_sub(1));
             }
