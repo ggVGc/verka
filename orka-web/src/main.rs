@@ -18,9 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use linka::{
-    ops, title_of, Author, CandidateStore, GitVcs, NodeId, ResultMeta, Store, Vcs,
-};
+use linka::{ops, title_of, Author, CandidateStore, GitVcs, NodeId, ResultMeta, Store, Vcs};
 use orka::agent::OutputFormat;
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;

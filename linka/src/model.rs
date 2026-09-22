@@ -463,7 +463,11 @@ impl std::fmt::Display for StalenessReason {
                 if *description {
                     files.push("description.md");
                 }
-                write!(f, "definition changed since the work ({})", files.join(", "))
+                write!(
+                    f,
+                    "definition changed since the work ({})",
+                    files.join(", ")
+                )
             }
             Self::ConsumedDefinitionChanged { id } => {
                 write!(f, "dependency {id}: definition moved")

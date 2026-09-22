@@ -507,7 +507,10 @@ mod tests {
     fn stamp_dates_only_moments_outside_the_current_day() {
         assert_eq!(civil_date(0), "1970-01-01");
         assert_eq!(civil_date(20_352), "2025-09-21");
-        assert_eq!(stamp(1_000, 2_000), minute_of_day(1_000, local_offset_seconds(1_000)));
+        assert_eq!(
+            stamp(1_000, 2_000),
+            minute_of_day(1_000, local_offset_seconds(1_000))
+        );
         assert!(stamp(8 * 24 * 3_600 * 1_000, 1_000).contains("1970-01-0"));
     }
     #[test]
