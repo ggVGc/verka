@@ -217,10 +217,10 @@ defmodule StyraWebWeb.DashboardLive do
     "#{selection["provider"] || "?"}:#{selection["model"] || "?"}/#{selection["effort"] || "?"}"
   end
 
-  defp activity_class("running"), do: "bg-amber-400"
-  defp activity_class("background"), do: "bg-sky-400"
-  defp activity_class("pending"), do: "bg-emerald-400"
-  defp activity_class(_activity), do: "bg-slate-500"
+  defp activity_class("running"), do: "bg-amber-500"
+  defp activity_class("background"), do: "bg-sky-600"
+  defp activity_class("pending"), do: "bg-emerald-600"
+  defp activity_class(_activity), do: "bg-gray-400"
 
   defp update_kind(%{"update" => %{"type" => "event", "data" => event}}),
     do: event["type"] || "event"

@@ -1,24 +1,24 @@
 <Layouts.app flash={@flash}>
-  <div class="min-h-screen bg-[#070b12] text-slate-100">
-    <header class="border-b border-white/10 bg-[#0b111b]/90 backdrop-blur-xl">
-      <div class="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-5 sm:py-4 lg:px-8">
+  <div class="min-h-screen bg-gray-100 text-gray-900">
+    <header class="border-b border-gray-300 bg-white">
+      <div class="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-5 lg:px-8">
         <div class="flex items-center gap-3">
-          <div class="grid size-10 place-items-center rounded-xl bg-violet-500 text-lg font-black text-white shadow-lg shadow-violet-500/20">
+          <div class="grid size-9 place-items-center rounded-sm bg-gray-900 text-base font-bold text-white">
             S
           </div>
           <div>
-            <h1 class="text-lg font-bold tracking-tight">Styra Live</h1>
-            <p class="text-xs text-slate-500">Local interaction console</p>
+            <h1 class="text-base font-semibold tracking-tight">Styra Live</h1>
+            <p class="text-xs text-gray-500">Local interaction console</p>
           </div>
         </div>
 
         <div
           id="connection-status"
-          class="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-slate-400"
+          class="flex items-center gap-2 border border-gray-300 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700"
         >
           <span class={[
             "size-2 rounded-full",
-            if(@connected, do: "bg-emerald-400 shadow-[0_0_12px_#34d399]", else: "bg-rose-500")
+            if(@connected, do: "bg-emerald-600", else: "bg-red-600")
           ]}></span>
           <span>{if @connected, do: @service || "Connected", else: "Offline"}</span>
         </div>
@@ -27,7 +27,7 @@
 
     <div :if={@error} class="mx-auto max-w-[1600px] px-4 pt-4 sm:px-5 lg:px-8">
       <div
-        class="flex items-center gap-3 rounded-xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200"
+        class="flex items-center gap-3 border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800"
         role="alert"
       >
         <.icon name="hero-exclamation-triangle" class="size-5 shrink-0" />
@@ -35,32 +35,32 @@
       </div>
     </div>
 
-    <div class="mx-auto grid max-w-[1600px] gap-4 px-3 py-3 sm:gap-5 sm:px-5 sm:py-5 lg:grid-cols-[22rem_minmax(0,1fr)] lg:px-8">
+    <div class="mx-auto grid max-w-[1600px] gap-4 px-3 py-4 sm:px-5 lg:grid-cols-[22rem_minmax(0,1fr)] lg:px-8">
       <aside class={[
-        "overflow-hidden rounded-2xl border border-white/10 bg-[#0b111b] shadow-2xl shadow-black/20",
+        "overflow-hidden border border-gray-300 bg-white",
         @selected_id && "hidden lg:block"
       ]}>
-        <div class="flex items-center justify-between border-b border-white/10 px-4 py-3">
+        <div class="flex items-center justify-between border-b border-gray-300 bg-gray-50 px-4 py-2.5">
           <div>
-            <h2 class="font-semibold">Interactions</h2>
-            <p class="text-xs text-slate-500">
+            <h2 class="text-sm font-semibold">Interactions</h2>
+            <p class="text-xs text-gray-500">
               {if @connected, do: "#{@interaction_count} live", else: "Server unavailable"}
             </p>
           </div>
           <span
             :if={@refreshing}
-            class="size-4 animate-spin rounded-full border-2 border-violet-400/25 border-t-violet-400"
+            class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700"
           ></span>
         </div>
 
         <div
           id="interactions"
           phx-update="stream"
-          class="max-h-[calc(100dvh-11.5rem)] overflow-y-auto p-2 sm:max-h-[calc(100dvh-12rem)]"
+          class="max-h-[calc(100dvh-11.5rem)] divide-y divide-gray-200 overflow-y-auto sm:max-h-[calc(100dvh-12rem)]"
         >
           <div
             id="interactions-empty"
-            class="hidden px-4 py-12 text-center text-sm text-slate-500 only:block"
+            class="hidden px-4 py-12 text-center text-sm text-gray-500 only:block"
           >
             No live interactions.
           </div>
@@ -71,24 +71,24 @@
             phx-click="select"
             phx-value-id={interaction["id"]}
             class={[
-              "group mb-1 min-h-16 w-full touch-manipulation rounded-xl border p-3 text-left transition duration-200 active:scale-[0.99]",
+              "block min-h-16 w-full touch-manipulation border-l-2 px-3 py-2.5 text-left",
               if(@selected_id == interaction["id"],
-                do: "border-violet-400/30 bg-violet-500/10",
-                else: "border-transparent hover:border-white/10 hover:bg-white/[0.04]"
+                do: "border-l-gray-900 bg-gray-100",
+                else: "border-l-transparent hover:bg-gray-50"
               )
             ]}
           >
             <div class="flex items-start justify-between gap-3">
-              <span class="truncate font-semibold">{display_name(interaction)}</span>
-              <span class="flex shrink-0 items-center gap-1.5 text-[11px] uppercase tracking-wide text-slate-500">
+              <span class="truncate text-sm font-semibold">{display_name(interaction)}</span>
+              <span class="flex shrink-0 items-center gap-1.5 text-[11px] uppercase tracking-wide text-gray-500">
                 <span class={["size-1.5 rounded-full", activity_class(interaction["activity"])]}></span>
                 {interaction["activity"]}
               </span>
             </div>
-            <p class="mt-1 truncate font-mono text-[11px] text-slate-600">
+            <p class="mt-0.5 truncate font-mono text-[11px] text-gray-500">
               {selection_name(interaction)}
             </p>
-            <p class="mt-2 line-clamp-2 text-sm leading-snug text-slate-400">
+            <p class="mt-1.5 line-clamp-2 text-sm leading-snug text-gray-600">
               {interaction["last_message"] || "No agent message yet"}
             </p>
           </button>
@@ -96,37 +96,37 @@
       </aside>
 
       <section class={[
-        "min-h-[calc(100dvh-8rem)] min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0b111b] shadow-2xl shadow-black/20 lg:flex lg:min-h-[calc(100vh-8.5rem)]",
+        "min-h-[calc(100dvh-8rem)] min-w-0 flex-col overflow-hidden border border-gray-300 bg-white lg:flex lg:min-h-[calc(100vh-8.5rem)]",
         if(@selected_id, do: "flex", else: "hidden")
       ]}>
         <%= if interaction = @selected_interaction do %>
-          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-3 sm:gap-3 sm:px-5">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-300 bg-gray-50 px-3 py-2 sm:gap-3 sm:px-4">
             <div class="flex min-w-0 flex-1 items-center gap-2">
               <button
                 id="back-to-interactions"
                 type="button"
                 aria-label="Back to interactions"
-                class="grid size-11 shrink-0 touch-manipulation place-items-center rounded-lg text-slate-400 transition hover:bg-white/5 hover:text-white active:scale-95 lg:hidden"
+                class="grid size-10 shrink-0 touch-manipulation place-items-center border border-gray-300 bg-white text-gray-600 hover:bg-gray-100 lg:hidden"
                 phx-click="deselect"
               >
                 <.icon name="hero-chevron-left" class="size-5" />
               </button>
               <div class="min-w-0">
                 <div class="flex items-center gap-2">
-                  <h2 class="truncate font-semibold">{display_name(interaction)}</h2>
-                  <span class="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-400">
+                  <h2 class="truncate text-sm font-semibold">{display_name(interaction)}</h2>
+                  <span class="border border-gray-300 bg-white px-1.5 py-0.5 text-[11px] text-gray-600">
                     {interaction["activity"]}
                   </span>
                 </div>
-                <p class="truncate font-mono text-xs text-slate-600">
+                <p class="truncate font-mono text-xs text-gray-500">
                   {interaction["workspace"]}
                 </p>
               </div>
             </div>
-            <div class="flex shrink-0 gap-1 sm:gap-2">
+            <div class="flex shrink-0 gap-2">
               <button
                 id="interrupt-button"
-                class="min-h-11 touch-manipulation rounded-lg px-2 text-xs text-slate-400 transition hover:bg-white/5 hover:text-slate-100 active:scale-[0.98] sm:px-3 sm:text-sm"
+                class="min-h-9 touch-manipulation border border-gray-300 bg-white px-3 text-sm text-gray-700 hover:bg-gray-100"
                 phx-click="action"
                 phx-value-name="interrupt"
               >
@@ -134,7 +134,7 @@
               </button>
               <button
                 id="stop-button"
-                class="min-h-11 touch-manipulation rounded-lg px-2 text-xs text-rose-400 transition hover:bg-rose-500/10 active:scale-[0.98] sm:px-3 sm:text-sm"
+                class="min-h-9 touch-manipulation border border-red-300 bg-white px-3 text-sm text-red-700 hover:bg-red-50"
                 phx-click="action"
                 phx-value-name="stop"
               >
@@ -146,39 +146,39 @@
           <div
             id="transcript"
             phx-update="stream"
-            class="flex-1 space-y-3 overflow-y-auto overscroll-contain bg-black/10 p-3 sm:p-5"
+            class="flex-1 space-y-2 overflow-y-auto overscroll-contain bg-gray-50 p-3 sm:p-4"
           >
             <div
               id="transcript-empty"
               class="hidden h-full min-h-72 place-items-center text-center only:grid"
             >
               <div>
-                <.icon name="hero-chat-bubble-left-right" class="mx-auto size-10 text-slate-700" />
-                <p class="mt-3 text-sm text-slate-500">Waiting for interaction events…</p>
+                <.icon name="hero-chat-bubble-left-right" class="mx-auto size-10 text-gray-400" />
+                <p class="mt-3 text-sm text-gray-500">Waiting for interaction events…</p>
               </div>
             </div>
             <article
               :for={{dom_id, item} <- @streams.updates}
               id={dom_id}
               class={[
-                "rounded-xl border px-3 py-3 sm:px-4",
+                "border px-3 py-2",
                 if(conversational?(item),
                   do:
                     if(user_message?(item),
-                      do: "ml-4 border-violet-400/20 bg-violet-500/10 sm:ml-10",
-                      else: "mr-4 border-white/10 bg-white/[0.03] sm:mr-10"
+                      do: "ml-4 border-gray-400 bg-white sm:ml-10",
+                      else: "mr-4 border-gray-300 bg-white sm:mr-10"
                     ),
-                  else: "mx-1 border-white/[0.07] bg-white/[0.02] sm:mx-6"
+                  else: "border-gray-200 bg-gray-100"
                 )
               ]}
             >
-              <div class="mb-1.5 flex items-center justify-between gap-3">
-                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              <div class="mb-1 flex items-center justify-between gap-3">
+                <span class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
                   {update_kind(item) |> String.replace("_", " ")}
                 </span>
-                <span class="font-mono text-[10px] text-slate-700">#{item["sequence"]}</span>
+                <span class="font-mono text-[10px] text-gray-400">#{item["sequence"]}</span>
               </div>
-              <p class="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">
+              <p class="whitespace-pre-wrap break-words text-sm leading-6 text-gray-800">
                 {update_text(item)}
               </p>
             </article>
@@ -188,7 +188,7 @@
             for={@message_form}
             id="message-form"
             phx-submit="send"
-            class="border-t border-white/10 bg-[#0b111b] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4 [&>div]:mb-0"
+            class="border-t border-gray-300 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] [&>div]:mb-0"
           >
             <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem] sm:gap-3 [&>div]:mb-0 [&>div]:min-w-0">
               <.input
@@ -197,7 +197,7 @@
                 aria-label="Message"
                 placeholder="Send a message to this interaction…"
                 rows="2"
-                class="min-h-20 w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-base text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-violet-400/70 focus:ring-2 focus:ring-violet-500/15 sm:min-h-16 sm:text-sm"
+                class="min-h-20 w-full resize-none border border-gray-300 bg-white px-3 py-2 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-900 sm:min-h-16 sm:text-sm"
               />
               <div class="flex gap-2 sm:flex-col [&>div]:mb-0 [&>div]:min-w-0 [&>div]:flex-1">
                 <.input
@@ -205,11 +205,11 @@
                   type="select"
                   aria-label="Answer contract"
                   options={contract_options()}
-                  class="h-11 w-full rounded-lg border border-white/10 bg-[#111827] px-3 text-sm text-slate-300 outline-none focus:border-violet-400/70 sm:h-9"
+                  class="h-10 w-full border border-gray-300 bg-white px-2 text-sm text-gray-800 outline-none focus:border-gray-900 sm:h-9"
                 />
                 <button
                   id="send-button"
-                  class="flex h-11 shrink-0 touch-manipulation items-center justify-center gap-2 rounded-lg bg-violet-500 px-5 text-sm font-semibold text-white shadow-lg shadow-violet-500/15 transition hover:bg-violet-400 active:scale-[0.98] phx-submit-loading:opacity-60 sm:h-9 sm:px-4"
+                  class="flex h-10 shrink-0 touch-manipulation items-center justify-center gap-2 border border-gray-900 bg-gray-900 px-5 text-sm font-semibold text-white hover:bg-gray-700 phx-submit-loading:opacity-60 sm:h-9 sm:px-4"
                   type="submit"
                 >
                   Send <.icon name="hero-arrow-up" class="size-4" />
@@ -220,11 +220,11 @@
         <% else %>
           <div class="grid flex-1 place-items-center p-10 text-center">
             <div class="max-w-sm">
-              <div class="mx-auto grid size-16 place-items-center rounded-2xl border border-white/10 bg-white/[0.03]">
-                <.icon name="hero-command-line" class="size-8 text-slate-700" />
+              <div class="mx-auto grid size-14 place-items-center border border-gray-300 bg-gray-50">
+                <.icon name="hero-command-line" class="size-7 text-gray-400" />
               </div>
-              <h2 class="mt-5 text-lg font-semibold">Select an interaction</h2>
-              <p class="mt-2 text-sm leading-6 text-slate-500">
+              <h2 class="mt-5 text-base font-semibold">Select an interaction</h2>
+              <p class="mt-2 text-sm leading-6 text-gray-600">
                 Choose a live Styra session to stream its events and send the next turn.
               </p>
             </div>

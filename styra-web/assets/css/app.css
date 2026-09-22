@@ -14,4 +14,4 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 html, body { min-height: 100%; }
-body { margin: 0; }
+body { margin: 0; background-color: #f3f4f6; color: #111827; }

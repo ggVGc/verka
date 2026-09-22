@@ -63,9 +63,9 @@ defmodule StyraWebWeb.CoreComponents do
       {@rest}
     >
       <div class={[
-        "flex w-80 max-w-80 gap-3 rounded-xl border p-4 text-sm shadow-2xl sm:w-96 sm:max-w-96",
-        @kind == :info && "border-sky-400/25 bg-sky-950 text-sky-100",
-        @kind == :error && "border-rose-400/25 bg-rose-950 text-rose-100"
+        "flex w-80 max-w-80 gap-3 border p-4 text-sm shadow-md sm:w-96 sm:max-w-96",
+        @kind == :info && "border-gray-300 bg-white text-gray-900",
+        @kind == :error && "border-red-300 bg-red-50 text-red-800"
       ]}>
         <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
         <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
@@ -98,14 +98,14 @@ defmodule StyraWebWeb.CoreComponents do
 
   def button(%{rest: rest} = assigns) do
     variants = %{
-      "primary" => "bg-violet-500 text-white hover:bg-violet-400",
-      nil => "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
+      "primary" => "border border-gray-900 bg-gray-900 text-white hover:bg-gray-700",
+      nil => "border border-gray-300 bg-white text-gray-800 hover:bg-gray-100"
     }
 
     assigns =
       assign_new(assigns, :class, fn ->
         [
-          "inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-semibold transition active:scale-[0.98]",
+          "inline-flex items-center justify-center px-4 py-2 text-sm font-semibold",
           Map.fetch!(variants, assigns[:variant])
         ]
       end)
@@ -230,7 +230,7 @@ defmodule StyraWebWeb.CoreComponents do
             name={@name}
             value="true"
             checked={@checked}
-            class={@class || "size-4 rounded border-white/20 bg-white/5 accent-violet-500"}
+            class={@class || "size-4 border-gray-400 bg-white accent-gray-900"}
             {@rest}
           />{@label}
         </span>
@@ -249,8 +249,8 @@ defmodule StyraWebWeb.CoreComponents do
           id={@id}
           name={@name}
           class={[
-            @class || "w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm",
-            @errors != [] && (@error_class || "border-rose-400")
+            @class || "w-full border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900",
+            @errors != [] && (@error_class || "border-red-500")
           ]}
           multiple={@multiple}
           {@rest}
@@ -273,8 +273,8 @@ defmodule StyraWebWeb.CoreComponents do
           id={@id}
           name={@name}
           class={[
-            @class || "w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm",
-            @errors != [] && (@error_class || "border-rose-400")
+            @class || "w-full border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900",
+            @errors != [] && (@error_class || "border-red-500")
           ]}
           {@rest}
         >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
@@ -296,8 +296,8 @@ defmodule StyraWebWeb.CoreComponents do
           id={@id}
           value={Phoenix.HTML.Form.normalize_value(@type, @value)}
           class={[
-            @class || "w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm",
-            @errors != [] && (@error_class || "border-rose-400")
+            @class || "w-full border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900",
+            @errors != [] && (@error_class || "border-red-500")
           ]}
           {@rest}
         />
@@ -310,7 +310,7 @@ defmodule StyraWebWeb.CoreComponents do
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex items-center gap-2 text-sm text-rose-400">
+    <p class="mt-1.5 flex items-center gap-2 text-sm text-red-700">
       <.icon name="hero-exclamation-circle" class="size-5" />
       {render_slot(@inner_block)}
     </p>
@@ -331,7 +331,7 @@ defmodule StyraWebWeb.CoreComponents do
         <h1 class="text-lg font-semibold leading-8">
           {render_slot(@inner_block)}
         </h1>
-        <p :if={@subtitle != []} class="text-sm text-base-content/70">
+        <p :if={@subtitle != []} class="text-sm text-gray-600">
           {render_slot(@subtitle)}
         </p>
       </div>
@@ -385,7 +385,7 @@ defmodule StyraWebWeb.CoreComponents do
         <tr
           :for={row <- @rows}
           id={@row_id && @row_id.(row)}
-          class="border-t border-white/10 odd:bg-white/[0.02]"
+          class="border-t border-gray-200 odd:bg-gray-50"
         >
           <td
             :for={col <- @col}
@@ -423,7 +423,7 @@ defmodule StyraWebWeb.CoreComponents do
 
   def list(assigns) do
     ~H"""
-    <ul class="divide-y divide-white/10">
+    <ul class="divide-y divide-gray-200">
       <li :for={item <- @item} class="py-3">
         <div>
           <div class="font-bold">{item.title}</div>
