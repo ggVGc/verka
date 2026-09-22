@@ -62,6 +62,11 @@ pub struct CreateSession {
     /// per-session choice; Workspaces never create them automatically.
     #[serde(default)]
     pub create_worktree: bool,
+    /// Reuse the checkout associated with this Session, when it has one.
+    /// The source must belong to `workspace_id`. Ignored when
+    /// `create_worktree` explicitly asks for a fresh checkout instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout_from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// Optional operator-facing name. When absent, the server derives one
@@ -89,6 +94,9 @@ pub struct PlanSession {
     /// Whether the prospective session should get its own linked worktree.
     #[serde(default)]
     pub create_worktree: bool,
+    /// Match [`CreateSession::checkout_from`] for the prospective launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout_from: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -586,6 +594,7 @@ mod tests {
             },
             launch: LaunchPolicy::default(),
             create_worktree: false,
+            checkout_from: None,
             message: None,
             name: None,
             contract: None,
@@ -614,6 +623,7 @@ mod tests {
                 ignore_workspace: false,
             },
             create_worktree: false,
+            checkout_from: None,
         });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "plan_session");

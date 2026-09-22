@@ -337,6 +337,7 @@ M.types.CreateSession = {
     { name = "selection", required = true, type = { kind = "ref", name = "Selection" } },
     { name = "launch", required = false, type = { kind = "ref", name = "LaunchPolicy" } },
     { name = "create_worktree", required = false, type = { kind = "boolean" } },
+    { name = "checkout_from", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "message", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "name", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "contract", required = false, type = { kind = "optional", inner = { kind = "ref", name = "Contract" } } },
@@ -354,6 +355,7 @@ M.types.PlanSession = {
     { name = "selection", required = true, type = { kind = "ref", name = "Selection" } },
     { name = "launch", required = false, type = { kind = "ref", name = "LaunchPolicy" } },
     { name = "create_worktree", required = false, type = { kind = "boolean" } },
+    { name = "checkout_from", required = false, type = { kind = "optional", inner = { kind = "string" } } },
   },
 }
 
@@ -654,6 +656,7 @@ M.types.InteractionSummary = {
     { name = "activity_reason", required = false, type = { kind = "optional", inner = { kind = "ref", name = "InteractionActivityReason" } } },
     { name = "activity_since_ms", required = false, type = { kind = "number", integer = true } },
     { name = "idle_unseen", required = false, type = { kind = "boolean" } },
+    { name = "uncommitted_changes", required = false, type = { kind = "boolean" } },
     { name = "last_message", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "auto_retry", required = false, type = { kind = "boolean" } },
     { name = "events", required = false, type = { kind = "number", integer = true } },
@@ -2096,6 +2099,7 @@ end
 ---   selection        Selection
 ---   launch           LaunchPolicy  (optional)
 ---   create_worktree  boolean  (optional)
+---   checkout_from    string|null  (optional)
 ---   message          string|null  (optional)
 ---   name             string|null  (optional)
 ---   contract         Contract|null  (optional)
@@ -2111,6 +2115,7 @@ end
 ---   selection        Selection
 ---   launch           LaunchPolicy  (optional)
 ---   create_worktree  boolean  (optional)
+---   checkout_from    string|null  (optional)
 function M.request.plan_session(data)
   return M.build("plan_session", data)
 end

@@ -76,7 +76,7 @@ live interactions.
 | `W` (existing session) | create and associate a linked workspace and branch; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `s` / `S` | interrupt the active turn / stop its interaction |
-| `n` / `N` | new session / stop then start a new session |
+| `n` / `N` | new session, in the current Session's checkout when it has one / stop then start a new session |
 | `B` | branch from history through, or only, the selected entry; opens the branch and leaves the source running |
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
@@ -286,6 +286,17 @@ directory below the checkout root gets the root: the agent sees more of the
 tree this way, not less. Merging the branch back afterwards is yours to do, on
 the host, with ordinary Git — Styra never merges, deletes, or prunes these
 checkouts.
+
+`n` in a Session that has a checkout starts the next one **in that same
+checkout**, on its branch and among its uncommitted work, rather than back in
+the Workspace directory — so a second agent, or a fresh conversation about the
+same half-finished change, needs no new branch and no copying. The blank screen
+stands in the checkout and the footer names it. Send that first prompt with
+`Ctrl+Enter` instead to say you wanted a branch of its own after all, and with
+`W` afterwards to give a Session that started in the Workspace directory a
+checkout later. Nothing is duplicated: both Sessions write to one working tree,
+which is the point when they are meant to collaborate and worth knowing when
+they are not.
 
 ## What Styra records and does not do
 

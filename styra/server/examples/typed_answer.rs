@@ -49,6 +49,7 @@ fn main() -> anyhow::Result<()> {
         selection: styra_server::agent::Selection::new(styra_server::agent::Provider::Codex),
         launch: Default::default(),
         create_worktree: false,
+        checkout_from: None,
         message: Some(prompt),
         name: None,
         // The server frames the seed message with the contract's instructions

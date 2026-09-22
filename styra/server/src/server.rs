@@ -942,6 +942,30 @@ impl ServerState {
         Ok(Some(checkout))
     }
 
+    /// Resolve a checkout another Session asked to share with a new one.
+    ///
+    /// The durable Session id is the authority: clients never send a host
+    /// path, and a Session from another Workspace cannot smuggle one into
+    /// this launch. A source without a checkout simply preserves the ordinary
+    /// Workspace launch, which lets `n` name every current Session without
+    /// first needing a separate checkout-inspection API.
+    fn inherited_checkout(
+        &self,
+        workspace_id: &str,
+        source_id: Option<&str>,
+    ) -> Result<Option<crate::worktree::Checkout>> {
+        let Some(source_id) = source_id else {
+            return Ok(None);
+        };
+        let source = self.stored_summary(source_id)?;
+        anyhow::ensure!(
+            source.workspace_id == workspace_id,
+            "cannot reuse checkout from Session {source_id:?}: it belongs to Workspace {:?}, not {workspace_id:?}",
+            source.workspace_id
+        );
+        self.session_checkout(&source.path, workspace_id, source_id)
+    }
+
     /// Give a Session that launched without one a checkout of its own.
     fn create_session_worktree(&self, id: &str) -> Result<()> {
         let session = self.stored_summary(id)?;
@@ -1047,13 +1071,23 @@ impl ServerState {
     fn create_session(&self, request: CreateSession) -> Result<SessionInfo> {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
+        // Ctrl-Enter remains an explicit request for a fresh checkout even on
+        // a blank screen reached with `n` from a Session that already has one.
+        let inherited_checkout = if request.create_worktree {
+            None
+        } else {
+            self.inherited_checkout(&owning_workspace.id, request.checkout_from.as_deref())?
+        };
         let repository_mounts = owning_workspace
             .git_repository
             .as_deref()
             .map(|root| self.inner.git.mounts(root))
             .transpose()?
             .unwrap_or_default();
-        let worktrees = self.workspace_worktrees(&owning_workspace, request.create_worktree)?;
+        let worktrees = self.workspace_worktrees(
+            &owning_workspace,
+            request.create_worktree || inherited_checkout.is_some(),
+        )?;
         let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
         let layout = launch_layout(worktrees.as_ref(), &workspace);
@@ -1065,7 +1099,7 @@ impl ServerState {
         // Workspace that makes no branch has no use for the branch half, and a
         // named launch has no use for the Session-name half — so an operator
         // only waits on a naming run whose answer they are going to see.
-        let topic = (worktrees.is_some() && requested_name.is_none())
+        let topic = (request.create_worktree && requested_name.is_none())
             .then(|| crate::naming::topic_for_prompt(&selection, request.message.as_deref()))
             .flatten();
         let name = requested_name
@@ -1103,8 +1137,16 @@ impl ServerState {
         // the work its first prompt describes — the topic resolved above — so
         // the branch it leaves behind is recognisable in the operator's own
         // `git branch`.
-        let checkout = match &worktrees {
-            Some(worktrees) => {
+        let checkout = match (&inherited_checkout, &worktrees) {
+            // A shared checkout is written down for this Session too, so it
+            // answers for the directory it works in on its own rather than
+            // through the Session it was started from — which may be closed,
+            // renamed, or given a checkout of its own later.
+            (Some(inherited), _) => {
+                journal::store_session_checkout(&journal_path, inherited)?;
+                inherited.path.clone()
+            }
+            (None, Some(worktrees)) => {
                 let made = crate::worktree::Checkout::at(
                     worktrees.checkout(&id, topic.as_ref().map(Topic::branch))?,
                 );
@@ -1114,7 +1156,7 @@ impl ServerState {
                 journal::store_session_checkout(&journal_path, &made)?;
                 made.path
             }
-            None => workspace.clone(),
+            (None, None) => workspace.clone(),
         };
         let spec = InteractionSpec {
             profile,
@@ -1455,19 +1497,28 @@ impl ServerState {
     fn plan_session(&self, request: crate::protocol::PlanSession) -> Result<DrivaOptions> {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
+        let inherited_checkout = if request.create_worktree {
+            None
+        } else {
+            self.inherited_checkout(&owning_workspace.id, request.checkout_from.as_deref())?
+        };
         let repository_mounts = owning_workspace
             .git_repository
             .as_deref()
             .map(|root| self.inner.git.mounts(root))
             .transpose()?
             .unwrap_or_default();
-        let worktrees = self.workspace_worktrees(&owning_workspace, request.create_worktree)?;
+        let worktrees = self.workspace_worktrees(
+            &owning_workspace,
+            request.create_worktree || inherited_checkout.is_some(),
+        )?;
         let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
         let layout = launch_layout(worktrees.as_ref(), &workspace);
-        let checkout = match &worktrees {
-            Some(worktrees) => worktrees.path(PENDING_SESSION_ID),
-            None => workspace.clone(),
+        let checkout = match (&inherited_checkout, &worktrees) {
+            (Some(checkout), _) => checkout.path.clone(),
+            (None, Some(worktrees)) => worktrees.path(PENDING_SESSION_ID),
+            (None, None) => workspace.clone(),
         };
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
         let mut profile = crate::agent::resolve_profile(&request.selection, &layout)?;
@@ -3817,6 +3868,65 @@ mod tests {
         std::fs::remove_dir_all(host).ok();
     }
 
+    /// A new Session reached with `n` shares the source Session's checkout,
+    /// including its branch and uncommitted file tree, instead of falling
+    /// back to the Workspace's original host directory.
+    #[test]
+    fn a_new_session_can_plan_in_an_existing_sessions_checkout() {
+        let (store, host, state, workspace, id, session_path) = stored_session("inherits-checkout");
+        let worktrees = state
+            .workspace_worktrees(&workspace, true)
+            .unwrap()
+            .unwrap();
+        let checkout = crate::worktree::Checkout::at(
+            worktrees
+                .checkout(&id, Some("shared-investigation"))
+                .unwrap(),
+        );
+        journal::store_session_checkout(&session_path, &checkout).unwrap();
+
+        let plan = state
+            .plan_session(crate::protocol::PlanSession {
+                workspace_id: workspace.id,
+                selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
+                launch: LaunchPolicy::default(),
+                create_worktree: false,
+                checkout_from: Some(id),
+            })
+            .unwrap();
+
+        let sandbox = SandboxLayout::default().workspace;
+        assert_eq!(plan.working_directory, sandbox);
+        assert!(plan.mounts.iter().any(|attributed| matches!(
+            &attributed.mount,
+            Mount::Bind { source, destination, access: MountAccess::ReadWrite }
+                if source == &checkout.path && destination == &sandbox
+        )));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn a_checkout_cannot_be_inherited_across_workspaces() {
+        let (store, host, state, _workspace, id, _session_path) =
+            stored_session("rejects-foreign-checkout");
+        let other_host = temp_path("rejects-foreign-checkout-other-host");
+        std::fs::remove_dir_all(&other_host).ok();
+        std::fs::create_dir_all(&other_host).unwrap();
+        let other = crate::workspace::create(&store, &other_host, None).unwrap();
+
+        let error = state.inherited_checkout(&other.id, Some(&id)).unwrap_err();
+        assert!(
+            error.to_string().contains("belongs to Workspace"),
+            "{error:#}"
+        );
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+        std::fs::remove_dir_all(other_host).ok();
+    }
+
     /// A Session launched before the record existed has a checkout and no
     /// mention of it. It is found the old way — by the id its directory ends
     /// with — and written down on the way past, so the scan answers for that
@@ -3938,6 +4048,7 @@ mod tests {
                 selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
                 launch: LaunchPolicy::default(),
                 create_worktree: false,
+                checkout_from: None,
             })
             .unwrap();
         let canonical = worktree.canonicalize().unwrap();
@@ -3984,6 +4095,7 @@ mod tests {
                 selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
                 launch: LaunchPolicy::default(),
                 create_worktree: true,
+                checkout_from: None,
             })
             .unwrap();
 
@@ -4044,6 +4156,7 @@ mod tests {
                     selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
                     launch,
                     create_worktree: false,
+                    checkout_from: None,
                 })
                 .unwrap();
             plan.mounts

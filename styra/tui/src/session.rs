@@ -267,26 +267,40 @@ pub fn turn(message: &str, selection: &Selection, contract: Option<Contract>) ->
     }
 }
 
+/// What a first launch is, beyond who runs it and where it runs.
+///
 /// `contract` types the seed message, when the operator asked the very first
 /// turn for a shape. A session is not typed as a whole — every later turn
 /// chooses for itself.
+///
+/// The two checkout fields are the blank screen's two answers to "which
+/// directory": `create_worktree` is `Ctrl-Enter` asking for a branch of its
+/// own, and `checkout_from` names the Session whose checkout this one shares.
+/// Asking for both is asking for a fresh one; the server settles it.
+#[derive(Clone, Debug, Default)]
+pub struct Start {
+    pub contract: Option<Contract>,
+    pub create_worktree: bool,
+    pub checkout_from: Option<String>,
+}
+
 pub fn create_session(
     client: &Client,
     launch: &LaunchPolicy,
     workspace_id: &str,
     selection: &Selection,
     seed: Option<&str>,
-    contract: Option<Contract>,
-    create_worktree: bool,
+    start: Start,
 ) -> Result<SessionInfo> {
     client.create_session(&CreateSession {
         workspace_id: workspace_id.to_owned(),
         selection: selection.clone(),
         launch: launch.clone(),
-        create_worktree,
+        create_worktree: start.create_worktree,
+        checkout_from: start.checkout_from,
         message: seed.map(str::to_owned),
         name: None,
-        contract,
+        contract: start.contract,
     })
 }
 
@@ -314,6 +328,7 @@ pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str) {
         selection: selection.clone(),
         launch: overlay,
         create_worktree: false,
+        checkout_from: app.checkout_from.clone(),
     });
     match planned {
         Ok(options) => app.launch.plan(selection, effective, Some(options)),
@@ -344,7 +359,14 @@ pub fn launch_live_session(
 ) -> Result<(App, SessionInfo)> {
     // The CLI's trailing prompt opens a conversation, not a typed question;
     // asking for a shape is a per-turn choice made in the interface.
-    let info = create_session(client, launch, workspace_id, selection, seed, None, false)?;
+    let info = create_session(
+        client,
+        launch,
+        workspace_id,
+        selection,
+        seed,
+        Start::default(),
+    )?;
     let mut app = App::new(info.selection.clone(), info.id.clone());
     app.launch.interaction = launch.clone();
     app.session_name = info.name.clone();

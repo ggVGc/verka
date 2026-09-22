@@ -710,13 +710,17 @@ pub fn handle_input_key(
                             workspace_id,
                             &selection,
                             Some(&message),
-                            contract,
-                            create_worktree,
+                            session::Start {
+                                contract,
+                                create_worktree,
+                                checkout_from: app.checkout_from.clone(),
+                            },
                         ) {
                             Ok(info) => {
                                 app.selection = info.selection;
                                 app.workspace.id = Some(info.workspace_id);
                                 app.session_id = info.id.clone();
+                                app.checkout_from = None;
                                 app.session_name = info.name;
                                 if create_worktree {
                                     // Closes the "creating…" notice the event

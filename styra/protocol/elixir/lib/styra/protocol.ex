@@ -347,6 +347,7 @@ defmodule Styra.Protocol do
         %{name: "selection", required: true, type: %{kind: :ref, name: "Selection"}},
         %{name: "launch", required: false, type: %{kind: :ref, name: "LaunchPolicy"}},
         %{name: "create_worktree", required: false, type: %{kind: :boolean}},
+        %{name: "checkout_from", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "name", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "contract", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Contract"}}}
@@ -363,7 +364,8 @@ defmodule Styra.Protocol do
         %{name: "workspace_id", required: true, type: %{kind: :string}},
         %{name: "selection", required: true, type: %{kind: :ref, name: "Selection"}},
         %{name: "launch", required: false, type: %{kind: :ref, name: "LaunchPolicy"}},
-        %{name: "create_worktree", required: false, type: %{kind: :boolean}}
+        %{name: "create_worktree", required: false, type: %{kind: :boolean}},
+        %{name: "checkout_from", required: false, type: %{kind: :optional, inner: %{kind: :string}}}
       ]
     },
 
@@ -1990,6 +1992,7 @@ defmodule Styra.Protocol do
       * `selection      `  Selection
       * `launch         `  LaunchPolicy  (optional)
       * `create_worktree`  boolean  (optional)
+      * `checkout_from  `  string|null  (optional)
       * `message        `  string|null  (optional)
       * `name           `  string|null  (optional)
       * `contract       `  Contract|null  (optional)
@@ -2009,6 +2012,7 @@ defmodule Styra.Protocol do
       * `selection      `  Selection
       * `launch         `  LaunchPolicy  (optional)
       * `create_worktree`  boolean  (optional)
+      * `checkout_from  `  string|null  (optional)
     """
     def plan_session(data), do: Styra.Protocol.build("plan_session", data)
 

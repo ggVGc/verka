@@ -234,6 +234,10 @@ pub struct App {
     /// The tag editor opened from the main view or live-interactions navigator.
     pub tag_picker: Option<TagPicker>,
     pub session_id: String,
+    /// Session whose linked checkout a pending new Session should reuse.
+    /// Set by `n`; the server resolves and validates the association rather
+    /// than accepting a client-supplied path.
+    pub checkout_from: Option<String>,
     /// Optional operator-facing name of the current durable Session.
     pub session_name: Option<String>,
     /// The sandbox policy: both of its layers, the sandbox they resolve to, and
@@ -437,6 +441,7 @@ impl App {
             git_repository_prompt: None,
             tag_picker: None,
             session_id: session_id.into(),
+            checkout_from: None,
             session_name: None,
             launch: Launch::default(),
             raw: RawView::default(),

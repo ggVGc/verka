@@ -123,6 +123,35 @@ fn pending_app(
     app
 }
 
+/// Build the blank screen reached with `n`, including the current Session as
+/// the server-side source of any checkout it owns. Naming the Session rather
+/// than copying its path keeps this useful for stored Sessions too, whose
+/// checkout is durable even though the replay screen has no live root.
+///
+/// Only a Session belonging to the Workspace being launched in is named. The
+/// Workspace can differ when the one being viewed has since gone away, and a
+/// checkout is the Workspace's to lend — the server refuses to cross that line,
+/// so a blank screen must not ask it to.
+fn pending_app_from_session(app: &App, workspace: &WorkspaceSummary) -> App {
+    let mut pending = pending_app(
+        app.selection.clone(),
+        app.launch.interaction.clone(),
+        workspace,
+    );
+    let same_workspace = app.workspace.id.as_deref() == Some(workspace.id.as_str());
+    pending.checkout_from =
+        (same_workspace && !app.session_id.is_empty()).then(|| app.session_id.clone());
+    // The blank screen stands where the launch will land rather than at the
+    // Workspace root, so the footer names the checkout being carried over
+    // instead of a directory this Session is not going to work in.
+    if pending.checkout_from.is_some() {
+        if let Some(root) = app.workspace.root() {
+            pending.workspace.enter(root.to_path_buf());
+        }
+    }
+    pending
+}
+
 /// What a new interaction starts from: the operator's saved defaults with this
 /// invocation's flags over them.
 ///
@@ -455,14 +484,13 @@ fn main() -> Result<()> {
             // The outgoing interaction remains server-owned and keeps running.
             RunOutcome::NewSession => {
                 live = Attachment::Detached;
-                let selection = app.selection.clone();
                 // The sandbox policy is part of that inherited context: a new
                 // session started from here begins with whatever the operator
                 // had built up, rather than resetting to the saved default.
                 launch = app.launch.interaction.clone();
                 active_workspace =
                     workspace_for_new_session(&app, &active_workspace, &client.list_workspaces()?);
-                app = pending_app(selection, launch.clone(), &active_workspace);
+                app = pending_app_from_session(&app, &active_workspace);
             }
         }
         refresh_workspace_context(&mut app, &client, &active_workspace);
@@ -624,18 +652,62 @@ mod cli_tests {
         let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
         let mut app = App::pending(selection.clone());
         app.workspace.id = Some(viewed.id.clone());
+        app.session_id = "source-session".into();
 
         let inherited = workspace_for_new_session(&app, &active, &[active.clone(), viewed.clone()]);
-        let pending = pending_app(
-            selection.clone(),
-            app.launch.interaction.clone(),
-            &inherited,
-        );
+        let pending = pending_app_from_session(&app, &inherited);
 
         assert_eq!(inherited, viewed);
         assert_eq!(pending.workspace.id.as_deref(), Some("viewed"));
         assert_eq!(pending.workspace.root(), Some(Path::new("/work/viewed")));
         assert_eq!(pending.selection, selection);
+        assert_eq!(pending.checkout_from.as_deref(), Some("source-session"));
+    }
+
+    /// `n` in a Session working in a linked worktree opens a blank screen
+    /// standing in that worktree, not at the Workspace root: the checkout it
+    /// asks to share is where the next launch will actually work, and the
+    /// footer has to say so before the first message is sent.
+    #[test]
+    fn a_new_session_started_in_a_checkout_stays_in_it() {
+        let viewed = workspace("viewed", "/work/viewed");
+        let checkout = Path::new("/state/worktrees/viewed/rename-the-picker-styra-7");
+        let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+        let mut app = App::pending(selection);
+        app.workspace.id = Some(viewed.id.clone());
+        app.session_id = "styra-7".into();
+        app.workspace.enter(checkout.to_path_buf());
+
+        let pending = pending_app_from_session(&app, &viewed);
+
+        assert_eq!(pending.checkout_from.as_deref(), Some("styra-7"));
+        assert_eq!(pending.workspace.root(), Some(checkout));
+        assert_eq!(
+            pending.workspace.working_directory_or_current(),
+            Some(checkout.to_path_buf())
+        );
+    }
+
+    /// The Workspace being viewed can be gone by the time `n` is pressed, in
+    /// which case the blank screen lands somewhere else. It starts there
+    /// plainly — at that Workspace's own root, and without asking to share a
+    /// checkout across Workspaces, which the server refuses.
+    #[test]
+    fn a_new_session_landing_in_another_workspace_does_not_inherit_the_checkout() {
+        let active = workspace("first", "/work/first");
+        let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+        let mut app = App::pending(selection);
+        app.workspace.id = Some("since-removed".into());
+        app.session_id = "source-session".into();
+        app.workspace
+            .enter(PathBuf::from("/state/worktrees/since-removed/styra-3"));
+
+        let landed_in = workspace_for_new_session(&app, &active, &[active.clone()]);
+        let pending = pending_app_from_session(&app, &landed_in);
+
+        assert_eq!(landed_in, active);
+        assert_eq!(pending.checkout_from, None);
+        assert_eq!(pending.workspace.root(), Some(Path::new("/work/first")));
     }
 
     /// A new session started from a Workspace begins on that Workspace's own

@@ -134,7 +134,7 @@ const GLOBAL: &[ReferenceRow] = &[
     },
     ReferenceRow::Binding {
         keys: "n / N",
-        action: "new session / stop and start new session",
+        action: "new session where this one works / stop and start new",
     },
     ReferenceRow::Binding {
         keys: "L",
