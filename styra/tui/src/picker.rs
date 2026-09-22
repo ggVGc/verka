@@ -574,7 +574,8 @@ pub fn run_workspace_picker(
     // interactions to consult, the ordering falls back to recent access alone.
     let mut interactions = client.list_interactions().unwrap_or_default();
     sort_workspaces(workspaces, &interactions);
-    let all_workspaces = workspaces.to_vec();
+    label_recency(workspaces, &interactions, unix_now_ms());
+    let mut all_workspaces = workspaces.to_vec();
     let mut filter: Option<String> = None;
     let mut searching = false;
     let mut workspaces = picker_workspaces(&all_workspaces, None);
@@ -604,6 +605,12 @@ pub fn run_workspace_picker(
             if let Ok(current) = client.list_interactions() {
                 interactions = current;
             }
+            // The recency column ages as the picker sits open, and a turn
+            // ending in a Workspace resets it. Relabelling in place leaves the
+            // ordering — and so the cursor — where the operator left it.
+            let now = unix_now_ms();
+            label_recency(&mut all_workspaces, &interactions, now);
+            label_recency(&mut workspaces, &interactions, now);
         }
 
         // Until the settle timer fires and the load returns, the pane says so:
@@ -845,6 +852,38 @@ fn sort_workspaces(workspaces: &mut [WorkspaceSummary], interactions: &[Interact
             })
             .then_with(|| b.created_at_ms.cmp(&a.created_at_ms))
     });
+}
+
+/// Replace the server's age — how long ago the Workspace was created — with
+/// how long ago work last happened in it.
+///
+/// The column is read against the ordering beside it, and creation date says
+/// nothing about that ordering: a Workspace made months ago and worked in this
+/// morning sorts at the top reading "94d ago". The recency the rows are sorted
+/// by is the one worth a column.
+fn label_recency(
+    workspaces: &mut [WorkspaceSummary],
+    interactions: &[InteractionSummary],
+    now: u64,
+) {
+    for workspace in workspaces {
+        workspace.age = humanize_since(now, last_worked_at_ms(workspace, interactions));
+    }
+}
+
+/// How long ago a moment was, in the server's wording so a row reads the same
+/// whichever side of the socket phrased it.
+fn humanize_since(now_ms: u64, at_ms: u64) -> String {
+    let elapsed_secs = now_ms.saturating_sub(at_ms) / 1000;
+    if elapsed_secs < 60 {
+        "just now".into()
+    } else if elapsed_secs < 3_600 {
+        format!("{}m ago", elapsed_secs / 60)
+    } else if elapsed_secs < 86_400 {
+        format!("{}h ago", elapsed_secs / 3_600)
+    } else {
+        format!("{}d ago", elapsed_secs / 86_400)
+    }
 }
 
 /// When work last happened in a Workspace: its most recent Interaction's
@@ -1212,5 +1251,46 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["worked-in", "opened-since", "never-touched"]
         );
+    }
+
+    /// The age column is read against the ordering beside it, so it has to
+    /// date a Workspace the same way the ordering does: by its most recent
+    /// interaction, not by when it was created.
+    #[test]
+    fn the_age_column_says_how_long_since_work_last_happened() {
+        let hour_ms = 3_600_000;
+        let mut workspaces = vec![
+            WorkspaceSummary {
+                created_at_ms: 1,
+                ..workspace("worked-in", hour_ms)
+            },
+            // No interaction dates this one, so its recorded access is all
+            // there is to say when it was last used.
+            WorkspaceSummary {
+                created_at_ms: 1,
+                ..workspace("only-opened", 20 * hour_ms)
+            },
+        ];
+        let interactions = vec![InteractionSummary {
+            activity_since_ms: 23 * hour_ms,
+            ..interaction_in("recent", "worked-in", InteractionActivity::Stopped)
+        }];
+
+        label_recency(&mut workspaces, &interactions, 24 * hour_ms);
+
+        assert_eq!(workspaces[0].age, "1h ago");
+        assert_eq!(workspaces[1].age, "4h ago");
+    }
+
+    /// A Workspace worked in seconds ago should not read "0m ago", and one
+    /// dated ahead of this client's clock should not read as a negative age.
+    #[test]
+    fn work_just_done_and_work_dated_ahead_both_read_as_just_now() {
+        let mut workspaces = vec![workspace("fresh", 9_000), workspace("ahead", 60_000)];
+
+        label_recency(&mut workspaces, &[], 10_000);
+
+        assert_eq!(workspaces[0].age, "just now");
+        assert_eq!(workspaces[1].age, "just now");
     }
 }
