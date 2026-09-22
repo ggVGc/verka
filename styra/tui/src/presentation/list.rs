@@ -68,6 +68,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
             .is_some_and(|rendered| app.timeline.selected < rendered),
         protocol: app.selection.provider.protocol(),
         links: ui_link_display(app.link_display),
+        search: app.search.view(),
         status,
     }
 }
@@ -80,6 +81,29 @@ mod tests {
 
     use styra_protocol::event::AgentEvent;
     use styra_ui::{TestUi, Ui};
+
+    /// The `/` prompt is shown along the bottom of the list it is marking, and
+    /// holds every printable key while it is open — including the letters that
+    /// are commands on the list underneath.
+    #[test]
+    fn the_search_prompt_shows_what_is_being_typed_into_it() {
+        use crossterm::event::{KeyCode, KeyEvent};
+
+        let mut app = test_support::app("s1");
+        app.push_event(AgentEvent::AgentMessage {
+            text: "reworked the retry queue".into(),
+        });
+        app.search.open();
+        for character in "que".chars() {
+            crate::keys::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char(character)));
+        }
+
+        assert!(test_support::rendered(&app).contains("/que▌"));
+
+        // `q` quits the list; here it is a letter of the term.
+        crate::keys::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char('q')));
+        assert_eq!(app.search.query(), Some("queq"));
+    }
 
     /// Draw `app` and feed the render's own offset back into it, exactly as
     /// the event loop does. The viewport offset only survives across frames

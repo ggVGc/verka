@@ -52,6 +52,22 @@ fn confirm(app: &mut App, preferences_path: &Path) {
     }
 }
 
+/// Keys for the event list's `/` search prompt. It is modal — every printable
+/// key is part of the term, including the letters bound to commands on the
+/// list underneath — so the event loop routes keys here ahead of the view.
+///
+/// Enter hands the keys back with the term still marked; Esc leaves the list
+/// unmarked, as does backspacing the term away.
+pub fn handle_search_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => app.search.cancel(),
+        KeyCode::Enter => app.search.accept(),
+        KeyCode::Backspace => app.search.backspace(),
+        KeyCode::Char(character) if !character.is_control() => app.search.push(character),
+        _ => {}
+    }
+}
+
 /// Keys for the driva view's "add a mount" prompt. It is modal — every
 /// printable key is part of the path being typed, `?` included — so the event
 /// loop routes keys here ahead of the keybind reference and every view and
@@ -217,6 +233,11 @@ pub fn handle_list_key(
         View::Events => match key.code {
             KeyCode::Char('T') => edit_current_interaction_tags(app, client),
             KeyCode::Char('F') => app.open_references(),
+            KeyCode::Char('/') => app.search.open(),
+            // A search that stands after the prompt has closed is cleared
+            // where it is being read, rather than by reopening the prompt in
+            // order to cancel it.
+            KeyCode::Esc if app.search.query().is_some() => app.search.cancel(),
             KeyCode::Char('u') => app.toggle_link_display(),
             KeyCode::Char('b') => session::follow_branch(app),
             KeyCode::Char('c') => app.toggle_conversation_only(),

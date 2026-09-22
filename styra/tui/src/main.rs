@@ -34,6 +34,7 @@ mod presentation;
 mod preview;
 mod raw;
 mod references;
+mod search;
 mod session;
 mod tag_picker;
 mod tail;

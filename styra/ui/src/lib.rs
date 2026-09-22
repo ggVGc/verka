@@ -34,6 +34,7 @@ pub mod picker;
 pub mod preview;
 pub mod quota;
 pub mod raw;
+pub mod search;
 pub mod transcript;
 
 /// A stable identity for layout feedback that application navigation consumes.

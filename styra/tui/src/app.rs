@@ -38,6 +38,7 @@ use crate::picker::TemplatePicker;
 use crate::preview::{self, Preview};
 use crate::raw::{ProviderRawView, RawView};
 use crate::references::{self, References};
+use crate::search::Search;
 use crate::tag_picker::TagPicker;
 use crate::tail::Tail;
 use crate::timeline::{Entry, Step, Timeline};
@@ -233,6 +234,10 @@ pub struct App {
     pub git_repository_prompt: Option<String>,
     /// The tag editor opened from the main view or live-interactions navigator.
     pub tag_picker: Option<TagPicker>,
+    /// The event list's `/` search. Not carried across screens by
+    /// [`App::take_operator_state`]: it is asked of the entries in front of
+    /// the operator, and the next screen holds different ones.
+    pub search: Search,
     pub session_id: String,
     /// Optional operator-facing name of the current durable Session.
     pub session_name: Option<String>,
@@ -436,6 +441,7 @@ impl App {
             workspace: Location::default(),
             git_repository_prompt: None,
             tag_picker: None,
+            search: Search::default(),
             session_id: session_id.into(),
             session_name: None,
             launch: Launch::default(),
