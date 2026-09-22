@@ -12,6 +12,25 @@ pub enum LinkDisplay {
     Compact,
     Full,
 }
+/// Which entry of a rendered block, if any, carries the selection.
+///
+/// Entries are numbered in reading order across the whole block, starting at
+/// zero, so a caller that keeps a `usize` and bounds it by
+/// [`BlockRender::entries`] can walk a response's citations without knowing
+/// anything about how they were laid out.
+pub type EntryIndex = usize;
+
+/// A rendered detail block, plus how many entries it offers for highlighting.
+///
+/// The count is what a caller needs to move a selection: it is the number of
+/// entries the returned lines contain, whether or not any of them is
+/// highlighted.
+#[derive(Clone, Debug)]
+pub struct BlockRender {
+    pub lines: Vec<Line<'static>>,
+    pub entries: usize,
+}
+
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -37,11 +56,34 @@ pub fn markdown_block_lines_with_links(
     indent: &str,
     links: LinkDisplay,
 ) -> Vec<Line<'static>> {
+    markdown_block_render(text, base_style, indent, links, None).lines
+}
+
+/// As [`markdown_block_lines_with_links`], drawing one entry as selected.
+///
+/// An entry is a link — which is also how agents write a file reference, as
+/// `[app.rs:120](/home/me/src/app.rs:120)` — so highlighting entry `n` puts a
+/// selection over the nth citation of the block. Entries are counted in
+/// reading order regardless of [`LinkDisplay`], so a selection does not jump
+/// when the operator toggles destinations on; what the selection covers does,
+/// since in [`LinkDisplay::Full`] the destination is part of what is on
+/// screen.
+///
+/// A `highlight` past the last entry simply highlights nothing, which is what
+/// a caller rendering a block that has since lost its citations wants.
+pub fn markdown_block_render(
+    text: &str,
+    base_style: Style,
+    indent: &str,
+    links: LinkDisplay,
+    highlight: Option<EntryIndex>,
+) -> BlockRender {
     let normalized = force_hard_line_breaks(text);
     let options = tui_markdown::Options::new(StyraStyleSheet)
         .code_theme(CodeTheme::clone(&MARKDOWN_CODE_THEME));
     let rendered = tui_markdown::from_str_with_options(&normalized, &options);
-    rendered
+    let mut entries = 0;
+    let lines = rendered
         .lines
         .into_iter()
         .map(|line| {
@@ -50,7 +92,7 @@ pub fn markdown_block_lines_with_links(
             // that base style has to be carried over explicitly.
             let line_style = line.style;
             let mut spans = vec![Span::styled(indent.to_owned(), base_style)];
-            let rendered_spans = collapse_links(line.spans, links);
+            let rendered_spans = render_links(line.spans, links, &mut entries, highlight);
             spans.extend(rendered_spans.into_iter().enumerate().map(|(i, span)| {
                 let mut content = span.content.into_owned();
                 // tui-markdown has no hook to customize the unordered-list
@@ -65,11 +107,29 @@ pub fn markdown_block_lines_with_links(
             }));
             Line::from(spans).style(line_style)
         })
-        .collect()
+        .collect();
+    BlockRender { lines, entries }
+}
+
+/// The selection drawn over a highlighted entry.
+///
+/// Yellow is what Styra already marks a selection with (see
+/// [`palette::SELECTION_MARKER`]), and filling the entry rather than tinting
+/// its text keeps it visible on the selected row too, whose own background is
+/// already [`palette::SELECTION_BACKGROUND`].
+fn entry_highlight_style() -> Style {
+    Style::new()
+        .fg(palette::SELECTION_BACKGROUND)
+        .bg(palette::SELECTION_MARKER)
 }
 
 /// Drops the destination `tui-markdown` appends to every link, leaving the
-/// title — unless the operator asked to see them ([`LinkDisplay::Full`]).
+/// title — unless the operator asked to see them ([`LinkDisplay::Full`]) —
+/// and puts the selection over the entry `highlight` names.
+///
+/// `entries` counts the entries seen so far, and is advanced past the ones on
+/// this line: a block is numbered continuously, but `tui-markdown` hands its
+/// lines over one at a time.
 ///
 /// `tui-markdown` renders a link as `label (destination)`, and agents cite
 /// their work as links: a reply reads `app.rs:120 (/home/me/src/app.rs:120)`,
@@ -79,32 +139,72 @@ pub fn markdown_block_lines_with_links(
 ///
 /// A link that wrote no label keeps its destination, since collapsing it would
 /// leave nothing on screen at all.
-fn collapse_links<'a>(spans: Vec<Span<'a>>, links: LinkDisplay) -> Vec<Span<'a>> {
-    if links == LinkDisplay::Full {
-        return spans;
-    }
+fn render_links<'a>(
+    mut spans: Vec<Span<'a>>,
+    links: LinkDisplay,
+    entries: &mut usize,
+    highlight: Option<EntryIndex>,
+) -> Vec<Span<'a>> {
     // `tui-markdown` emits a link's destination as the three spans " (", the
     // destination under the link style, and ")", directly after the label —
     // which carries that same style, plus whatever emphasis it was written
     // with. Nothing else in a rendered line is styled as a link, so the shape
     // identifies a destination rather than parenthesised prose.
     let mut appended = vec![false; spans.len()];
+    let mut selected = vec![false; spans.len()];
     for index in 1..spans.len().saturating_sub(2) {
-        if spans[index].content == " ("
+        if !(spans[index].content == " ("
             && spans[index + 2].content == ")"
             && spans[index + 1].style == StyraStyleSheet.link()
-            && is_link_label(&spans[index - 1])
+            && is_link_label(&spans[index - 1]))
         {
-            appended[index] = true;
-            appended[index + 1] = true;
-            appended[index + 2] = true;
+            continue;
         }
+        appended[index] = true;
+        appended[index + 1] = true;
+        appended[index + 2] = true;
+        // One entry per destination, so two links written back to back stay
+        // two entries even once their destinations are dropped.
+        let entry = *entries;
+        *entries += 1;
+        if highlight != Some(entry) {
+            continue;
+        }
+        // The label is however many spans the emphasis inside it was split
+        // into; in `Full` the destination is on screen too, and the selection
+        // covers what is on screen.
+        let mut first = index;
+        while first > 0 && is_link_span(&spans[first - 1]) {
+            first -= 1;
+        }
+        let last = if links == LinkDisplay::Full {
+            index + 2
+        } else {
+            index.saturating_sub(1)
+        };
+        for span in selected.iter_mut().take(last + 1).skip(first) {
+            *span = true;
+        }
+    }
+    for (span, selected) in spans.iter_mut().zip(&selected) {
+        if *selected {
+            span.style = span.style.patch(entry_highlight_style());
+        }
+    }
+    if links == LinkDisplay::Full {
+        return spans;
     }
     spans
         .into_iter()
         .zip(appended)
         .filter_map(|(span, appended)| (!appended).then_some(span))
         .collect()
+}
+
+/// Whether `span` is part of a link's label, rather than text that merely
+/// happens to be underlined — a level-one heading is too.
+fn is_link_span(span: &Span<'_>) -> bool {
+    is_link_label(span) && span.style.fg == StyraStyleSheet.link().fg
 }
 
 /// Whether `span` could be the label of the link whose destination follows it.
@@ -427,6 +527,84 @@ mod tests {
             LinkDisplay::Full,
         );
         assert_eq!(rendered_line(&full[0]), "the docs (https://example.com)");
+    }
+
+    #[test]
+    fn a_highlighted_entry_is_the_nth_citation_of_the_block() {
+        let base = Style::default();
+        let render = markdown_block_render(
+            "see [app.rs:120](/src/app.rs:120) and [lib.rs:7](/src/lib.rs)",
+            base,
+            "",
+            LinkDisplay::Compact,
+            Some(1),
+        );
+
+        assert_eq!(render.entries, 2);
+        let highlighted: Vec<&str> = render.lines[0]
+            .spans
+            .iter()
+            .filter(|span| span.style.bg == Some(palette::SELECTION_MARKER))
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(highlighted, vec!["lib.rs:7"]);
+    }
+
+    #[test]
+    fn a_highlight_covers_the_destination_only_when_it_is_on_screen() {
+        let base = Style::default();
+        let source = "[app.rs:120](/src/app.rs:120)";
+        let selected = |links| {
+            markdown_block_render(source, base, "", links, Some(0)).lines[0]
+                .spans
+                .iter()
+                .filter(|span| span.style.bg == Some(palette::SELECTION_MARKER))
+                .map(|span| span.content.to_string())
+                .collect::<Vec<String>>()
+                .concat()
+        };
+
+        assert_eq!(selected(LinkDisplay::Compact), "app.rs:120");
+        assert_eq!(selected(LinkDisplay::Full), "app.rs:120 (/src/app.rs:120)");
+    }
+
+    #[test]
+    fn entries_are_counted_across_lines_and_an_absent_one_highlights_nothing() {
+        let base = Style::default();
+        let render = markdown_block_render(
+            "- [one](/a)\n- [two](/b)",
+            base,
+            "",
+            LinkDisplay::Compact,
+            Some(7),
+        );
+
+        assert_eq!(render.entries, 2);
+        assert!(render
+            .lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .all(|span| span.style.bg != Some(palette::SELECTION_MARKER)));
+    }
+
+    #[test]
+    fn a_heading_is_not_mistaken_for_a_link_label() {
+        let base = Style::default();
+        let render = markdown_block_render(
+            "# Title [app.rs](/src/app.rs)",
+            base,
+            "",
+            LinkDisplay::Compact,
+            Some(0),
+        );
+
+        let highlighted: Vec<&str> = render.lines[0]
+            .spans
+            .iter()
+            .filter(|span| span.style.bg == Some(palette::SELECTION_MARKER))
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(highlighted, vec!["app.rs"]);
     }
 
     #[test]
