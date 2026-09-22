@@ -164,12 +164,36 @@ defmodule Styra.Client do
   end
 
   defp exchange_on(socket, line, timeout, path) do
-    with :ok <- :gen_tcp.send(socket, [line, "\n"]),
-         {:ok, reply} <- :gen_tcp.recv(socket, 0, timeout) do
-      {:ok, reply}
+    with :ok <- :gen_tcp.send(socket, [line, "\n"]) do
+      recv_line(socket, timeout, path, "")
     else
-      {:error, :closed} -> {:error, "#{path} closed the connection without replying"}
       {:error, reason} -> {:error, "talking to #{path}: #{describe(reason)}"}
+    end
+  end
+
+  # A reply longer than the socket's read buffer arrives in pieces, and in
+  # `packet: :line` mode a piece cut short by the buffer looks exactly like a
+  # whole line minus its newline. So the newline, not the read, is what ends a
+  # reply: read on until one arrives.
+  defp recv_line(socket, timeout, path, acc) do
+    case :gen_tcp.recv(socket, 0, timeout) do
+      {:ok, piece} ->
+        reply = acc <> piece
+
+        if String.ends_with?(reply, "\n") do
+          {:ok, reply}
+        else
+          recv_line(socket, timeout, path, reply)
+        end
+
+      {:error, :closed} when acc != "" ->
+        {:ok, acc}
+
+      {:error, :closed} ->
+        {:error, "#{path} closed the connection without replying"}
+
+      {:error, reason} ->
+        {:error, "talking to #{path}: #{describe(reason)}"}
     end
   end
 
