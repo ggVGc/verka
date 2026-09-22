@@ -6,8 +6,9 @@
 //! on, which is how it is usually read, the work between two messages is off
 //! screen entirely. This view answers "what happened for this one" without
 //! making the operator turn the filter off and find their place again, so it
-//! deliberately ignores both list filters: the entries it shows are exactly the
-//! ones the list is hiding.
+//! deliberately ignores that filter: the entries it shows are exactly the ones
+//! the list is hiding. It does honour `m`, though — minor lifecycle events
+//! turned off are noise everywhere on this screen, not just in the list.
 //!
 //! Entries use the same collapsed, one-line rows as the main event list. This
 //! is a scoped interaction log, not a second detail reader: the operator can
@@ -20,17 +21,18 @@
 use super::list::ui_link_display;
 use crate::app::App;
 pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
-    let span = app.timeline.conversation_span();
+    let shown = app.entry_log_indices();
     // The cursor is only drawn while the pane holds the navigation keys:
     // otherwise it follows the list, and a second highlighted row would read
     // as a second selection the keys do not move.
     let cursor = app
         .entry_log
         .focused()
-        .then(|| app.entry_log.cursor(span.len()))
+        .then(|| app.entry_log.cursor(shown.len()))
         .flatten();
-    let entries = app.timeline.entries[span]
+    let entries = shown
         .iter()
+        .map(|&idx| &app.timeline.entries[idx])
         .enumerate()
         .map(|(index, entry)| styra_ui::event_list::EventEntry {
             event: &entry.event,
@@ -102,6 +104,65 @@ mod tests {
         app.timeline.selected = 0;
         app.toggle_entry_log();
         assert!(test_support::rendered(&app).contains("cargo test backoff"));
+    }
+
+    /// `m` says whether minor lifecycle events are worth screen space, and it
+    /// says it for the whole Events screen: a pane that kept showing them
+    /// would put back what the operator just turned off.
+    #[test]
+    fn entry_log_hides_minor_events_unless_the_list_shows_them() {
+        let mut app = test_support::app("s1");
+        app.timeline.conversation_only = true;
+        app.push_event(AgentEvent::UserMessage {
+            text: "run the tests".into(),
+        });
+        app.push_event(AgentEvent::Thinking {
+            text: "weighing the retry backoff".into(),
+            tokens: None,
+        });
+        app.push_event(AgentEvent::CommandStarted {
+            command: "cargo test backoff".into(),
+        });
+        app.select_first();
+        app.toggle_entry_log();
+        assert!(!app.timeline.show_minor);
+
+        let screen = test_support::rendered(&app);
+        assert!(screen.contains("cargo test backoff"));
+        assert!(!screen.contains("weighing the retry backoff"));
+
+        app.toggle_minor();
+        assert!(test_support::rendered(&app).contains("weighing the retry backoff"));
+    }
+
+    /// The cursor walks what the pane draws, so a hidden entry is not a row it
+    /// can land on.
+    #[test]
+    fn the_panes_cursor_skips_the_entries_it_is_not_showing() {
+        let mut app = test_support::app("s1");
+        app.push_event(AgentEvent::UserMessage {
+            text: "run the tests".into(),
+        });
+        app.push_event(AgentEvent::Thinking {
+            text: "weighing it".into(),
+            tokens: None,
+        });
+        app.push_event(AgentEvent::CommandStarted {
+            command: "cargo test".into(),
+        });
+        app.select_first();
+        app.toggle_entry_log();
+        app.toggle_entry_log_focus();
+
+        assert_eq!(app.entry_log_index(), Some(0));
+        app.entry_log_select_next();
+        assert_eq!(
+            app.entry_log_entry().map(|entry| entry.event.tag()),
+            Some("shell"),
+            "the thinking entry is not on screen to stop at"
+        );
+        app.entry_log_select_next();
+        assert_eq!(app.entry_log_index(), Some(2), "and that is the last row");
     }
 
     /// With the filter off the cursor can rest on a tool row. That row is part

@@ -173,7 +173,7 @@ const GLOBAL: &[ReferenceRow] = &[
         action: "raw / log / transcript / details; press again for events",
     },
     ReferenceRow::Binding {
-        keys: "E",
+        keys: "e",
         action: "toggle the entry log below the event list",
     },
     ReferenceRow::Binding {

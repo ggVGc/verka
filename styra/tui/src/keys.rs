@@ -180,9 +180,12 @@ pub fn handle_list_key(
             return app.ask(Request::Quota);
         }
         KeyCode::Char('t') => return app.toggle_view(View::Transcript),
-        // `E` toggles the pane below the event list. Uppercase leaves
-        // lowercase `e` to open the editor in the files and answer views.
-        KeyCode::Char('E') => return app.toggle_entry_log(),
+        // `e` toggles the pane below the event list. The files and answer
+        // views keep the key for opening the editor, which is the one thing
+        // `e` already meant there.
+        KeyCode::Char('e') if !matches!(app.view, View::Files | View::Answer) => {
+            return app.toggle_entry_log()
+        }
         KeyCode::Char('d') => return app.toggle_view(View::Driva),
         KeyCode::Char('f') => return app.toggle_files(),
         KeyCode::Char('X') => return app.toggle_answer(),

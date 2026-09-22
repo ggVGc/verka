@@ -748,17 +748,38 @@ impl App {
         if self.entry_log.focused() {
             self.entry_log.unfocus();
         } else {
-            let span = self.timeline.conversation_span();
-            let cursor = self.timeline.selected.saturating_sub(span.start);
+            // The list selection as a position in what the pane is showing.
+            // A hidden entry is not there to land on, so the cursor takes the
+            // first row at or after it.
+            let shown = self.entry_log_indices();
+            let cursor = shown
+                .iter()
+                .position(|&idx| idx >= self.timeline.selected)
+                .unwrap_or(0);
             self.entry_log.focus(cursor);
         }
         self.preview.scroll.reset();
     }
 
-    /// How many entries the entry-log pane is showing: the selected message's
-    /// stretch, which is what its cursor moves within.
+    /// The timeline entries the entry-log pane is showing: the selected
+    /// message's stretch, which is what its cursor moves within.
+    ///
+    /// The pane ignores the list's conversation-only filter — showing what
+    /// that filter hides is the whole point of it — but not `m`: an operator
+    /// who has minor lifecycle events turned off has said they are noise on
+    /// this screen, and a pane that kept them would put them back.
+    pub(crate) fn entry_log_indices(&self) -> Vec<usize> {
+        let show_minor = self.timeline.show_minor;
+        self.timeline
+            .conversation_span()
+            .filter(|&idx| show_minor || !self.timeline.entries[idx].event.is_minor())
+            .collect()
+    }
+
+    /// How many entries the entry-log pane is showing; see
+    /// [`Self::entry_log_indices`].
     pub(crate) fn entry_log_len(&self) -> usize {
-        self.timeline.conversation_span().len()
+        self.entry_log_indices().len()
     }
 
     /// Where the entry-log pane's cursor is in the timeline, while that pane
@@ -768,9 +789,9 @@ impl App {
         if !self.entry_log.focused() {
             return None;
         }
-        let span = self.timeline.conversation_span();
-        let cursor = self.entry_log.cursor(span.len())?;
-        Some(span.start + cursor)
+        let shown = self.entry_log_indices();
+        let cursor = self.entry_log.cursor(shown.len())?;
+        shown.get(cursor).copied()
     }
 
     /// The entry the entry-log pane's cursor is on; see
