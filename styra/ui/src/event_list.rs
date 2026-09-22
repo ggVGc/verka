@@ -553,18 +553,7 @@ fn entry_item_with_max_rows(
         )));
     }
     lines.extend(detail);
-    let mut wrapped: Vec<Line<'static>> = lines
-        .into_iter()
-        .enumerate()
-        .flat_map(|(index, line)| {
-            let continuation_indent = if index == 0 {
-                summary_indent
-            } else {
-                DETAIL_INDENT.len()
-            };
-            wrap_rendered(line, width, continuation_indent)
-        })
-        .collect();
+    let mut wrapped = wrap_log_lines(lines, width, summary_indent);
     // The cap above bounds logical detail lines, which say nothing about how
     // many rows they occupy once wrapped, so the height has to be bounded
     // again here.
@@ -690,6 +679,226 @@ pub fn wrap_rendered(
 ) -> Vec<Line<'static>> {
     let indent = structural_indent(&line).unwrap_or(continuation_indent);
     wrap_line(line, width, indent)
+}
+
+/// Wrap all of an expanded log entry, keeping rendered Markdown tables as a
+/// unit. A table wider than the pane gives space back from its widest column
+/// first and wraps that column's cells inside the table. Sending each row
+/// through [`wrap_rendered`] independently would instead break borders at
+/// arbitrary words and make the columns stop lining up.
+fn wrap_log_lines(
+    lines: Vec<Line<'static>>,
+    width: usize,
+    summary_indent: usize,
+) -> Vec<Line<'static>> {
+    let mut wrapped = Vec::new();
+    let mut lines = lines.into_iter();
+    let mut index = 0usize;
+
+    while let Some(line) = lines.next() {
+        if is_table_border(&line, '┌') {
+            let mut table = vec![line];
+            for next in lines.by_ref() {
+                let is_bottom = is_table_border(&next, '└');
+                table.push(next);
+                if is_bottom {
+                    break;
+                }
+            }
+            if let Some(resized) = resize_rendered_table(&table, width) {
+                wrapped.extend(resized);
+                index += table.len();
+                continue;
+            }
+            for line in table {
+                wrapped.extend(wrap_rendered(line, width, DETAIL_INDENT.len()));
+                index += 1;
+            }
+            continue;
+        }
+
+        let continuation_indent = if index == 0 {
+            summary_indent
+        } else {
+            DETAIL_INDENT.len()
+        };
+        wrapped.extend(wrap_rendered(line, width, continuation_indent));
+        index += 1;
+    }
+    wrapped
+}
+
+fn is_table_border(line: &Line<'_>, border: char) -> bool {
+    line.spans
+        .iter()
+        .flat_map(|span| span.content.chars())
+        .find(|ch| !ch.is_whitespace())
+        == Some(border)
+}
+
+/// Resize a complete `tui-markdown` table to `width` and preserve its styles.
+/// Returns `None` for an unfamiliar table shape so the normal safe wrapper can
+/// still handle it.
+fn resize_rendered_table(table: &[Line<'static>], width: usize) -> Option<Vec<Line<'static>>> {
+    let top = table.first()?;
+    if top.width() <= width {
+        return Some(table.to_vec());
+    }
+    let top_text = line_text(top);
+    let trimmed = top_text.trim_start();
+    let prefix_width = top_text.len() - trimmed.len();
+    let inside = trimmed.strip_prefix('┌')?.strip_suffix('┐')?;
+    let mut column_widths: Vec<usize> = inside
+        .split('┬')
+        .map(|segment| segment.chars().count().checked_sub(2))
+        .collect::<Option<_>>()?;
+    if column_widths.is_empty() {
+        return None;
+    }
+
+    let fixed_width = prefix_width + column_widths.len() * 3 + 1;
+    let available_content = width.checked_sub(fixed_width)?;
+    if available_content < column_widths.len() {
+        return None;
+    }
+    while column_widths.iter().sum::<usize>() > available_content {
+        let (widest, &widest_width) = column_widths
+            .iter()
+            .enumerate()
+            .max_by_key(|&(index, column_width)| (*column_width, std::cmp::Reverse(index)))?;
+        if widest_width <= 1 {
+            return None;
+        }
+        column_widths[widest] -= 1;
+    }
+
+    let mut resized = Vec::new();
+    for line in table {
+        let text = line_text(line);
+        let first = text.trim_start().chars().next()?;
+        match first {
+            '┌' => resized.push(resized_border(line, &column_widths, '┌', '┬', '┐')?),
+            '├' => resized.push(resized_border(line, &column_widths, '├', '┼', '┤')?),
+            '└' => resized.push(resized_border(line, &column_widths, '└', '┴', '┘')?),
+            '│' => resized.extend(resized_row(line, &column_widths)?),
+            _ => return None,
+        }
+    }
+    Some(resized)
+}
+
+fn line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn resized_border(
+    line: &Line<'static>,
+    widths: &[usize],
+    left: char,
+    intersection: char,
+    right: char,
+) -> Option<Line<'static>> {
+    let border_index = line
+        .spans
+        .iter()
+        .position(|span| span.content.contains(left))?;
+    let mut spans = line.spans[..border_index].to_vec();
+    let style = line.spans[border_index].style;
+    let mut border = String::new();
+    border.push(left);
+    for (index, width) in widths.iter().enumerate() {
+        border.push_str(&"─".repeat(width + 2));
+        border.push(if index + 1 == widths.len() {
+            right
+        } else {
+            intersection
+        });
+    }
+    spans.push(Span::styled(border, style));
+    Some(Line::from(spans).style(line.style))
+}
+
+fn resized_row(line: &Line<'static>, widths: &[usize]) -> Option<Vec<Line<'static>>> {
+    let first_border = line
+        .spans
+        .iter()
+        .position(|span| span.content.as_ref() == "│")?;
+    let prefix = line.spans[..first_border].to_vec();
+    let border_style = line.spans[first_border].style;
+    let mut cells = Vec::new();
+    let mut cell = Vec::new();
+    for span in &line.spans[first_border + 1..] {
+        if span.content.as_ref() == "│" {
+            cells.push(trim_cell(std::mem::take(&mut cell)));
+        } else {
+            cell.push(span.clone());
+        }
+    }
+    if cells.len() != widths.len() {
+        return None;
+    }
+
+    let wrapped_cells: Vec<Vec<Line<'static>>> = cells
+        .into_iter()
+        .zip(widths)
+        .map(|(cell, &width)| wrap_line(Line::from(cell), width, 0))
+        .collect();
+    let height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
+    let mut rows = Vec::with_capacity(height);
+    for row_index in 0..height {
+        let mut spans = prefix.clone();
+        spans.push(Span::styled("│", border_style));
+        for (column, &width) in widths.iter().enumerate() {
+            let content = wrapped_cells[column].get(row_index);
+            let content_width = content.map(Line::width).unwrap_or(0);
+            let padding_style = content
+                .and_then(|line| line.spans.first())
+                .map(|span| span.style)
+                .or_else(|| {
+                    wrapped_cells[column][0]
+                        .spans
+                        .first()
+                        .map(|span| span.style)
+                })
+                .unwrap_or_default();
+            spans.push(Span::styled(" ", padding_style));
+            if let Some(content) = content {
+                spans.extend(content.spans.clone());
+            }
+            spans.push(Span::styled(
+                " ".repeat(width.saturating_sub(content_width) + 1),
+                padding_style,
+            ));
+            spans.push(Span::styled("│", border_style));
+        }
+        rows.push(Line::from(spans).style(line.style));
+    }
+    Some(rows)
+}
+
+fn trim_cell(mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    while spans
+        .first()
+        .is_some_and(|span| span.content.trim().is_empty())
+    {
+        spans.remove(0);
+    }
+    while spans
+        .last()
+        .is_some_and(|span| span.content.trim().is_empty())
+    {
+        spans.pop();
+    }
+    if let Some(first) = spans.first_mut() {
+        first.content = first.content.trim_start().to_owned().into();
+    }
+    if let Some(last) = spans.last_mut() {
+        last.content = last.content.trim_end().to_owned().into();
+    }
+    spans
 }
 
 /// Word-wrap one logical line to `width` columns, preserving each span's
@@ -1105,7 +1314,9 @@ fn format_scaled(tokens: u64, unit: u64, suffix: char) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_tokens, list_offset_with_scrolloff};
+    use super::{format_tokens, list_offset_with_scrolloff, wrap_log_lines};
+    use crate::markdown::markdown_block_lines;
+    use ratatui::style::Style;
 
     #[test]
     fn token_counts_read_as_k_and_m_past_a_thousand() {
@@ -1115,6 +1326,51 @@ mod tests {
         assert_eq!(format_tokens(126_400), "126k");
         assert_eq!(format_tokens(1_350_000), "1.3M");
         assert_eq!(format_tokens(12_000_000), "12M");
+    }
+
+    #[test]
+    fn wide_markdown_tables_wrap_the_widest_column_inside_the_borders() {
+        let markdown = "| State | Explanation |\n\
+                        |---|---|\n\
+                        | stable | This deliberately long explanation wraps inside its cell |";
+        let lines = markdown_block_lines(markdown, Style::default(), "    ");
+        let wrapped = wrap_log_lines(lines, 36, 0);
+        let rendered: Vec<String> = wrapped
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert!(wrapped.iter().all(|line| line.width() == 36));
+        assert_eq!(
+            rendered.first().and_then(|line| line.chars().nth(4)),
+            Some('┌')
+        );
+        assert_eq!(
+            rendered.last().and_then(|line| line.chars().nth(4)),
+            Some('└')
+        );
+        assert!(rendered.iter().all(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with('│') || trimmed.matches('│').count() == 3
+        }));
+
+        let body: Vec<&String> = rendered
+            .iter()
+            .skip_while(|line| !line.trim_start().starts_with('├'))
+            .skip(1)
+            .take_while(|line| !line.trim_start().starts_with('└'))
+            .collect();
+        assert!(body.len() > 1, "the long cell should add table rows");
+        assert_eq!(
+            body.iter().filter(|line| line.contains("stable")).count(),
+            1
+        );
+        assert!(body.iter().skip(1).any(|line| line.contains("inside")));
     }
 
     /// A live row can change height without the selection moving: streamed
