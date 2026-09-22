@@ -2029,6 +2029,16 @@ impl ServerState {
             .with_context(|| format!("no live interaction for session {id:?}"))
     }
 
+    /// Whether an agent this server owns is serving `id`. Distinguishes a
+    /// Session with a process behind it from one that only exists on disk.
+    fn has_live_interaction(&self, id: &str) -> bool {
+        self.inner
+            .interactions
+            .lock()
+            .expect("server interaction lock poisoned")
+            .contains_key(id)
+    }
+
     /// Open a row a previous run left, if `id` names one.
     ///
     /// There is no agent and no live update stream behind it, so the history
@@ -2543,11 +2553,17 @@ impl ServerState {
                 // not represented by a live `ManagedInteraction` here, so the
                 // flag is written straight to the Session's stored metadata
                 // and the mirrored row is told to catch up.
-                if self.inner.roster.holds(&id) {
+                //
+                // A Session that never ran under this server is not even
+                // mirrored in the roster — the stored-sessions picker lists it
+                // straight off disk — and completion is still its own stored
+                // property, so the same write serves it with no row to update.
+                if !self.has_live_interaction(&id) {
                     let summary = self.stored_summary(&id)?;
                     journal::store_session_completed(&summary.path, completed)?;
-                    self.inner.roster.set_completed(&id, completed);
-                    self.publish_roster();
+                    if self.inner.roster.set_completed(&id, completed) {
+                        self.publish_roster();
+                    }
                     return Ok(Response::Accepted);
                 }
                 self.interaction(&id)?.set_completed(completed)?;
@@ -3566,6 +3582,38 @@ mod tests {
         let session_path = journal.path().parent().unwrap().to_path_buf();
         drop(journal);
         (store, host, state, workspace, id, session_path)
+    }
+
+    /// Completion belongs to the stored Session, so the stored-sessions
+    /// picker can mark one this server never ran — there is no live
+    /// interaction behind such a row, and demanding one made the whole view's
+    /// `C` fail.
+    #[test]
+    fn a_stored_session_is_completed_without_an_interaction_behind_it() {
+        let (store, host, state, _workspace, id, session_path) = stored_session("complete-stored");
+
+        assert!(!journal::read_session_completed(&session_path).unwrap());
+
+        state
+            .handle(Request::SetSessionCompleted {
+                id: id.clone(),
+                completed: true,
+            })
+            .expect("completing a stored Session needs no live interaction");
+        assert!(journal::read_session_completed(&session_path).unwrap());
+
+        // And back: revealing a completed row is only useful if it can be
+        // unmarked from the same place.
+        state
+            .handle(Request::SetSessionCompleted {
+                id,
+                completed: false,
+            })
+            .unwrap();
+        assert!(!journal::read_session_completed(&session_path).unwrap());
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
     }
 
     /// The Session states which checkout it works in, so a resume asks the
