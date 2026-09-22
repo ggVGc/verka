@@ -14,9 +14,12 @@
 //! restored row is therefore [`InteractionActivity::Stopped`] with
 //! [`InteractionActivityReason::ServerRestarted`], whatever it was doing when
 //! the previous run ended — which is both what is true and what tells the
-//! operator that resuming the Session is what would bring the agent back. The
-//! exception is a row the operator had finished with: completion is itself why
-//! that one is stopped, and the restart has nothing to add to it.
+//! operator that resuming the Session is what would bring the agent back.
+//! Completion is not one of the things a restart can overwrite this way: it is
+//! a property of the Session (see [`crate::protocol::SessionSummary::completed`]),
+//! not a reason a row is stopped, so it is read fresh off the Session's stored
+//! metadata every time the roster is opened rather than carried in the
+//! mirrored row at all.
 //!
 //! The mirrored row is the summary itself rather than a key to rebuild one
 //! from. Most of a summary could be re-derived from the Session's stored
@@ -82,19 +85,21 @@ impl Roster {
             // operator a conversation they cannot open.
             .filter(|entry| entry.session_path.is_dir())
             .map(|mut entry| {
-                // A row the operator had finished with keeps that as why it is
-                // stopped: the restart is not what ended it, and the
-                // completion would otherwise be lost with the reason.
-                let reason = match entry.summary.completed() {
-                    true => InteractionActivityReason::Completed,
-                    false => InteractionActivityReason::ServerRestarted,
-                };
                 entry.summary.activity = InteractionActivity::Stopped;
-                entry.summary.activity_reason = Some(reason);
+                entry.summary.activity_reason = Some(InteractionActivityReason::ServerRestarted);
                 // Deliberately not restored, for the reason the quota log does
                 // not restore its announcements: a notification is owed to the
                 // operator of the run that raised it, and this is not that run.
                 entry.summary.idle_unseen = false;
+                // Completion lives with the Session, not the mirrored row, so
+                // it is read back from there rather than trusted from disk —
+                // the mirrored value is stale the moment anything else touches
+                // the Session's metadata. A Session whose file has since gone
+                // missing (caught by the filter above, but a race is still
+                // possible) is read as not completed rather than dropping the
+                // row a second time.
+                entry.summary.completed =
+                    crate::journal::read_session_completed(&entry.session_path).unwrap_or(false);
                 (entry.summary.id.clone(), entry)
             })
             .collect();
@@ -129,15 +134,16 @@ impl Roster {
         self.lock().contains_key(id)
     }
 
-    /// Mark a restored, necessarily stopped row as completed. Unlike a live
-    /// interaction, it has no process left to stop: only the reason it is
-    /// stopped changes.
-    pub fn complete(&self, id: &str) -> bool {
+    /// Reflect a completion change already written to the Session's stored
+    /// metadata onto a restored row's mirrored summary. Unlike a live
+    /// interaction, it has no process left to stop; the row was stopped
+    /// already, and only the flag it carries for display changes.
+    pub fn set_completed(&self, id: &str, completed: bool) -> bool {
         let mut restored = self.lock();
         let Some(entry) = restored.get_mut(id) else {
             return false;
         };
-        entry.summary.activity_reason = Some(InteractionActivityReason::Completed);
+        entry.summary.completed = completed;
         true
     }
 
@@ -263,6 +269,7 @@ mod tests {
             last_message: Some("still going".into()),
             auto_retry: false,
             events: 12,
+            completed: false,
         }
     }
 
@@ -315,21 +322,52 @@ mod tests {
     #[test]
     fn a_restored_row_can_be_marked_completed() {
         let root = store("complete");
-        let session = root.join("session-complete");
-        std::fs::create_dir_all(&session).unwrap();
-        Roster::open(&root).publish(vec![(session, summary("session-complete"))]);
+        let host = store("complete-host");
+        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
+        let profile = crate::agent::Profile {
+            name: "codex".into(),
+            command: vec!["true".into()],
+            protocol: crate::event::Protocol::CodexJsonl,
+            mounts: Vec::new(),
+            environment: Default::default(),
+            network: false,
+            message_format: crate::agent::MessageFormat::PlainLine,
+            single_turn: false,
+        };
+        let (_, id) = crate::journal::Journal::create_in_workspace(
+            &root,
+            &workspace.id,
+            &profile,
+            &Selection {
+                provider: Provider::Codex,
+                model: "codex".into(),
+                effort: Effort::Medium,
+            },
+            None,
+        )
+        .unwrap();
+        let session = crate::workspace::sessions_dir(&root, &workspace.id).join(&id);
+        let mut row = summary(&id);
+        row.workspace_id = workspace.id.clone();
+        Roster::open(&root).publish(vec![(session.clone(), row)]);
 
+        // Set from a live interaction, as `set_completed` does: written to the
+        // Session's own metadata first, then mirrored onto the roster row.
+        crate::journal::store_session_completed(&session, true).unwrap();
         let roster = Roster::open(&root);
-        assert!(roster.complete("session-complete"));
+        assert!(roster.set_completed(&id, true));
         roster.publish(Vec::new());
 
+        // Read back fresh, the way the next run does — the mirrored row is
+        // never itself the record of it.
         let restored = Roster::open(&root).restored();
-        assert!(restored[0].completed());
+        assert!(restored[0].completed);
         assert_eq!(
             restored[0].activity_reason,
-            Some(InteractionActivityReason::Completed)
+            Some(InteractionActivityReason::ServerRestarted)
         );
         std::fs::remove_dir_all(root).ok();
+        std::fs::remove_dir_all(host).ok();
     }
 
     /// A run that inherits rows and opens none of its own must not drop the

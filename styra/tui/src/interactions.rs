@@ -91,7 +91,7 @@ impl LiveInteractions {
             .filter_map(|(index, interaction)| {
                 ((!self.only_current_workspace
                     || workspace_id.is_some_and(|id| interaction.workspace_id == id))
-                    && (self.show_completed || !interaction.completed()))
+                    && (self.show_completed || !interaction.completed))
                     .then_some(index)
             })
             .collect()
@@ -460,7 +460,7 @@ fn is_idle(interaction: &InteractionSummary) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use styra_protocol::{DrivaOptions, InteractionActivity, InteractionActivityReason};
+    use styra_protocol::{DrivaOptions, InteractionActivity};
 
     fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
@@ -486,14 +486,15 @@ mod tests {
             idle_unseen: false,
             last_message: None,
             events: 0,
+            completed: false,
         }
     }
 
-    /// An interaction the operator finished with: stopped, and stopped for
-    /// that reason.
+    /// An interaction the operator finished with: stopped, and marked
+    /// complete on the Session it serves.
     fn completed(id: &str) -> InteractionSummary {
         let mut interaction = interaction(id, InteractionActivity::Stopped);
-        interaction.activity_reason = Some(InteractionActivityReason::Completed);
+        interaction.completed = true;
         interaction
     }
 
@@ -566,9 +567,10 @@ mod tests {
         assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1]);
     }
 
-    /// Completion is the reason an interaction is stopped, so an interaction
-    /// started again is not completed any more — and the listing shows it
-    /// without anything having to clear a mark.
+    /// Completion is a property of the Session, cleared by the server when it
+    /// is resumed, so an interaction started again arrives already not
+    /// completed — and the listing shows it without anything here having to
+    /// clear a mark.
     #[test]
     fn an_interaction_started_again_is_no_longer_completed() {
         let mut live = LiveInteractions::default();

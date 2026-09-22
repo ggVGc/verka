@@ -186,11 +186,12 @@ M.types.Request = {
         { name = "id", required = true, type = { kind = "string" } },
       },
     } },
-    { name = "complete_interaction", payload = {
+    { name = "set_session_completed", payload = {
       kind = "struct",
       deny_unknown_fields = true,
       fields = {
         { name = "id", required = true, type = { kind = "string" } },
+        { name = "completed", required = true, type = { kind = "boolean" } },
       },
     } },
     { name = "close_interaction", payload = {
@@ -598,6 +599,7 @@ M.types.SessionSummary = {
     { name = "last_event_at_ms", required = false, type = { kind = "optional", inner = { kind = "number", integer = true } } },
     { name = "last_event_age", required = false, type = { kind = "string" } },
     { name = "origin", required = false, type = { kind = "optional", inner = { kind = "ref", name = "SessionOrigin" } } },
+    { name = "completed", required = false, type = { kind = "boolean" } },
   },
 }
 
@@ -655,6 +657,7 @@ M.types.InteractionSummary = {
     { name = "last_message", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "auto_retry", required = false, type = { kind = "boolean" } },
     { name = "events", required = false, type = { kind = "number", integer = true } },
+    { name = "completed", required = false, type = { kind = "boolean" } },
   },
 }
 
@@ -907,7 +910,6 @@ M.types.InteractionActivityReason = {
     } },
     { name = "background_finished", payload = { kind = "unit" } },
     { name = "paused", payload = { kind = "unit" } },
-    { name = "completed", payload = { kind = "unit" } },
     { name = "exited", payload = {
       kind = "struct",
       fields = {
@@ -1380,7 +1382,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "complete_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1410,7 +1412,7 @@ M.Request = {
   CLEAR_QUEUED_MESSAGES = "clear_queued_messages",
   INTERRUPT_INTERACTION = "interrupt_interaction",
   STOP_INTERACTION = "stop_interaction",
-  COMPLETE_INTERACTION = "complete_interaction",
+  SET_SESSION_COMPLETED = "set_session_completed",
   CLOSE_INTERACTION = "close_interaction",
   LOAD_INTERACTION = "load_interaction",
   UPDATES = "updates",
@@ -1529,7 +1531,7 @@ M.InteractionActivity = {
   STOPPED = "stopped",
 }
 
-M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "completed", "exited", "server_restarted" }
+M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "exited", "server_restarted" }
 --- Wire spellings of `InteractionActivityReason`.
 M.InteractionActivityReason = {
   TURN_COMPLETED = "turn_completed",
@@ -1538,7 +1540,6 @@ M.InteractionActivityReason = {
   RATE_LIMITED = "rate_limited",
   BACKGROUND_FINISHED = "background_finished",
   PAUSED = "paused",
-  COMPLETED = "completed",
   EXITED = "exited",
   SERVER_RESTARTED = "server_restarted",
 }
@@ -2289,15 +2290,17 @@ function M.request.stop_interaction(data)
   return M.build("stop_interaction", data)
 end
 
---- Stop an interaction because the operator is finished with it: it stops
---- for `InteractionActivityReason::Completed`. The row stays listed and
---- can be reopened, but clients normally hide completed rows; resuming the
---- Session starts it again, and it is then no longer completed.
+--- Set whether the operator is finished with a Session. `true` stops any
+--- live interaction serving it (the row stays listed, but clients
+--- normally hide completed rows). The flag lives with the Session, not
+--- the interaction, so it survives the interaction stopping and is what
+--- the stored-sessions picker filters on; resuming the Session clears it.
 ---
 --- Fields of `data`:
----   id  string
-function M.request.complete_interaction(data)
-  return M.build("complete_interaction", data)
+---   id         string
+---   completed  boolean
+function M.request.set_session_completed(data)
+  return M.build("set_session_completed", data)
 end
 
 --- Stop an interaction and drop the server's record of it, so the Session

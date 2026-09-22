@@ -385,10 +385,14 @@ impl Client {
         }
     }
 
-    /// Stop an interaction as finished, which normally hides its row from the
-    /// interactions navigator until the Session is started again.
-    pub fn complete_interaction(&self, id: &str) -> Result<()> {
-        match self.request(Request::CompleteInteraction { id: id.to_owned() })? {
+    /// Set whether the operator is finished with a Session. `true` stops its
+    /// live interaction, if any, and normally hides its row from the
+    /// interactions navigator; resuming the Session clears it again.
+    pub fn set_session_completed(&self, id: &str, completed: bool) -> Result<()> {
+        match self.request(Request::SetSessionCompleted {
+            id: id.to_owned(),
+            completed,
+        })? {
             Response::Accepted => Ok(()),
             other => unexpected("accepted", other),
         }

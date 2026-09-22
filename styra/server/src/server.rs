@@ -330,6 +330,11 @@ struct ManagedInteraction {
     /// retry resumes the Session as a new interaction and the setting has to
     /// survive that. See [`ServerState::retry_after_reset`].
     auto_retry: Arc<AtomicBool>,
+    /// Whether the operator has finished with this interaction's Session;
+    /// mirrored into `session_path` since it is a property of the Session,
+    /// not of this interaction — see [`crate::protocol::SessionSummary::completed`].
+    /// Read back on resume, which is what clears it.
+    completed: Arc<AtomicBool>,
     /// The window that refused this interaction's work, once one has — the
     /// reason it stopped, as opposed to a figure about how full it was. What
     /// makes this interaction one a reset should come back to.
@@ -478,6 +483,7 @@ impl ManagedInteraction {
             last_message: self.last_message(),
             auto_retry: self.auto_retry.load(Ordering::Acquire),
             events: self.events.load(Ordering::Acquire),
+            completed: self.completed.load(Ordering::Acquire),
         }
     }
 
@@ -726,15 +732,20 @@ impl ManagedInteraction {
         self.interaction.stop();
     }
 
-    /// Stop the interaction as finished. Unlike [`Self::stop`] the reason is
-    /// asserted rather than offered: the operator saying the work is done is
-    /// news now, whatever the interaction had already stopped for.
-    fn complete(&self) {
-        self.activity.set(
-            InteractionActivity::Stopped,
-            Some(InteractionActivityReason::Completed),
-        );
-        self.interaction.stop();
+    /// Set whether the operator has finished with this interaction's Session,
+    /// mirroring the flag to `session_path` first so a crash between the two
+    /// never leaves the live summary claiming a state the store disagrees
+    /// with. Marking it complete also stops the interaction — there is
+    /// nothing left for its agent to do — with the ordinary [`Self::stop`]
+    /// reason: completion is a fact about the Session, not a new way for an
+    /// interaction to be stopped.
+    fn set_completed(&self, completed: bool) -> Result<()> {
+        journal::store_session_completed(&self.session_path, completed)?;
+        self.completed.store(completed, Ordering::Release);
+        if completed {
+            self.stop();
+        }
+        Ok(())
     }
 
     fn persist_queue(&self, queue: &std::collections::VecDeque<QueuedMessage>) -> Result<()> {
@@ -1101,6 +1112,7 @@ impl ServerState {
             shell,
             queue: Mutex::new(std::collections::VecDeque::new()),
             auto_retry: Arc::new(AtomicBool::new(false)),
+            completed: Arc::new(AtomicBool::new(false)),
             refused_by: Arc::new(Mutex::new(None)),
             interrupt_requested: Arc::clone(&interrupt_requested),
             launch: request.launch.clone(),
@@ -1594,6 +1606,10 @@ impl ServerState {
         // idle enough to send them), so reload them rather than starting empty.
         let queued = journal::read_queued_messages(&summary.path)?;
         let auto_retry = journal::read_session_auto_retry(&summary.path)?;
+        // Resuming is what undoes completion: an interaction working on the
+        // Session again is not one the operator is finished with, and there
+        // is no separate client action to clear the flag.
+        journal::store_session_completed(&summary.path, false)?;
         let interrupt_requested = Arc::new(AtomicBool::new(false));
         let managed = Arc::new(ManagedInteraction {
             interaction,
@@ -1612,6 +1628,7 @@ impl ServerState {
             // this resume is the operator's standing answer to a rate limit,
             // and a Session that keeps hitting the window has to keep it.
             auto_retry: Arc::new(AtomicBool::new(auto_retry)),
+            completed: Arc::new(AtomicBool::new(false)),
             refused_by: Arc::new(Mutex::new(None)),
             interrupt_requested: Arc::clone(&interrupt_requested),
             launch: request.launch.clone(),
@@ -2520,15 +2537,20 @@ impl ServerState {
                 self.interaction(&id)?.stop();
                 Ok(Response::Accepted)
             }
-            Request::CompleteInteraction { id } => {
+            Request::SetSessionCompleted { id, completed } => {
                 // Restored rows already stopped when the previous server
                 // exited. They are still selectable in the navigator but are
-                // not represented by a live `ManagedInteraction` here.
-                if self.inner.roster.complete(&id) {
+                // not represented by a live `ManagedInteraction` here, so the
+                // flag is written straight to the Session's stored metadata
+                // and the mirrored row is told to catch up.
+                if self.inner.roster.holds(&id) {
+                    let summary = self.stored_summary(&id)?;
+                    journal::store_session_completed(&summary.path, completed)?;
+                    self.inner.roster.set_completed(&id, completed);
                     self.publish_roster();
                     return Ok(Response::Accepted);
                 }
-                self.interaction(&id)?.complete();
+                self.interaction(&id)?.set_completed(completed)?;
                 self.publish_roster();
                 Ok(Response::Accepted)
             }

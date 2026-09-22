@@ -394,12 +394,14 @@ pub enum Request {
     StopInteraction {
         id: String,
     },
-    /// Stop an interaction because the operator is finished with it: it stops
-    /// for [`InteractionActivityReason::Completed`]. The row stays listed and
-    /// can be reopened, but clients normally hide completed rows; resuming the
-    /// Session starts it again, and it is then no longer completed.
-    CompleteInteraction {
+    /// Set whether the operator is finished with a Session. `true` stops any
+    /// live interaction serving it (the row stays listed, but clients
+    /// normally hide completed rows). The flag lives with the Session, not
+    /// the interaction, so it survives the interaction stopping and is what
+    /// the stored-sessions picker filters on; resuming the Session clears it.
+    SetSessionCompleted {
         id: String,
+        completed: bool,
     },
     /// Stop an interaction and drop the server's record of it, so the Session
     /// is only what is stored on disk: it no longer appears in the

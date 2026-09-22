@@ -123,6 +123,7 @@ pub fn render_picker(
     preview: Preview<'_>,
     filter: Option<&str>,
     searching: bool,
+    show_completed: bool,
 ) {
     let area = frame.area();
     let panes = Layout::default()
@@ -132,7 +133,7 @@ pub fn render_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(session_picker_title(order, filter, searching));
+        .title(session_picker_title(order, filter, searching, show_completed));
 
     if sessions.is_empty() {
         render_placeholder(frame, block, panes[0], "  no sessions found");
@@ -160,18 +161,28 @@ pub fn render_picker(
     render_session_preview(frame, session, preview, panes[1]);
 }
 
-fn session_picker_title(order: SessionOrder, filter: Option<&str>, searching: bool) -> String {
+fn session_picker_title(
+    order: SessionOrder,
+    filter: Option<&str>,
+    searching: bool,
+    show_completed: bool,
+) -> String {
     let filter = filter
         .filter(|filter| !filter.is_empty())
         .map(|filter| format!(" · filter: {filter}"))
         .unwrap_or_default();
     let searching = searching.then_some(" · searching").unwrap_or("");
+    let completed = if show_completed {
+        "completed shown"
+    } else {
+        "completed hidden"
+    };
     // The shortcuts live behind `?` rather than along this line: only a few
-    // ever fit, and the ones that did crowded out the state — the filter, and
-    // which way the list is sorted — that the operator cannot get anywhere
-    // else.
+    // ever fit, and the ones that did crowded out the state — the filter,
+    // which way the list is sorted, and whether completed sessions are shown
+    // — that the operator cannot get anywhere else.
     format!(
-        " styra · sessions{filter}{searching} · sort: {} · ? keys ",
+        " styra · sessions{filter}{searching} · sort: {} · {completed} · ? keys ",
         order.label(),
     )
 }
@@ -611,7 +622,7 @@ fn session_item(
         }
         _ => session.age.clone(),
     };
-    ListItem::new(Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             tree_marker(depth, selected),
             Style::default().fg(if selected {
@@ -634,7 +645,16 @@ fn session_item(
             format!(" · {age}"),
             Style::default().fg(palette::ADDITIONAL_INFO),
         ),
-    ]))
+    ];
+    if session.completed {
+        spans.push(Span::styled(
+            " · COMPLETED",
+            Style::default()
+                .fg(palette::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    ListItem::new(Line::from(spans))
 }
 
 fn tree_marker(depth: usize, selected: bool) -> String {
@@ -674,6 +694,7 @@ mod tests {
             last_event_at_ms: None,
             last_event_age: String::new(),
             origin: None,
+            completed: false,
         }
     }
 
@@ -688,6 +709,7 @@ mod tests {
                     SessionOrder::LastActivity,
                     Preview::Ready(&[]),
                     None,
+                    false,
                     false,
                 )
             })
@@ -804,6 +826,7 @@ mod tests {
                     SessionOrder::LastActivity,
                     Preview::Ready(&updates),
                     None,
+                    false,
                     false,
                 )
             })
@@ -991,6 +1014,7 @@ mod tests {
             idle_unseen: false,
             last_message: None,
             events: 0,
+            completed: false,
         }
     }
 
@@ -1011,6 +1035,7 @@ mod tests {
                     SessionOrder::LastActivity,
                     Preview::Ready(&[]),
                     None,
+                    false,
                     false,
                 )
             })

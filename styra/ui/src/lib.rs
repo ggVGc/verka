@@ -140,6 +140,7 @@ pub trait Ui {
         preview: picker::Preview<'_>,
         filter: Option<&str>,
         searching: bool,
+        show_completed: bool,
     ) -> UiResult<RenderFeedback>;
 
     fn render_session_picker_message(
@@ -150,6 +151,7 @@ pub trait Ui {
         preview: picker::Preview<'_>,
         filter: Option<&str>,
         searching: bool,
+        show_completed: bool,
         title: &str,
         message: &str,
     ) -> UiResult<RenderFeedback>;
@@ -162,6 +164,7 @@ pub trait Ui {
         preview: picker::Preview<'_>,
         filter: Option<&str>,
         searching: bool,
+        show_completed: bool,
         value: &str,
     ) -> UiResult<RenderFeedback>;
 
@@ -303,6 +306,7 @@ where
         preview: picker::Preview<'_>,
         filter: Option<&str>,
         searching: bool,
+        show_completed: bool,
     ) -> UiResult<RenderFeedback> {
         self.render_session_picker_with(
             sessions,
@@ -311,6 +315,7 @@ where
             preview,
             filter,
             searching,
+            show_completed,
             |_| {},
         )
     }
@@ -323,6 +328,7 @@ where
         preview: picker::Preview<'_>,
         filter: Option<&str>,
         searching: bool,
+        show_completed: bool,
         title: &str,
         message: &str,
     ) -> UiResult<RenderFeedback> {
@@ -333,6 +339,7 @@ where
             preview,
             filter,
             searching,
+            show_completed,
             |frame| picker::render_message_popup(frame, title, message),
         )
     }
@@ -345,6 +352,7 @@ where
         preview: picker::Preview<'_>,
         filter: Option<&str>,
         searching: bool,
+        show_completed: bool,
         value: &str,
     ) -> UiResult<RenderFeedback> {
         self.render_session_picker_with(
@@ -354,6 +362,7 @@ where
             preview,
             filter,
             searching,
+            show_completed,
             |frame| picker::render_name_prompt(frame, value),
         )
     }
@@ -366,10 +375,20 @@ where
         preview: picker::Preview<'_>,
         filter: Option<&str>,
         searching: bool,
+        show_completed: bool,
         overlay: impl FnOnce(&mut Frame),
     ) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
-            picker::render_picker(frame, sessions, selected, order, preview, filter, searching);
+            picker::render_picker(
+                frame,
+                sessions,
+                selected,
+                order,
+                preview,
+                filter,
+                searching,
+                show_completed,
+            );
             overlay(frame);
             RenderFeedback::default()
         })
@@ -465,9 +484,17 @@ where
         preview: picker::Preview<'_>,
         filter: Option<&str>,
         searching: bool,
+        show_completed: bool,
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_session_picker(
-            self, sessions, selected, order, preview, filter, searching,
+            self,
+            sessions,
+            selected,
+            order,
+            preview,
+            filter,
+            searching,
+            show_completed,
         )
     }
 
@@ -479,11 +506,21 @@ where
         preview: picker::Preview<'_>,
         filter: Option<&str>,
         searching: bool,
+        show_completed: bool,
         title: &str,
         message: &str,
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_session_picker_message(
-            self, sessions, selected, order, preview, filter, searching, title, message,
+            self,
+            sessions,
+            selected,
+            order,
+            preview,
+            filter,
+            searching,
+            show_completed,
+            title,
+            message,
         )
     }
 
@@ -495,10 +532,19 @@ where
         preview: picker::Preview<'_>,
         filter: Option<&str>,
         searching: bool,
+        show_completed: bool,
         value: &str,
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_session_picker_name_prompt(
-            self, sessions, selected, order, preview, filter, searching, value,
+            self,
+            sessions,
+            selected,
+            order,
+            preview,
+            filter,
+            searching,
+            show_completed,
+            value,
         )
     }
 

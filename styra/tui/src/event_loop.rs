@@ -807,15 +807,15 @@ pub fn run(
                     else {
                         continue;
                     };
-                    if let Err(error) = client.complete_interaction(&interaction.id) {
+                    if let Err(error) = client.set_session_completed(&interaction.id, true) {
                         app.show_action_message(format!(
                             "could not complete interaction: {error:#}"
                         ));
                         continue;
                     }
-                    // Completion is a way of being stopped, so the row is still
-                    // listed and the server is what says so: take its word for
-                    // the new state rather than writing one here.
+                    // Completion is a Session property the server owns, so the
+                    // row is still listed and the server is what says so: take
+                    // its word for the new state rather than writing one here.
                     if let Ok(interactions) = client.list_interactions() {
                         app.interactions.refresh(interactions);
                     }

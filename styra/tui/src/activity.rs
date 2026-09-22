@@ -110,7 +110,6 @@ impl IdleReason {
             // Each of these describes an interaction that stopped rather than
             // one waiting for input, so as idle reasons they say nothing.
             Some(InteractionActivityReason::Paused)
-            | Some(InteractionActivityReason::Completed)
             | Some(InteractionActivityReason::Exited { .. })
             | Some(InteractionActivityReason::ServerRestarted)
             | None => IdleReason::Reported,
@@ -162,13 +161,19 @@ pub enum StopReason {
 impl StopReason {
     /// The server's reason for an interaction that takes no more messages.
     ///
-    /// The reasons that describe a turn ending — completed, interrupted,
-    /// background work running out — say nothing about why the interaction
-    /// then stopped, so they come through as the bare fact that it has.
-    pub fn reported(reason: Option<&InteractionActivityReason>) -> Self {
+    /// Completion is checked first and independently of `reason`: it is a
+    /// property of the Session, not one of the ways a turn can end, so it can
+    /// be true alongside any reason the interaction happened to stop for.
+    ///
+    /// The reasons that describe a turn ending — interrupted, background work
+    /// running out — say nothing about why the interaction then stopped, so
+    /// they come through as the bare fact that it has.
+    pub fn reported(completed: bool, reason: Option<&InteractionActivityReason>) -> Self {
+        if completed {
+            return StopReason::Completed;
+        }
         match reason {
             Some(InteractionActivityReason::Paused) => StopReason::Paused,
-            Some(InteractionActivityReason::Completed) => StopReason::Completed,
             Some(InteractionActivityReason::Exited { exit_code }) => StopReason::Exited {
                 exit_code: *exit_code,
             },
@@ -362,7 +367,9 @@ impl Status {
             InteractionActivity::Pending => Status::Idle(IdleReason::reported(reason)),
             InteractionActivity::Running => Status::Running,
             InteractionActivity::Background => Status::Background,
-            InteractionActivity::Stopped => Status::Stopped(StopReason::reported(reason)),
+            InteractionActivity::Stopped => {
+                Status::Stopped(StopReason::reported(interaction.completed, reason))
+            }
         }
     }
 }
@@ -819,6 +826,7 @@ mod tests {
             last_message: None,
             auto_retry: false,
             events: 0,
+            completed: false,
         }
     }
 

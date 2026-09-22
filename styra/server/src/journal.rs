@@ -60,6 +60,13 @@ struct StoredSessionMeta {
     /// finds nothing here still looks on disk before concluding it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     checkout: Option<Checkout>,
+    /// Whether the operator has finished with this Session. A property of the
+    /// Session rather than of whichever interaction happened to be open when
+    /// it was set, so it outlives that interaction and is what the stored-
+    /// sessions picker filters on. Cleared when the Session is resumed: an
+    /// interaction working on it again is not one the operator is done with.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    completed: bool,
     #[serde(flatten)]
     agent: SessionMeta,
 }
@@ -335,6 +342,7 @@ fn write_session_meta(
         contract: None,
         auto_retry: false,
         checkout: None,
+        completed: false,
         agent: meta.clone(),
     };
     let json = serde_json::to_string_pretty(&stored).context("serializing session metadata")?;
@@ -377,6 +385,7 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
         last_event_at_ms,
         last_event_age: humanize_age(now_ms(), last_event_at_ms),
         origin: meta.origin,
+        completed: meta.completed,
     })
 }
 
@@ -596,6 +605,28 @@ pub fn store_session_auto_retry(path: &Path, auto_retry: bool) -> Result<()> {
         return Ok(());
     }
     stored.auto_retry = auto_retry;
+    write_stored_session_meta(&directory, &stored)
+}
+
+/// Whether the operator has marked this Session as finished with.
+pub fn read_session_completed(path: &Path) -> Result<bool> {
+    Ok(read_stored_session_meta(path)?.completed)
+}
+
+/// Record the operator's completion state for a Session. Kept with the
+/// Session, not the interaction, so it survives the interaction stopping and
+/// is what the stored-sessions picker filters on.
+pub fn store_session_completed(path: &Path, completed: bool) -> Result<()> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    if stored.completed == completed {
+        return Ok(());
+    }
+    stored.completed = completed;
     write_stored_session_meta(&directory, &stored)
 }
 
@@ -1325,6 +1356,38 @@ mod tests {
         std::fs::remove_dir_all(&host).ok();
     }
 
+    /// Completion is a property of the Session, not of whichever interaction
+    /// happened to be open when the operator set it, so it has to round-trip
+    /// through the same stored metadata every other Session property does.
+    #[test]
+    fn completion_is_stored_with_the_session() {
+        let root = temp_dir("completed-store");
+        let host = temp_dir("completed-host");
+        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, _) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+        let directory = journal.path().parent().unwrap();
+
+        assert!(!read_session_completed(directory).unwrap());
+        store_session_completed(directory, true).unwrap();
+        assert!(read_session_completed(directory).unwrap());
+        store_session_completed(directory, false).unwrap();
+        assert!(!read_session_completed(directory).unwrap());
+
+        // And recording it disturbs nothing else about the Session.
+        store_session_completed(directory, true).unwrap();
+        assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
+        assert_eq!(
+            read_session_meta(directory).unwrap().protocol,
+            Protocol::CodexJsonl
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&host).ok();
+    }
+
     #[test]
     fn a_queued_message_keeps_its_contract_across_a_restart() {
         let dir = temp_dir("queue-contract");
@@ -1404,6 +1467,7 @@ mod tests {
             last_event_at_ms: created_at_ms,
             last_event_age: String::new(),
             origin: None,
+            completed: false,
         };
         let mut sessions = vec![
             summary(Some(100)),

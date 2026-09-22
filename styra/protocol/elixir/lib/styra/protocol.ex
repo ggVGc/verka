@@ -196,11 +196,12 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
-        %{name: "complete_interaction", payload: %{
+        %{name: "set_session_completed", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
           fields: [
-            %{name: "id", required: true, type: %{kind: :string}}
+            %{name: "id", required: true, type: %{kind: :string}},
+            %{name: "completed", required: true, type: %{kind: :boolean}}
           ]
         }},
         %{name: "close_interaction", payload: %{
@@ -607,7 +608,8 @@ defmodule Styra.Protocol do
         %{name: "created_at_ms", required: true, type: %{kind: :optional, inner: %{kind: :number, integer: true}}},
         %{name: "last_event_at_ms", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}},
         %{name: "last_event_age", required: false, type: %{kind: :string}},
-        %{name: "origin", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "SessionOrigin"}}}
+        %{name: "origin", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "SessionOrigin"}}},
+        %{name: "completed", required: false, type: %{kind: :boolean}}
       ]
     },
 
@@ -664,7 +666,8 @@ defmodule Styra.Protocol do
         %{name: "idle_unseen", required: false, type: %{kind: :boolean}},
         %{name: "last_message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "auto_retry", required: false, type: %{kind: :boolean}},
-        %{name: "events", required: false, type: %{kind: :number, integer: true}}
+        %{name: "events", required: false, type: %{kind: :number, integer: true}},
+        %{name: "completed", required: false, type: %{kind: :boolean}}
       ]
     },
 
@@ -917,7 +920,6 @@ defmodule Styra.Protocol do
         }},
         %{name: "background_finished", payload: %{kind: :unit}},
         %{name: "paused", payload: %{kind: :unit}},
-        %{name: "completed", payload: %{kind: :unit}},
         %{name: "exited", payload: %{
           kind: :struct,
           fields: [
@@ -1427,7 +1429,7 @@ defmodule Styra.Protocol do
     "clear_queued_messages",
     "interrupt_interaction",
     "stop_interaction",
-    "complete_interaction",
+    "set_session_completed",
     "close_interaction",
     "load_interaction",
     "updates",
@@ -2259,19 +2261,21 @@ defmodule Styra.Protocol do
     def stop_interaction!(data), do: Styra.Protocol.build!("stop_interaction", data)
 
     @doc ~S"""
-    Stop an interaction because the operator is finished with it: it stops
-    for `InteractionActivityReason::Completed`. The row stays listed and
-    can be reopened, but clients normally hide completed rows; resuming the
-    Session starts it again, and it is then no longer completed.
+    Set whether the operator is finished with a Session. `true` stops any
+    live interaction serving it (the row stays listed, but clients
+    normally hide completed rows). The flag lives with the Session, not
+    the interaction, so it survives the interaction stopping and is what
+    the stored-sessions picker filters on; resuming the Session clears it.
 
     Fields of `data`:
 
-      * `id`  string
+      * `id       `  string
+      * `completed`  boolean
     """
-    def complete_interaction(data), do: Styra.Protocol.build("complete_interaction", data)
+    def set_session_completed(data), do: Styra.Protocol.build("set_session_completed", data)
 
-    @doc "`complete_interaction/1`, raising on a request the server would refuse."
-    def complete_interaction!(data), do: Styra.Protocol.build!("complete_interaction", data)
+    @doc "`set_session_completed/1`, raising on a request the server would refuse."
+    def set_session_completed!(data), do: Styra.Protocol.build!("set_session_completed", data)
 
     @doc ~S"""
     Stop an interaction and drop the server's record of it, so the Session
@@ -2969,7 +2973,6 @@ defmodule Styra.Protocol.InteractionActivityReason do
     {:rate_limited, "rate_limited"},
     {:background_finished, "background_finished"},
     {:paused, "paused"},
-    {:completed, "completed"},
     {:exited, "exited"},
     {:server_restarted, "server_restarted"}
   ]
@@ -3035,17 +3038,6 @@ defmodule Styra.Protocol.InteractionActivityReason do
   `crate::protocol::Request::StopInteraction`).
   """
   def paused, do: "paused"
-
-  @doc ~S"""
-  The operator stopped the interaction because the work it was doing is
-  finished (see `crate::protocol::Request::CompleteInteraction`).
-
-  Completion is a way of being `InteractionActivity::Stopped` rather
-  than a mark beside it: resuming the Session gives the interaction an
-  agent again, and an interaction that is working is not one the operator
-  has finished with.
-  """
-  def completed, do: "completed"
 
   @doc ~S"""
   The agent's process ended of its own accord. `exit_code` is `None` when

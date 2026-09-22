@@ -737,6 +737,7 @@ mod tests {
             last_event_at_ms,
             last_event_age: String::new(),
             origin: None,
+            completed: false,
         }
     }
 

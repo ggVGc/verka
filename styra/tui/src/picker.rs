@@ -43,7 +43,9 @@ pub enum WorkspaceChoice {
 
 /// The session picker loop: j/k or arrows to move, Enter to choose a
 /// session, `s` to switch between ordering by last activity and by creation,
-/// `a` to toggle history older than a week, and `/` to filter by name or first
+/// `a` to toggle history older than a week, `c` to toggle showing Sessions the
+/// operator has marked completed (hidden by default, the same convention as
+/// the live interactions navigator), and `/` to filter by name or first
 /// prompt. Esc abandons an active search, then backs out. When
 /// `current_id` is in the list, it opens selected even if another root or
 /// branch sorts above it.
@@ -61,9 +63,11 @@ pub fn run_session_picker(
     let mut all_sessions = sessions.to_vec();
     let now_ms = unix_now_ms();
     let mut showing_all = false;
+    let mut show_completed = false;
     let mut filter: Option<String> = None;
     let mut searching = false;
-    let mut sessions = picker_sessions(&all_sessions, showing_all, now_ms, order, None);
+    let mut sessions =
+        picker_sessions(&all_sessions, showing_all, show_completed, now_ms, order, None);
     let mut selected = initial_session_selection(&sessions, current_id);
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
@@ -151,6 +155,7 @@ pub fn run_session_picker(
                 preview,
                 filter.as_deref(),
                 searching,
+                show_completed,
             )?;
         }
 
@@ -183,8 +188,14 @@ pub fn run_session_picker(
                 _ => continue,
             }
             let cursor_id = sessions.get(selected).map(|session| session.id.clone());
-            sessions =
-                picker_sessions(&all_sessions, showing_all, now_ms, order, filter.as_deref());
+            sessions = picker_sessions(
+                &all_sessions,
+                showing_all,
+                show_completed,
+                now_ms,
+                order,
+                filter.as_deref(),
+            );
             selected = cursor_id
                 .and_then(|id| sessions.iter().position(|session| session.id == id))
                 .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
@@ -193,7 +204,14 @@ pub fn run_session_picker(
         match key.code {
             KeyCode::Esc if filter.is_some() => {
                 filter = None;
-                sessions = picker_sessions(&all_sessions, showing_all, now_ms, order, None);
+                sessions = picker_sessions(
+                    &all_sessions,
+                    showing_all,
+                    show_completed,
+                    now_ms,
+                    order,
+                    None,
+                );
                 selected = initial_session_selection(&sessions, current_id);
             }
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
@@ -228,8 +246,29 @@ pub fn run_session_picker(
             KeyCode::Char('a') => {
                 let cursor_id = sessions.get(selected).map(|session| session.id.clone());
                 showing_all = !showing_all;
-                sessions =
-                    picker_sessions(&all_sessions, showing_all, now_ms, order, filter.as_deref());
+                sessions = picker_sessions(
+                    &all_sessions,
+                    showing_all,
+                    show_completed,
+                    now_ms,
+                    order,
+                    filter.as_deref(),
+                );
+                selected = cursor_id
+                    .and_then(|id| sessions.iter().position(|session| session.id == id))
+                    .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
+            }
+            KeyCode::Char('c') => {
+                let cursor_id = sessions.get(selected).map(|session| session.id.clone());
+                show_completed = !show_completed;
+                sessions = picker_sessions(
+                    &all_sessions,
+                    showing_all,
+                    show_completed,
+                    now_ms,
+                    order,
+                    filter.as_deref(),
+                );
                 selected = cursor_id
                     .and_then(|id| sessions.iter().position(|session| session.id == id))
                     .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
@@ -317,6 +356,7 @@ fn handle_help_key(help: &mut Help, code: KeyCode) -> bool {
 fn picker_sessions(
     sessions: &[styra_protocol::SessionSummary],
     showing_all: bool,
+    show_completed: bool,
     now_ms: u64,
     order: SessionOrder,
     filter: Option<&str>,
@@ -328,6 +368,7 @@ fn picker_sessions(
         .iter()
         .filter(|session| {
             (showing_all || is_recent_session(session, now_ms))
+                && (show_completed || !session.completed)
                 && filter.as_ref().is_none_or(|filter| {
                     session
                         .name
@@ -404,6 +445,7 @@ fn show_message(
             presentation::Preview::Ready(&[]),
             None,
             false,
+            false,
             title,
             message,
         )?;
@@ -430,6 +472,7 @@ fn read_session_name(
             picker_order(order),
             presentation::Preview::Ready(&[]),
             None,
+            false,
             false,
             &value,
         )?;
@@ -690,6 +733,7 @@ mod tests {
             last_event_at_ms: None,
             last_event_age: String::new(),
             origin: None,
+            completed: false,
         }
     }
 
@@ -717,6 +761,7 @@ mod tests {
             idle_unseen: false,
             last_message: None,
             events: 0,
+            completed: false,
         }
     }
 
@@ -800,7 +845,8 @@ mod tests {
         let unknown_age = session("unknown-age");
         let sessions = vec![old, unknown_age, fresh];
 
-        let recent = picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity, None);
+        let recent =
+            picker_sessions(&sessions, false, false, now_ms, SessionOrder::LastActivity, None);
         assert_eq!(
             recent
                 .iter()
@@ -808,10 +854,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["fresh", "unknown-age"]
         );
-        let all = picker_sessions(&sessions, true, now_ms, SessionOrder::LastActivity, None);
+        let all = picker_sessions(&sessions, true, false, now_ms, SessionOrder::LastActivity, None);
         assert_eq!(all.len(), 3);
         let recent_again =
-            picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity, None);
+            picker_sessions(&sessions, false, false, now_ms, SessionOrder::LastActivity, None);
         assert_eq!(recent_again, recent);
     }
 
@@ -826,6 +872,7 @@ mod tests {
         let matches = picker_sessions(
             &sessions,
             true,
+            false,
             unix_now_ms(),
             SessionOrder::LastActivity,
             Some("TIMEOUT"),

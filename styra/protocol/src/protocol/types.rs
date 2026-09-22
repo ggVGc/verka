@@ -677,14 +677,6 @@ pub enum InteractionActivityReason {
     /// The operator stopped the interaction (see
     /// [`crate::protocol::Request::StopInteraction`]).
     Paused,
-    /// The operator stopped the interaction because the work it was doing is
-    /// finished (see [`crate::protocol::Request::CompleteInteraction`]).
-    ///
-    /// Completion is a way of being [`InteractionActivity::Stopped`] rather
-    /// than a mark beside it: resuming the Session gives the interaction an
-    /// agent again, and an interaction that is working is not one the operator
-    /// has finished with.
-    Completed,
     /// The agent's process ended of its own accord. `exit_code` is `None` when
     /// it did not exit normally — killed, or ended before it ran at all.
     Exited {
@@ -709,9 +701,7 @@ impl InteractionActivityReason {
     pub fn explains_stopping(&self) -> bool {
         matches!(
             self,
-            InteractionActivityReason::Paused
-                | InteractionActivityReason::Completed
-                | InteractionActivityReason::RateLimited { .. }
+            InteractionActivityReason::Paused | InteractionActivityReason::RateLimited { .. }
         )
     }
 }
@@ -779,17 +769,13 @@ pub struct InteractionSummary {
     /// pace, whichever interaction the client happens to be attached to.
     #[serde(default)]
     pub events: usize,
-}
-
-impl InteractionSummary {
-    /// Whether the operator has finished with this interaction: stopped, and
-    /// stopped for [`InteractionActivityReason::Completed`]. Reading it off
-    /// the state is what makes starting the Session again undo it — there is
-    /// no separate flag left behind to clear.
-    pub fn completed(&self) -> bool {
-        self.activity == InteractionActivity::Stopped
-            && self.activity_reason == Some(InteractionActivityReason::Completed)
-    }
+    /// Whether the operator has finished with the Session this interaction
+    /// serves. A property of the Session — see [`SessionSummary::completed`]
+    /// — projected onto the interaction for display; nothing here is the
+    /// record of it, so starting the Session again is what the server clears
+    /// it on, not anything a client does to this summary.
+    #[serde(default)]
+    pub completed: bool,
 }
 
 /// Where a Session came from, when it was not launched fresh but branched
@@ -865,6 +851,12 @@ pub struct SessionSummary {
     /// launched fresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SessionOrigin>,
+    /// Whether the operator has finished with this Session — see
+    /// [`crate::protocol::Request::SetSessionCompleted`]. Cleared when the
+    /// Session is resumed: an interaction working on it again is not one the
+    /// operator is done with.
+    #[serde(default)]
+    pub completed: bool,
 }
 
 /// An operator message persisted but not yet sent.
