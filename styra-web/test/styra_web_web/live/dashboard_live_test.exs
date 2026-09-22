@@ -75,6 +75,13 @@ defmodule StyraWebWeb.DashboardLiveTest do
                         }
                       }
                     }}
+
+    view
+    |> element("#back-to-interactions")
+    |> render_click()
+
+    refute has_element?(view, "#message-form")
+    assert has_element?(view, "#interaction-styra-1")
   end
 
   defp ok(type, data) do

@@ -1,7 +1,7 @@
 <Layouts.app flash={@flash}>
   <div class="min-h-screen bg-[#070b12] text-slate-100">
     <header class="border-b border-white/10 bg-[#0b111b]/90 backdrop-blur-xl">
-      <div class="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4 px-5 py-4 lg:px-8">
+      <div class="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-5 sm:py-4 lg:px-8">
         <div class="flex items-center gap-3">
           <div class="grid size-10 place-items-center rounded-xl bg-violet-500 text-lg font-black text-white shadow-lg shadow-violet-500/20">
             S
@@ -16,17 +16,17 @@
           for={@connection_form}
           id="connection-form"
           phx-submit="connect"
-          class="flex min-w-0 items-center gap-2"
+          class="flex w-full min-w-0 items-center gap-2 sm:w-auto [&>div]:mb-0 [&>div]:min-w-0 [&>div]:flex-1"
         >
           <.input
             field={@connection_form[:socket_path]}
             aria-label="Styra socket path"
-            class="h-9 w-48 rounded-lg border border-white/10 bg-white/5 px-3 font-mono text-xs text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-violet-400/70 focus:ring-2 focus:ring-violet-500/15 sm:w-80"
+            class="h-11 w-full min-w-0 rounded-lg border border-white/10 bg-white/5 px-3 font-mono text-xs text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-violet-400/70 focus:ring-2 focus:ring-violet-500/15 sm:h-9 sm:w-80"
             autocomplete="off"
           />
           <button
             id="connect-button"
-            class="h-9 rounded-lg bg-slate-100 px-4 text-sm font-semibold text-slate-950 transition hover:bg-white active:scale-[0.98]"
+            class="h-11 shrink-0 rounded-lg bg-slate-100 px-4 text-sm font-semibold text-slate-950 transition hover:bg-white active:scale-[0.98] sm:h-9"
             type="submit"
           >
             Connect
@@ -39,7 +39,7 @@
       </div>
     </header>
 
-    <div :if={@error} class="mx-auto max-w-[1600px] px-5 pt-4 lg:px-8">
+    <div :if={@error} class="mx-auto max-w-[1600px] px-4 pt-4 sm:px-5 lg:px-8">
       <div
         class="flex items-center gap-3 rounded-xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200"
         role="alert"
@@ -49,8 +49,11 @@
       </div>
     </div>
 
-    <div class="mx-auto grid max-w-[1600px] gap-5 px-5 py-5 lg:grid-cols-[22rem_minmax(0,1fr)] lg:px-8">
-      <aside class="overflow-hidden rounded-2xl border border-white/10 bg-[#0b111b] shadow-2xl shadow-black/20">
+    <div class="mx-auto grid max-w-[1600px] gap-4 px-3 py-3 sm:gap-5 sm:px-5 sm:py-5 lg:grid-cols-[22rem_minmax(0,1fr)] lg:px-8">
+      <aside class={[
+        "overflow-hidden rounded-2xl border border-white/10 bg-[#0b111b] shadow-2xl shadow-black/20",
+        @selected_id && "hidden lg:block"
+      ]}>
         <div class="flex items-center justify-between border-b border-white/10 px-4 py-3">
           <div>
             <h2 class="font-semibold">Interactions</h2>
@@ -67,7 +70,7 @@
         <div
           id="interactions"
           phx-update="stream"
-          class="max-h-[calc(100vh-12rem)] overflow-y-auto p-2"
+          class="max-h-[calc(100dvh-11.5rem)] overflow-y-auto p-2 sm:max-h-[calc(100dvh-12rem)]"
         >
           <div
             id="interactions-empty"
@@ -82,7 +85,7 @@
             phx-click="select"
             phx-value-id={interaction["id"]}
             class={[
-              "group mb-1 w-full rounded-xl border p-3 text-left transition duration-200 active:scale-[0.99]",
+              "group mb-1 min-h-16 w-full touch-manipulation rounded-xl border p-3 text-left transition duration-200 active:scale-[0.99]",
               if(@selected_id == interaction["id"],
                 do: "border-violet-400/30 bg-violet-500/10",
                 else: "border-transparent hover:border-white/10 hover:bg-white/[0.04]"
@@ -106,22 +109,38 @@
         </div>
       </aside>
 
-      <section class="flex min-h-[calc(100vh-8.5rem)] min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0b111b] shadow-2xl shadow-black/20">
+      <section class={[
+        "min-h-[calc(100dvh-8rem)] min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0b111b] shadow-2xl shadow-black/20 lg:flex lg:min-h-[calc(100vh-8.5rem)]",
+        if(@selected_id, do: "flex", else: "hidden")
+      ]}>
         <%= if interaction = @selected_interaction do %>
-          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-3">
-            <div class="min-w-0">
-              <div class="flex items-center gap-2">
-                <h2 class="truncate font-semibold">{display_name(interaction)}</h2>
-                <span class="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-400">
-                  {interaction["activity"]}
-                </span>
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-3 sm:gap-3 sm:px-5">
+            <div class="flex min-w-0 flex-1 items-center gap-2">
+              <button
+                id="back-to-interactions"
+                type="button"
+                aria-label="Back to interactions"
+                class="grid size-11 shrink-0 touch-manipulation place-items-center rounded-lg text-slate-400 transition hover:bg-white/5 hover:text-white active:scale-95 lg:hidden"
+                phx-click="deselect"
+              >
+                <.icon name="hero-chevron-left" class="size-5" />
+              </button>
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <h2 class="truncate font-semibold">{display_name(interaction)}</h2>
+                  <span class="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-400">
+                    {interaction["activity"]}
+                  </span>
+                </div>
+                <p class="truncate font-mono text-xs text-slate-600">
+                  {interaction["workspace"]}
+                </p>
               </div>
-              <p class="truncate font-mono text-xs text-slate-600">{interaction["workspace"]}</p>
             </div>
-            <div class="flex gap-2">
+            <div class="flex shrink-0 gap-1 sm:gap-2">
               <button
                 id="interrupt-button"
-                class="rounded-lg px-3 py-2 text-sm text-slate-400 transition hover:bg-white/5 hover:text-slate-100 active:scale-[0.98]"
+                class="min-h-11 touch-manipulation rounded-lg px-2 text-xs text-slate-400 transition hover:bg-white/5 hover:text-slate-100 active:scale-[0.98] sm:px-3 sm:text-sm"
                 phx-click="action"
                 phx-value-name="interrupt"
               >
@@ -129,7 +148,7 @@
               </button>
               <button
                 id="stop-button"
-                class="rounded-lg px-3 py-2 text-sm text-rose-400 transition hover:bg-rose-500/10 active:scale-[0.98]"
+                class="min-h-11 touch-manipulation rounded-lg px-2 text-xs text-rose-400 transition hover:bg-rose-500/10 active:scale-[0.98] sm:px-3 sm:text-sm"
                 phx-click="action"
                 phx-value-name="stop"
               >
@@ -141,7 +160,7 @@
           <div
             id="transcript"
             phx-update="stream"
-            class="flex-1 space-y-3 overflow-y-auto bg-black/10 p-5"
+            class="flex-1 space-y-3 overflow-y-auto overscroll-contain bg-black/10 p-3 sm:p-5"
           >
             <div
               id="transcript-empty"
@@ -156,14 +175,14 @@
               :for={{dom_id, item} <- @streams.updates}
               id={dom_id}
               class={[
-                "rounded-xl border px-4 py-3",
+                "rounded-xl border px-3 py-3 sm:px-4",
                 if(conversational?(item),
                   do:
                     if(user_message?(item),
-                      do: "ml-10 border-violet-400/20 bg-violet-500/10",
-                      else: "mr-10 border-white/10 bg-white/[0.03]"
+                      do: "ml-4 border-violet-400/20 bg-violet-500/10 sm:ml-10",
+                      else: "mr-4 border-white/10 bg-white/[0.03] sm:mr-10"
                     ),
-                  else: "mx-6 border-white/[0.07] bg-white/[0.02]"
+                  else: "mx-1 border-white/[0.07] bg-white/[0.02] sm:mx-6"
                 )
               ]}
             >
@@ -183,28 +202,28 @@
             for={@message_form}
             id="message-form"
             phx-submit="send"
-            class="border-t border-white/10 p-4"
+            class="border-t border-white/10 bg-[#0b111b] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4 [&>div]:mb-0"
           >
-            <div class="flex items-end gap-3">
+            <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem] sm:gap-3 [&>div]:mb-0 [&>div]:min-w-0">
               <.input
                 field={@message_form[:text]}
                 type="textarea"
                 aria-label="Message"
                 placeholder="Send a message to this interaction…"
                 rows="2"
-                class="min-h-16 flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-violet-400/70 focus:ring-2 focus:ring-violet-500/15"
+                class="min-h-20 w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-base text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-violet-400/70 focus:ring-2 focus:ring-violet-500/15 sm:min-h-16 sm:text-sm"
               />
-              <div class="flex flex-col gap-2">
+              <div class="flex gap-2 sm:flex-col [&>div]:mb-0 [&>div]:min-w-0 [&>div]:flex-1">
                 <.input
                   field={@message_form[:contract]}
                   type="select"
                   aria-label="Answer contract"
                   options={contract_options()}
-                  class="h-9 w-36 rounded-lg border border-white/10 bg-[#111827] px-3 text-sm text-slate-300 outline-none focus:border-violet-400/70"
+                  class="h-11 w-full rounded-lg border border-white/10 bg-[#111827] px-3 text-sm text-slate-300 outline-none focus:border-violet-400/70 sm:h-9"
                 />
                 <button
                   id="send-button"
-                  class="flex h-9 items-center justify-center gap-2 rounded-lg bg-violet-500 px-4 text-sm font-semibold text-white shadow-lg shadow-violet-500/15 transition hover:bg-violet-400 active:scale-[0.98] phx-submit-loading:opacity-60"
+                  class="flex h-11 shrink-0 touch-manipulation items-center justify-center gap-2 rounded-lg bg-violet-500 px-5 text-sm font-semibold text-white shadow-lg shadow-violet-500/15 transition hover:bg-violet-400 active:scale-[0.98] phx-submit-loading:opacity-60 sm:h-9 sm:px-4"
                   type="submit"
                 >
                   Send <.icon name="hero-arrow-up" class="size-4" />

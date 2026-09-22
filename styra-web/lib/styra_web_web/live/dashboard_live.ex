@@ -124,6 +124,19 @@ defmodule StyraWebWeb.DashboardLive do
      |> stream(:updates, [], reset: true)}
   end
 
+  def handle_event("deselect", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(
+       selected_id: nil,
+       selected_interaction: nil,
+       updates_empty?: true,
+       cursor: 0,
+       error: nil
+     )
+     |> stream(:updates, [], reset: true)}
+  end
+
   def handle_event("send", %{"message" => params}, socket) do
     text = String.trim(params["text"] || "")
     contract = params["contract"] || "none"
