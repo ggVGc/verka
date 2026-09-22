@@ -24,8 +24,10 @@ mix setup
 mix phx.server
 ```
 
-Open <http://localhost:4000>. The initial socket is
-`$XDG_RUNTIME_DIR/styra/styra.sock`; it can be changed from the header.
+Open <http://localhost:4000>. The socket is deployment configuration and is
+never accepted from the browser. It defaults to
+`$XDG_RUNTIME_DIR/styra/styra.sock`; set `STYRA_SOCKET_PATH` before starting the
+application to override it.
 
 ## Verify
 

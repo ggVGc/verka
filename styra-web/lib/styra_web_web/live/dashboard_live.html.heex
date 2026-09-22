@@ -12,30 +12,16 @@
           </div>
         </div>
 
-        <.form
-          for={@connection_form}
-          id="connection-form"
-          phx-submit="connect"
-          class="flex w-full min-w-0 items-center gap-2 sm:w-auto [&>div]:mb-0 [&>div]:min-w-0 [&>div]:flex-1"
+        <div
+          id="connection-status"
+          class="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-slate-400"
         >
-          <.input
-            field={@connection_form[:socket_path]}
-            aria-label="Styra socket path"
-            class="h-11 w-full min-w-0 rounded-lg border border-white/10 bg-white/5 px-3 font-mono text-xs text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-violet-400/70 focus:ring-2 focus:ring-violet-500/15 sm:h-9 sm:w-80"
-            autocomplete="off"
-          />
-          <button
-            id="connect-button"
-            class="h-11 shrink-0 rounded-lg bg-slate-100 px-4 text-sm font-semibold text-slate-950 transition hover:bg-white active:scale-[0.98] sm:h-9"
-            type="submit"
-          >
-            Connect
-          </button>
           <span class={[
-            "size-2.5 rounded-full",
+            "size-2 rounded-full",
             if(@connected, do: "bg-emerald-400 shadow-[0_0_12px_#34d399]", else: "bg-rose-500")
           ]}></span>
-        </.form>
+          <span>{if @connected, do: @service || "Connected", else: "Offline"}</span>
+        </div>
       </div>
     </header>
 

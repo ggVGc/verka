@@ -7,6 +7,8 @@ config :styra_web, StyraWebWeb.Endpoint,
   secret_key_base: "PpZvbWGmDPp/bwIj0fStjPGronUrmlpWlYKxVOhd+J8MbbRNTjQKlF275eGi9+X1",
   server: false
 
+config :styra_web, :styra_socket_path, "/tmp/styra-test.sock"
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

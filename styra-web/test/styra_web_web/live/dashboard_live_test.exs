@@ -5,9 +5,11 @@ defmodule StyraWebWeb.DashboardLiveTest do
 
   setup do
     test_process = self()
+    previous_socket_path = Application.get_env(:styra_web, :styra_socket_path)
 
-    exchange = fn _path, json, _timeout ->
+    exchange = fn path, json, _timeout ->
       request = Jason.decode!(json)
+      send(test_process, {:styra_socket, path})
       send(test_process, {:styra_request, request})
 
       response =
@@ -39,9 +41,13 @@ defmodule StyraWebWeb.DashboardLiveTest do
       {:ok, Jason.encode!(response)}
     end
 
+    Application.put_env(:styra_web, :styra_socket_path, "/deployment/styra.sock")
     Application.put_env(:styra_web, :styra_client_options, exchange: exchange, json: Jason)
 
-    on_exit(fn -> Application.delete_env(:styra_web, :styra_client_options) end)
+    on_exit(fn ->
+      Application.put_env(:styra_web, :styra_socket_path, previous_socket_path)
+      Application.delete_env(:styra_web, :styra_client_options)
+    end)
 
     :ok
   end
@@ -50,6 +56,9 @@ defmodule StyraWebWeb.DashboardLiveTest do
     {:ok, view, _html} = live(conn, "/")
     render_async(view)
 
+    assert_receive {:styra_socket, "/deployment/styra.sock"}
+    assert has_element?(view, "#connection-status", "styra")
+    refute has_element?(view, "#connection-form")
     assert has_element?(view, "#interaction-styra-1", "Review auth")
 
     view

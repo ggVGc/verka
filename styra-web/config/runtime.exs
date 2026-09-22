@@ -1,5 +1,11 @@
 import Config
 
+# The Styra socket belongs to the deployment, not to a browser session. When
+# absent, StyraWeb uses the same $XDG_RUNTIME_DIR default as the Styra clients.
+if styra_socket_path = System.get_env("STYRA_SOCKET_PATH") do
+  config :styra_web, :styra_socket_path, styra_socket_path
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration

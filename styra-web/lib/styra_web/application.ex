@@ -5,8 +5,12 @@ defmodule StyraWeb.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
+    log_styra_socket()
+
     children = [
       StyraWebWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:styra_web, :dns_cluster_query) || :ignore},
@@ -21,6 +25,13 @@ defmodule StyraWeb.Application do
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: StyraWeb.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp log_styra_socket do
+    case StyraWeb.StyraAPI.socket_path() do
+      {:ok, path} -> Logger.info("Styra socket: #{path}")
+      {:error, message} -> Logger.warning("Styra socket is not configured: #{message}")
+    end
   end
 
   # Tell Phoenix to update the endpoint configuration

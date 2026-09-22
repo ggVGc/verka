@@ -11,11 +11,18 @@ defmodule StyraWeb.StyraAPI do
 
   @timeout 1_500
 
-  @spec default_socket() :: String.t()
-  def default_socket do
-    case Client.default_socket() do
-      {:ok, path} -> path
-      {:error, _message} -> "/tmp/styra/styra.sock"
+  @doc """
+  Resolve the server-owned socket path.
+
+  An explicit deployment value has the same role as the TUI's `--socket`
+  option. Without one, this delegates to `Styra.Client.default_socket/0`, so
+  the web application and TUI use exactly the same default.
+  """
+  @spec socket_path() :: {:ok, String.t()} | {:error, String.t()}
+  def socket_path do
+    case Application.get_env(:styra_web, :styra_socket_path) do
+      path when is_binary(path) and path != "" -> {:ok, path}
+      _ -> Client.default_socket()
     end
   end
 

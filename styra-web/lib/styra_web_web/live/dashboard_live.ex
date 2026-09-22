@@ -9,7 +9,11 @@ defmodule StyraWebWeb.DashboardLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    socket_path = StyraAPI.default_socket()
+    {socket_path, socket_error} =
+      case StyraAPI.socket_path() do
+        {:ok, path} -> {path, nil}
+        {:error, message} -> {nil, message}
+      end
 
     socket =
       socket
@@ -20,11 +24,10 @@ defmodule StyraWebWeb.DashboardLive do
       |> assign(
         page_title: "Live interactions",
         socket_path: socket_path,
-        connection_form: to_form(%{"socket_path" => socket_path}, as: :connection),
         message_form: message_form(),
         connected: false,
         service: nil,
-        error: nil,
+        error: socket_error,
         interaction_count: 0,
         selected_id: nil,
         selected_interaction: nil,
@@ -33,11 +36,13 @@ defmodule StyraWebWeb.DashboardLive do
         refreshing: false
       )
 
-    if connected?(socket), do: send(self(), :poll)
+    if connected?(socket) and socket_path, do: send(self(), :poll)
     {:ok, socket}
   end
 
   @impl true
+  def handle_info(:poll, %{assigns: %{socket_path: nil}} = socket), do: {:noreply, socket}
+
   def handle_info(:poll, %{assigns: %{refreshing: true}} = socket), do: {:noreply, socket}
 
   def handle_info(:poll, socket) do
@@ -82,32 +87,6 @@ defmodule StyraWebWeb.DashboardLive do
   end
 
   @impl true
-  def handle_event("connect", %{"connection" => %{"socket_path" => path}}, socket) do
-    path = String.trim(path)
-
-    if path == "" do
-      {:noreply, assign(socket, :error, "Enter a Unix socket path.")}
-    else
-      send(self(), :poll)
-
-      {:noreply,
-       socket
-       |> assign(
-         socket_path: path,
-         connection_form: to_form(%{"socket_path" => path}, as: :connection),
-         connected: false,
-         error: nil,
-         interaction_count: 0,
-         selected_id: nil,
-         selected_interaction: nil,
-         updates_empty?: true,
-         cursor: 0
-       )
-       |> stream(:interactions, [], reset: true)
-       |> stream(:updates, [], reset: true)}
-    end
-  end
-
   def handle_event("select", %{"id" => id}, socket) do
     send(self(), :poll)
 
