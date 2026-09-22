@@ -17,6 +17,7 @@
 use crate::agent::{Profile, Selection, SessionMeta};
 use crate::event::{decode_line, AgentEvent, BranchDirection, Protocol};
 use crate::protocol::{Contract, Direction, QueuedMessage, RawLine, SessionOrigin, SessionSummary};
+use crate::worktree::Checkout;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -53,6 +54,12 @@ struct StoredSessionMeta {
     /// once.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     auto_retry: bool,
+    /// The linked checkout and branch this Session works in, for a Session
+    /// launched with one. `None` means it works in the Workspace directory
+    /// itself — or that it predates this field, which is why a reader that
+    /// finds nothing here still looks on disk before concluding it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkout: Option<Checkout>,
     #[serde(flatten)]
     agent: SessionMeta,
 }
@@ -327,6 +334,7 @@ fn write_session_meta(
         origin: None,
         contract: None,
         auto_retry: false,
+        checkout: None,
         agent: meta.clone(),
     };
     let json = serde_json::to_string_pretty(&stored).context("serializing session metadata")?;
@@ -508,6 +516,41 @@ pub fn store_session_origin(path: &Path, origin: SessionOrigin) -> Result<()> {
     };
     let mut stored = read_stored_session_meta(&directory)?;
     stored.origin = Some(origin);
+    write_stored_session_meta(&directory, &stored)
+}
+
+/// The checkout a Session was given, as the Session itself records it.
+///
+/// `None` for a Session that works in its Workspace directory — and for one
+/// launched before this was stored, whose checkout is still found by the scan
+/// in [`crate::worktree::existing_checkout`]. Callers that must not miss an
+/// old Session's checkout ask through
+/// [`crate::server::ServerState::session_checkout`], which tries both.
+pub fn read_session_checkout(path: &Path) -> Result<Option<Checkout>> {
+    Ok(read_stored_session_meta(path)?.checkout)
+}
+
+/// Record the checkout a Session works in, at the moment one is made for it.
+///
+/// Set once: a Session keeps the checkout it was given for as long as it
+/// exists, and a second one would mean its uncommitted work had been left
+/// somewhere the Session no longer names.
+pub fn store_session_checkout(path: &Path, checkout: &Checkout) -> Result<()> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    match &stored.checkout {
+        Some(existing) if existing == checkout => return Ok(()),
+        Some(existing) => anyhow::bail!(
+            "session already works in {}, not {}",
+            existing.path.display(),
+            checkout.path.display()
+        ),
+        None => stored.checkout = Some(checkout.clone()),
+    }
     write_stored_session_meta(&directory, &stored)
 }
 
@@ -1174,7 +1217,8 @@ mod tests {
 
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, id) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None)
+                .unwrap();
         let directory = journal.path().parent().unwrap();
         assert_eq!(
             directory,
@@ -1218,7 +1262,8 @@ mod tests {
         let profile = test_profile("codex", Protocol::CodexJsonl);
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None)
+                .unwrap();
         let directory = journal.path().parent().unwrap();
 
         assert_eq!(read_session_contract(directory).unwrap(), None);
@@ -1257,7 +1302,8 @@ mod tests {
         let profile = test_profile("codex", Protocol::CodexJsonl);
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None)
+                .unwrap();
         let directory = journal.path().parent().unwrap();
 
         // Nothing is done on the operator's behalf until they ask.
@@ -1419,7 +1465,8 @@ mod tests {
         let profile = test_profile("codex", Protocol::CodexJsonl);
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None)
+                .unwrap();
         let directory = journal.path().parent().unwrap();
         store_provider_session_id(directory, "provider-1").unwrap();
 

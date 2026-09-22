@@ -826,26 +826,46 @@ impl ServerState {
         .map(Some)
     }
 
-    /// Whether Session `id` already works in a checkout of its own.
+    /// The checkout Session `id` works in, or `None` when it works in its
+    /// Workspace directory.
     ///
     /// A worktree belongs to the Session that explicitly created it, so this
     /// is what a launch path asks before deciding to make one — it must not
-    /// prepare anything, which is why it looks at the parent directly rather
-    /// than through [`Self::workspace_worktrees`]. The checkout is named after
-    /// the topic of the prompt that created it, so only the id it ends with
-    /// can be asked for here.
-    fn session_has_worktree(&self, workspace_id: &str, id: &str) -> bool {
-        crate::worktree::existing_checkout(
+    /// prepare anything, which is why it never goes through
+    /// [`Self::workspace_worktrees`].
+    ///
+    /// The Session's own record answers first. A Session launched before that
+    /// record existed has none, and for it the checkout is still found by the
+    /// scan — and then written down, so each such Session is asked about the
+    /// filesystem exactly once more.
+    fn session_checkout(
+        &self,
+        session_path: &Path,
+        workspace_id: &str,
+        id: &str,
+    ) -> Result<Option<crate::worktree::Checkout>> {
+        if let Some(stored) = journal::read_session_checkout(session_path)? {
+            return Ok(Some(stored));
+        }
+        let Some(path) = crate::worktree::existing_checkout(
             &crate::workspace::worktrees_dir(&self.inner.store_root, workspace_id),
             id,
-        )
-        .is_some()
+        ) else {
+            return Ok(None);
+        };
+        let checkout = crate::worktree::Checkout::at(path);
+        journal::store_session_checkout(session_path, &checkout)?;
+        Ok(Some(checkout))
     }
 
+    /// Give a Session that launched without one a checkout of its own.
     fn create_session_worktree(&self, id: &str) -> Result<()> {
         let session = self.stored_summary(id)?;
         let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
-        if self.session_has_worktree(&workspace.id, id) {
+        if self
+            .session_checkout(&session.path, &workspace.id, id)?
+            .is_some()
+        {
             anyhow::bail!(
                 "this Session already has a linked workspace; creating another is not possible"
             );
@@ -853,7 +873,8 @@ impl ServerState {
         let Some(worktrees) = self.workspace_worktrees(&workspace, true)? else {
             anyhow::bail!("the Workspace is not inside a Git working tree");
         };
-        worktrees.checkout(id, None)?;
+        let checkout = crate::worktree::Checkout::at(worktrees.checkout(id, None)?);
+        journal::store_session_checkout(&session.path, &checkout)?;
         Ok(())
     }
     pub fn new(store_root: PathBuf, socket: PathBuf) -> Self {
@@ -999,7 +1020,16 @@ impl ServerState {
         // the branch it leaves behind is recognisable in the operator's own
         // `git branch`.
         let checkout = match &worktrees {
-            Some(worktrees) => worktrees.checkout(&id, topic.as_ref().map(Topic::branch))?,
+            Some(worktrees) => {
+                let made = crate::worktree::Checkout::at(
+                    worktrees.checkout(&id, topic.as_ref().map(Topic::branch))?,
+                );
+                // Written down here, while the name and the branch are known
+                // first-hand, rather than left to be recognised later from
+                // the shape of a directory name.
+                journal::store_session_checkout(&journal_path, &made)?;
+                made.path
+            }
             None => workspace.clone(),
         };
         let spec = InteractionSpec {
@@ -1451,21 +1481,26 @@ impl ServerState {
             .map(|root| self.inner.git.mounts(root))
             .transpose()?
             .unwrap_or_default();
-        // Never create one merely because this Workspace once had the old
-        // preference: a resume returns to the checkout this Session has, or to
-        // the Workspace directory it has always worked in.
-        let has_worktree = self.session_has_worktree(&owning_workspace.id, &request.id);
-        let worktrees = self.workspace_worktrees(&owning_workspace, has_worktree)?;
+        // The checkout this Session says it works in. Never create one merely
+        // because this Workspace once had the old preference: a resume returns
+        // to the checkout the Session has, or to the Workspace directory it
+        // has always worked in.
+        let stored_checkout =
+            self.session_checkout(&summary.path, &owning_workspace.id, &request.id)?;
+        let worktrees = self.workspace_worktrees(&owning_workspace, stored_checkout.is_some())?;
         let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
         let layout = launch_layout(worktrees.as_ref(), &workspace);
-        // The Session's own checkout, from the id it has always had. It is
-        // still there with its branch and its uncommitted work unless the
-        // Workspace was opted in after this Session last ran, in which case
-        // this is where it starts having one.
-        let checkout = match &worktrees {
-            Some(worktrees) => worktrees.checkout(&request.id, None)?,
-            None => workspace.clone(),
+        // Where the Session says its branch and its uncommitted work are, used
+        // as stated: a checkout that has been renamed is still this Session's,
+        // and nothing here re-derives it from the id its directory ends with.
+        // Only a record pointing at a directory that is no longer there falls
+        // through to making one, which is also the path a Session opted in
+        // after it last ran takes.
+        let checkout = match (&worktrees, &stored_checkout) {
+            (Some(_), Some(stored)) if stored.path.is_dir() => stored.path.clone(),
+            (Some(worktrees), _) => worktrees.checkout(&request.id, None)?,
+            (None, _) => workspace.clone(),
         };
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
         let mut profile = crate::agent::resolve_profile(&selection, &layout)?;
@@ -3480,15 +3515,20 @@ mod tests {
         std::fs::remove_dir_all(host).ok();
     }
 
-    /// A Session whose checkout was named after its first prompt still owns
-    /// that checkout after a restart. Nothing durable records the pairing, so
-    /// a resume rediscovers it from the id — and if it does not, the Session
-    /// comes back mounted on the operator's own directory with its branch and
-    /// its uncommitted work left behind, which is the bug this guards.
-    #[test]
-    fn a_named_checkout_is_still_found_by_the_session_that_owns_it() {
-        let store = temp_path("named-checkout-store");
-        let host = temp_path("named-checkout-host");
+    /// A Session on a repository, with no interaction: enough durable state
+    /// for the checkout questions, which are decided before an agent starts.
+    fn stored_session(
+        tag: &str,
+    ) -> (
+        PathBuf,
+        PathBuf,
+        ServerState,
+        crate::protocol::WorkspaceSummary,
+        String,
+        PathBuf,
+    ) {
+        let store = temp_path(&format!("{tag}-store"));
+        let host = temp_path(&format!("{tag}-host"));
         std::fs::remove_dir_all(&store).ok();
         std::fs::remove_dir_all(&host).ok();
         std::fs::create_dir_all(&host).unwrap();
@@ -3496,30 +3536,121 @@ mod tests {
         git.init(&host);
         let state = ServerState::with_git(git, store.clone());
         let workspace = crate::workspace::create(&store, &host, None).unwrap();
-        let id = "1757000000000-1-0";
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
+        let (journal, id) =
+            Journal::create_in_workspace(&store, &workspace.id, &profile, &selection, None)
+                .unwrap();
+        let session_path = journal.path().parent().unwrap().to_path_buf();
+        drop(journal);
+        (store, host, state, workspace, id, session_path)
+    }
 
-        // Before anything is checked out there is nothing to find, and asking
-        // must not be what brings the parent directory into being.
-        assert!(!state.session_has_worktree(&workspace.id, id));
+    /// The Session states which checkout it works in, so a resume asks the
+    /// Session rather than the shape of a directory name. Without it a
+    /// checkout named after its first prompt is not recognised, and the
+    /// Session comes back mounted on the operator's own directory with its
+    /// branch and its uncommitted work left behind.
+    #[test]
+    fn a_session_records_the_checkout_it_was_given() {
+        let (store, host, state, workspace, id, session_path) = stored_session("records-checkout");
+
+        // Before anything is checked out there is nothing to report, and
+        // asking must not be what brings the parent directory into being.
+        assert_eq!(
+            state
+                .session_checkout(&session_path, &workspace.id, &id)
+                .unwrap(),
+            None
+        );
         assert!(!crate::workspace::worktrees_dir(&store, &workspace.id).exists());
 
         let worktrees = state
             .workspace_worktrees(&workspace, true)
             .unwrap()
             .unwrap();
-        let checkout = worktrees
-            .checkout(id, Some("teach-the-picker-to-filter"))
+        let made = crate::worktree::Checkout::at(
+            worktrees
+                .checkout(&id, Some("teach-the-picker-to-filter"))
+                .unwrap(),
+        );
+        journal::store_session_checkout(&session_path, &made).unwrap();
+
+        // Both halves are the Session's own record now, branch included —
+        // nothing has to reconstruct either from a path.
+        let stored = journal::read_session_checkout(&session_path).unwrap();
+        assert_eq!(stored, Some(made.clone()));
+        assert_eq!(
+            made.path.file_name().unwrap(),
+            format!("teach-the-picker-to-filter-{id}").as_str()
+        );
+        assert_eq!(
+            made.branch,
+            format!("styra/teach-the-picker-to-filter-{id}")
+        );
+        assert_eq!(
+            state
+                .session_checkout(&session_path, &workspace.id, &id)
+                .unwrap(),
+            Some(made.clone())
+        );
+
+        // And the record, not the name, is what answers: a checkout renamed to
+        // something the id-suffix scan cannot find is still reported as this
+        // Session's.
+        let renamed = made.path.with_file_name("renamed-by-the-operator");
+        std::fs::rename(&made.path, &renamed).unwrap();
+        assert_eq!(
+            crate::worktree::existing_checkout(
+                &crate::workspace::worktrees_dir(&store, &workspace.id),
+                &id
+            ),
+            None
+        );
+        assert_eq!(
+            state
+                .session_checkout(&session_path, &workspace.id, &id)
+                .unwrap(),
+            Some(made)
+        );
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// A Session launched before the record existed has a checkout and no
+    /// mention of it. It is found the old way — by the id its directory ends
+    /// with — and written down on the way past, so the scan answers for that
+    /// Session once and never again.
+    #[test]
+    fn a_session_predating_the_record_is_given_one() {
+        let (store, host, state, workspace, id, session_path) = stored_session("backfill-checkout");
+        let worktrees = state
+            .workspace_worktrees(&workspace, true)
+            .unwrap()
+            .unwrap();
+        let path = worktrees.checkout(&id, Some("fix-the-flaky-test")).unwrap();
+        assert_eq!(journal::read_session_checkout(&session_path).unwrap(), None);
+
+        let found = state
+            .session_checkout(&session_path, &workspace.id, &id)
             .unwrap();
 
-        assert!(state.session_has_worktree(&workspace.id, id));
-        // The name is the topic's, which is why the bare id cannot be the
-        // thing looked for.
+        assert_eq!(found, Some(crate::worktree::Checkout::at(path.clone())));
         assert_eq!(
-            checkout.file_name().unwrap(),
-            "teach-the-picker-to-filter-1757000000000-1-0"
+            journal::read_session_checkout(&session_path).unwrap(),
+            Some(crate::worktree::Checkout::at(path))
         );
-        // A different Session in the same Workspace still has none of its own.
-        assert!(!state.session_has_worktree(&workspace.id, "1757000000000-1-1"));
+        // A different Session in the same Workspace still has none of its own,
+        // and is not handed its neighbour's.
+        let other = crate::workspace::sessions_dir(&store, &workspace.id).join("1757000000000-9-9");
+        assert_eq!(
+            state
+                .session_checkout(&other, &workspace.id, "1757000000000-9-9")
+                .ok()
+                .flatten(),
+            None
+        );
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();

@@ -17,12 +17,49 @@
 use crate::agent::MountSpec;
 use crate::git::{Git, Repository};
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Branches Styra creates live under this prefix, so a checkout it owns is
 /// recognisable among the operator's own in `git branch`.
 const BRANCH_PREFIX: &str = "styra";
+
+/// The checkout and branch one Session was given, as the Session records it.
+///
+/// Until this was stored, the pairing lived only in the name of a directory:
+/// a Session found its checkout by scanning for the one whose name ends with
+/// its id. That works until something renames it, and it makes every caller
+/// that wants the branch reconstruct it from a path. Stored with the Session,
+/// the pairing is a fact the Session states rather than one the filesystem
+/// happens to still imply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Checkout {
+    /// Where the Session works, on the host.
+    pub path: PathBuf,
+    /// The branch checked out there, as `git branch` shows it.
+    pub branch: String,
+}
+
+impl Checkout {
+    /// What the checkout at `path` is, for a path this module named.
+    ///
+    /// The branch is not read back from Git: the name on disk and the branch
+    /// are written from the same string by [`Worktrees::checkout`], so the
+    /// directory is the record. Deriving it is what lets a Session stored
+    /// before this field existed be described without its checkout being
+    /// touched.
+    pub fn at(path: PathBuf) -> Self {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Self {
+            branch: format!("{BRANCH_PREFIX}/{name}"),
+            path,
+        }
+    }
+}
 
 /// One Workspace's durable worktree parent, and the repository its checkouts
 /// are made from.
