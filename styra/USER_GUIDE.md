@@ -99,7 +99,11 @@ footer counts those rows until they are focused. Finishing a turn while a client
 is showing it is not one of them — you watched it happen.
 
 `A` opens the full Session list. In that list, `/` starts a case-insensitive
-filter over the Session name and first prompt; `Esc` abandons the filter.
+filter over the Session name and first prompt; `Esc` abandons the filter. `c`
+shows or hides the Sessions marked completed, and `C` marks the selected
+Session completed — or, on one already marked, unmarks it. `n` leaves the list
+without resuming anything and starts a new Session in the Workspace whose list
+you were reading.
 
 A Session you did not name yourself is named after what you asked for — a
 short phrase like `Fix flaky checkout test`, summarised from your first prompt

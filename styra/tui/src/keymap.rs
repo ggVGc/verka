@@ -509,6 +509,14 @@ const SESSION_PICKER: &[ReferenceRow] = &[
         action: "open the selected session",
     },
     ReferenceRow::Binding {
+        keys: "n",
+        action: "start a new session in this Workspace",
+    },
+    ReferenceRow::Binding {
+        keys: "c / C",
+        action: "show/hide completed / mark selected completed or not",
+    },
+    ReferenceRow::Binding {
         keys: "/",
         action: "filter by name or first prompt (Esc clears)",
     },

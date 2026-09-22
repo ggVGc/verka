@@ -215,12 +215,14 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let mut term = RatatuiUi::new()?;
-            match picker::run_session_picker(&mut term, &client, &mut sessions, None) {
-                Ok(Some(id)) => {
+            match picker::run_session_picker(&mut term, &client, &mut sessions, None, false) {
+                Ok(Some(picker::SessionChoice::Open(id))) => {
                     terminal = Some(term);
                     Some(PathBuf::from(id))
                 }
-                Ok(None) => {
+                // `n` is not offered when browsing to view a stored log, so
+                // the only other answer is backing out.
+                Ok(Some(picker::SessionChoice::New) | None) => {
                     term.close()?;
                     return Ok(());
                 }
@@ -503,11 +505,13 @@ fn browse_shells(client: &Client) -> Result<()> {
     }
 
     let mut terminal = RatatuiUi::new()?;
-    let choice = picker::run_session_picker(&mut terminal, client, &mut sessions, None);
+    let choice = picker::run_session_picker(&mut terminal, client, &mut sessions, None, false);
     terminal.close()?;
     match choice? {
-        Some(session) => attach_shell(client, &session),
-        None => Ok(()),
+        Some(picker::SessionChoice::Open(session)) => attach_shell(client, &session),
+        // There is no interaction to start from a shell browser, so `n` is not
+        // offered there and backing out is the only other answer.
+        Some(picker::SessionChoice::New) | None => Ok(()),
     }
 }
 

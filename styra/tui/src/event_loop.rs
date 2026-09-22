@@ -960,11 +960,18 @@ pub fn run(
                         open_interactions: false,
                     });
                 }
-                if let Some(id) = picker::run_session_picker(terminal, client, &mut sessions, None)?
+                // Starting fresh from this list enters the Workspace that was
+                // just chosen with no Session loaded, which is the same place
+                // entering a Workspace that has no history at all lands.
+                if let Some(choice) =
+                    picker::run_session_picker(terminal, client, &mut sessions, None, true)?
                 {
                     return Ok(RunOutcome::OpenWorkspace {
                         workspace: Box::new(workspace),
-                        session_id: Some(id),
+                        session_id: match choice {
+                            picker::SessionChoice::Open(id) => Some(id),
+                            picker::SessionChoice::New => None,
+                        },
                         open_interactions: false,
                     });
                 }
@@ -976,13 +983,20 @@ pub fn run(
                     app.push_log(LogEntry::warn("no sessions found in the current Workspace"));
                     continue;
                 }
-                if let Some(id) = picker::run_session_picker(
+                match picker::run_session_picker(
                     terminal,
                     client,
                     &mut sessions,
                     Some(&app.session_id),
+                    true,
                 )? {
-                    return Ok(RunOutcome::OpenSession(id));
+                    Some(picker::SessionChoice::Open(id)) => {
+                        return Ok(RunOutcome::OpenSession(id))
+                    }
+                    // The same new interaction `n` starts from the main view:
+                    // it inherits the context being viewed, in this Workspace.
+                    Some(picker::SessionChoice::New) => return Ok(RunOutcome::NewSession),
+                    None => {}
                 }
             }
             Some(Request::Interactions) => {

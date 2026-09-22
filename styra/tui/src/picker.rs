@@ -41,14 +41,28 @@ pub enum WorkspaceChoice {
     CreateCurrentDirectory,
 }
 
+/// What the operator left the session picker with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionChoice {
+    /// Open the stored Session with this id.
+    Open(String),
+    /// Start a fresh Session in the Workspace whose list was being browsed.
+    New,
+}
+
 /// The session picker loop: j/k or arrows to move, Enter to choose a
-/// session, `s` to switch between ordering by last activity and by creation,
-/// `a` to toggle history older than a week, `c` to toggle showing Sessions the
-/// operator has marked completed (hidden by default, the same convention as
-/// the live interactions navigator), and `/` to filter by name or first
-/// prompt. Esc abandons an active search, then backs out. When
-/// `current_id` is in the list, it opens selected even if another root or
-/// branch sorts above it.
+/// session, `n` to start a new one instead of resuming any of them, `s` to
+/// switch between ordering by last activity and by creation, `a` to toggle
+/// history older than a week, `c` to toggle showing Sessions the operator has
+/// marked completed (hidden by default, the same convention as the live
+/// interactions navigator), `C` to mark the selected Session completed or not,
+/// and `/` to filter by name or first prompt. Esc abandons an active search,
+/// then backs out. When `current_id` is in the list, it opens selected even if
+/// another root or branch sorts above it.
+///
+/// `can_start_new` says whether this picker was opened somewhere that can act
+/// on [`SessionChoice::New`]: browsing to attach a shell or to view a stored
+/// log has no Workspace to start work in, so there `n` is not a key at all.
 ///
 /// `?` shows the whole list of those keys. The picker's own title says only
 /// what the list cannot be read without — the filter, and the sort — because
@@ -58,7 +72,8 @@ pub fn run_session_picker(
     client: &Client,
     sessions: &mut [styra_protocol::SessionSummary],
     current_id: Option<&str>,
-) -> Result<Option<String>> {
+    can_start_new: bool,
+) -> Result<Option<SessionChoice>> {
     let mut order = SessionOrder::LastActivity;
     let mut all_sessions = sessions.to_vec();
     let now_ms = unix_now_ms();
@@ -273,8 +288,45 @@ pub fn run_session_picker(
                     .and_then(|id| sessions.iter().position(|session| session.id == id))
                     .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
             }
+            // Completion is stored on the Session, so the row can be marked
+            // from here without the interaction being live — and unmarked the
+            // same way, which is the only way back once `c` has revealed it.
+            KeyCode::Char('C') if !sessions.is_empty() => {
+                let completed = !sessions[selected].completed;
+                let id = sessions[selected].id.clone();
+                if let Err(error) = client.set_session_completed(&id, completed) {
+                    show_message(
+                        terminal,
+                        &sessions,
+                        selected,
+                        order,
+                        "could not change completion",
+                        &format!("{error:#}"),
+                    )?;
+                    continue;
+                }
+                sessions[selected].completed = completed;
+                if let Some(session) = all_sessions.iter_mut().find(|session| session.id == id) {
+                    session.completed = completed;
+                }
+                sessions = picker_sessions(
+                    &all_sessions,
+                    showing_all,
+                    show_completed,
+                    now_ms,
+                    order,
+                    filter.as_deref(),
+                );
+                // A Session that has just left the list leaves the cursor
+                // where it was, which is now the row that took its place.
+                selected = sessions
+                    .iter()
+                    .position(|session| session.id == id)
+                    .unwrap_or_else(|| selected.min(sessions.len().saturating_sub(1)));
+            }
+            KeyCode::Char('n') if can_start_new => return Ok(Some(SessionChoice::New)),
             KeyCode::Enter if !sessions.is_empty() => {
-                return Ok(Some(sessions[selected].id.clone()));
+                return Ok(Some(SessionChoice::Open(sessions[selected].id.clone())));
             }
             KeyCode::Char('r') if !sessions.is_empty() => {
                 if let Some(name) = read_session_name(
@@ -299,7 +351,7 @@ pub fn run_session_picker(
             }
             KeyCode::Char('x') if !sessions.is_empty() => {
                 match client.convert_session_provider(&sessions[selected].id) {
-                    Ok(converted) => return Ok(Some(converted.id)),
+                    Ok(converted) => return Ok(Some(SessionChoice::Open(converted.id))),
                     Err(error) => show_message(
                         terminal,
                         &sessions,
