@@ -562,7 +562,7 @@ const WORKSPACE_PICKER: &[ReferenceRow] = &[
     },
     ReferenceRow::Binding {
         keys: "/",
-        action: "filter by name or directory (Esc clears)",
+        action: "filter by name (Esc clears)",
     },
     ReferenceRow::Binding {
         keys: "Esc or q",
