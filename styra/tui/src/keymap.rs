@@ -233,8 +233,12 @@ const EVENTS: &[ReferenceRow] = &[
         action: "toggle full-screen preview",
     },
     ReferenceRow::Binding {
-        keys: "v / C",
+        keys: "v / C (preview open)",
         action: "pretty/diff preview; preview the newest command",
+    },
+    ReferenceRow::Binding {
+        keys: "C (preview closed)",
+        action: "mark this interaction completed and stop it",
     },
     ReferenceRow::Binding {
         keys: "u",

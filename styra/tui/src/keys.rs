@@ -212,6 +212,14 @@ pub fn handle_list_key(
             KeyCode::Char('c') => app.toggle_conversation_only(),
             KeyCode::Char('v') if app.preview.open => app.preview.toggle_mode(),
             KeyCode::Char('C') if app.preview.open => app.preview.toggle_target(),
+            // Same key as the live-interactions navigator's `C`, and the same
+            // action: finish the interaction on screen without first having to
+            // open the navigator to find the row for it. Guarded so it does
+            // not steal the preview pane's own `C`, which claims the key while
+            // that pane is open.
+            KeyCode::Char('C') if !app.preview.open => {
+                session::complete_interaction(app, client, live);
+            }
             // The Events screen shows two windows when the entry-log pane is
             // open, and Tab is what moves the navigation keys between them.
             KeyCode::Tab | KeyCode::BackTab if app.entry_log.open => app.toggle_entry_log_focus(),

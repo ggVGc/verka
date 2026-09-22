@@ -807,10 +807,11 @@ pub fn run(
                     else {
                         continue;
                     };
-                    if let Err(error) = client.set_session_completed(&interaction.id, true) {
-                        app.show_action_message(format!(
-                            "could not complete interaction: {error:#}"
-                        ));
+                    // The cursor settle above already made this row the one
+                    // on screen, so completing it is the same action — and the
+                    // same local status update — as the `C` bound directly on
+                    // the Events view.
+                    if !session::complete_interaction(app, client, live) {
                         continue;
                     }
                     // Completion is a Session property the server owns, so the

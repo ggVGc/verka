@@ -552,6 +552,18 @@ mod tests {
         assert!(rendered(&app).contains("idle"));
     }
 
+    /// Completion is a property of the Session, not a fact the update stream
+    /// reports, so nothing else would put it in the header — the local status
+    /// set when the operator marks it done is what the operator reads back.
+    #[test]
+    fn header_names_completion_in_the_status() {
+        let mut app = test_support::app("s1");
+        app.activity.status =
+            crate::activity::Status::Stopped(crate::activity::StopReason::Completed);
+        let title = rendered(&app);
+        assert!(title.contains("you completed it"), "{title}");
+    }
+
     #[test]
     fn message_box_floats_in_the_center_of_the_primary_view() {
         let mut app = test_support::app("s1");
