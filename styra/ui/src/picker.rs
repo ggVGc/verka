@@ -133,7 +133,12 @@ pub fn render_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(session_picker_title(order, filter, searching, show_completed));
+        .title(session_picker_title(
+            order,
+            filter,
+            searching,
+            show_completed,
+        ));
 
     if sessions.is_empty() {
         render_placeholder(frame, block, panes[0], "  no sessions found");
@@ -337,6 +342,8 @@ pub fn render_workspace_picker(
     selected: usize,
     interactions: &[InteractionSummary],
     preview: SessionsPreview<'_>,
+    filter: Option<&str>,
+    searching: bool,
 ) {
     let area = frame.area();
     let panes = Layout::default()
@@ -346,14 +353,14 @@ pub fn render_workspace_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" styra \u{b7} Workspaces \u{b7} ? keys ");
+        .title(workspace_picker_title(filter, searching));
     if workspaces.is_empty() {
-        render_placeholder(
-            frame,
-            block,
-            panes[0],
-            "  no Workspaces found \u{b7} press c to create one in the current directory",
-        );
+        let empty = if filter.is_some_and(|filter| !filter.is_empty()) {
+            "  no Workspaces match the filter \u{b7} Esc clears it"
+        } else {
+            "  no Workspaces found \u{b7} press c to create one in the current directory"
+        };
+        render_placeholder(frame, block, panes[0], empty);
         render_sessions_preview(frame, None, preview, interactions, panes[1]);
         return;
     }
@@ -373,6 +380,18 @@ pub fn render_workspace_picker(
     frame.render_stateful_widget(list, panes[0], &mut state);
     let workspace = workspaces.get(selected);
     render_sessions_preview(frame, workspace, preview, interactions, panes[1]);
+}
+
+/// The Workspace picker's title says what the list cannot be read without:
+/// the filter narrowing it, and whether a search is being typed. The rest of
+/// the keys live behind `?`, as they do for the session picker.
+fn workspace_picker_title(filter: Option<&str>, searching: bool) -> String {
+    let filter = filter
+        .filter(|filter| !filter.is_empty())
+        .map(|filter| format!(" \u{b7} filter: {filter}"))
+        .unwrap_or_default();
+    let searching = searching.then_some(" \u{b7} searching").unwrap_or("");
+    format!(" styra \u{b7} Workspaces{filter}{searching} \u{b7} ? keys ")
 }
 
 /// One Workspace row. A Workspace holding an Interaction the server still
@@ -883,11 +902,30 @@ mod tests {
         interactions: &[InteractionSummary],
         preview: SessionsPreview<'_>,
     ) -> String {
+        rendered_filtered_workspace_picker(workspaces, selected, interactions, preview, None, false)
+    }
+
+    fn rendered_filtered_workspace_picker(
+        workspaces: &[WorkspaceSummary],
+        selected: usize,
+        interactions: &[InteractionSummary],
+        preview: SessionsPreview<'_>,
+        filter: Option<&str>,
+        searching: bool,
+    ) -> String {
         let mut terminal =
             Terminal::new(TestBackend::new(WORKSPACE_PICKER_WIDTH as u16, 14)).unwrap();
         terminal
             .draw(|frame| {
-                render_workspace_picker(frame, workspaces, selected, interactions, preview)
+                render_workspace_picker(
+                    frame,
+                    workspaces,
+                    selected,
+                    interactions,
+                    preview,
+                    filter,
+                    searching,
+                )
             })
             .unwrap();
         screen_text(terminal.backend().buffer())
@@ -902,6 +940,37 @@ mod tests {
         assert!(screen.contains("retry work"), "{screen}");
         assert!(screen.contains("3 sessions"), "{screen}");
         assert!(screen.contains("/home/op/retry"), "{screen}");
+    }
+
+    #[test]
+    fn workspace_picker_title_states_the_filter_and_the_search() {
+        let workspace = workspace_summary("retry", "retry work", 3);
+
+        let screen = rendered_filtered_workspace_picker(
+            &[workspace],
+            0,
+            &[],
+            SessionsPreview::Ready(&[]),
+            Some("ret"),
+            true,
+        );
+
+        assert!(screen.contains("filter: ret"), "{screen}");
+        assert!(screen.contains("searching"), "{screen}");
+    }
+
+    #[test]
+    fn workspace_picker_says_when_the_filter_is_what_emptied_the_list() {
+        let screen = rendered_filtered_workspace_picker(
+            &[],
+            0,
+            &[],
+            SessionsPreview::Ready(&[]),
+            Some("nothing"),
+            false,
+        );
+
+        assert!(screen.contains("no Workspaces match"), "{screen}");
     }
 
     #[test]

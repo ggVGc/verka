@@ -81,8 +81,14 @@ pub fn run_session_picker(
     let mut show_completed = false;
     let mut filter: Option<String> = None;
     let mut searching = false;
-    let mut sessions =
-        picker_sessions(&all_sessions, showing_all, show_completed, now_ms, order, None);
+    let mut sessions = picker_sessions(
+        &all_sessions,
+        showing_all,
+        show_completed,
+        now_ms,
+        order,
+        None,
+    );
     let mut selected = initial_session_selection(&sessions, current_id);
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
@@ -547,13 +553,18 @@ fn read_session_name(
 }
 
 /// The Workspace picker loop: j/k or arrows to move, Enter to open a
-/// Workspace, `c` to create one for the current directory, Esc or q to back
-/// out, and `?` for that list on screen.
+/// Workspace, `c` to create one for the current directory, `/` to filter by
+/// name or directory path, Esc or q to back out, and `?` for that list on
+/// screen. Esc abandons an active search, then clears the filter, then backs
+/// out.
 ///
 /// The list is ordered once on entry, by [`sort_workspaces`]. A Workspace the
 /// operator opens is not reordered under them while they look at it — but its
 /// liveness marker is refreshed as the picker sits open, so a Workspace whose
 /// agent finishes or goes idle says so without the ordering shifting.
+///
+/// Filtering narrows that same ordering rather than re-deriving it, so a
+/// Workspace does not move relative to its neighbours as characters are typed.
 pub fn run_workspace_picker(
     terminal: &mut dyn Ui,
     client: &Client,
@@ -563,6 +574,10 @@ pub fn run_workspace_picker(
     // interactions to consult, the ordering falls back to recent access alone.
     let mut interactions = client.list_interactions().unwrap_or_default();
     sort_workspaces(workspaces, &interactions);
+    let all_workspaces = workspaces.to_vec();
+    let mut filter: Option<String> = None;
+    let mut searching = false;
+    let mut workspaces = picker_workspaces(&all_workspaces, None);
     let mut selected = 0usize;
     let mut refreshed = Instant::now();
     // The Session list of the row under the cursor, loaded like the session
@@ -601,7 +616,14 @@ pub fn run_workspace_picker(
         if help.is_open() {
             render_help(terminal, Window::WorkspacePicker, &mut help)?;
         } else {
-            terminal.render_workspace_picker(workspaces, selected, &interactions, preview)?;
+            terminal.render_workspace_picker(
+                &workspaces,
+                selected,
+                &interactions,
+                preview,
+                filter.as_deref(),
+                searching,
+            )?;
         }
         let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
             continue;
@@ -612,9 +634,52 @@ pub fn run_workspace_picker(
         if handle_help_key(&mut help, key.code) {
             continue;
         }
+        if searching {
+            match key.code {
+                KeyCode::Esc => {
+                    filter = None;
+                    searching = false;
+                }
+                KeyCode::Enter => searching = false,
+                KeyCode::Backspace => {
+                    if let Some(filter) = &mut filter {
+                        filter.pop();
+                    }
+                }
+                KeyCode::Char(character) if !character.is_control() => {
+                    filter.get_or_insert_with(String::new).push(character);
+                }
+                _ => continue,
+            }
+            // The cursor stays on the Workspace it was on for as long as the
+            // narrowing list still holds it; when it is typed away, the list
+            // reads from the top.
+            let cursor_id = workspaces
+                .get(selected)
+                .map(|workspace| workspace.id.clone());
+            workspaces = picker_workspaces(&all_workspaces, filter.as_deref());
+            selected = cursor_id
+                .and_then(|id| workspaces.iter().position(|workspace| workspace.id == id))
+                .unwrap_or(0);
+            continue;
+        }
         match key.code {
+            KeyCode::Esc if filter.is_some() => {
+                let cursor_id = workspaces
+                    .get(selected)
+                    .map(|workspace| workspace.id.clone());
+                filter = None;
+                workspaces = picker_workspaces(&all_workspaces, None);
+                selected = cursor_id
+                    .and_then(|id| workspaces.iter().position(|workspace| workspace.id == id))
+                    .unwrap_or(0);
+            }
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
             KeyCode::Char('?') => help.open(),
+            KeyCode::Char('/') => {
+                filter = Some(String::new());
+                searching = true;
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 selected = (selected + 1).min(workspaces.len().saturating_sub(1));
             }
@@ -628,6 +693,50 @@ pub fn run_workspace_picker(
             _ => {}
         }
     }
+}
+
+/// The Workspaces the filter leaves on screen, in the order they were sorted
+/// into on entry.
+///
+/// A Workspace is matched on what its row shows — the operator-facing name, or
+/// the host directory name standing in for it — and on the host path the row
+/// prints beside it, because a checkout is as often recognised by where it
+/// lives as by what it is called.
+fn picker_workspaces(
+    workspaces: &[WorkspaceSummary],
+    filter: Option<&str>,
+) -> Vec<WorkspaceSummary> {
+    let filter = filter
+        .map(str::to_lowercase)
+        .filter(|filter| !filter.is_empty());
+    workspaces
+        .iter()
+        .filter(|workspace| {
+            filter
+                .as_ref()
+                .is_none_or(|filter| workspace_matches(workspace, filter))
+        })
+        .cloned()
+        .collect()
+}
+
+/// Whether `filter`, already lowercased, appears in the Workspace's displayed
+/// name or its host path.
+fn workspace_matches(workspace: &WorkspaceSummary, filter: &str) -> bool {
+    let name = workspace.name.clone().unwrap_or_else(|| {
+        workspace
+            .host_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned()
+    });
+    name.to_lowercase().contains(filter)
+        || workspace
+            .host_path
+            .to_string_lossy()
+            .to_lowercase()
+            .contains(filter)
 }
 
 /// Root-loop-owned state for the Driva template chooser. `templates` is `None`
@@ -897,8 +1006,14 @@ mod tests {
         let unknown_age = session("unknown-age");
         let sessions = vec![old, unknown_age, fresh];
 
-        let recent =
-            picker_sessions(&sessions, false, false, now_ms, SessionOrder::LastActivity, None);
+        let recent = picker_sessions(
+            &sessions,
+            false,
+            false,
+            now_ms,
+            SessionOrder::LastActivity,
+            None,
+        );
         assert_eq!(
             recent
                 .iter()
@@ -906,10 +1021,23 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["fresh", "unknown-age"]
         );
-        let all = picker_sessions(&sessions, true, false, now_ms, SessionOrder::LastActivity, None);
+        let all = picker_sessions(
+            &sessions,
+            true,
+            false,
+            now_ms,
+            SessionOrder::LastActivity,
+            None,
+        );
         assert_eq!(all.len(), 3);
-        let recent_again =
-            picker_sessions(&sessions, false, false, now_ms, SessionOrder::LastActivity, None);
+        let recent_again = picker_sessions(
+            &sessions,
+            false,
+            false,
+            now_ms,
+            SessionOrder::LastActivity,
+            None,
+        );
         assert_eq!(recent_again, recent);
     }
 
@@ -956,6 +1084,51 @@ mod tests {
         assert_eq!(next_top_level_session(&sessions, 1), Some(2));
         assert_eq!(previous_top_level_session(&sessions, 1), Some(0));
         assert_eq!(previous_top_level_session(&sessions, 2), Some(0));
+    }
+
+    #[test]
+    fn workspace_filter_matches_name_or_directory_case_insensitively() {
+        let mut named = workspace("w-1", 3);
+        named.name = Some("Payments API".into());
+        let workspaces = vec![named, workspace("billing", 2), workspace("quiet", 1)];
+
+        let by_name = picker_workspaces(&workspaces, Some("payments"));
+        assert_eq!(
+            by_name.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
+            vec!["w-1"]
+        );
+
+        // The host path is matched too: a checkout is as often recognised by
+        // where it lives as by what it is called.
+        let by_path = picker_workspaces(&workspaces, Some("/home/op/bill"));
+        assert_eq!(
+            by_path.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
+            vec!["billing"]
+        );
+
+        // A named Workspace is not matched on the directory name its name
+        // replaced only when that name is what is typed.
+        assert!(picker_workspaces(&workspaces, Some("zzz")).is_empty());
+    }
+
+    #[test]
+    fn workspace_filter_keeps_the_order_it_narrows() {
+        let workspaces = vec![workspace("work-a", 3), workspace("work-b", 2)];
+
+        let filtered = picker_workspaces(&workspaces, Some("work"));
+
+        assert_eq!(
+            filtered.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
+            vec!["work-a", "work-b"]
+        );
+    }
+
+    #[test]
+    fn empty_workspace_filter_shows_every_workspace() {
+        let workspaces = vec![workspace("w-1", 2), workspace("w-2", 1)];
+
+        assert_eq!(picker_workspaces(&workspaces, Some("")).len(), 2);
+        assert_eq!(picker_workspaces(&workspaces, None).len(), 2);
     }
 
     #[test]

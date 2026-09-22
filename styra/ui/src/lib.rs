@@ -174,6 +174,8 @@ pub trait Ui {
         selected: usize,
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
+        filter: Option<&str>,
+        searching: bool,
     ) -> UiResult<RenderFeedback>;
 
     fn render_template_picker(
@@ -400,9 +402,19 @@ where
         selected: usize,
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
+        filter: Option<&str>,
+        searching: bool,
     ) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
-            picker::render_workspace_picker(frame, workspaces, selected, interactions, preview);
+            picker::render_workspace_picker(
+                frame,
+                workspaces,
+                selected,
+                interactions,
+                preview,
+                filter,
+                searching,
+            );
             RenderFeedback::default()
         })
     }
@@ -554,8 +566,18 @@ where
         selected: usize,
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
+        filter: Option<&str>,
+        searching: bool,
     ) -> UiResult<RenderFeedback> {
-        TerminalUi::render_workspace_picker(self, workspaces, selected, interactions, preview)
+        TerminalUi::render_workspace_picker(
+            self,
+            workspaces,
+            selected,
+            interactions,
+            preview,
+            filter,
+            searching,
+        )
     }
 
     fn render_template_picker(

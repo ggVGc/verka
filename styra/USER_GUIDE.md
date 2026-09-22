@@ -103,7 +103,8 @@ filter over the Session name and first prompt; `Esc` abandons the filter. `c`
 shows or hides the Sessions marked completed, and `C` marks the selected
 Session completed — or, on one already marked, unmarks it. `n` leaves the list
 without resuming anything and starts a new Session in the Workspace whose list
-you were reading.
+you were reading. `V` opens the Workspace list, where `/` filters the same way
+over the Workspace name and its host directory.
 
 A Session you did not name yourself is named after what you asked for — a
 short phrase like `Fix flaky checkout test`, summarised from your first prompt
