@@ -101,7 +101,9 @@ is showing it is not one of them — you watched it happen.
 
 An interaction that stops with uncommitted changes in its Git checkout — edits
 or new files the agent left behind — is marked `UNCOMMITTED` in the list, and
-the footer says `uncommitted changes` for the interaction you are attached to.
+`uncommitted changes` sits on the bottom border of the pane — beside
+`conversation only` when that filter is on — for the interaction you are
+attached to.
 The checkout is read at the moment the agent stops working, so the mark
 describes what that turn left; it clears the next time the interaction goes
 idle. A workspace that is not in a repository says nothing either way.

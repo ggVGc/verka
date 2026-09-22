@@ -85,9 +85,9 @@ mod tests {
     }
 
     /// The attached interaction's own checkout, not any other idle one's: the
-    /// footer describes the panes above it.
+    /// marker describes the pane it rides the border of.
     #[test]
-    fn footer_reports_uncommitted_work_in_the_attached_interaction() {
+    fn panel_border_reports_uncommitted_work_in_the_attached_interaction() {
         let mut app = test_support::app("current");
         let mut elsewhere = interaction("other", InteractionActivity::Pending);
         elsewhere.uncommitted_changes = true;
@@ -104,7 +104,14 @@ mod tests {
             interaction("other", InteractionActivity::Pending),
         ]);
 
-        assert!(rendered(&app).contains("uncommitted changes"));
+        let screen = test_support::screen(&app);
+        // 20 rows tall: the footer is the last, the panel's bottom border the
+        // one above it.
+        let bottom_border = screen.row(18);
+        assert!(
+            bottom_border.contains("uncommitted changes"),
+            "{bottom_border}"
+        );
     }
 
     #[test]

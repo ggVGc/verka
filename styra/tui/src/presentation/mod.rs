@@ -278,6 +278,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 text: &text,
                 has_entries: !app.timeline.entries.is_empty(),
                 conversation_only: app.timeline.conversation_only,
+                uncommitted_changes: uncommitted_changes(app),
                 requested_scroll: app.transcript.offset,
             };
             draw_main(ui, app, MainView::Transcript(&transcript))
@@ -353,6 +354,15 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
     }
 }
 
+/// Whether the interaction being shown — not the cursor's — stopped working
+/// with changes left in its checkout. The panes report what they are showing,
+/// and that is this session's interaction.
+pub(crate) fn uncommitted_changes(app: &App) -> bool {
+    app.interactions
+        .current(&app.session_id)
+        .is_some_and(|interaction| interaction.uncommitted_changes)
+}
+
 fn draw_main(
     ui: &mut dyn Ui,
     app: &App,
@@ -373,12 +383,6 @@ fn draw_main(
         help_key: crate::keymap::HELP,
         working_directory: &working_directory,
         idle_interactions: app.interactions.idle_notification_count(),
-        // The interaction being shown, not the cursor's: the footer describes
-        // the panes above it, and those are this session's.
-        uncommitted_changes: app
-            .interactions
-            .current(&app.session_id)
-            .is_some_and(|interaction| interaction.uncommitted_changes),
         quota: &quota_alert,
         auto_retry: app.auto_retry,
     };

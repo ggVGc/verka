@@ -57,6 +57,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         chrome: super::panel_chrome(app, None),
         entries,
         conversation_only: app.timeline.conversation_only,
+        uncommitted_changes: super::uncommitted_changes(app),
         usage,
         can_configure_launch: app.can_configure_launch(),
         selection_name: app.selection.name(),

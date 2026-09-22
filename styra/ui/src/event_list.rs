@@ -56,6 +56,9 @@ pub struct EventListView<'a> {
     pub chrome: PanelChrome,
     pub entries: Vec<EventEntry<'a>>,
     pub conversation_only: bool,
+    /// The interaction being shown has stopped working and left uncommitted
+    /// changes in its repository — see [`crate::chrome::uncommitted_title`].
+    pub uncommitted_changes: bool,
     pub usage: Option<(u64, u64, u64)>,
     pub can_configure_launch: bool,
     pub selection_name: String,
@@ -191,6 +194,9 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     let mut block = panel_block(&view.chrome).title_bottom(Line::from(usage).right_aligned());
     if view.conversation_only {
         block = conversation_only_title(block);
+    }
+    if view.uncommitted_changes {
+        block = crate::chrome::uncommitted_title(block);
     }
 
     if view.entries.is_empty() {

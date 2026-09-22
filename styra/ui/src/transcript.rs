@@ -1,6 +1,6 @@
 //! Filtered plain-text transcript presentation.
 
-use crate::chrome::{panel_block, PanelChrome};
+use crate::chrome::{panel_block, uncommitted_title, PanelChrome};
 use crate::palette;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -15,6 +15,8 @@ pub struct TranscriptView<'a> {
     pub text: &'a str,
     pub has_entries: bool,
     pub conversation_only: bool,
+    /// See [`crate::chrome::uncommitted_title`].
+    pub uncommitted_changes: bool,
     pub requested_scroll: u16,
 }
 
@@ -27,6 +29,9 @@ pub fn render(frame: &mut Frame, view: &TranscriptView<'_>, area: Rect) -> u16 {
                 .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )));
+    }
+    if view.uncommitted_changes {
+        block = uncommitted_title(block);
     }
     if !view.has_entries {
         frame.render_widget(Paragraph::new("  nothing to render yet").block(block), area);
@@ -79,6 +84,7 @@ mod tests {
         text: &str,
         has_entries: bool,
         conversation_only: bool,
+        uncommitted_changes: bool,
         requested_scroll: u16,
     ) -> (String, u16) {
         let mut terminal = Terminal::new(TestBackend::new(50, 8)).unwrap();
@@ -92,6 +98,7 @@ mod tests {
                         text,
                         has_entries,
                         conversation_only,
+                        uncommitted_changes,
                         requested_scroll,
                     },
                     frame.area(),
@@ -110,9 +117,20 @@ mod tests {
     }
     #[test]
     fn content_and_filter_marker_are_rendered() {
-        let (output, _) = screen("user: hello\nagent: hi", true, true, 0);
+        let (output, _) = screen("user: hello\nagent: hi", true, true, false, 0);
         assert!(output.contains("conversation only"));
         assert!(output.contains("user: hello"));
+    }
+    #[test]
+    fn uncommitted_work_is_marked_beside_the_filter() {
+        let (output, _) = screen("user: hello", true, true, true, 0);
+        let bottom = output.lines().last().unwrap().to_owned();
+        assert!(
+            bottom.find("conversation only") < bottom.find("uncommitted changes"),
+            "{bottom}"
+        );
+        let (clean, _) = screen("user: hello", true, true, false, 0);
+        assert!(!clean.contains("uncommitted"));
     }
     #[test]
     fn scroll_is_measured_and_clamped() {
@@ -120,13 +138,13 @@ mod tests {
             .map(|line| format!("line {line}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let (output, limit) = screen(&text, true, false, u16::MAX);
+        let (output, limit) = screen(&text, true, false, false, u16::MAX);
         assert_eq!(limit, 4);
         assert!(output.contains("line 9"));
     }
     #[test]
     fn empty_state_has_no_scroll() {
-        let (output, limit) = screen("", false, false, 20);
+        let (output, limit) = screen("", false, false, false, 20);
         assert_eq!(limit, 0);
         assert!(output.contains("nothing to render yet"));
     }

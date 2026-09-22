@@ -32,6 +32,22 @@ pub struct PanelChrome {
     pub session: Option<String>,
 }
 
+/// Mark a panel as showing an interaction that stopped working and left
+/// uncommitted changes in its repository. It rides the bottom border of the
+/// pane the operator is already reading, beside the other markers about what
+/// is on screen, because it is what they have to decide about before sending
+/// the agent off again — and because nothing else tells them: the agent's own
+/// account of a turn routinely says it changed files without saying whether it
+/// committed them.
+pub fn uncommitted_title(block: Block<'static>) -> Block<'static> {
+    block.title_bottom(Line::from(Span::styled(
+        " uncommitted changes ",
+        Style::default()
+            .fg(palette::WARNING)
+            .add_modifier(Modifier::BOLD),
+    )))
+}
+
 pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
     let tone = match chrome.status_tone {
         StatusTone::Pending => palette::INFO,
