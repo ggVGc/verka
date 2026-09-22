@@ -83,6 +83,7 @@ live interactions.
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
 | `Ctrl+A` | go to the next interaction that went idle unseen |
+| `Ctrl+N` | step to the next interaction that is still running |
 | `L` | choose provider, model, and effort |
 
 Sending a message to a stopped or viewed Session automatically attempts native
@@ -118,6 +119,13 @@ list open it moves the cursor there (revealing all Workspaces if it lives in
 another one), and with the list closed it makes that interaction current and
 opens the list around it. Pressing it repeatedly walks every waiting
 interaction and wraps back to the first.
+
+`Ctrl+N` moves the same way, over every interaction still running — waiting on
+you or mid-turn, seen or unseen — in the order the list shows them, wrapping
+back to the first at the end. Stopped and completed interactions are skipped, so
+pressing it repeatedly cycles the work you actually have in flight without
+opening the list to find it. Like `Ctrl+A`, it reveals all Workspaces if the
+interaction it lands on lives in another one.
 
 The tag editor lists every tag already used by a Session, across Workspaces.
 Use `Space` to select or clear one, `n` to type and add a new tag, and `Enter`

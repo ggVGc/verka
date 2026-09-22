@@ -312,6 +312,11 @@ pub enum Request {
     /// live list around it. The footer counts those interactions; this is how
     /// the operator gets to one without walking the navigator to find it.
     NextIdleInteraction,
+    /// Make the next live interaction current — the one after the one on
+    /// screen in the navigator's order — and show the live list around it.
+    /// Where [`Request::NextIdleInteraction`] answers the footer's count, this
+    /// walks the work that is still running, waiting or not.
+    NextLiveInteraction,
     /// Stop the current interaction and return to the blank start screen.
     Reset,
     /// Return to the blank start screen without stopping the current interaction.

@@ -165,6 +165,10 @@ const GLOBAL: &[ReferenceRow] = &[
         action: "go to the next interaction that went idle unseen",
     },
     ReferenceRow::Binding {
+        keys: "ctrl-n",
+        action: "step to the next interaction that is still running",
+    },
+    ReferenceRow::Binding {
         keys: "r / l / t / d",
         action: "raw / log / transcript / details; press again for events",
     },
@@ -407,6 +411,10 @@ const INTERACTIONS: &[ReferenceRow] = &[
     ReferenceRow::Binding {
         keys: "ctrl-j / ctrl-k",
         action: "first interaction of the next / previous Workspace, in All",
+    },
+    ReferenceRow::Binding {
+        keys: "ctrl-n",
+        action: "next interaction that is still running",
     },
     ReferenceRow::Binding {
         keys: "w",

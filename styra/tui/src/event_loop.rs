@@ -763,6 +763,18 @@ pub fn run(
                     }
                     continue;
                 }
+                // The step between live interactions moves the cursor for the
+                // same reason: one load, on the row it settles on.
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if app
+                        .interactions
+                        .cursor_to_next_live(&session_id, app.workspace.id.as_deref())
+                        .is_none()
+                    {
+                        app.show_action_message("no other interaction is running");
+                    }
+                    continue;
+                }
                 KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.interactions
                         .cursor_next_workspace(&session_id, app.workspace.id.as_deref());
@@ -1025,6 +1037,23 @@ pub fn run(
                 }
                 let Some(next) = app.interactions.next_idle_unseen(&app.session_id) else {
                     app.show_action_message("no interaction has gone idle unseen");
+                    continue;
+                };
+                make_interaction_current(app, live, client, standing_launch, next);
+                open_interaction_navigator(app, client);
+            }
+            // The same jump as the unseen-idle one, over every live interaction
+            // instead: asked with the navigator closed, so the interaction is
+            // loaded outright and the list opens around it.
+            Some(Request::NextLiveInteraction) => {
+                // The client's snapshot is up to a refresh old, and an
+                // interaction that has since stopped is not one to step onto.
+                if let Ok(interactions) = client.list_interactions() {
+                    app.interactions.refresh(interactions);
+                    interactions_refreshed = Instant::now();
+                }
+                let Some(next) = app.interactions.next_live(&app.session_id) else {
+                    app.show_action_message("no other interaction is running");
                     continue;
                 };
                 make_interaction_current(app, live, client, standing_launch, next);

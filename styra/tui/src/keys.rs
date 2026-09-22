@@ -193,6 +193,13 @@ pub fn handle_list_key(
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             return app.ask(Request::NextIdleInteraction)
         }
+        // Beside ctrl-a, and the same jump with a wider net: ctrl-a goes to
+        // work that is waiting to be read, ctrl-n steps through every
+        // interaction still running. Matched before plain `n`, which crossterm
+        // reports as the same character.
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            return app.ask(Request::NextLiveInteraction)
+        }
         KeyCode::Char('a') if app.view != View::Files => return app.ask(Request::Interactions),
         KeyCode::Char('V') => return app.ask(Request::Workspace),
         KeyCode::Char('W') if !app.session_id.is_empty() => {
@@ -859,6 +866,36 @@ mod tests {
 
         press(&mut app, KeyModifiers::NONE);
         assert_eq!(app.take_request(), Some(Request::Interactions));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// ctrl-n steps through the running interactions, and must be taken before
+    /// plain `n`, which the terminal reports as the same character.
+    #[test]
+    fn control_n_steps_to_the_next_running_interaction() {
+        let root = tree("live-step");
+        let mut app = app(&root);
+        app.enter_list();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+        let mut press = |app: &mut App, code, modifiers| {
+            handle_list_key(
+                app,
+                &client,
+                &mut live,
+                KeyEvent::new(code, modifiers),
+                &mut pending_fold,
+                &root.join("preferences.toml"),
+            );
+        };
+
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
+        assert_eq!(app.take_request(), Some(Request::NextLiveInteraction));
+
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+        assert_eq!(app.take_request(), Some(Request::NewSession));
 
         let _ = std::fs::remove_dir_all(root);
     }
