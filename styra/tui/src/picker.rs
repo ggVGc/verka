@@ -1095,7 +1095,10 @@ mod tests {
         // shows in place of a name.
         let by_directory = picker_workspaces(&workspaces, Some("bill"));
         assert_eq!(
-            by_directory.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
+            by_directory
+                .iter()
+                .map(|w| w.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["billing"]
         );
 

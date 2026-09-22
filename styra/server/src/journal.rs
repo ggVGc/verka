@@ -1248,8 +1248,7 @@ mod tests {
 
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, id) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None)
-                .unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
         let directory = journal.path().parent().unwrap();
         assert_eq!(
             directory,
@@ -1293,8 +1292,7 @@ mod tests {
         let profile = test_profile("codex", Protocol::CodexJsonl);
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None)
-                .unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
         let directory = journal.path().parent().unwrap();
 
         assert_eq!(read_session_contract(directory).unwrap(), None);
@@ -1333,8 +1331,7 @@ mod tests {
         let profile = test_profile("codex", Protocol::CodexJsonl);
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None)
-                .unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
         let directory = journal.path().parent().unwrap();
 
         // Nothing is done on the operator's behalf until they ask.
@@ -1511,7 +1508,9 @@ mod tests {
         let directory = temp_dir("first-prompt");
         let mut journal = Journal::create(&directory).unwrap();
         journal.record_agent_line("provider prelude").unwrap();
-        journal.record_user_message("Find the flaky checkout test").unwrap();
+        journal
+            .record_user_message("Find the flaky checkout test")
+            .unwrap();
         journal.record_user_message("Then fix it").unwrap();
 
         assert_eq!(
@@ -1529,8 +1528,7 @@ mod tests {
         let profile = test_profile("codex", Protocol::CodexJsonl);
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None)
-                .unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
         let directory = journal.path().parent().unwrap();
         store_provider_session_id(directory, "provider-1").unwrap();
 
@@ -1595,8 +1593,7 @@ mod tests {
         let profile = test_profile("codex", Protocol::CodexJsonl);
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None)
-                .unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
         let directory = journal.path().parent().unwrap();
 
         assert_eq!(

@@ -4,6 +4,7 @@
 //! with the [`SERVE_ENV`] sentinel to spawn its own detached daemon rather than
 //! shelling out to a separate `styra-server` binary (see [`crate::spawn`]).
 
+use crate::client::{Client, InProcessServer};
 use crate::server::{serve, ServerState};
 use anyhow::{bail, Context, Result};
 use std::fs::{File, OpenOptions};
@@ -13,7 +14,6 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use crate::client::{Client, InProcessServer};
 use styra_protocol::{Request, Response};
 
 /// Sentinel env var: when set, a host binary runs as the Styra server instead

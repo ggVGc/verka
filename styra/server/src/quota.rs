@@ -1134,7 +1134,9 @@ mod tests {
     #[test]
     fn a_refusal_is_announced_once_while_the_plan_stays_spent() {
         let log = QuotaLog::new();
-        let announced = log.observe("s-1", Provider::Codex, 1, CODEX_REFUSAL).announce;
+        let announced = log
+            .observe("s-1", Provider::Codex, 1, CODEX_REFUSAL)
+            .announce;
         assert_eq!(announced.len(), 1);
         assert!(announced[0].describe().contains("Sep 9th"));
         // The `error` notification says the same thing a millisecond later.

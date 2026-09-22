@@ -52,10 +52,10 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         .sum::<usize>()
         .min(area.width as usize) as u16;
     let retry = view.auto_retry.then_some(" R rate-limit retry: on ");
-    let retry_width = retry.map(UnicodeWidthStr::width).unwrap_or_default().min(
-        area.width
-            .saturating_sub(quota_width) as usize,
-    ) as u16;
+    let retry_width = retry
+        .map(UnicodeWidthStr::width)
+        .unwrap_or_default()
+        .min(area.width.saturating_sub(quota_width) as usize) as u16;
     let directory_width = view.working_directory.width().min(
         area.width
             .saturating_sub(keybinds_width)
