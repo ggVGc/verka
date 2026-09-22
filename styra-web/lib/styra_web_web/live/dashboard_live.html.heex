@@ -1,0 +1,231 @@
+<Layouts.app flash={@flash}>
+  <div class="min-h-screen bg-[#070b12] text-slate-100">
+    <header class="border-b border-white/10 bg-[#0b111b]/90 backdrop-blur-xl">
+      <div class="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4 px-5 py-4 lg:px-8">
+        <div class="flex items-center gap-3">
+          <div class="grid size-10 place-items-center rounded-xl bg-violet-500 text-lg font-black text-white shadow-lg shadow-violet-500/20">
+            S
+          </div>
+          <div>
+            <h1 class="text-lg font-bold tracking-tight">Styra Live</h1>
+            <p class="text-xs text-slate-500">Local interaction console</p>
+          </div>
+        </div>
+
+        <.form
+          for={@connection_form}
+          id="connection-form"
+          phx-submit="connect"
+          class="flex min-w-0 items-center gap-2"
+        >
+          <.input
+            field={@connection_form[:socket_path]}
+            aria-label="Styra socket path"
+            class="h-9 w-48 rounded-lg border border-white/10 bg-white/5 px-3 font-mono text-xs text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-violet-400/70 focus:ring-2 focus:ring-violet-500/15 sm:w-80"
+            autocomplete="off"
+          />
+          <button
+            id="connect-button"
+            class="h-9 rounded-lg bg-slate-100 px-4 text-sm font-semibold text-slate-950 transition hover:bg-white active:scale-[0.98]"
+            type="submit"
+          >
+            Connect
+          </button>
+          <span class={[
+            "size-2.5 rounded-full",
+            if(@connected, do: "bg-emerald-400 shadow-[0_0_12px_#34d399]", else: "bg-rose-500")
+          ]}></span>
+        </.form>
+      </div>
+    </header>
+
+    <div :if={@error} class="mx-auto max-w-[1600px] px-5 pt-4 lg:px-8">
+      <div
+        class="flex items-center gap-3 rounded-xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200"
+        role="alert"
+      >
+        <.icon name="hero-exclamation-triangle" class="size-5 shrink-0" />
+        <span>{@error}</span>
+      </div>
+    </div>
+
+    <div class="mx-auto grid max-w-[1600px] gap-5 px-5 py-5 lg:grid-cols-[22rem_minmax(0,1fr)] lg:px-8">
+      <aside class="overflow-hidden rounded-2xl border border-white/10 bg-[#0b111b] shadow-2xl shadow-black/20">
+        <div class="flex items-center justify-between border-b border-white/10 px-4 py-3">
+          <div>
+            <h2 class="font-semibold">Interactions</h2>
+            <p class="text-xs text-slate-500">
+              {if @connected, do: "#{@interaction_count} live", else: "Server unavailable"}
+            </p>
+          </div>
+          <span
+            :if={@refreshing}
+            class="size-4 animate-spin rounded-full border-2 border-violet-400/25 border-t-violet-400"
+          ></span>
+        </div>
+
+        <div
+          id="interactions"
+          phx-update="stream"
+          class="max-h-[calc(100vh-12rem)] overflow-y-auto p-2"
+        >
+          <div
+            id="interactions-empty"
+            class="hidden px-4 py-12 text-center text-sm text-slate-500 only:block"
+          >
+            No live interactions.
+          </div>
+          <button
+            :for={{dom_id, interaction} <- @streams.interactions}
+            id={dom_id}
+            type="button"
+            phx-click="select"
+            phx-value-id={interaction["id"]}
+            class={[
+              "group mb-1 w-full rounded-xl border p-3 text-left transition duration-200 active:scale-[0.99]",
+              if(@selected_id == interaction["id"],
+                do: "border-violet-400/30 bg-violet-500/10",
+                else: "border-transparent hover:border-white/10 hover:bg-white/[0.04]"
+              )
+            ]}
+          >
+            <div class="flex items-start justify-between gap-3">
+              <span class="truncate font-semibold">{display_name(interaction)}</span>
+              <span class="flex shrink-0 items-center gap-1.5 text-[11px] uppercase tracking-wide text-slate-500">
+                <span class={["size-1.5 rounded-full", activity_class(interaction["activity"])]}></span>
+                {interaction["activity"]}
+              </span>
+            </div>
+            <p class="mt-1 truncate font-mono text-[11px] text-slate-600">
+              {selection_name(interaction)}
+            </p>
+            <p class="mt-2 line-clamp-2 text-sm leading-snug text-slate-400">
+              {interaction["last_message"] || "No agent message yet"}
+            </p>
+          </button>
+        </div>
+      </aside>
+
+      <section class="flex min-h-[calc(100vh-8.5rem)] min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0b111b] shadow-2xl shadow-black/20">
+        <%= if interaction = @selected_interaction do %>
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-3">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <h2 class="truncate font-semibold">{display_name(interaction)}</h2>
+                <span class="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-400">
+                  {interaction["activity"]}
+                </span>
+              </div>
+              <p class="truncate font-mono text-xs text-slate-600">{interaction["workspace"]}</p>
+            </div>
+            <div class="flex gap-2">
+              <button
+                id="interrupt-button"
+                class="rounded-lg px-3 py-2 text-sm text-slate-400 transition hover:bg-white/5 hover:text-slate-100 active:scale-[0.98]"
+                phx-click="action"
+                phx-value-name="interrupt"
+              >
+                Interrupt
+              </button>
+              <button
+                id="stop-button"
+                class="rounded-lg px-3 py-2 text-sm text-rose-400 transition hover:bg-rose-500/10 active:scale-[0.98]"
+                phx-click="action"
+                phx-value-name="stop"
+              >
+                Stop
+              </button>
+            </div>
+          </div>
+
+          <div
+            id="transcript"
+            phx-update="stream"
+            class="flex-1 space-y-3 overflow-y-auto bg-black/10 p-5"
+          >
+            <div
+              id="transcript-empty"
+              class="hidden h-full min-h-72 place-items-center text-center only:grid"
+            >
+              <div>
+                <.icon name="hero-chat-bubble-left-right" class="mx-auto size-10 text-slate-700" />
+                <p class="mt-3 text-sm text-slate-500">Waiting for interaction events…</p>
+              </div>
+            </div>
+            <article
+              :for={{dom_id, item} <- @streams.updates}
+              id={dom_id}
+              class={[
+                "rounded-xl border px-4 py-3",
+                if(conversational?(item),
+                  do:
+                    if(user_message?(item),
+                      do: "ml-10 border-violet-400/20 bg-violet-500/10",
+                      else: "mr-10 border-white/10 bg-white/[0.03]"
+                    ),
+                  else: "mx-6 border-white/[0.07] bg-white/[0.02]"
+                )
+              ]}
+            >
+              <div class="mb-1.5 flex items-center justify-between gap-3">
+                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  {update_kind(item) |> String.replace("_", " ")}
+                </span>
+                <span class="font-mono text-[10px] text-slate-700">#{item["sequence"]}</span>
+              </div>
+              <p class="whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">
+                {update_text(item)}
+              </p>
+            </article>
+          </div>
+
+          <.form
+            for={@message_form}
+            id="message-form"
+            phx-submit="send"
+            class="border-t border-white/10 p-4"
+          >
+            <div class="flex items-end gap-3">
+              <.input
+                field={@message_form[:text]}
+                type="textarea"
+                aria-label="Message"
+                placeholder="Send a message to this interaction…"
+                rows="2"
+                class="min-h-16 flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-violet-400/70 focus:ring-2 focus:ring-violet-500/15"
+              />
+              <div class="flex flex-col gap-2">
+                <.input
+                  field={@message_form[:contract]}
+                  type="select"
+                  aria-label="Answer contract"
+                  options={contract_options()}
+                  class="h-9 w-36 rounded-lg border border-white/10 bg-[#111827] px-3 text-sm text-slate-300 outline-none focus:border-violet-400/70"
+                />
+                <button
+                  id="send-button"
+                  class="flex h-9 items-center justify-center gap-2 rounded-lg bg-violet-500 px-4 text-sm font-semibold text-white shadow-lg shadow-violet-500/15 transition hover:bg-violet-400 active:scale-[0.98] phx-submit-loading:opacity-60"
+                  type="submit"
+                >
+                  Send <.icon name="hero-arrow-up" class="size-4" />
+                </button>
+              </div>
+            </div>
+          </.form>
+        <% else %>
+          <div class="grid flex-1 place-items-center p-10 text-center">
+            <div class="max-w-sm">
+              <div class="mx-auto grid size-16 place-items-center rounded-2xl border border-white/10 bg-white/[0.03]">
+                <.icon name="hero-command-line" class="size-8 text-slate-700" />
+              </div>
+              <h2 class="mt-5 text-lg font-semibold">Select an interaction</h2>
+              <p class="mt-2 text-sm leading-6 text-slate-500">
+                Choose a live Styra session to stream its events and send the next turn.
+              </p>
+            </div>
+          </div>
+        <% end %>
+      </section>
+    </div>
+  </div>
+</Layouts.app>
