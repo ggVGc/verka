@@ -358,8 +358,6 @@ const RESET_SWEEP: Duration = Duration::from_secs(15);
 struct HeldBack {
     /// The Session to resume, which is also the interaction's id.
     id: String,
-    /// The turn it was refused in the middle of, verbatim as it went out.
-    turn: String,
     /// The interaction's own half of the launch policy, so the Session comes
     /// back in the sandbox the operator granted it rather than a plainer one.
     launch: LaunchPolicy,
@@ -2044,12 +2042,7 @@ impl ServerState {
     /// first.
     fn retry_after_reset(&self, reset: &crate::quota::WindowReset) {
         for held in self.held_back_by(reset) {
-            let HeldBack {
-                id,
-                turn,
-                launch,
-                alive,
-            } = held;
+            let HeldBack { id, launch, alive } = held;
             if !alive {
                 if let Err(error) = self.resume_session(ResumeSession {
                     id: id.clone(),
@@ -2080,7 +2073,10 @@ impl ServerState {
                 )),
             );
             let sent = self.interaction(&id).and_then(|interaction| {
-                interaction.send_message(SendMessage::new(&turn))?;
+                // Not the refused turn itself, verbatim: the agent was already
+                // told what to do, and a rate limit is not a reason to repeat
+                // it. "continue" is enough to pick the same turn back up.
+                interaction.send_message(SendMessage::new("continue"))?;
                 // Asked again, so the refusal has been acted on: what happens
                 // to this turn is the new turn's business.
                 interaction.note_serving(reset.provider);
@@ -2114,8 +2110,8 @@ impl ServerState {
                 continue;
             }
             let id = managed.interaction.session_id().to_owned();
-            let Some(turn) = managed.last_operator_turn() else {
-                // Nothing was asked, so there is nothing to ask again. Said in
+            if managed.last_operator_turn().is_none() {
+                // Nothing was asked, so there is nothing to continue. Said in
                 // the interaction's own stream, since the operator asked for a
                 // retry and is owed the reason there was none.
                 managed.push_update(InteractionUpdate::Log(LogEntry::warn(format!(
@@ -2123,10 +2119,9 @@ impl ServerState {
                     reset.window
                 ))));
                 continue;
-            };
+            }
             held.push(HeldBack {
                 id,
-                turn,
                 launch: managed.launch.clone(),
                 alive: managed.activity.activity().accepting(),
             });
