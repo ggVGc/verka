@@ -752,6 +752,15 @@ pub struct InteractionSummary {
     /// listing it is deliberately not an acknowledgement.
     #[serde(default)]
     pub idle_unseen: bool,
+    /// True when this interaction has stopped working and the Git checkout it
+    /// works in has uncommitted changes. Read when the interaction goes idle
+    /// and not after: an operator deciding what to do with work an agent has
+    /// left behind is asking about the moment it stopped, and asking again on
+    /// every listing would run `git` per interaction per refresh. `false`
+    /// while a turn runs, and for a workspace that is not in a repository at
+    /// all.
+    #[serde(default)]
+    pub uncommitted_changes: bool,
     /// The most recent message the agent sent, flattened to a single line and
     /// clipped, so a list of interactions says what each one is actually
     /// talking about. `None` before the agent has said anything.

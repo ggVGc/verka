@@ -30,6 +30,7 @@ mod tests {
             activity_reason: None,
             activity_since_ms: 0,
             idle_unseen: false,
+            uncommitted_changes: false,
             last_message: None,
             events: 0,
             completed: false,
@@ -81,6 +82,29 @@ mod tests {
         ]);
 
         assert!(rendered(&app).contains("^a 1 interaction idle"));
+    }
+
+    /// The attached interaction's own checkout, not any other idle one's: the
+    /// footer describes the panes above it.
+    #[test]
+    fn footer_reports_uncommitted_work_in_the_attached_interaction() {
+        let mut app = test_support::app("current");
+        let mut elsewhere = interaction("other", InteractionActivity::Pending);
+        elsewhere.uncommitted_changes = true;
+        app.interactions.refresh(vec![
+            interaction("current", InteractionActivity::Pending),
+            elsewhere,
+        ]);
+        assert!(!rendered(&app).contains("uncommitted changes"));
+
+        let mut current = interaction("current", InteractionActivity::Pending);
+        current.uncommitted_changes = true;
+        app.interactions.refresh(vec![
+            current,
+            interaction("other", InteractionActivity::Pending),
+        ]);
+
+        assert!(rendered(&app).contains("uncommitted changes"));
     }
 
     #[test]

@@ -99,6 +99,13 @@ client's screen, and has not been focused since, is marked `NEWLY IDLE`; the
 footer counts those rows until they are focused. Finishing a turn while a client
 is showing it is not one of them — you watched it happen.
 
+An interaction that stops with uncommitted changes in its Git checkout — edits
+or new files the agent left behind — is marked `UNCOMMITTED` in the list, and
+the footer says `uncommitted changes` for the interaction you are attached to.
+The checkout is read at the moment the agent stops working, so the mark
+describes what that turn left; it clears the next time the interaction goes
+idle. A workspace that is not in a repository says nothing either way.
+
 `A` opens the full Session list. In that list, `/` starts a case-insensitive
 filter over the Session name and first prompt; `Esc` abandons the filter. `c`
 shows or hides the Sessions marked completed, and `C` marks the selected

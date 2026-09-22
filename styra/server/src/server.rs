@@ -175,6 +175,71 @@ impl IdleNotice {
     }
 }
 
+/// Everything an interaction reaching idle records: that going idle is news
+/// for a client that was not watching, and what the agent left uncommitted in
+/// the checkout.
+///
+/// One handle rather than two because the two are the same event. The
+/// collector thread notices an interaction stop working in three places — a
+/// turn completing, a background task set emptying, a background poll
+/// finishing — and each of them has to record both, so the pair is held
+/// together where forgetting one is not possible.
+struct GoneIdle {
+    notice: Arc<IdleNotice>,
+    working_tree: Arc<WorkingTree>,
+}
+
+impl GoneIdle {
+    fn became_idle(&self) {
+        self.notice.became_idle();
+        self.working_tree.reread();
+    }
+}
+
+/// Whether the checkout an interaction works in has work that is not
+/// committed, as it stood when the interaction last stopped working.
+///
+/// Read at that moment and held, rather than answered when a client asks,
+/// because the question costs a `git` process: a navigator listing a dozen
+/// interactions several times a second would spawn one per interaction per
+/// refresh to learn something that only changes while an agent is running.
+/// The agent has stopped by the time this is read, so the answer stays true
+/// for as long as anyone is looking at it — until the operator commits, which
+/// is what they were being told to consider.
+struct WorkingTree {
+    git: Arc<dyn crate::git::Git>,
+    checkout: PathBuf,
+    uncommitted: AtomicBool,
+}
+
+impl WorkingTree {
+    fn new(git: Arc<dyn crate::git::Git>, checkout: PathBuf) -> Self {
+        Self {
+            git,
+            checkout,
+            uncommitted: AtomicBool::new(false),
+        }
+    }
+
+    /// Ask Git again, because the interaction has stopped writing to the
+    /// checkout.
+    ///
+    /// A workspace outside a repository fails the question rather than
+    /// answering it, and that failure is the answer this reports: there is no
+    /// history here to have left work out of, so there is nothing to say.
+    fn reread(&self) {
+        let uncommitted = self
+            .git
+            .has_uncommitted_changes(&self.checkout)
+            .unwrap_or(false);
+        self.uncommitted.store(uncommitted, Ordering::Release);
+    }
+
+    fn uncommitted(&self) -> bool {
+        self.uncommitted.load(Ordering::Acquire)
+    }
+}
+
 /// What an interaction is doing, how it came to be doing it, and the moment it
 /// started. The three are held together because the last two are only ever
 /// read as the first's clock and the first's explanation, and a transition
@@ -306,6 +371,9 @@ struct ManagedInteraction {
     /// Whether this interaction going idle is still news, and what makes it
     /// news at all: see [`IdleNotice`].
     idle: Arc<IdleNotice>,
+    /// What the agent left uncommitted in the workspace when it last stopped
+    /// working: see [`WorkingTree`].
+    working_tree: Arc<WorkingTree>,
     /// How many agent events this interaction has produced. Counted as they
     /// arrive rather than derived from `updates` on each listing, so a summary
     /// costs a load instead of a scan of the whole history.
@@ -477,6 +545,11 @@ impl ManagedInteraction {
             workspace: self.workspace.clone(),
             driva: self.driva.clone(),
             idle_unseen: activity == InteractionActivity::Pending && self.idle.unseen(),
+            // Only reported where it was read: an interaction that is working
+            // again has an answer from before the turn it is running, and an
+            // operator cannot act on a checkout the agent is still writing to.
+            uncommitted_changes: activity == InteractionActivity::Pending
+                && self.working_tree.uncommitted(),
             activity,
             activity_reason: state.reason,
             activity_since_ms: state.since_ms,
@@ -1098,11 +1171,16 @@ impl ServerState {
         let events = Arc::new(AtomicUsize::new(0));
         let background_work = Arc::new(AtomicBool::new(false));
         let interrupt_requested = Arc::new(AtomicBool::new(false));
+        let working_tree = Arc::new(WorkingTree::new(
+            Arc::clone(&self.inner.git),
+            checkout.clone(),
+        ));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
             activity: Arc::clone(&activity),
             idle: Arc::clone(&idle),
+            working_tree: Arc::clone(&working_tree),
             events: Arc::clone(&events),
             workspace_id: request.workspace_id.clone(),
             name: Mutex::new(name.clone()),
@@ -1125,7 +1203,10 @@ impl ServerState {
         let refused = Arc::downgrade(&managed);
         let interrupted = Arc::clone(&interrupt_requested);
         let quota = Arc::clone(&self.inner.quota);
-        let idle = Arc::clone(&idle);
+        let idle = GoneIdle {
+            notice: Arc::clone(&idle),
+            working_tree: Arc::clone(&working_tree),
+        };
         let quota_session = id.clone();
         let quota_provider = selection.provider;
         std::thread::Builder::new()
@@ -1611,11 +1692,16 @@ impl ServerState {
         // is no separate client action to clear the flag.
         journal::store_session_completed(&summary.path, false)?;
         let interrupt_requested = Arc::new(AtomicBool::new(false));
+        let working_tree = Arc::new(WorkingTree::new(
+            Arc::clone(&self.inner.git),
+            checkout.clone(),
+        ));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
             activity: Arc::clone(&activity),
             idle: Arc::clone(&idle),
+            working_tree: Arc::clone(&working_tree),
             events: Arc::clone(&events),
             workspace_id: summary.workspace_id.clone(),
             name: Mutex::new(summary.name.clone()),
@@ -1639,7 +1725,10 @@ impl ServerState {
         let interrupted = Arc::clone(&interrupt_requested);
         let id = request.id.clone();
         let quota = Arc::clone(&self.inner.quota);
-        let idle = Arc::clone(&idle);
+        let idle = GoneIdle {
+            notice: Arc::clone(&idle),
+            working_tree: Arc::clone(&working_tree),
+        };
         let quota_session = id.clone();
         let quota_provider = selection.provider;
         std::thread::Builder::new()
@@ -3522,6 +3611,46 @@ mod tests {
         idle.note_watched();
 
         assert!(!idle.unseen());
+    }
+
+    /// Read when the agent stops, and not before: a checkout the operator has
+    /// since committed still reads as it did at that moment, and a workspace
+    /// the agent dirtied mid-turn does not report until the turn is over.
+    #[test]
+    fn a_working_tree_is_read_when_the_interaction_stops() {
+        let host = temp_path("working-tree-host");
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let tree = WorkingTree::new(git.clone(), host.clone());
+
+        assert!(!tree.uncommitted(), "nothing has been read yet");
+
+        git.set_uncommitted_changes(&host, true);
+        assert!(!tree.uncommitted(), "the agent is still working");
+
+        tree.reread();
+        assert!(tree.uncommitted());
+
+        git.set_uncommitted_changes(&host, false);
+        assert!(tree.uncommitted(), "still what the turn left behind");
+        tree.reread();
+        assert!(!tree.uncommitted());
+    }
+
+    /// A workspace outside a repository has no answer to give, and the
+    /// question failing is not something to report at an operator.
+    #[test]
+    fn a_workspace_outside_a_repository_reports_nothing() {
+        let host = temp_path("working-tree-bare-host");
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let tree = WorkingTree::new(crate::git::FakeGit::shared(), host);
+
+        tree.reread();
+
+        assert!(!tree.uncommitted());
     }
 
     #[test]

@@ -373,6 +373,12 @@ fn draw_main(
         help_key: crate::keymap::HELP,
         working_directory: &working_directory,
         idle_interactions: app.interactions.idle_notification_count(),
+        // The interaction being shown, not the cursor's: the footer describes
+        // the panes above it, and those are this session's.
+        uncommitted_changes: app
+            .interactions
+            .current(&app.session_id)
+            .is_some_and(|interaction| interaction.uncommitted_changes),
         quota: &quota_alert,
         auto_retry: app.auto_retry,
     };

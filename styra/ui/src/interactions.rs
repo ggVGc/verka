@@ -31,6 +31,9 @@ pub enum InteractionRow<'a> {
         selected: bool,
         loading: bool,
         newly_idle: bool,
+        /// The interaction has stopped and left work uncommitted in its
+        /// repository — see [`crate::footer::FooterView::uncommitted_changes`].
+        uncommitted: bool,
         completed: bool,
         tags: &'a [String],
         last_message: Option<&'a str>,
@@ -106,6 +109,7 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
         current,
         loading,
         newly_idle,
+        uncommitted,
         completed,
         tags,
         last_message,
@@ -145,6 +149,14 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
             " · NEWLY IDLE",
             Style::default()
                 .fg(palette::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if *uncommitted {
+        main.push(Span::styled(
+            " · UNCOMMITTED",
+            Style::default()
+                .fg(palette::WARNING)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -227,6 +239,7 @@ mod tests {
                     selected: true,
                     loading: false,
                     newly_idle: true,
+                    uncommitted: false,
                     completed: false,
                     tags: &tags,
                     last_message: Some("The checks are green."),
@@ -239,6 +252,32 @@ mod tests {
         assert!(screen.contains("NEWLY IDLE · #bug #urgent"), "{screen}");
         assert!(screen.contains("« The checks are green."), "{screen}");
         assert_eq!(height(&view, 12), 5);
+    }
+
+    /// The list is where an operator scanning several stopped agents decides
+    /// which one to go back to, so the checkout each of them left behind has
+    /// to be readable from the row.
+    #[test]
+    fn a_stopped_interaction_says_it_left_work_uncommitted() {
+        let view = InteractionNavigator {
+            scope: "Payments".into(),
+            all_workspaces: false,
+            completion_filter: "completed hidden".into(),
+            rows: vec![InteractionRow::Interaction {
+                name: "repair checkout".into(),
+                provider: "claude",
+                status: InteractionStatus::Idle,
+                current: false,
+                selected: false,
+                loading: false,
+                newly_idle: false,
+                uncommitted: true,
+                completed: false,
+                tags: &[],
+                last_message: None,
+            }],
+        };
+        assert!(rendered(&view).contains("repair checkout · claude · UNCOMMITTED"));
     }
 
     #[test]
@@ -256,6 +295,7 @@ mod tests {
                     selected: false,
                     loading: false,
                     newly_idle: false,
+                    uncommitted: false,
                     completed: false,
                     tags: &[],
                     last_message: None,
@@ -268,6 +308,7 @@ mod tests {
                     selected: true,
                     loading: true,
                     newly_idle: false,
+                    uncommitted: false,
                     completed: false,
                     tags: &[],
                     last_message: None,

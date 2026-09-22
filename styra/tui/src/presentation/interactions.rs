@@ -76,6 +76,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             loading: loading == Some(interaction.id.as_str()),
             newly_idle: interaction.activity == styra_protocol::InteractionActivity::Pending
                 && interaction.idle_unseen,
+            uncommitted: interaction.uncommitted_changes,
             completed: interaction.completed,
             tags: &interaction.tags,
             last_message: interaction.last_message.as_deref(),

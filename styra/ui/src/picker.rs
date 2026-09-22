@@ -1081,6 +1081,7 @@ mod tests {
             activity_reason: None,
             activity_since_ms: 0,
             idle_unseen: false,
+            uncommitted_changes: false,
             last_message: None,
             events: 0,
             completed: false,

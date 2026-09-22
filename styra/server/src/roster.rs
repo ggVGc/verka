@@ -266,6 +266,7 @@ mod tests {
             activity_reason: None,
             activity_since_ms: 7,
             idle_unseen: true,
+            uncommitted_changes: false,
             last_message: Some("still going".into()),
             auto_retry: false,
             events: 12,

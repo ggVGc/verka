@@ -19,7 +19,7 @@
 //! reading Git's layout, since running `git` in that checkout is exactly what
 //! fails.
 //!
-//! Running `git` is a seam, not a fact: [`Git`] names the four questions that
+//! Running `git` is a seam, not a fact: [`Git`] names the questions that
 //! need a process, [`SystemGit`] answers them by spawning one, and [`FakeGit`]
 //! answers them from an in-memory model. Everything derived from those answers
 //! — which root a path belongs to, which directories a launch must mount — is
@@ -57,7 +57,7 @@ pub struct Directories {
 
 /// Every question about a repository that only a running `git` can answer.
 ///
-/// Deliberately four methods and no more. Each one is a single `git`
+/// Deliberately few methods. Each one is a single `git`
 /// invocation whose output Styra parses; everything Styra *decides* from those
 /// answers is a default method below, so a test that cares about the deciding
 /// — which is nearly all of them — runs against [`FakeGit`] and never spawns a
@@ -81,6 +81,17 @@ pub trait Git: Send + Sync {
     /// The branch checked out in `checkout`, or `None` when its head is
     /// detached.
     fn current_branch(&self, checkout: &Path) -> Result<Option<String>>;
+
+    /// Whether `checkout` has work that is not committed: anything `git
+    /// status` would report, tracked or not.
+    ///
+    /// Asked of a checkout an agent has just stopped working in, so it is
+    /// deliberately the same coarse question the operator would ask by
+    /// running `git status` there — what is uncommitted, not what changed in
+    /// this turn. Untracked files count: a turn that wrote a new file and
+    /// never added it has left work behind just as surely as one that edited
+    /// a tracked one.
+    fn has_uncommitted_changes(&self, checkout: &Path) -> Result<bool>;
 
     /// Resolve `path` to the root of its nearest enclosing Git checkout.
     fn repository_root(&self, path: &Path) -> Result<PathBuf> {
@@ -196,6 +207,13 @@ impl Git for SystemGit {
             .output()?;
         Ok(Some(branch).filter(|branch| !branch.is_empty()))
     }
+
+    fn has_uncommitted_changes(&self, checkout: &Path) -> Result<bool> {
+        let status = Invocation::new(checkout, "read the working tree status")
+            .args(["status", "--porcelain"])
+            .output()?;
+        Ok(!status.trim().is_empty())
+    }
 }
 
 fn git_path<I, S>(directory: &Path, arguments: I) -> Result<PathBuf>
@@ -242,6 +260,10 @@ fn push_mount(mounts: &mut Vec<MountSpec>, path: PathBuf, writable: bool) {
 #[derive(Default)]
 pub struct FakeGit {
     checkouts: Mutex<Vec<Checkout>>,
+    /// Roots a test has declared to have uncommitted work. A fake with no
+    /// history cannot derive this, and the callers only ever ask the
+    /// question, so it is simply stated.
+    dirty: Mutex<Vec<PathBuf>>,
 }
 
 /// One checkout the fake knows about: the main one, or a linked worktree.
@@ -298,6 +320,21 @@ impl FakeGit {
             .find(|checkout| checkout.root == root)
             .expect("relocating an unregistered checkout");
         checkout.directories.git_dir = git_dir.to_path_buf();
+    }
+
+    /// Declare whether the checkout containing `root` has uncommitted work,
+    /// the one thing about a working tree this fake cannot infer from layout.
+    pub fn set_uncommitted_changes(&self, root: &Path, uncommitted: bool) {
+        let root = root.canonicalize().expect("canonicalising the fake root");
+        let mut dirty = self.dirty.lock().unwrap();
+        let known = dirty.iter().position(|known| *known == root);
+        match (uncommitted, known) {
+            (true, None) => dirty.push(root),
+            (false, Some(index)) => {
+                dirty.remove(index);
+            }
+            _ => {}
+        }
     }
 
     /// The checkout whose root is `path` or an ancestor of it, longest root
@@ -387,6 +424,16 @@ impl Git for FakeGit {
             .canonicalize()
             .with_context(|| format!("checkout {} must exist", checkout.display()))?;
         Ok(self.containing(&checkout).and_then(|found| found.branch))
+    }
+
+    fn has_uncommitted_changes(&self, checkout: &Path) -> Result<bool> {
+        let checkout = checkout
+            .canonicalize()
+            .with_context(|| format!("checkout {} must exist", checkout.display()))?;
+        let Some(found) = self.containing(&checkout) else {
+            anyhow::bail!("{} is not inside a Git repository", checkout.display());
+        };
+        Ok(self.dirty.lock().unwrap().contains(&found.root))
     }
 }
 
@@ -861,6 +908,29 @@ mod tests {
 #[cfg(test)]
 mod conformance {
     use super::*;
+
+    /// The working-tree question as `git` actually answers it, including the
+    /// part Styra depends on that a status summary could plausibly omit: an
+    /// untracked file counts as uncommitted work.
+    #[test]
+    #[ignore = "requires a real git binary"]
+    fn real_git_reports_uncommitted_work_in_a_checkout() {
+        if !fixture::git_available() {
+            eprintln!("skipping: no usable git");
+            return;
+        }
+        let root = temporary_directory("conformance-status");
+        std::fs::create_dir_all(&root).unwrap();
+        fixture::init(&root);
+        fixture::commit_empty(&root, "root");
+
+        assert!(!SystemGit.has_uncommitted_changes(&root).unwrap());
+
+        std::fs::write(root.join("left-behind.txt"), "work").unwrap();
+        assert!(SystemGit.has_uncommitted_changes(&root).unwrap());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// Both implementations must answer a nested lookup the same way.
     #[test]

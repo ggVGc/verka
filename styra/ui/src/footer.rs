@@ -26,6 +26,13 @@ pub struct FooterView<'a> {
     pub help_key: &'a str,
     pub working_directory: &'a str,
     pub idle_interactions: usize,
+    /// The interaction being shown has stopped working and left uncommitted
+    /// changes in its repository. Reported at the bottom of the view the
+    /// operator is already looking at, because it is what they have to decide
+    /// about before sending the agent off again — and because nothing else
+    /// tells them: the agent's own account of a turn routinely says it
+    /// changed files without saying whether it committed them.
+    pub uncommitted_changes: bool,
     pub quota: &'a [Segment],
     pub auto_retry: bool,
 }
@@ -45,6 +52,11 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         .map(UnicodeWidthStr::width)
         .unwrap_or_default()
         .min(area.width as usize) as u16;
+    let uncommitted = view.uncommitted_changes.then_some(" uncommitted changes ");
+    let uncommitted_width = uncommitted
+        .map(UnicodeWidthStr::width)
+        .unwrap_or_default()
+        .min(area.width as usize) as u16;
     let quota_width = view
         .quota
         .iter()
@@ -60,6 +72,7 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         area.width
             .saturating_sub(keybinds_width)
             .saturating_sub(idle_width)
+            .saturating_sub(uncommitted_width)
             .saturating_sub(retry_width)
             .saturating_sub(quota_width) as usize,
     ) as u16;
@@ -70,6 +83,7 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             Constraint::Length(quota_width),
             Constraint::Length(retry_width),
             Constraint::Length(idle_width),
+            Constraint::Length(uncommitted_width),
             Constraint::Length(directory_width),
         ])
         .split(area);
@@ -120,13 +134,25 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             chunks[3],
         );
     }
+    if let Some(uncommitted) = uncommitted {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                uncommitted,
+                Style::default()
+                    .fg(palette::WARNING)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .right_aligned(),
+            chunks[4],
+        );
+    }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             view.working_directory.to_owned(),
             Style::default().fg(palette::ADDITIONAL_INFO),
         )))
         .right_aligned(),
-        chunks[4],
+        chunks[5],
     );
 }
 
@@ -182,6 +208,7 @@ mod tests {
                 help_key: "?",
                 working_directory: "/workspace",
                 idle_interactions: 2,
+                uncommitted_changes: false,
                 quota: &quota,
                 auto_retry: true,
             },
@@ -196,6 +223,30 @@ mod tests {
             assert!(output.contains(expected), "missing {expected}: {output}");
         }
     }
+    /// What an idle agent left behind is only actionable if the operator is
+    /// told about it where they are already looking.
+    #[test]
+    fn reports_work_the_idle_agent_left_uncommitted() {
+        let view = FooterView {
+            help_key: "?",
+            working_directory: "/workspace",
+            idle_interactions: 0,
+            uncommitted_changes: true,
+            quota: &[],
+            auto_retry: false,
+        };
+        assert!(screen(120, &view).contains("uncommitted changes"));
+
+        let clean = FooterView {
+            uncommitted_changes: false,
+            ..view
+        };
+        assert!(
+            !screen(120, &clean).contains("uncommitted"),
+            "a clean checkout takes no footer space"
+        );
+    }
+
     #[test]
     fn keybind_hint_survives_a_narrow_terminal() {
         let output = screen(
@@ -204,6 +255,7 @@ mod tests {
                 help_key: "?",
                 working_directory: "/a/very/long/directory",
                 idle_interactions: 0,
+                uncommitted_changes: false,
                 quota: &[],
                 auto_retry: false,
             },
