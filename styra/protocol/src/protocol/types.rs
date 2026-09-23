@@ -882,9 +882,11 @@ pub enum BranchHistory {
 ///
 /// [`Self::Sealed`] means the same as [`Self::Completed`] wherever completion
 /// is read — hidden from the default listing, its interaction stopped — but
-/// unlike [`Self::Completed`] it is not what resuming the Session clears, and
-/// no client action can turn it back into [`Self::Active`]: it is the
-/// operator's final word on the Session, not a checkbox.
+/// it is where the Session stops: no client action turns it back into
+/// [`Self::Active`], and the Session can never be resumed again. It is the
+/// operator's final word, not a checkbox. The history stays readable, and
+/// branching still takes a copy that can run; the sealed Session itself does
+/// not run again.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompletionState {
@@ -894,7 +896,8 @@ pub enum CompletionState {
     /// The operator is done with this Session, reversibly: resuming it, or an
     /// explicit client action, can put it back to [`Self::Active`].
     Completed,
-    /// The operator is done with this Session, irreversibly.
+    /// The operator is done with this Session for good: nothing puts it back
+    /// to [`Self::Active`], and it cannot be resumed.
     Sealed,
 }
 
@@ -948,9 +951,9 @@ pub struct SessionSummary {
     pub origin: Option<SessionOrigin>,
     /// Whether the operator has finished with this Session — see
     /// [`crate::protocol::Request::SetSessionCompleted`]. Cleared when the
-    /// Session is resumed, unless it was [`CompletionState::Sealed`]: an
-    /// interaction working on it again is not one the operator is done with,
-    /// but a seal is not undone by that either.
+    /// Session is resumed: an interaction working on it again is not one the
+    /// operator is done with. A [`CompletionState::Sealed`] Session is never
+    /// cleared this way because it can no longer be resumed at all.
     #[serde(default)]
     pub completed: CompletionState,
 }

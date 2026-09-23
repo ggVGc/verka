@@ -485,8 +485,8 @@ struct ManagedInteraction {
     /// Whether the operator has finished with this interaction's Session;
     /// mirrored into `session_path` since it is a property of the Session,
     /// not of this interaction — see [`crate::protocol::SessionSummary::completed`].
-    /// Read back on resume, which is what clears it (unless it is
-    /// [`CompletionState::Sealed`]).
+    /// Read back on resume, which is what clears it — a sealed Session never
+    /// reaches that point, because it cannot be resumed.
     completed: Arc<Mutex<CompletionState>>,
     /// The window that refused this interaction's work, once one has — the
     /// reason it stopped, as opposed to a figure about how full it was. What
@@ -1677,6 +1677,18 @@ impl ServerState {
         }
 
         let summary = self.stored_summary(&request.id)?;
+        // Sealing is the operator's final word on a Session, and a Session
+        // that could be resumed would not be finished with at all — the seal
+        // would last exactly until someone opened it. Refused before anything
+        // is launched, and refused here rather than at the request, so the
+        // automatic retry after a plan window resets cannot revive one either.
+        // The history stays readable; it is only running again that is gone.
+        if journal::read_session_completed(&summary.path)? == CompletionState::Sealed {
+            anyhow::bail!(
+                "session {:?} is sealed and cannot be resumed; branch it to continue the conversation",
+                request.id
+            );
+        }
         // A resume revives the session on the selection the caller names, so a
         // model or effort chosen while nothing was running is what comes back
         // up. The agent is not open to the same choice: this hands the provider
@@ -1835,16 +1847,11 @@ impl ServerState {
         let queued = journal::read_queued_messages(&summary.path)?;
         let auto_retry = journal::read_session_auto_retry(&summary.path)?;
         // Resuming is what undoes completion: an interaction working on the
-        // Session again is not one the operator is finished with, and there
-        // is no separate client action to clear it — unless the Session was
-        // sealed, which resuming must not undo.
-        let completed = if journal::read_session_completed(&summary.path)? == CompletionState::Sealed
-        {
-            CompletionState::Sealed
-        } else {
-            journal::store_session_completed(&summary.path, CompletionState::Active)?;
-            CompletionState::Active
-        };
+        // Session again is not one the operator is finished with, and there is
+        // no separate client action to clear it. Only a completed Session gets
+        // this far — a sealed one was refused above — so the state it comes
+        // back up in is always active.
+        journal::store_session_completed(&summary.path, CompletionState::Active)?;
         let interrupt_requested = Arc::new(AtomicBool::new(false));
         let working_tree = Arc::new(WorkingTree::new(
             Arc::clone(&self.inner.git),
@@ -1868,7 +1875,7 @@ impl ServerState {
             // this resume is the operator's standing answer to a rate limit,
             // and a Session that keeps hitting the window has to keep it.
             auto_retry: Arc::new(AtomicBool::new(auto_retry)),
-            completed: Arc::new(Mutex::new(completed)),
+            completed: Arc::new(Mutex::new(CompletionState::Active)),
             refused_by: Arc::new(Mutex::new(None)),
             interrupt_requested: Arc::clone(&interrupt_requested),
             launch: request.launch.clone(),
@@ -4117,6 +4124,63 @@ mod tests {
         let session_path = journal.path().parent().unwrap().to_path_buf();
         drop(journal);
         (store, host, state, workspace, id, session_path)
+    }
+
+    /// Sealing is only final if nothing starts the Session again, so the
+    /// resume is refused outright rather than allowed to quietly clear the
+    /// seal the way it clears an ordinary completion. Refused inside
+    /// `resume_session`, which is the one path to a live agent — the request
+    /// handler and the unattended retry after a plan window resets both go
+    /// through it — and refused before anything is launched.
+    #[test]
+    fn a_sealed_session_cannot_be_resumed() {
+        let (store, host, state, _workspace, id, session_path) = stored_session("sealed-resume");
+
+        // Completed is not sealed: it is refused for wanting a native
+        // transcript this bare journal has never had, which is proof the
+        // completion itself did not stop it.
+        state
+            .handle(Request::SetSessionCompleted {
+                id: id.clone(),
+                completed: CompletionState::Completed,
+            })
+            .unwrap();
+        let error = state
+            .resume_session(ResumeSession {
+                id: id.clone(),
+                launch: LaunchPolicy::default(),
+                selection: None,
+            })
+            .unwrap_err();
+        assert!(
+            !error.to_string().contains("sealed"),
+            "a merely completed session is not refused for being sealed: {error:#}"
+        );
+
+        state
+            .handle(Request::SetSessionCompleted {
+                id: id.clone(),
+                completed: CompletionState::Sealed,
+            })
+            .unwrap();
+        let error = state
+            .resume_session(ResumeSession {
+                id: id.clone(),
+                launch: LaunchPolicy::default(),
+                selection: None,
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("sealed"), "{error:#}");
+
+        // And the refusal left the seal alone: a resume that got as far as
+        // clearing completion would have unsealed it on the way to failing.
+        assert_eq!(
+            journal::read_session_completed(&session_path).unwrap(),
+            CompletionState::Sealed
+        );
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
     }
 
     /// Completion belongs to the stored Session, so the stored-sessions

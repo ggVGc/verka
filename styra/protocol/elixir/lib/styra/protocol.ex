@@ -493,9 +493,11 @@ defmodule Styra.Protocol do
     #
     # `Self::Sealed` means the same as `Self::Completed` wherever completion
     # is read — hidden from the default listing, its interaction stopped — but
-    # unlike `Self::Completed` it is not what resuming the Session clears, and
-    # no client action can turn it back into `Self::Active`: it is the
-    # operator's final word on the Session, not a checkbox.
+    # it is where the Session stops: no client action turns it back into
+    # `Self::Active`, and the Session can never be resumed again. It is the
+    # operator's final word, not a checkbox. The history stays readable, and
+    # branching still takes a copy that can run; the sealed Session itself does
+    # not run again.
     "CompletionState" => %{
       kind: :enum,
       tagging: %{style: :external},
@@ -2337,8 +2339,9 @@ defmodule Styra.Protocol do
     row stays listed, but clients normally hide completed rows). The state
     lives with the Session, not the interaction, so it survives the
     interaction stopping and is what the stored-sessions picker filters
-    on; resuming the Session clears it back to `Active`, unless it was
-    `CompletionState::Sealed`, which resuming does not undo.
+    on; resuming the Session clears it back to `Active`. Sealing is the
+    exception in both directions: nothing sets a sealed Session back to
+    `Active`, and a sealed Session cannot be resumed.
 
     Fields of `data`:
 
@@ -2807,9 +2810,11 @@ defmodule Styra.Protocol.CompletionState do
 
   `Self::Sealed` means the same as `Self::Completed` wherever completion
   is read — hidden from the default listing, its interaction stopped — but
-  unlike `Self::Completed` it is not what resuming the Session clears, and
-  no client action can turn it back into `Self::Active`: it is the
-  operator's final word on the Session, not a checkbox.
+  it is where the Session stops: no client action turns it back into
+  `Self::Active`, and the Session can never be resumed again. It is the
+  operator's final word, not a checkbox. The history stays readable, and
+  branching still takes a copy that can run; the sealed Session itself does
+  not run again.
   """
 
   @spellings [
@@ -2852,7 +2857,8 @@ defmodule Styra.Protocol.CompletionState do
   def completed, do: "completed"
 
   @doc ~S"""
-  The operator is done with this Session, irreversibly.
+  The operator is done with this Session for good: nothing puts it back
+  to `Self::Active`, and it cannot be resumed.
   """
   def sealed, do: "sealed"
 end

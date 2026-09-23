@@ -426,8 +426,9 @@ pub enum Request {
     /// row stays listed, but clients normally hide completed rows). The state
     /// lives with the Session, not the interaction, so it survives the
     /// interaction stopping and is what the stored-sessions picker filters
-    /// on; resuming the Session clears it back to `Active`, unless it was
-    /// [`CompletionState::Sealed`], which resuming does not undo.
+    /// on; resuming the Session clears it back to `Active`. Sealing is the
+    /// exception in both directions: nothing sets a sealed Session back to
+    /// `Active`, and a sealed Session cannot be resumed.
     SetSessionCompleted {
         id: String,
         completed: CompletionState,

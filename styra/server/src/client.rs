@@ -106,7 +106,9 @@ impl Client {
 
     /// Convert a stored Session's native transcript to the other interactive
     /// provider's format and return the new sibling Session it was written
-    /// to. The source Session is untouched.
+    /// to. The source Session's history is untouched, but it is sealed: the
+    /// conversation continues under the new provider, and the source cannot
+    /// be resumed again.
     pub fn convert_session_provider(&self, id: &str) -> Result<SessionSummary> {
         match self.request(Request::ConvertSessionProvider { id: id.to_owned() })? {
             Response::SessionConverted(value) => Ok(value),
@@ -116,7 +118,8 @@ impl Client {
 
     /// Branch a stored Session into a new sibling Session, using `history` to
     /// keep the source through `at_ms` or only the selected entry, optionally
-    /// under a different provider. The source Session is untouched.
+    /// under a different provider. A same-provider branch leaves the source
+    /// untouched; one that changes provider seals it, as a conversion does.
     pub fn branch_session(
         &self,
         id: &str,
@@ -398,7 +401,8 @@ impl Client {
     /// Set whether the operator is finished with a Session. Anything but
     /// `Active` stops its live interaction, if any, and normally hides its
     /// row from the interactions navigator; resuming the Session clears it
-    /// again, unless it was `Sealed`.
+    /// again. `Sealed` is final: it cannot be set back, and a sealed Session
+    /// can no longer be resumed.
     pub fn set_session_completed(&self, id: &str, completed: CompletionState) -> Result<()> {
         match self.request(Request::SetSessionCompleted {
             id: id.to_owned(),
