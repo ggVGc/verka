@@ -101,26 +101,15 @@ impl LiveInteractions {
     /// them: in All scope the entries are grouped under their Workspace
     /// heading, so j/k has to walk that order rather than the raw item order.
     ///
-    /// Stopped entries are the tail of the list whatever Workspace they belong
-    /// to. They are not work in progress — nothing can be said to them until
-    /// the Session is resumed — so they are kept out of the grouping the
-    /// operator scans for live work and read at the foot of the list, where
-    /// each says why it stopped.
+    /// A stopped entry stays where it belongs, in its own Workspace's group and
+    /// in item order: its row says that it stopped and why, which is enough to
+    /// tell it apart from the work that can still be talked to.
     pub fn display_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
-        self.ordered(self.visible_indices(workspace_id))
-    }
-
-    /// `indices` in display order: grouped by Workspace in All scope, with the
-    /// stopped entries moved to the end in both scopes.
-    fn ordered(&self, indices: Vec<usize>) -> Vec<usize> {
-        let (mut live, stopped): (Vec<usize>, Vec<usize>) = indices
-            .into_iter()
-            .partition(|index| !is_stopped(&self.items[*index]));
-        if !self.only_current_workspace {
-            live = grouped_by_workspace(&self.items, live);
+        let visible = self.visible_indices(workspace_id);
+        if self.only_current_workspace {
+            return visible;
         }
-        live.extend(stopped);
-        live
+        grouped_by_workspace(&self.items, visible)
     }
 
     /// The next Interaction that went idle unseen, from `from` onward in
@@ -408,13 +397,6 @@ impl LiveInteractions {
 
         let mut leaders: Vec<usize> = Vec::new();
         for index in self.display_indices(workspace_id) {
-            // The stopped tail is a group of its own, whatever Workspaces its
-            // entries came from: it is drawn under one heading, and a group
-            // skip into it lands on its first entry.
-            if is_stopped(&self.items[index]) {
-                leaders.push(index);
-                break;
-            }
             let workspace_id = &self.items[index].workspace_id;
             if leaders
                 .last()
@@ -426,24 +408,16 @@ impl LiveInteractions {
         leaders
     }
 
-    /// Which group `current` sits in, counted over
-    /// [`Self::workspace_leaders`] — its Workspace's, or the stopped tail's
-    /// if it is stopped.
+    /// Which Workspace group `current` sits in, counted over
+    /// [`Self::workspace_leaders`].
     fn group_of(&self, current: &str, workspace_id: Option<&str>) -> Option<usize> {
         let current = self
             .items
             .iter()
             .find(|interaction| interaction.id == current)?;
-        let leaders = self.workspace_leaders(workspace_id);
-        if is_stopped(current) {
-            return leaders
-                .iter()
-                .position(|leader| is_stopped(&self.items[*leader]));
-        }
-        leaders.iter().position(|leader| {
-            !is_stopped(&self.items[*leader])
-                && self.items[*leader].workspace_id == current.workspace_id
-        })
+        self.workspace_leaders(workspace_id)
+            .iter()
+            .position(|leader| self.items[*leader].workspace_id == current.workspace_id)
     }
 
     pub fn toggle_workspace_scope(&mut self) {
@@ -572,12 +546,6 @@ fn sort_interactions(interactions: &mut [InteractionSummary]) {
 /// input (the TUI calls that state `Idle`).
 fn is_idle(interaction: &InteractionSummary) -> bool {
     interaction.activity == styra_protocol::InteractionActivity::Pending
-}
-
-/// An interaction with no agent behind it that takes messages: the listing
-/// keeps it, at the foot of the list, with the reason it stopped.
-pub fn is_stopped(interaction: &InteractionSummary) -> bool {
-    interaction.activity == styra_protocol::InteractionActivity::Stopped
 }
 
 #[cfg(test)]
@@ -1165,11 +1133,10 @@ mod tests {
         assert!(live.pending("pending").is_none());
     }
 
-    /// Stopped Interactions are shown, at the foot of the whole list rather
-    /// than inside the Workspace group they belong to: the grouping is there
-    /// to be scanned for work that can still be talked to.
+    /// A stopped Interaction stays in its own Workspace's group, in item
+    /// order: its row says that it stopped, so it needs no place of its own.
     #[test]
-    fn stopped_interactions_are_the_tail_of_the_list() {
+    fn stopped_interactions_stay_in_their_workspace_group() {
         let mut other_stopped = interaction("other-stopped", InteractionActivity::Stopped);
         other_stopped.workspace_id = "other-workspace".into();
         let mut other_running = interaction("other-running", InteractionActivity::Running);
@@ -1193,59 +1160,13 @@ mod tests {
         };
         assert_eq!(
             ordered(&live),
-            ["pending", "other-running", "other-stopped", "stopped"]
+            ["pending", "stopped", "other-running", "other-stopped"]
         );
 
-        // The same in Workspace scope, where there is no grouping to be kept
-        // out of but the tail still reads as the tail.
+        // And in Workspace scope, where only this Workspace's entries are
+        // listed, in item order.
         live.toggle_workspace_scope();
         assert_eq!(ordered(&live), ["pending", "stopped"]);
-    }
-
-    /// The stopped tail is drawn under one heading, so the group skip steps
-    /// into it once rather than once per Workspace represented in it.
-    #[test]
-    fn the_group_skip_treats_the_stopped_tail_as_one_group() {
-        let mut other_stopped = interaction("other-stopped", InteractionActivity::Stopped);
-        other_stopped.workspace_id = "other-workspace".into();
-        let mut other_running = interaction("other-running", InteractionActivity::Running);
-        other_running.workspace_id = "other-workspace".into();
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                interaction("pending", InteractionActivity::Pending),
-                other_stopped,
-                interaction("stopped", InteractionActivity::Stopped),
-                other_running,
-            ],
-            vec![],
-        );
-        let workspace = Some("workspace");
-
-        // Display order: pending | other-running | other-stopped, stopped
-        assert_eq!(
-            live.next_workspace("pending", workspace).unwrap().id,
-            "other-running"
-        );
-        assert_eq!(
-            live.next_workspace("other-running", workspace).unwrap().id,
-            "other-stopped"
-        );
-        assert!(live.next_workspace("stopped", workspace).is_none());
-        assert!(live.next_workspace("other-stopped", workspace).is_none());
-
-        // From inside the tail the skip walks up to its first entry, then out
-        // of it into the last Workspace group, as it does for any group.
-        assert_eq!(
-            live.previous_workspace("stopped", workspace).unwrap().id,
-            "other-stopped"
-        );
-        assert_eq!(
-            live.previous_workspace("other-stopped", workspace)
-                .unwrap()
-                .id,
-            "other-running"
-        );
     }
 
     #[test]

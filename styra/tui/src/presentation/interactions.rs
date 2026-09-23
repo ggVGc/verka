@@ -5,14 +5,6 @@ use crate::app::App;
 use std::borrow::Cow;
 use styra_ui::interactions::{InteractionNavigator, InteractionRow, InteractionStatus};
 
-/// What the heading above a run of rows names: the Workspace they share, or
-/// the stopped tail, which is one group however many Workspaces it spans.
-#[derive(PartialEq, Eq)]
-enum Heading {
-    Workspace(String),
-    Stopped,
-}
-
 pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
     let ordered = app
         .interactions
@@ -40,30 +32,19 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         "completed hidden"
     };
     let mut rows = Vec::new();
-    let mut heading: Option<Heading> = None;
+    let mut heading = None;
     for index in ordered {
         let interaction = &app.interactions.items[index];
-        // The stopped entries are the tail of the list whatever Workspaces
-        // they came from, so they are drawn under one heading of their own
-        // rather than under a Workspace's a second time.
-        let row_heading = if crate::interactions::is_stopped(interaction) {
-            Heading::Stopped
-        } else {
-            Heading::Workspace(interaction.workspace_id.clone())
-        };
-        if all_workspaces && heading.as_ref() != Some(&row_heading) {
-            let name = match &row_heading {
-                Heading::Stopped => "Stopped".to_owned(),
-                Heading::Workspace(id) => app
-                    .interactions
-                    .workspaces
-                    .iter()
-                    .find(|workspace| workspace.id == *id)
-                    .map(crate::workspace::display_name)
-                    .unwrap_or_else(|| id.clone()),
-            };
+        if all_workspaces && heading.as_deref() != Some(interaction.workspace_id.as_str()) {
+            let name = app
+                .interactions
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == interaction.workspace_id)
+                .map(crate::workspace::display_name)
+                .unwrap_or_else(|| interaction.workspace_id.clone());
             rows.push(InteractionRow::Workspace(Cow::Owned(name)));
-            heading = Some(row_heading);
+            heading = Some(interaction.workspace_id.clone());
         }
         // The navigator's gutter has one cell per row, so the reasons the
         // status carries are dropped here rather than rendered: they belong to
