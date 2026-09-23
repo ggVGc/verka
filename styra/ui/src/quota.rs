@@ -204,26 +204,35 @@ pub fn footer_segments(readings: &[&QuotaEvent], now_ms: u64) -> Vec<Segment> {
         .iter()
         .copied()
         .find(|reading| reading.provider == Provider::Claude && reading.window == "five_hour");
-    if codex.is_empty() && claude.is_none() {
+    let spent = spent_label(&newest, readings, Provider::Codex, now_ms);
+    if codex.is_empty() && spent.is_none() && claude.is_none() {
         return Vec::new();
     }
     let mut output = Vec::new();
-    if !codex.is_empty() {
+    if !codex.is_empty() || spent.is_some() {
         output.push(segment(" codex: ", Tone::Muted, false));
     }
-    let mut wrote = false;
-    for window in ["5h", "7d"] {
-        if let Some(reading) = codex.iter().find(|reading| reading.window == window) {
-            output.push(segment(
-                format!(
-                    "{}{}",
-                    if wrote { "/" } else { "" },
-                    reading.utilization_label()
-                ),
-                utilization_tone(reading.utilization.expect("filtered")),
-                true,
-            ));
-            wrote = true;
+    // A spent plan replaces the percentages rather than joining them: the
+    // figures say how full the windows were on the last turn that ran, and the
+    // one thing worth the footer's width once work is being refused is when it
+    // will be taken again.
+    if let Some(spent) = spent {
+        output.push(segment(spent, Tone::Error, true));
+    } else {
+        let mut wrote = false;
+        for window in ["5h", "7d"] {
+            if let Some(reading) = codex.iter().find(|reading| reading.window == window) {
+                output.push(segment(
+                    format!(
+                        "{}{}",
+                        if wrote { "/" } else { "" },
+                        reading.utilization_label()
+                    ),
+                    utilization_tone(reading.utilization.expect("filtered")),
+                    true,
+                ));
+                wrote = true;
+            }
         }
     }
     if let Some(reading) = claude {
@@ -243,6 +252,51 @@ pub fn footer_segments(readings: &[&QuotaEvent], now_ms: u64) -> Vec<Segment> {
         output.push(segment(label, tone, true));
     }
     output
+}
+
+/// What the footer says about a provider whose plan is refusing work: when it
+/// comes back, or that it is spent for a reason no clock answers.
+///
+/// Codex reports its exhaustion in pieces. The refusal itself is filed under
+/// `plan` and names no reset — it states one only in prose — while the window
+/// that filled up is a reading of its own, carrying the moment it turns over.
+/// Both are looked at, and the soonest reset any of them names is the one
+/// quoted, because that is when the provider next takes work.
+///
+/// `None` when nothing is standing in refusal: no window has refused, a later
+/// reading says the provider is serving again, or the moment it named has
+/// already passed — which is as good as serving until it refuses again, and
+/// leaves the footer showing the figures instead of a stale reset.
+fn spent_label(
+    newest: &[&QuotaEvent],
+    readings: &[&QuotaEvent],
+    provider: Provider,
+    now_ms: u64,
+) -> Option<String> {
+    let spent = newest
+        .iter()
+        .copied()
+        .filter(|reading| {
+            reading.provider == provider
+                && reading.status == QuotaStatus::Exhausted
+                && !superseded(reading, readings)
+        })
+        .collect::<Vec<_>>();
+    if spent.is_empty() {
+        return None;
+    }
+    match spent
+        .iter()
+        .filter_map(|reading| reading.resets_at_ms)
+        .min()
+    {
+        Some(reset) if reset <= now_ms => None,
+        Some(reset) => Some(format!("resets {}", stamp(reset, now_ms))),
+        // A refusal that names no moment is still worth the row: an account out
+        // of credits waits on somebody topping it up, and a footer showing the
+        // last percentages would read as a plan with room to spare.
+        None => Some("spent".into()),
+    }
 }
 
 fn segment(text: impl Into<String>, tone: Tone, bold: bool) -> Segment {
@@ -521,6 +575,72 @@ mod tests {
         assert_eq!(text(&segments), " codex: 12%/91%");
         assert_eq!(segments[2].tone, Tone::Error);
     }
+    /// The refusal Codex files under `plan` names no reset of its own, so the
+    /// footer quotes the window that filled up — the same news Claude gets.
+    #[test]
+    fn a_spent_codex_plan_shows_when_it_comes_back() {
+        let mut full = reading(Provider::Codex, "5h", QuotaStatus::Exhausted, Some(1.0));
+        full.resets_at_ms = Some(4_102_444_800_000);
+        let mut refusal = reading(Provider::Codex, "plan", QuotaStatus::Exhausted, None);
+        refusal.at_ms = full.at_ms;
+        let segments = footer_segments(&[&full, &refusal], 1_000);
+        assert!(
+            text(&segments).starts_with(" codex: resets "),
+            "{segments:?}"
+        );
+        assert_eq!(segments[1].tone, Tone::Error);
+        // The reset replaces the figures rather than crowding in beside them.
+        assert!(!text(&segments).contains('%'), "{segments:?}");
+    }
+
+    /// An account out of credits comes back when somebody pays, not when a
+    /// clock turns over — and the last percentages would read as room to spare.
+    #[test]
+    fn a_codex_refusal_naming_no_reset_still_says_the_plan_is_spent() {
+        let mut healthy = reading(Provider::Codex, "5h", QuotaStatus::Allowed, Some(0.12));
+        healthy.at_ms = 1;
+        let mut refusal = reading(Provider::Codex, "plan", QuotaStatus::Exhausted, None);
+        refusal.at_ms = 2;
+        refusal.detail = Some("workspace_member_credits_depleted".into());
+        assert_eq!(
+            text(&footer_segments(&[&healthy, &refusal], 3)),
+            " codex: spent"
+        );
+    }
+
+    /// Once the provider serves again, or the moment it named has passed, the
+    /// footer goes back to the figures rather than quoting a stale reset.
+    #[test]
+    fn a_codex_plan_that_is_serving_again_shows_its_figures() {
+        let mut refusal = reading(Provider::Codex, "plan", QuotaStatus::Exhausted, None);
+        refusal.at_ms = 1;
+        refusal.resets_at_ms = Some(2_000);
+        let mut served = reading(Provider::Codex, "5h", QuotaStatus::Allowed, Some(0.04));
+        served.at_ms = 3;
+        assert_eq!(
+            text(&footer_segments(&[&refusal, &served], 1)),
+            " codex: 4%"
+        );
+        // The reset alone is enough, even before any reading contradicts it.
+        assert_eq!(text(&footer_segments(&[&refusal], 3_000)), "");
+    }
+
+    /// One provider's spent plan says nothing about the other's.
+    #[test]
+    fn a_spent_codex_plan_leaves_the_claude_reading_alone() {
+        let mut refusal = reading(Provider::Codex, "plan", QuotaStatus::Exhausted, None);
+        refusal.resets_at_ms = Some(4_102_444_800_000);
+        let claude = reading(
+            Provider::Claude,
+            "five_hour",
+            QuotaStatus::Warning,
+            Some(0.91),
+        );
+        let text = text(&footer_segments(&[&refusal, &claude], 1_000));
+        assert!(text.starts_with(" codex: resets "), "{text}");
+        assert!(text.ends_with(" claude: 91%"), "{text}");
+    }
+
     #[test]
     fn latest_clear_claude_reading_is_a_dash() {
         let mut old = reading(
