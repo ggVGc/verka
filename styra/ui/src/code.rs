@@ -5,7 +5,7 @@
 //! highlighted the same way under `p`, and a suspicious shell result is marked
 //! in both places.
 
-use super::palette;
+use super::{markdown::syntax_highlighted_code_lines, palette};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
@@ -21,6 +21,15 @@ pub fn code_block_lines(
     suspicious_shell: bool,
     indent: &str,
 ) -> Vec<Line<'static>> {
+    // Agent-message fences become `DetailBlock::Code` before they reach the
+    // UI. Feed recognized languages back through the shared TextMate renderer
+    // so they receive the same theme as fenced Markdown elsewhere.
+    if !suspicious_shell {
+        if let Some(lines) = syntax_highlighted_code_lines(text, language, indent) {
+            return lines;
+        }
+    }
+
     text.lines()
         .map(|line| {
             if suspicious_shell && is_error_diagnostic(line) {
@@ -131,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_commands_are_highlighted_token_by_token() {
+    fn bash_blocks_use_the_markdown_syntax_theme() {
         let lines = code_block_lines(
             "grep -n 'needle' $FILE",
             Some("bash"),
@@ -141,9 +150,23 @@ mod tests {
         );
 
         let colors = colors(&lines[0]);
-        assert!(colors.contains(&Some(palette::ACCENT)), "{colors:?}"); // -n
-        assert!(colors.contains(&Some(palette::SUCCESS)), "{colors:?}"); // 'needle'
-        assert!(colors.contains(&Some(palette::WARNING)), "{colors:?}"); // $FILE
+        assert!(
+            colors.contains(&Some(palette::ADDITIONAL_INFO)),
+            "{colors:?}"
+        ); // command / option
+        assert!(colors.len() > 2, "{colors:?}"); // tokenized, not one plain span
+    }
+
+    #[test]
+    fn rust_blocks_use_the_markdown_syntax_theme() {
+        let lines = code_block_lines("fn main() {}", Some("rust"), palette::TEXT, false, "  ");
+
+        let keyword = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content == "fn")
+            .expect("Rust keyword span");
+        assert_eq!(keyword.style.fg, Some(palette::MARKDOWN_CODE_KEYWORD));
     }
 
     #[test]

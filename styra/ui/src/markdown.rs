@@ -59,6 +59,54 @@ pub fn markdown_block_lines_with_links(
     markdown_block_render(text, base_style, indent, links, None).lines
 }
 
+/// Syntax-highlights a standalone fenced-code block when `language` is known
+/// to tui-markdown.  Code reaches Styra as a separate `DetailBlock`, so it
+/// cannot otherwise take the Markdown renderer's fenced-code path.
+///
+/// `None` means the language was absent or unrecognised; callers can then use
+/// their ordinary code rendering (including its diagnostics and diff cues).
+pub fn syntax_highlighted_code_lines(
+    text: &str,
+    language: Option<&str>,
+    indent: &str,
+) -> Option<Vec<Line<'static>>> {
+    let language = language?.trim();
+    if language.is_empty() {
+        return None;
+    }
+
+    // A four-backtick wrapper also permits source which itself contains a
+    // normal three-backtick fence.
+    let source = format!("````{language}\n{text}\n````");
+    let options = tui_markdown::Options::new(StyraStyleSheet)
+        .code_theme(CodeTheme::clone(&MARKDOWN_CODE_THEME));
+    let rendered = tui_markdown::from_str_with_options(&source, &options);
+
+    // tui-markdown deliberately falls back to one plain span for an unknown
+    // token.  Do not replace Styra's established fallback rendering in that
+    // case.
+    let highlighted = rendered.lines.iter().any(|line| line.spans.len() > 1);
+    highlighted.then(|| {
+        rendered
+            .lines
+            .into_iter()
+            .map(|line| {
+                let line_style = line.style;
+                let mut spans = vec![Span::styled(
+                    indent.to_owned(),
+                    Style::default().fg(palette::TEXT),
+                )];
+                spans.extend(
+                    line.spans
+                        .into_iter()
+                        .map(|span| Span::styled(span.content.into_owned(), span.style)),
+                );
+                Line::from(spans).style(line_style)
+            })
+            .collect()
+    })
+}
+
 /// As [`markdown_block_lines_with_links`], drawing one entry as selected.
 ///
 /// An entry is a link — which is also how agents write a file reference, as
@@ -342,6 +390,10 @@ impl StyleSheet for StyraStyleSheet {
         Style::new()
             .fg(palette::WARNING)
             .bg(palette::CODE_BACKGROUND)
+    }
+
+    fn code_block_fence(&self) -> &str {
+        ""
     }
 
     fn link(&self) -> Style {
