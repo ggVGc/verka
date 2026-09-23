@@ -133,14 +133,13 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
         unreachable!()
     };
     let (marker, color) = status_marker(*status);
-    // A running row wears its spinner inverted — a lit cell with dark dots —
-    // so the handful that are working can be picked out of a long list at a
-    // glance. The trailing space stays outside the span so the block is one
-    // cell wide rather than two.
+    // A running row's spinner gets a soft background behind it so the
+    // handful that are working can be picked out of a long list at a
+    // glance, without inverting the dots themselves.
     let marker_style = if matches!(status, InteractionStatus::Running { .. }) {
         Style::default()
-            .fg(palette::CODE_BACKGROUND)
-            .bg(color)
+            .fg(color)
+            .bg(palette::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(color).add_modifier(Modifier::BOLD)
