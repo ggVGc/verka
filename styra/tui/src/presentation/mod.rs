@@ -197,6 +197,8 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
         title,
         model: Some(label.model.unwrap_or_else(|| "default model".into())),
         model_reported: label.model_reported,
+        effort: label.effort,
+        effort_reported: label.effort_reported,
         note: app
             .outbox
             .contract()
