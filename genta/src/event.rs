@@ -2872,6 +2872,37 @@ mod tests {
         );
     }
 
+    /// Claude Code states a top-level `cwd` only on its `system`/`init` line,
+    /// which it emits once per turn. An agent that moves mid-turn says so only
+    /// through the per-tool ingest context on the assistant lines that follow,
+    /// so reading the top level alone leaves the reported directory a whole
+    /// turn stale — the Session keeps naming the directory it was launched in
+    /// until the operator happens to send another message.
+    #[test]
+    fn a_claude_move_mid_turn_is_reported_from_the_tool_ingest_context() {
+        assert_eq!(
+            reported_cwd(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"assistant","message":{},"wire_ingest_context":{"toolu_01R4iQQhVV5J6g3XqUCukR1M":{"cwd":"/workspace/.worktrees/audio-transcript"}}}"#,
+            ),
+            Some("/workspace/.worktrees/audio-transcript".into())
+        );
+    }
+
+    /// The turn's own `init` line outranks the ingest context: a tool may run
+    /// somewhere other than the thread's directory (a subagent, a `cd` inside
+    /// one command), and only the top level speaks for the thread itself.
+    #[test]
+    fn a_stated_claude_cwd_outranks_the_tool_ingest_context() {
+        assert_eq!(
+            reported_cwd(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"assistant","cwd":"/workspace","wire_ingest_context":{"toolu_1":{"cwd":"/workspace/crates/ui"}}}"#,
+            ),
+            Some("/workspace".into())
+        );
+    }
+
     /// The reported model and effort must survive a journal round trip, since a
     /// stored session is read back through the same decoded events.
     #[test]
