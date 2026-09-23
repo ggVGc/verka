@@ -7,7 +7,7 @@
 //! `tui-markdown` has no single-line-only mode.
 
 use crate::palette;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LinkDisplay {
     Compact,
     Full,
@@ -31,9 +31,11 @@ pub struct BlockRender {
     pub entries: usize,
 }
 
+use crate::render_cache::{Memo, Weigh};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::cell::RefCell;
 use std::sync::LazyLock;
 use tui_markdown::{AlertKind, CodeTheme, StyleSheet};
 
@@ -41,6 +43,46 @@ static MARKDOWN_CODE_THEME: LazyLock<CodeTheme> = LazyLock::new(|| {
     CodeTheme::from_textmate(palette::MARKDOWN_CODE_THEME)
         .expect("Styra's embedded Markdown code theme must be valid")
 });
+
+/// Everything that shapes a [`syntax_highlighted_code_lines`] result.
+#[derive(PartialEq, Eq, Hash)]
+struct CodeKey {
+    text: String,
+    language: String,
+    indent: String,
+}
+
+/// Everything that shapes a [`markdown_block_render`] result.
+#[derive(PartialEq, Eq, Hash)]
+struct BlockKey {
+    text: String,
+    base_style: Style,
+    indent: String,
+    links: LinkDisplay,
+    highlight: Option<EntryIndex>,
+}
+
+impl Weigh for Option<Vec<Line<'static>>> {
+    fn weight(&self) -> usize {
+        // A block that does not highlight still occupies a table slot, and the
+        // parse that decided so is what the cache is saving.
+        self.as_ref().map_or(1, Vec::len)
+    }
+}
+
+impl Weigh for BlockRender {
+    fn weight(&self) -> usize {
+        self.lines.len().max(1)
+    }
+}
+
+thread_local! {
+    /// See [`crate::render_cache`]: the event list asks for every one of these
+    /// again on every frame, and a frame is drawn for every keystroke.
+    static CODE_CACHE: RefCell<Memo<CodeKey, Option<Vec<Line<'static>>>>> =
+        RefCell::new(Memo::default());
+    static BLOCK_CACHE: RefCell<Memo<BlockKey, BlockRender>> = RefCell::new(Memo::default());
+}
 
 /// Renders a detail block's full markdown buffer as styled lines, each
 /// prefixed with `indent`.
@@ -74,7 +116,23 @@ pub fn syntax_highlighted_code_lines(
     if language.is_empty() {
         return None;
     }
+    // Both answers are worth keeping. A language tui-markdown does not know
+    // still costs a full Markdown parse to find that out, so a block that
+    // falls back is as expensive to re-decide as one that highlights.
+    let key = CodeKey {
+        text: text.to_owned(),
+        language: language.to_owned(),
+        indent: indent.to_owned(),
+    };
+    CODE_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .get_or_insert_with(key, || highlight_code(text, language, indent))
+    })
+}
 
+/// [`syntax_highlighted_code_lines`] proper, behind its cache.
+fn highlight_code(text: &str, language: &str, indent: &str) -> Option<Vec<Line<'static>>> {
     // A four-backtick wrapper also permits source which itself contains a
     // normal three-backtick fence.
     let source = format!("````{language}\n{text}\n````");
@@ -120,6 +178,28 @@ pub fn syntax_highlighted_code_lines(
 /// A `highlight` past the last entry simply highlights nothing, which is what
 /// a caller rendering a block that has since lost its citations wants.
 pub fn markdown_block_render(
+    text: &str,
+    base_style: Style,
+    indent: &str,
+    links: LinkDisplay,
+    highlight: Option<EntryIndex>,
+) -> BlockRender {
+    let key = BlockKey {
+        text: text.to_owned(),
+        base_style,
+        indent: indent.to_owned(),
+        links,
+        highlight,
+    };
+    BLOCK_CACHE.with(|cache| {
+        cache.borrow_mut().get_or_insert_with(key, || {
+            render_markdown_block(text, base_style, indent, links, highlight)
+        })
+    })
+}
+
+/// [`markdown_block_render`] proper, behind its cache.
+fn render_markdown_block(
     text: &str,
     base_style: Style,
     indent: &str,
@@ -744,5 +824,76 @@ mod tests {
             .expect("highlighted Rust keyword");
 
         assert_eq!(keyword.style.fg, Some(palette::MARKDOWN_CODE_KEYWORD));
+    }
+
+    /// Rendering is memoized (see [`crate::render_cache`]), so what is asked
+    /// for twice has to come back the same both times — and, more to the
+    /// point, what differs only in a display choice must not come back as the
+    /// rendering made under the other one.
+    #[test]
+    fn a_cached_block_is_not_reused_for_a_different_display_choice() {
+        let text = "see [app.rs:120](/home/me/src/app.rs:120)";
+        let base = Style::default().fg(palette::TEXT);
+
+        let compact = markdown_block_lines_with_links(text, base, "  ", LinkDisplay::Compact);
+        let full = markdown_block_lines_with_links(text, base, "  ", LinkDisplay::Full);
+        assert_ne!(text_of(&compact), text_of(&full));
+        assert_eq!(
+            text_of(&markdown_block_lines_with_links(
+                text,
+                base,
+                "  ",
+                LinkDisplay::Compact
+            )),
+            text_of(&compact),
+            "asking again has to give the same rendering back"
+        );
+
+        // The selection is part of what shapes a block, so it is part of the key.
+        let plain = markdown_block_render(text, base, "  ", LinkDisplay::Compact, None);
+        let selected = markdown_block_render(text, base, "  ", LinkDisplay::Compact, Some(0));
+        assert_ne!(
+            plain.lines[0].spans.last().map(|span| span.style),
+            selected.lines[0].spans.last().map(|span| span.style),
+        );
+
+        // As are the base style and the indent.
+        let indented =
+            markdown_block_lines_with_links(text, base, "        ", LinkDisplay::Compact);
+        assert_ne!(text_of(&indented), text_of(&compact));
+    }
+
+    /// The same, for the standalone code path: two blocks differing only in
+    /// language must not answer for each other.
+    #[test]
+    fn a_cached_code_block_is_keyed_by_its_language() {
+        let source = "fn main() {}";
+        let rust = syntax_highlighted_code_lines(source, Some("rust"), "  ")
+            .expect("Rust is a known language");
+        let unknown = syntax_highlighted_code_lines(source, Some("not-a-language"), "  ");
+        assert!(unknown.is_none());
+        assert_eq!(
+            text_of(
+                &syntax_highlighted_code_lines(source, Some("rust"), "  ")
+                    .expect("Rust is a known language")
+            ),
+            text_of(&rust),
+            "asking again has to give the same rendering back"
+        );
+    }
+
+    fn text_of(lines: &[Line<'static>]) -> Vec<(String, Vec<Style>)> {
+        lines
+            .iter()
+            .map(|line| {
+                (
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>(),
+                    line.spans.iter().map(|span| span.style).collect(),
+                )
+            })
+            .collect()
     }
 }

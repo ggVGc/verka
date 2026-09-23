@@ -34,6 +34,7 @@ pub mod picker;
 pub mod preview;
 pub mod quota;
 pub mod raw;
+mod render_cache;
 pub mod search;
 pub mod transcript;
 
