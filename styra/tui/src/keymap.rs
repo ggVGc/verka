@@ -533,6 +533,10 @@ const SESSION_PICKER: &[ReferenceRow] = &[
         action: "show/hide completed / mark selected completed or not",
     },
     ReferenceRow::Binding {
+        keys: "S",
+        action: "seal the selected session (completed for good, cannot be undone)",
+    },
+    ReferenceRow::Binding {
         keys: "/",
         action: "filter by name or first prompt (Esc clears)",
     },

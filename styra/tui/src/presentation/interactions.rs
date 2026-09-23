@@ -3,6 +3,7 @@
 use crate::activity::{IdleReason, Status};
 use crate::app::App;
 use std::borrow::Cow;
+use styra_protocol::CompletionState;
 use styra_ui::interactions::{InteractionNavigator, InteractionRow, InteractionStatus};
 
 pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
@@ -52,9 +53,9 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         // exception is a stopped one — see `InteractionRow::stop_reason`.
         let reported = Status::reported(interaction);
         let stop_reason = match &reported {
-            // A completed row already says so with its own badge, and "you
-            // completed it" next to it would only repeat the badge.
-            Status::Stopped(_) if interaction.completed => None,
+            // A completed (or sealed) row already says so with its own badge,
+            // and "you completed it" next to it would only repeat the badge.
+            Status::Stopped(_) if interaction.completed != CompletionState::Active => None,
             Status::Stopped(why) => Some(Cow::Owned(why.label())),
             _ => None,
         };
@@ -95,7 +96,8 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             stop_reason,
             rate_limited,
             uncommitted: interaction.uncommitted_changes,
-            completed: interaction.completed,
+            completed: interaction.completed != CompletionState::Active,
+            sealed: interaction.completed == CompletionState::Sealed,
             tags: &interaction.tags,
             last_message: interaction.last_message.as_deref(),
         });

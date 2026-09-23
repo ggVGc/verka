@@ -14,8 +14,8 @@ mod types;
 
 pub use types::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
-    BranchHistory, CheckoutState, Contract, Direction, DrivaOptions, FileLocation,
-    InteractionActivity, InteractionActivityReason, InteractionEnd, InteractionSummary,
+    BranchHistory, CheckoutState, CompletionState, Contract, Direction, DrivaOptions,
+    FileLocation, InteractionActivity, InteractionActivityReason, InteractionEnd, InteractionSummary,
     InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage,
     QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
     VariableOrigin, WorkspaceSummary,
@@ -421,14 +421,16 @@ pub enum Request {
     StopInteraction {
         id: String,
     },
-    /// Set whether the operator is finished with a Session. `true` stops any
-    /// live interaction serving it (the row stays listed, but clients
-    /// normally hide completed rows). The flag lives with the Session, not
-    /// the interaction, so it survives the interaction stopping and is what
-    /// the stored-sessions picker filters on; resuming the Session clears it.
+    /// Set whether the operator is finished with a Session. Anything but
+    /// [`CompletionState::Active`] stops any live interaction serving it (the
+    /// row stays listed, but clients normally hide completed rows). The state
+    /// lives with the Session, not the interaction, so it survives the
+    /// interaction stopping and is what the stored-sessions picker filters
+    /// on; resuming the Session clears it back to `Active`, unless it was
+    /// [`CompletionState::Sealed`], which resuming does not undo.
     SetSessionCompleted {
         id: String,
-        completed: bool,
+        completed: CompletionState,
     },
     /// Stop an interaction and drop the server's record of it, so the Session
     /// is only what is stored on disk: it no longer appears in the

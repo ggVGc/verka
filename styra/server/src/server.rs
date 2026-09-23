@@ -8,9 +8,9 @@ use crate::journal::{self, Journal};
 use crate::naming::Topic;
 use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
-    Answer, CheckoutState, Contract, DrivaOptions, InteractionActivity, InteractionActivityReason,
-    InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, QueuedMessage,
-    SendMessage, SessionOrigin, SessionSummary, TemplateSummary,
+    Answer, CheckoutState, CompletionState, Contract, DrivaOptions, InteractionActivity,
+    InteractionActivityReason, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy,
+    LogEntry, QueuedMessage, SendMessage, SessionOrigin, SessionSummary, TemplateSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
@@ -485,8 +485,9 @@ struct ManagedInteraction {
     /// Whether the operator has finished with this interaction's Session;
     /// mirrored into `session_path` since it is a property of the Session,
     /// not of this interaction — see [`crate::protocol::SessionSummary::completed`].
-    /// Read back on resume, which is what clears it.
-    completed: Arc<AtomicBool>,
+    /// Read back on resume, which is what clears it (unless it is
+    /// [`CompletionState::Sealed`]).
+    completed: Arc<Mutex<CompletionState>>,
     /// The window that refused this interaction's work, once one has — the
     /// reason it stopped, as opposed to a figure about how full it was. What
     /// makes this interaction one a reset should come back to.
@@ -644,7 +645,7 @@ impl ManagedInteraction {
             last_message: self.last_message(),
             auto_retry: self.auto_retry.load(Ordering::Acquire),
             events: self.events.load(Ordering::Acquire),
-            completed: self.completed.load(Ordering::Acquire),
+            completed: *self.completed.lock().expect("completion lock poisoned"),
         }
     }
 
@@ -894,16 +895,16 @@ impl ManagedInteraction {
     }
 
     /// Set whether the operator has finished with this interaction's Session,
-    /// mirroring the flag to `session_path` first so a crash between the two
+    /// mirroring the state to `session_path` first so a crash between the two
     /// never leaves the live summary claiming a state the store disagrees
-    /// with. Marking it complete also stops the interaction — there is
-    /// nothing left for its agent to do — with the ordinary [`Self::stop`]
-    /// reason: completion is a fact about the Session, not a new way for an
-    /// interaction to be stopped.
-    fn set_completed(&self, completed: bool) -> Result<()> {
+    /// with. Marking it complete (or sealed) also stops the interaction —
+    /// there is nothing left for its agent to do — with the ordinary
+    /// [`Self::stop`] reason: completion is a fact about the Session, not a
+    /// new way for an interaction to be stopped.
+    fn set_completed(&self, completed: CompletionState) -> Result<()> {
         journal::store_session_completed(&self.session_path, completed)?;
-        self.completed.store(completed, Ordering::Release);
-        if completed {
+        *self.completed.lock().expect("completion lock poisoned") = completed;
+        if completed.is_done() {
             self.stop();
         }
         Ok(())
@@ -1320,7 +1321,7 @@ impl ServerState {
             shell,
             queue: Mutex::new(std::collections::VecDeque::new()),
             auto_retry: Arc::new(AtomicBool::new(false)),
-            completed: Arc::new(AtomicBool::new(false)),
+            completed: Arc::new(Mutex::new(CompletionState::Active)),
             refused_by: Arc::new(Mutex::new(None)),
             interrupt_requested: Arc::clone(&interrupt_requested),
             launch: request.launch.clone(),
@@ -1835,8 +1836,15 @@ impl ServerState {
         let auto_retry = journal::read_session_auto_retry(&summary.path)?;
         // Resuming is what undoes completion: an interaction working on the
         // Session again is not one the operator is finished with, and there
-        // is no separate client action to clear the flag.
-        journal::store_session_completed(&summary.path, false)?;
+        // is no separate client action to clear it — unless the Session was
+        // sealed, which resuming must not undo.
+        let completed = if journal::read_session_completed(&summary.path)? == CompletionState::Sealed
+        {
+            CompletionState::Sealed
+        } else {
+            journal::store_session_completed(&summary.path, CompletionState::Active)?;
+            CompletionState::Active
+        };
         let interrupt_requested = Arc::new(AtomicBool::new(false));
         let working_tree = Arc::new(WorkingTree::new(
             Arc::clone(&self.inner.git),
@@ -1860,7 +1868,7 @@ impl ServerState {
             // this resume is the operator's standing answer to a rate limit,
             // and a Session that keeps hitting the window has to keep it.
             auto_retry: Arc::new(AtomicBool::new(auto_retry)),
-            completed: Arc::new(AtomicBool::new(false)),
+            completed: Arc::new(Mutex::new(completed)),
             refused_by: Arc::new(Mutex::new(None)),
             interrupt_requested: Arc::clone(&interrupt_requested),
             launch: request.launch.clone(),
@@ -2840,13 +2848,24 @@ impl ServerState {
                 // property, so the same write serves it with no row to update.
                 if !self.has_live_interaction(&id) {
                     let summary = self.stored_summary(&id)?;
+                    if journal::read_session_completed(&summary.path)? == CompletionState::Sealed
+                        && completed != CompletionState::Sealed
+                    {
+                        anyhow::bail!("a sealed session cannot be un-sealed");
+                    }
                     journal::store_session_completed(&summary.path, completed)?;
                     if self.inner.roster.set_completed(&id, completed) {
                         self.publish_roster();
                     }
                     return Ok(Response::Accepted);
                 }
-                self.interaction(&id)?.set_completed(completed)?;
+                let interaction = self.interaction(&id)?;
+                if interaction.summary().completed == CompletionState::Sealed
+                    && completed != CompletionState::Sealed
+                {
+                    anyhow::bail!("a sealed session cannot be un-sealed");
+                }
+                interaction.set_completed(completed)?;
                 self.publish_roster();
                 Ok(Response::Accepted)
             }
@@ -4082,25 +4101,52 @@ mod tests {
     fn a_stored_session_is_completed_without_an_interaction_behind_it() {
         let (store, host, state, _workspace, id, session_path) = stored_session("complete-stored");
 
-        assert!(!journal::read_session_completed(&session_path).unwrap());
+        assert_eq!(
+            journal::read_session_completed(&session_path).unwrap(),
+            CompletionState::Active
+        );
 
         state
             .handle(Request::SetSessionCompleted {
                 id: id.clone(),
-                completed: true,
+                completed: CompletionState::Completed,
             })
             .expect("completing a stored Session needs no live interaction");
-        assert!(journal::read_session_completed(&session_path).unwrap());
+        assert_eq!(
+            journal::read_session_completed(&session_path).unwrap(),
+            CompletionState::Completed
+        );
 
         // And back: revealing a completed row is only useful if it can be
         // unmarked from the same place.
         state
             .handle(Request::SetSessionCompleted {
-                id,
-                completed: false,
+                id: id.clone(),
+                completed: CompletionState::Active,
             })
             .unwrap();
-        assert!(!journal::read_session_completed(&session_path).unwrap());
+        assert_eq!(
+            journal::read_session_completed(&session_path).unwrap(),
+            CompletionState::Active
+        );
+
+        // Sealing it, though, is final: even with no live interaction behind
+        // the row, nothing can un-seal it from here.
+        state
+            .handle(Request::SetSessionCompleted {
+                id: id.clone(),
+                completed: CompletionState::Sealed,
+            })
+            .unwrap();
+        assert!(
+            state
+                .handle(Request::SetSessionCompleted {
+                    id,
+                    completed: CompletionState::Active,
+                })
+                .is_err(),
+            "a sealed session cannot be un-sealed"
+        );
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();

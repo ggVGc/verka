@@ -47,6 +47,11 @@ pub enum InteractionRow<'a> {
         /// repository — see [`crate::footer::FooterView::uncommitted_changes`].
         uncommitted: bool,
         completed: bool,
+        /// Set only when [`Self::completed`] is true because the operator
+        /// sealed the Session, not merely completed it — the row's badge
+        /// reads "SEALED" instead of "COMPLETED" so the irreversible state
+        /// reads differently from the reversible one.
+        sealed: bool,
         tags: &'a [String],
         last_message: Option<&'a str>,
     },
@@ -125,6 +130,7 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
         rate_limited,
         uncommitted,
         completed,
+        sealed,
         tags,
         last_message,
         ..
@@ -197,7 +203,14 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    if *completed {
+    if *sealed {
+        main.push(Span::styled(
+            " · SEALED",
+            Style::default()
+                .fg(palette::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else if *completed {
         main.push(Span::styled(
             " · COMPLETED",
             Style::default()
@@ -280,6 +293,7 @@ mod tests {
                     rate_limited: None,
                     uncommitted: false,
                     completed: false,
+                    sealed: false,
                     tags: &tags,
                     last_message: Some("The checks are green."),
                 },
@@ -314,6 +328,7 @@ mod tests {
                 rate_limited: None,
                 uncommitted: true,
                 completed: false,
+                sealed: false,
                 tags: &[],
                 last_message: None,
             }],
@@ -341,6 +356,7 @@ mod tests {
                 rate_limited: None,
                 uncommitted: false,
                 completed: false,
+                sealed: false,
                 tags: &[],
                 last_message: None,
             }],
@@ -369,6 +385,7 @@ mod tests {
                 rate_limited: Some("five_hour".into()),
                 uncommitted: false,
                 completed: false,
+                sealed: false,
                 tags: &[],
                 last_message: None,
             }],
@@ -395,6 +412,7 @@ mod tests {
                     rate_limited: None,
                     uncommitted: false,
                     completed: false,
+                    sealed: false,
                     tags: &[],
                     last_message: None,
                 },
@@ -410,6 +428,7 @@ mod tests {
                     rate_limited: None,
                     uncommitted: false,
                     completed: false,
+                    sealed: false,
                     tags: &[],
                     last_message: None,
                 },

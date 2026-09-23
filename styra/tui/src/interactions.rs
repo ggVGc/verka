@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use styra_protocol::{InteractionSummary, WorkspaceSummary};
+use styra_protocol::{CompletionState, InteractionSummary, WorkspaceSummary};
 
 /// How long the cursor must rest on an entry before that Interaction is
 /// loaded, matching the Session and Workspace pickers' settle: short enough to
@@ -91,7 +91,7 @@ impl LiveInteractions {
             .filter_map(|(index, interaction)| {
                 ((!self.only_current_workspace
                     || workspace_id.is_some_and(|id| interaction.workspace_id == id))
-                    && (self.show_completed || !interaction.completed))
+                    && (self.show_completed || interaction.completed == CompletionState::Active))
                     .then_some(index)
             })
             .collect()
@@ -160,7 +160,9 @@ impl LiveInteractions {
             .take(order.len())
             .map(|index| &self.items[*index])
             .find(|interaction| {
-                interaction.id != from && interaction.activity.accepting() && !interaction.completed
+                interaction.id != from
+                    && interaction.activity.accepting()
+                    && interaction.completed == CompletionState::Active
             })
             .cloned()
     }
@@ -580,7 +582,7 @@ mod tests {
             checkout: None,
             last_message: None,
             events: 0,
-            completed: false,
+            completed: CompletionState::Active,
         }
     }
 
@@ -588,7 +590,7 @@ mod tests {
     /// complete on the Session it serves.
     fn completed(id: &str) -> InteractionSummary {
         let mut interaction = interaction(id, InteractionActivity::Stopped);
-        interaction.completed = true;
+        interaction.completed = CompletionState::Completed;
         interaction
     }
 

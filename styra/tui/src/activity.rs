@@ -12,7 +12,9 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use styra_protocol::event::{AgentEvent, TokenUsage, UsageTracker};
-use styra_protocol::{InteractionActivity, InteractionActivityReason, InteractionSummary};
+use styra_protocol::{
+    CompletionState, InteractionActivity, InteractionActivityReason, InteractionSummary,
+};
 
 /// The wall clock in the epoch milliseconds the server dates an interaction's
 /// activity in. Only the difference between the two readings is used, so the
@@ -140,6 +142,10 @@ pub enum StopReason {
     /// The operator finished with the interaction (`C`): stopped, and stopped
     /// because the work it was doing is done.
     Completed,
+    /// The operator sealed the interaction: stopped, done, and — unlike
+    /// [`Self::Completed`] — not something resuming or a client action can
+    /// undo.
+    Sealed,
     /// A plan window refused the work and the Session is not waiting it out,
     /// so the interaction was stopped rather than left holding a process that
     /// cannot run anything.
@@ -168,9 +174,11 @@ impl StopReason {
     /// The reasons that describe a turn ending — interrupted, background work
     /// running out — say nothing about why the interaction then stopped, so
     /// they come through as the bare fact that it has.
-    pub fn reported(completed: bool, reason: Option<&InteractionActivityReason>) -> Self {
-        if completed {
-            return StopReason::Completed;
+    pub fn reported(completed: CompletionState, reason: Option<&InteractionActivityReason>) -> Self {
+        match completed {
+            CompletionState::Sealed => return StopReason::Sealed,
+            CompletionState::Completed => return StopReason::Completed,
+            CompletionState::Active => {}
         }
         match reason {
             Some(InteractionActivityReason::Paused) => StopReason::Paused,
@@ -198,6 +206,7 @@ impl StopReason {
         match self {
             StopReason::Paused => "paused".into(),
             StopReason::Completed => "completed".into(),
+            StopReason::Sealed => "sealed".into(),
             StopReason::RateLimited(limit) => format!("rate limited ({})", limit.window),
             StopReason::Failed { message } => format!("failed: {message}"),
             StopReason::Exited {
@@ -828,7 +837,7 @@ mod tests {
             last_message: None,
             auto_retry: false,
             events: 0,
-            completed: false,
+            completed: CompletionState::Active,
         }
     }
 

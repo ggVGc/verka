@@ -28,7 +28,9 @@
 //! question — what a launch *now* would get — while claiming to describe the
 //! run that happened.
 
-use crate::protocol::{InteractionActivity, InteractionActivityReason, InteractionSummary};
+use crate::protocol::{
+    CompletionState, InteractionActivity, InteractionActivityReason, InteractionSummary,
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -98,8 +100,10 @@ impl Roster {
                 // missing (caught by the filter above, but a race is still
                 // possible) is read as not completed rather than dropping the
                 // row a second time.
-                entry.summary.completed =
-                    crate::journal::read_session_completed(&entry.session_path).unwrap_or(false);
+                entry.summary.completed = crate::journal::read_session_completed(
+                    &entry.session_path,
+                )
+                .unwrap_or(CompletionState::Active);
                 (entry.summary.id.clone(), entry)
             })
             .collect();
@@ -138,7 +142,7 @@ impl Roster {
     /// metadata onto a restored row's mirrored summary. Unlike a live
     /// interaction, it has no process left to stop; the row was stopped
     /// already, and only the flag it carries for display changes.
-    pub fn set_completed(&self, id: &str, completed: bool) -> bool {
+    pub fn set_completed(&self, id: &str, completed: CompletionState) -> bool {
         let mut restored = self.lock();
         let Some(entry) = restored.get_mut(id) else {
             return false;
@@ -275,7 +279,7 @@ mod tests {
             last_message: Some("still going".into()),
             auto_retry: false,
             events: 12,
-            completed: false,
+            completed: CompletionState::Active,
         }
     }
 
@@ -367,15 +371,15 @@ mod tests {
 
         // Set from a live interaction, as `set_completed` does: written to the
         // Session's own metadata first, then mirrored onto the roster row.
-        crate::journal::store_session_completed(&session, true).unwrap();
+        crate::journal::store_session_completed(&session, CompletionState::Completed).unwrap();
         let roster = Roster::open(&root);
-        assert!(roster.set_completed(&id, true));
+        assert!(roster.set_completed(&id, CompletionState::Completed));
         roster.publish(Vec::new());
 
         // Read back fresh, the way the next run does — the mirrored row is
         // never itself the record of it.
         let restored = Roster::open(&root).restored();
-        assert!(restored[0].completed);
+        assert_eq!(restored[0].completed, CompletionState::Completed);
         assert_eq!(
             restored[0].activity_reason,
             Some(InteractionActivityReason::ServerRestarted)

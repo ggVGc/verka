@@ -2,7 +2,9 @@ use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use styra_protocol::{InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
+use styra_protocol::{
+    CompletionState, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary,
+};
 use styra_server::Client;
 
 use crate::help::Help;
@@ -55,8 +57,9 @@ pub enum SessionChoice {
 /// switch between ordering by last activity and by creation, `a` to toggle
 /// history older than a week, `c` to toggle showing Sessions the operator has
 /// marked completed (hidden by default, the same convention as the live
-/// interactions navigator), `C` to mark the selected Session completed or not,
-/// and `/` to filter by name or first prompt. Esc abandons an active search,
+/// interactions navigator), `C` to mark the selected Session completed or
+/// not, `S` to seal it — completed in a way `C` can no longer undo — and `/`
+/// to filter by name or first prompt. Esc abandons an active search,
 /// then backs out. When `current_id` is in the list, it opens selected even if
 /// another root or branch sorts above it.
 ///
@@ -297,8 +300,16 @@ pub fn run_session_picker(
             // Completion is stored on the Session, so the row can be marked
             // from here without the interaction being live — and unmarked the
             // same way, which is the only way back once `c` has revealed it.
-            KeyCode::Char('C') if !sessions.is_empty() => {
-                let completed = !sessions[selected].completed;
+            // A sealed Session refuses this: sealing is meant to be final, so
+            // `C` leaves it alone rather than quietly reopening it.
+            KeyCode::Char('C')
+                if !sessions.is_empty() && sessions[selected].completed != CompletionState::Sealed =>
+            {
+                let completed = if sessions[selected].completed == CompletionState::Active {
+                    CompletionState::Completed
+                } else {
+                    CompletionState::Active
+                };
                 let id = sessions[selected].id.clone();
                 if let Err(error) = client.set_session_completed(&id, completed) {
                     show_message(
@@ -325,6 +336,40 @@ pub fn run_session_picker(
                 );
                 // A Session that has just left the list leaves the cursor
                 // where it was, which is now the row that took its place.
+                selected = sessions
+                    .iter()
+                    .position(|session| session.id == id)
+                    .unwrap_or_else(|| selected.min(sessions.len().saturating_sub(1)));
+            }
+            // Sealing is one-way: unlike `C`, nothing here ever turns a sealed
+            // Session back to active or merely completed.
+            KeyCode::Char('S')
+                if !sessions.is_empty() && sessions[selected].completed != CompletionState::Sealed =>
+            {
+                let id = sessions[selected].id.clone();
+                if let Err(error) = client.set_session_completed(&id, CompletionState::Sealed) {
+                    show_message(
+                        terminal,
+                        &sessions,
+                        selected,
+                        order,
+                        "could not seal session",
+                        &format!("{error:#}"),
+                    )?;
+                    continue;
+                }
+                sessions[selected].completed = CompletionState::Sealed;
+                if let Some(session) = all_sessions.iter_mut().find(|session| session.id == id) {
+                    session.completed = CompletionState::Sealed;
+                }
+                sessions = picker_sessions(
+                    &all_sessions,
+                    showing_all,
+                    show_completed,
+                    now_ms,
+                    order,
+                    filter.as_deref(),
+                );
                 selected = sessions
                     .iter()
                     .position(|session| session.id == id)
@@ -426,7 +471,7 @@ fn picker_sessions(
         .iter()
         .filter(|session| {
             (showing_all || is_recent_session(session, now_ms))
-                && (show_completed || !session.completed)
+                && (show_completed || session.completed == CompletionState::Active)
                 && filter.as_ref().is_none_or(|filter| {
                     session
                         .name
@@ -988,7 +1033,7 @@ mod tests {
             last_event_at_ms: None,
             last_event_age: String::new(),
             origin: None,
-            completed: false,
+            completed: CompletionState::Active,
         }
     }
 
@@ -1018,7 +1063,7 @@ mod tests {
             checkout: None,
             last_message: None,
             events: 0,
-            completed: false,
+            completed: CompletionState::Active,
         }
     }
 

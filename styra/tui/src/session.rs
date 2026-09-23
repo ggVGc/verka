@@ -9,7 +9,9 @@ use styra_protocol::agent::Selection;
 use styra_protocol::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SendMessage, SessionInfo,
 };
-use styra_protocol::{Contract, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary};
+use styra_protocol::{
+    CompletionState, Contract, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
+};
 use styra_server::Client;
 
 /// How long a Session remains in the picker's default recent-conversation
@@ -619,7 +621,7 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) 
 /// the navigator refreshing its list, say — knows whether there is anything
 /// new to refresh.
 pub fn complete_interaction(app: &mut App, client: &Client, live: &mut Attachment) -> bool {
-    match client.set_session_completed(&app.session_id, true) {
+    match client.set_session_completed(&app.session_id, CompletionState::Completed) {
         Ok(()) => {
             app.push_log(LogEntry::info("interaction marked completed"));
             mark_stopped(app, live, StopReason::Completed);
@@ -792,7 +794,7 @@ mod tests {
             last_event_at_ms,
             last_event_age: String::new(),
             origin: None,
-            completed: false,
+            completed: CompletionState::Active,
         }
     }
 

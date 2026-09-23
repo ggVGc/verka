@@ -202,7 +202,7 @@ defmodule Styra.Protocol do
           deny_unknown_fields: true,
           fields: [
             %{name: "id", required: true, type: %{kind: :string}},
-            %{name: "completed", required: true, type: %{kind: :boolean}}
+            %{name: "completed", required: true, type: %{kind: :ref, name: "CompletionState"}}
           ]
         }},
         %{name: "close_interaction", payload: %{
@@ -488,6 +488,25 @@ defmodule Styra.Protocol do
       ]
     },
 
+    # Whether the operator is finished with a Session, and if so, whether that
+    # is final.
+    #
+    # `Self::Sealed` means the same as `Self::Completed` wherever completion
+    # is read — hidden from the default listing, its interaction stopped — but
+    # unlike `Self::Completed` it is not what resuming the Session clears, and
+    # no client action can turn it back into `Self::Active`: it is the
+    # operator's final word on the Session, not a checkbox.
+    "CompletionState" => %{
+      kind: :enum,
+      tagging: %{style: :external},
+      plain: true,
+      variants: [
+        %{name: "active", payload: %{kind: :unit}},
+        %{name: "completed", payload: %{kind: :unit}},
+        %{name: "sealed", payload: %{kind: :unit}}
+      ]
+    },
+
     # The shape a client asks a turn's answer to come back in.
     #
     # A contract is applied at both ends of one turn: it frames the message sent
@@ -623,7 +642,7 @@ defmodule Styra.Protocol do
         %{name: "last_event_at_ms", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}},
         %{name: "last_event_age", required: false, type: %{kind: :string}},
         %{name: "origin", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "SessionOrigin"}}},
-        %{name: "completed", required: false, type: %{kind: :boolean}}
+        %{name: "completed", required: false, type: %{kind: :ref, name: "CompletionState"}}
       ]
     },
 
@@ -683,7 +702,7 @@ defmodule Styra.Protocol do
         %{name: "last_message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "auto_retry", required: false, type: %{kind: :boolean}},
         %{name: "events", required: false, type: %{kind: :number, integer: true}},
-        %{name: "completed", required: false, type: %{kind: :boolean}}
+        %{name: "completed", required: false, type: %{kind: :ref, name: "CompletionState"}}
       ]
     },
 
@@ -2313,16 +2332,18 @@ defmodule Styra.Protocol do
     def stop_interaction!(data), do: Styra.Protocol.build!("stop_interaction", data)
 
     @doc ~S"""
-    Set whether the operator is finished with a Session. `true` stops any
-    live interaction serving it (the row stays listed, but clients
-    normally hide completed rows). The flag lives with the Session, not
-    the interaction, so it survives the interaction stopping and is what
-    the stored-sessions picker filters on; resuming the Session clears it.
+    Set whether the operator is finished with a Session. Anything but
+    `CompletionState::Active` stops any live interaction serving it (the
+    row stays listed, but clients normally hide completed rows). The state
+    lives with the Session, not the interaction, so it survives the
+    interaction stopping and is what the stored-sessions picker filters
+    on; resuming the Session clears it back to `Active`, unless it was
+    `CompletionState::Sealed`, which resuming does not undo.
 
     Fields of `data`:
 
       * `id       `  string
-      * `completed`  boolean
+      * `completed`  CompletionState
     """
     def set_session_completed(data), do: Styra.Protocol.build("set_session_completed", data)
 
@@ -2775,6 +2796,65 @@ defmodule Styra.Protocol.WorkspaceLaunchChange do
   def remove_mount, do: "remove_mount"
 
   def replace, do: "replace"
+end
+
+defmodule Styra.Protocol.CompletionState do
+  @moduledoc ~S"""
+  Wire spellings of `CompletionState`.
+
+  Whether the operator is finished with a Session, and if so, whether that
+  is final.
+
+  `Self::Sealed` means the same as `Self::Completed` wherever completion
+  is read — hidden from the default listing, its interaction stopped — but
+  unlike `Self::Completed` it is not what resuming the Session clears, and
+  no client action can turn it back into `Self::Active`: it is the
+  operator's final word on the Session, not a checkbox.
+  """
+
+  @spellings [
+    {:active, "active"},
+    {:completed, "completed"},
+    {:sealed, "sealed"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  @doc ~S"""
+  The operator has not said they are done with this Session.
+  """
+  def active, do: "active"
+
+  @doc ~S"""
+  The operator is done with this Session, reversibly: resuming it, or an
+  explicit client action, can put it back to `Self::Active`.
+  """
+  def completed, do: "completed"
+
+  @doc ~S"""
+  The operator is done with this Session, irreversibly.
+  """
+  def sealed, do: "sealed"
 end
 
 defmodule Styra.Protocol.Contract do

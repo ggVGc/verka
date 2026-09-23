@@ -686,7 +686,14 @@ fn session_item(
             Style::default().fg(palette::ADDITIONAL_INFO),
         ),
     ];
-    if session.completed {
+    if session.completed == styra_protocol::CompletionState::Sealed {
+        spans.push(Span::styled(
+            " · SEALED",
+            Style::default()
+                .fg(palette::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else if session.completed == styra_protocol::CompletionState::Completed {
         spans.push(Span::styled(
             " · COMPLETED",
             Style::default()
@@ -734,7 +741,7 @@ mod tests {
             last_event_at_ms: None,
             last_event_age: String::new(),
             origin: None,
-            completed: false,
+            completed: styra_protocol::CompletionState::Active,
         }
     }
 
@@ -1106,7 +1113,7 @@ mod tests {
             checkout: None,
             last_message: None,
             events: 0,
-            completed: false,
+            completed: styra_protocol::CompletionState::Active,
         }
     }
 

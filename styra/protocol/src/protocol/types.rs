@@ -840,7 +840,7 @@ pub struct InteractionSummary {
     /// record of it, so starting the Session again is what the server clears
     /// it on, not anything a client does to this summary.
     #[serde(default)]
-    pub completed: bool,
+    pub completed: CompletionState,
 }
 
 /// Where a Session came from, when it was not launched fresh but branched
@@ -875,6 +875,40 @@ pub enum BranchHistory {
     ThroughSelected,
     /// Copy only the selected entry.
     SelectedOnly,
+}
+
+/// Whether the operator is finished with a Session, and if so, whether that
+/// is final.
+///
+/// [`Self::Sealed`] means the same as [`Self::Completed`] wherever completion
+/// is read — hidden from the default listing, its interaction stopped — but
+/// unlike [`Self::Completed`] it is not what resuming the Session clears, and
+/// no client action can turn it back into [`Self::Active`]: it is the
+/// operator's final word on the Session, not a checkbox.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionState {
+    /// The operator has not said they are done with this Session.
+    #[default]
+    Active,
+    /// The operator is done with this Session, reversibly: resuming it, or an
+    /// explicit client action, can put it back to [`Self::Active`].
+    Completed,
+    /// The operator is done with this Session, irreversibly.
+    Sealed,
+}
+
+impl CompletionState {
+    /// Whether the operator has finished with the Session, whichever way.
+    pub fn is_done(self) -> bool {
+        !matches!(self, CompletionState::Active)
+    }
+
+    /// Whether a client is allowed to undo this state — turn it back to
+    /// [`Self::Active`], or resume the Session out of it.
+    pub fn can_undo(self) -> bool {
+        matches!(self, CompletionState::Active | CompletionState::Completed)
+    }
 }
 
 /// A stored session, enough to display and select it from a list — see
@@ -918,10 +952,11 @@ pub struct SessionSummary {
     pub origin: Option<SessionOrigin>,
     /// Whether the operator has finished with this Session — see
     /// [`crate::protocol::Request::SetSessionCompleted`]. Cleared when the
-    /// Session is resumed: an interaction working on it again is not one the
-    /// operator is done with.
+    /// Session is resumed, unless it was [`CompletionState::Sealed`]: an
+    /// interaction working on it again is not one the operator is done with,
+    /// but a seal is not undone by that either.
     #[serde(default)]
-    pub completed: bool,
+    pub completed: CompletionState,
 }
 
 /// An operator message persisted but not yet sent.

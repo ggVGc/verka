@@ -16,7 +16,9 @@
 
 use crate::agent::{Profile, Selection, SessionMeta};
 use crate::event::{decode_line, AgentEvent, BranchDirection, Protocol};
-use crate::protocol::{Contract, Direction, QueuedMessage, RawLine, SessionOrigin, SessionSummary};
+use crate::protocol::{
+    CompletionState, Contract, Direction, QueuedMessage, RawLine, SessionOrigin, SessionSummary,
+};
 use crate::worktree::Checkout;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -63,10 +65,12 @@ struct StoredSessionMeta {
     /// Whether the operator has finished with this Session. A property of the
     /// Session rather than of whichever interaction happened to be open when
     /// it was set, so it outlives that interaction and is what the stored-
-    /// sessions picker filters on. Cleared when the Session is resumed: an
-    /// interaction working on it again is not one the operator is done with.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    completed: bool,
+    /// sessions picker filters on. Cleared when the Session is resumed, unless
+    /// it is [`CompletionState::Sealed`]: an interaction working on it again
+    /// is not one the operator is done with, but a seal is not undone by that
+    /// either.
+    #[serde(default)]
+    completed: CompletionState,
     #[serde(flatten)]
     agent: SessionMeta,
 }
@@ -342,7 +346,7 @@ fn write_session_meta(
         contract: None,
         auto_retry: false,
         checkout: None,
-        completed: false,
+        completed: CompletionState::Active,
         agent: meta.clone(),
     };
     let json = serde_json::to_string_pretty(&stored).context("serializing session metadata")?;
@@ -609,14 +613,14 @@ pub fn store_session_auto_retry(path: &Path, auto_retry: bool) -> Result<()> {
 }
 
 /// Whether the operator has marked this Session as finished with.
-pub fn read_session_completed(path: &Path) -> Result<bool> {
+pub fn read_session_completed(path: &Path) -> Result<CompletionState> {
     Ok(read_stored_session_meta(path)?.completed)
 }
 
 /// Record the operator's completion state for a Session. Kept with the
 /// Session, not the interaction, so it survives the interaction stopping and
 /// is what the stored-sessions picker filters on.
-pub fn store_session_completed(path: &Path, completed: bool) -> Result<()> {
+pub fn store_session_completed(path: &Path, completed: CompletionState) -> Result<()> {
     let directory = if path.is_dir() {
         path.to_path_buf()
     } else {
@@ -1486,14 +1490,31 @@ mod tests {
             Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
         let directory = journal.path().parent().unwrap();
 
-        assert!(!read_session_completed(directory).unwrap());
-        store_session_completed(directory, true).unwrap();
-        assert!(read_session_completed(directory).unwrap());
-        store_session_completed(directory, false).unwrap();
-        assert!(!read_session_completed(directory).unwrap());
+        assert_eq!(
+            read_session_completed(directory).unwrap(),
+            CompletionState::Active
+        );
+        store_session_completed(directory, CompletionState::Completed).unwrap();
+        assert_eq!(
+            read_session_completed(directory).unwrap(),
+            CompletionState::Completed
+        );
+        store_session_completed(directory, CompletionState::Active).unwrap();
+        assert_eq!(
+            read_session_completed(directory).unwrap(),
+            CompletionState::Active
+        );
+
+        // Sealing behaves the same way at the storage layer; only the server
+        // refuses to undo it.
+        store_session_completed(directory, CompletionState::Sealed).unwrap();
+        assert_eq!(
+            read_session_completed(directory).unwrap(),
+            CompletionState::Sealed
+        );
 
         // And recording it disturbs nothing else about the Session.
-        store_session_completed(directory, true).unwrap();
+        store_session_completed(directory, CompletionState::Completed).unwrap();
         assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
         assert_eq!(
             read_session_meta(directory).unwrap().protocol,
@@ -1583,7 +1604,7 @@ mod tests {
             last_event_at_ms: created_at_ms,
             last_event_age: String::new(),
             origin: None,
-            completed: false,
+            completed: CompletionState::Active,
         };
         let mut sessions = vec![
             summary(Some(100)),

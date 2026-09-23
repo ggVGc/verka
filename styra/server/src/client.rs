@@ -8,7 +8,7 @@ use crate::protocol::{
     Response, ResumeSession, SendMessage, SessionInfo, SetSessionTags, ShellInfo, StoredSession,
     TemplateSummary, Updates, WireResponse, WorkspaceLaunchChange,
 };
-use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
+use crate::protocol::{CompletionState, InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
@@ -395,10 +395,11 @@ impl Client {
         }
     }
 
-    /// Set whether the operator is finished with a Session. `true` stops its
-    /// live interaction, if any, and normally hides its row from the
-    /// interactions navigator; resuming the Session clears it again.
-    pub fn set_session_completed(&self, id: &str, completed: bool) -> Result<()> {
+    /// Set whether the operator is finished with a Session. Anything but
+    /// `Active` stops its live interaction, if any, and normally hides its
+    /// row from the interactions navigator; resuming the Session clears it
+    /// again, unless it was `Sealed`.
+    pub fn set_session_completed(&self, id: &str, completed: CompletionState) -> Result<()> {
         match self.request(Request::SetSessionCompleted {
             id: id.to_owned(),
             completed,

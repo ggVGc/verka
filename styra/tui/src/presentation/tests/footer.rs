@@ -6,7 +6,7 @@ mod tests {
     use super::super::test_support::rendered;
 
     use std::path::PathBuf;
-    use styra_protocol::{DrivaOptions, InteractionActivity, InteractionSummary};
+    use styra_protocol::{CompletionState, DrivaOptions, InteractionActivity, InteractionSummary};
 
     fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
@@ -34,7 +34,7 @@ mod tests {
             checkout: None,
             last_message: None,
             events: 0,
-            completed: false,
+            completed: CompletionState::Active,
         }
     }
 
