@@ -66,5 +66,12 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
         last_message,
         workspace_launch_pending: app.workspace_launch_pending,
         git_repository_prompt: app.git_repository_prompt.as_deref(),
+        // The interaction being shown, not the navigator's cursor: this panel
+        // describes the session on screen, the same way the uncommitted-work
+        // marker on the borders does.
+        checkout: app
+            .interactions
+            .current(&app.session_id)
+            .and_then(|interaction| interaction.checkout.clone()),
     }
 }

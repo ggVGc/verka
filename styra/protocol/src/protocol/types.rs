@@ -706,6 +706,49 @@ impl InteractionActivityReason {
     }
 }
 
+/// Where an interaction's agent was working, in Git's terms, as of the last
+/// time it stopped working.
+///
+/// Read from Git rather than from the name Styra gave the checkout. A Session
+/// records the checkout it was *given* (see `styra_server::worktree::Checkout`),
+/// which is set once and says what Styra made; this says what is actually
+/// there now — the agent may have switched branches, or the Workspace may be
+/// the operator's own checkout that Styra never made anything for.
+///
+/// Read when the interaction goes idle and not after, for the reason
+/// [`InteractionSummary::uncommitted_changes`] is: the answer costs a `git`
+/// process, and it only changes while an agent is running.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckoutState {
+    /// Root of the working tree the agent's workspace sits in.
+    pub worktree: PathBuf,
+    /// The directory the repository's shared history sits in — the main
+    /// checkout, for the two layouts Styra makes and meets: a plain checkout,
+    /// and the linked worktrees it adds to one. Equal to [`Self::worktree`]
+    /// unless the agent was working in a linked worktree, which is what
+    /// [`Self::linked`] asks.
+    ///
+    /// Derived from where Git keeps the shared directory rather than from a
+    /// question asked about the worktree itself, so it costs no extra `git`
+    /// process. A checkout whose history was put somewhere unrelated — `git
+    /// init --separate-git-dir` — therefore reads as linked from that
+    /// somewhere, which is where its history is but not a worktree of
+    /// anything.
+    pub repository: PathBuf,
+    /// The branch checked out there, as `git branch` shows it. `None` when the
+    /// head is detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+impl CheckoutState {
+    /// Whether the agent worked in a linked worktree rather than in the
+    /// repository's main checkout.
+    pub fn linked(&self) -> bool {
+        self.worktree != self.repository
+    }
+}
+
 /// An interaction the server is currently running (this process's live sessions),
 /// enough to list it and to reattach a client to it. Distinct from
 /// [`SessionSummary`], which describes a session persisted in the store
@@ -761,6 +804,18 @@ pub struct InteractionSummary {
     /// all.
     #[serde(default)]
     pub uncommitted_changes: bool,
+    /// The branch and worktree the agent was working in, as Git had them when
+    /// this interaction last stopped working — see [`CheckoutState`]. `None`
+    /// for a workspace that is not in a repository at all, and before the
+    /// interaction has gone idle even once.
+    ///
+    /// Unlike [`Self::uncommitted_changes`] this is still reported while a
+    /// turn runs. It is a statement about where the work is happening rather
+    /// than about work left behind, so the last reading stays the useful
+    /// answer even when the agent is mid-turn; blanking it would make the
+    /// details view empty its Git rows every time the operator said anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<CheckoutState>,
     /// The most recent message the agent sent, flattened to a single line and
     /// clipped, so a list of interactions says what each one is actually
     /// talking about. `None` before the agent has said anything.

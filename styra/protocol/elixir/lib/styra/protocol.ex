@@ -667,6 +667,7 @@ defmodule Styra.Protocol do
         %{name: "activity_since_ms", required: false, type: %{kind: :number, integer: true}},
         %{name: "idle_unseen", required: false, type: %{kind: :boolean}},
         %{name: "uncommitted_changes", required: false, type: %{kind: :boolean}},
+        %{name: "checkout", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "CheckoutState"}}},
         %{name: "last_message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "auto_retry", required: false, type: %{kind: :boolean}},
         %{name: "events", required: false, type: %{kind: :number, integer: true}},
@@ -931,6 +932,27 @@ defmodule Styra.Protocol do
           ]
         }},
         %{name: "server_restarted", payload: %{kind: :unit}}
+      ]
+    },
+
+    # Where an interaction's agent was working, in Git's terms, as of the last
+    # time it stopped working.
+    #
+    # Read from Git rather than from the name Styra gave the checkout. A Session
+    # records the checkout it was *given* (see `styra_server::worktree::Checkout`),
+    # which is set once and says what Styra made; this says what is actually
+    # there now — the agent may have switched branches, or the Workspace may be
+    # the operator's own checkout that Styra never made anything for.
+    #
+    # Read when the interaction goes idle and not after, for the reason
+    # `InteractionSummary::uncommitted_changes` is: the answer costs a `git`
+    # process, and it only changes while an agent is running.
+    "CheckoutState" => %{
+      kind: :struct,
+      fields: [
+        %{name: "worktree", required: true, type: %{kind: :string, path: true}},
+        %{name: "repository", required: true, type: %{kind: :string, path: true}},
+        %{name: "branch", required: false, type: %{kind: :optional, inner: %{kind: :string}}}
       ]
     },
 

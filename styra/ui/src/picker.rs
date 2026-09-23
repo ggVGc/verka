@@ -1082,6 +1082,7 @@ mod tests {
             activity_since_ms: 0,
             idle_unseen: false,
             uncommitted_changes: false,
+            checkout: None,
             last_message: None,
             events: 0,
             completed: false,

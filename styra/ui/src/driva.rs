@@ -28,8 +28,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use std::path::PathBuf;
 use styra_protocol::{
-    AttributedMount, DrivaOptions, FloorKind, LaunchMount, LaunchPolicy, Mount, MountAccess,
-    MountOrigin, VariableOrigin, WritableMountMode,
+    AttributedMount, CheckoutState, DrivaOptions, FloorKind, LaunchMount, LaunchPolicy, Mount,
+    MountAccess, MountOrigin, VariableOrigin, WritableMountMode,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -154,6 +154,12 @@ pub struct DrivaView<'a> {
     pub last_message: Option<String>,
     pub workspace_launch_pending: usize,
     pub git_repository_prompt: Option<&'a str>,
+    /// Where the interaction's agent was working in Git's terms when it last
+    /// stopped working, as the server read it — see
+    /// [`styra_protocol::InteractionSummary::checkout`]. `None` when the
+    /// workspace is not in a repository, or before the interaction has gone
+    /// idle once.
+    pub checkout: Option<CheckoutState>,
 }
 
 impl DrivaView<'_> {
@@ -899,10 +905,44 @@ fn interaction_lines(app: &DrivaView) -> Vec<Line<'static>> {
         ),
         detail_field_line("queued", &app.queued_count.to_string()),
     ]);
+    lines.extend(checkout_lines(app.checkout.as_ref()));
     if let Some(message) = &app.last_message {
         lines.push(detail_field_line("last message", &message));
     }
     lines
+}
+
+/// Where the agent was working, in Git's terms: the branch it was on and the
+/// worktree it was in.
+///
+/// Two rows rather than one because they are two things the operator does
+/// something different with — a branch is what they would merge, a worktree is
+/// where they would `cd` — and a linked worktree names the repository it
+/// belongs to beside it, since the worktree path alone does not say which
+/// repository the branch will turn up in.
+///
+/// Never absent. A workspace outside a repository is a fact worth one row:
+/// without it, the operator cannot tell "no repository here" from "the server
+/// has not looked yet".
+fn checkout_lines(checkout: Option<&CheckoutState>) -> Vec<Line<'static>> {
+    let Some(checkout) = checkout else {
+        return vec![detail_field_line("git", "not a Git checkout")];
+    };
+    let worktree = checkout.worktree.display().to_string();
+    vec![
+        detail_field_line(
+            "branch",
+            checkout.branch.as_deref().unwrap_or("detached head"),
+        ),
+        detail_field_line(
+            "worktree",
+            &if checkout.linked() {
+                format!("{worktree} · linked from {}", checkout.repository.display())
+            } else {
+                worktree
+            },
+        ),
+    ]
 }
 
 fn section_line(title: &str) -> Line<'static> {
@@ -1400,5 +1440,77 @@ fn launch_mount_label(mount: &LaunchMount) -> String {
             destination.display()
         ),
         None => format!("{} ({access})", mount.source.display()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(lines: Vec<Line<'static>>) -> Vec<String> {
+        lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn state(worktree: &str, repository: &str, branch: Option<&str>) -> CheckoutState {
+        CheckoutState {
+            worktree: PathBuf::from(worktree),
+            repository: PathBuf::from(repository),
+            branch: branch.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_plain_checkout_reports_its_branch_and_where_it_is() {
+        let lines = text(checkout_lines(Some(&state(
+            "/work/project",
+            "/work/project",
+            Some("main"),
+        ))));
+
+        assert!(lines[0].contains("branch"), "{lines:?}");
+        assert!(lines[0].contains("main"), "{lines:?}");
+        assert!(lines[1].contains("/work/project"), "{lines:?}");
+        // Nothing to say about a repository the checkout simply is.
+        assert!(!lines[1].contains("linked"), "{lines:?}");
+    }
+
+    /// The worktree Styra parks under its own directory says nothing about
+    /// which repository the branch will turn up in, so the row says it.
+    #[test]
+    fn a_linked_worktree_says_what_it_was_branched_from() {
+        let lines = text(checkout_lines(Some(&state(
+            "/styra/worktrees/session",
+            "/work/project",
+            Some("styra/session"),
+        ))));
+
+        assert!(lines[0].contains("styra/session"), "{lines:?}");
+        assert!(lines[1].contains("/styra/worktrees/session"), "{lines:?}");
+        assert!(lines[1].contains("linked from /work/project"), "{lines:?}");
+    }
+
+    #[test]
+    fn a_detached_head_is_said_to_be_one_rather_than_left_blank() {
+        let lines = text(checkout_lines(Some(&state("/work", "/work", None))));
+
+        assert!(lines[0].contains("detached head"), "{lines:?}");
+    }
+
+    /// "Not a checkout" and "not looked at yet" would both render as no rows
+    /// at all, and the operator reading the panel cannot ask which it was.
+    #[test]
+    fn a_workspace_outside_a_repository_still_gets_a_row() {
+        let lines = text(checkout_lines(None));
+
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("not a Git checkout"), "{lines:?}");
     }
 }

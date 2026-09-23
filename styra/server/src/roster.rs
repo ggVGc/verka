@@ -267,6 +267,11 @@ mod tests {
             activity_since_ms: 7,
             idle_unseen: true,
             uncommitted_changes: false,
+            checkout: Some(crate::protocol::CheckoutState {
+                worktree: PathBuf::from("/tmp/worktrees/project-session"),
+                repository: PathBuf::from("/tmp/project"),
+                branch: Some("styra/project-session".into()),
+            }),
             last_message: Some("still going".into()),
             auto_retry: false,
             events: 12,
@@ -294,6 +299,14 @@ mod tests {
             Some(InteractionActivityReason::ServerRestarted)
         );
         assert_eq!(restored[0].last_message.as_deref(), Some("still going"));
+        // Where the agent was working outlives the agent. Nothing this run can
+        // do would re-derive it — the branch was read from a checkout the
+        // previous run's agent may since have been the last to touch — so a
+        // row that lost it would have to show the operator nothing.
+        let checkout = restored[0].checkout.as_ref().expect("the checkout is kept");
+        assert_eq!(checkout.branch.as_deref(), Some("styra/project-session"));
+        assert_eq!(checkout.repository, PathBuf::from("/tmp/project"));
+        assert!(checkout.linked());
         // The previous run's notification is not this run's to raise.
         assert!(!restored[0].idle_unseen);
         std::fs::remove_dir_all(root).ok();

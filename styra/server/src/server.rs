@@ -8,7 +8,7 @@ use crate::journal::{self, Journal};
 use crate::naming::Topic;
 use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
-    Answer, Contract, DrivaOptions, InteractionActivity, InteractionActivityReason,
+    Answer, CheckoutState, Contract, DrivaOptions, InteractionActivity, InteractionActivityReason,
     InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, QueuedMessage,
     SendMessage, SessionOrigin, SessionSummary, TemplateSummary,
 };
@@ -196,20 +196,26 @@ impl GoneIdle {
     }
 }
 
-/// Whether the checkout an interaction works in has work that is not
-/// committed, as it stood when the interaction last stopped working.
+/// What Git says about the checkout an interaction works in, as it stood when
+/// the interaction last stopped working: the branch and worktree the agent was
+/// in, and whether it left work uncommitted there.
 ///
 /// Read at that moment and held, rather than answered when a client asks,
-/// because the question costs a `git` process: a navigator listing a dozen
+/// because each question costs a `git` process: a navigator listing a dozen
 /// interactions several times a second would spawn one per interaction per
 /// refresh to learn something that only changes while an agent is running.
-/// The agent has stopped by the time this is read, so the answer stays true
-/// for as long as anyone is looking at it — until the operator commits, which
-/// is what they were being told to consider.
+/// The agent has stopped by the time this is read, so the answers stay true
+/// for as long as anyone is looking at them — until the operator commits or
+/// switches branches, which is what they were being told to consider.
+///
+/// The branch is read from Git rather than taken from the name Styra gave the
+/// checkout: an agent can `git checkout` its way somewhere else, and a
+/// Workspace that never had a worktree made for it has a branch all the same.
 struct WorkingTree {
     git: Arc<dyn crate::git::Git>,
     checkout: PathBuf,
     uncommitted: AtomicBool,
+    state: Mutex<Option<CheckoutState>>,
 }
 
 impl WorkingTree {
@@ -218,25 +224,60 @@ impl WorkingTree {
             git,
             checkout,
             uncommitted: AtomicBool::new(false),
+            state: Mutex::new(None),
         }
     }
 
     /// Ask Git again, because the interaction has stopped writing to the
     /// checkout.
     ///
-    /// A workspace outside a repository fails the question rather than
-    /// answering it, and that failure is the answer this reports: there is no
-    /// history here to have left work out of, so there is nothing to say.
+    /// A workspace outside a repository fails the questions rather than
+    /// answering them, and that failure is the answer this reports: there is
+    /// no history here to have left work out of, and no branch to be on, so
+    /// there is nothing to say.
     fn reread(&self) {
         let uncommitted = self
             .git
             .has_uncommitted_changes(&self.checkout)
             .unwrap_or(false);
         self.uncommitted.store(uncommitted, Ordering::Release);
+        // A repository that has become unreadable since the last reading
+        // leaves the last reading in place rather than blanking it: the
+        // operator is better served by where the work was than by nothing.
+        if let Some(state) = self.read_checkout() {
+            *self.state.lock().expect("checkout state lock poisoned") = Some(state);
+        }
+    }
+
+    /// Where the agent is working, in Git's terms, or `None` when the
+    /// workspace is not inside a working tree.
+    fn read_checkout(&self) -> Option<CheckoutState> {
+        let repository = self.git.discover(&self.checkout).ok().flatten()?;
+        // For a main checkout the common directory is its own `.git`, so its
+        // parent is that checkout; for a linked worktree it is the main
+        // checkout's, so the parent is the main checkout. Either way the
+        // parent is the repository the worktree belongs to.
+        let main = repository
+            .common_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| repository.root.clone());
+        Some(CheckoutState {
+            branch: self.git.current_branch(&repository.root).ok().flatten(),
+            worktree: repository.root,
+            repository: main,
+        })
     }
 
     fn uncommitted(&self) -> bool {
         self.uncommitted.load(Ordering::Acquire)
+    }
+
+    fn checkout_state(&self) -> Option<CheckoutState> {
+        self.state
+            .lock()
+            .expect("checkout state lock poisoned")
+            .clone()
     }
 }
 
@@ -550,6 +591,10 @@ impl ManagedInteraction {
             // operator cannot act on a checkout the agent is still writing to.
             uncommitted_changes: activity == InteractionActivity::Pending
                 && self.working_tree.uncommitted(),
+            // Reported whatever the interaction is doing: see
+            // `InteractionSummary::checkout`. Where the work is happening is
+            // still the answer while the agent is working on it.
+            checkout: self.working_tree.checkout_state(),
             activity,
             activity_reason: state.reason,
             activity_since_ms: state.since_ms,
@@ -3801,6 +3846,78 @@ mod tests {
         tree.reread();
 
         assert!(!tree.uncommitted());
+        assert_eq!(tree.checkout_state(), None);
+    }
+
+    /// Read at the same moment and on the same terms as the uncommitted work
+    /// beside it: nothing until the interaction stops, and then where the
+    /// agent actually was.
+    #[test]
+    fn a_working_tree_records_the_branch_it_stopped_on() {
+        let host = temp_path("working-tree-branch-host");
+        std::fs::remove_dir_all(&host).ok();
+        let git = Arc::new(crate::git::FakeGit::new());
+        let repository = git.init(&host);
+        let tree = WorkingTree::new(git.clone(), host.clone());
+
+        assert_eq!(tree.checkout_state(), None, "nothing has been read yet");
+
+        tree.reread();
+
+        let state = tree.checkout_state().expect("the workspace is a checkout");
+        assert_eq!(state.branch.as_deref(), Some("main"));
+        assert_eq!(state.worktree, repository.root);
+        // A main checkout is its own repository, which is what makes the
+        // linked-worktree question answerable without a second field.
+        assert_eq!(state.repository, repository.root);
+        assert!(!state.linked());
+    }
+
+    /// An interaction given its own linked worktree reports that worktree and
+    /// its branch, and names the repository the branch will turn up in — which
+    /// the worktree path, parked wherever Styra keeps them, does not say.
+    #[test]
+    fn a_linked_worktree_names_the_repository_it_branches_from() {
+        let host = temp_path("working-tree-linked-host");
+        std::fs::remove_dir_all(&host).ok();
+        let git = Arc::new(crate::git::FakeGit::new());
+        let repository = git.init(&host.join("repository"));
+        let worktree = host.join("worktrees").join("styra-session");
+        git.create_worktree(&repository.root, "styra/session", &worktree)
+            .unwrap();
+        let tree = WorkingTree::new(git.clone(), worktree.clone());
+
+        tree.reread();
+
+        let state = tree.checkout_state().expect("the worktree is a checkout");
+        assert_eq!(state.branch.as_deref(), Some("styra/session"));
+        assert_eq!(state.worktree, worktree.canonicalize().unwrap());
+        assert_eq!(state.repository, repository.root);
+        assert!(state.linked());
+    }
+
+    /// The reading survives the repository becoming unreadable. Where the work
+    /// was is still the best answer available, and an operator shown nothing
+    /// would read it as "not a checkout" rather than "could not look".
+    #[test]
+    fn a_checkout_that_goes_away_leaves_the_last_reading_standing() {
+        let host = temp_path("working-tree-vanished-host");
+        std::fs::remove_dir_all(&host).ok();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let tree = WorkingTree::new(git.clone(), host.clone());
+        tree.reread();
+        assert!(tree.checkout_state().is_some());
+
+        std::fs::remove_dir_all(&host).unwrap();
+        tree.reread();
+
+        assert_eq!(
+            tree.checkout_state()
+                .and_then(|state| state.branch)
+                .as_deref(),
+            Some("main")
+        );
     }
 
     #[test]
