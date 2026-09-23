@@ -124,6 +124,11 @@ If the artifact is tested and exhibits problems, then the definition graph is ed
 and the production of a new artifact.
 
 
+= Linka =
+Git is the shared data store. It should be easy to mention changes in another branch in a linka description,
+and have that reference be tracked. Best way to achieve overview of git operations seems to be a git wrapper tool,
+to avoid agents sneaking in information from git history in a way that is not tracked.
+
 
 = Implementation language =
 
