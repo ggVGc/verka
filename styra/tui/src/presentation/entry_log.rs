@@ -14,22 +14,18 @@
 //! is a scoped interaction log, not a second detail reader: the operator can
 //! compare its compact sequence with the selected row immediately above it.
 //!
-//! The pane opens following the list selection, and `Tab` hands it the
-//! navigation keys, at which point it draws a cursor of its own and the
-//! preview shows whatever that cursor is on; see [`crate::entry_log`].
+//! The pane opens with its cursor on its last, newest entry, and `Tab` hands
+//! it the navigation keys. The preview shows whatever its cursor is on for as
+//! long as it is open, keys or not; see [`crate::entry_log`].
 
 use super::list::ui_link_display;
 use crate::app::App;
 pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
     let shown = app.entry_log_indices();
-    // The cursor is only drawn while the pane holds the navigation keys:
-    // otherwise it follows the list, and a second highlighted row would read
-    // as a second selection the keys do not move.
-    let cursor = app
-        .entry_log
-        .focused()
-        .then(|| app.entry_log.cursor(shown.len()))
-        .flatten();
+    // The cursor is drawn whether or not the pane holds the keys: it is what
+    // the preview beside it is showing, so the row it is on has to be visible
+    // for the pair to be read together.
+    let cursor = app.entry_log.cursor(shown.len());
     let entries = shown
         .iter()
         .map(|&idx| &app.timeline.entries[idx])
@@ -153,6 +149,7 @@ mod tests {
         app.select_first();
         app.toggle_entry_log();
         app.toggle_entry_log_focus();
+        app.entry_log_select_first();
 
         assert_eq!(app.entry_log_index(), Some(0));
         app.entry_log_select_next();
@@ -225,33 +222,36 @@ mod tests {
         assert!(y > entry_log_y, "the pane followed the list selection");
     }
 
-    /// `Tab` makes the pane the window the movement keys act on, and the
-    /// preview follows its cursor: the two panes are read as one pair, with the
-    /// preview showing whichever of them holds the keys.
+    /// `Tab` makes the pane the window the movement keys act on. The preview
+    /// reads the pane's cursor for as long as the pane is open, so `Tab`
+    /// itself changes nothing about what it shows: the two windows are read as
+    /// one pair, with the finer-grained of them driving the preview.
     #[test]
-    fn tab_moves_the_keys_to_the_pane_and_the_preview_follows_its_cursor() {
+    fn tab_moves_the_keys_to_the_pane_and_the_preview_stays_on_its_cursor() {
         let mut app = app_with_two_turns();
         app.timeline.conversation_only = true;
         app.timeline.selected = 0;
         app.toggle_entry_log();
         app.preview.show();
 
-        // Before Tab the preview shows the list's selection: the message.
+        // The pane opened on its newest entry — the command under the message
+        // — and that is what the preview shows, before any key is pressed.
+        assert_eq!(app.entry_log_index(), Some(1));
         assert_eq!(
             app.preview_entry().map(|entry| entry.event.tag()),
-            Some("user")
+            Some("shell")
         );
 
         app.toggle_entry_log_focus();
         assert!(app.entry_log.focused());
         assert_eq!(
             app.preview_entry().map(|entry| entry.event.tag()),
-            Some("user"),
+            Some("shell"),
             "taking the keys leaves the preview on the entry it was showing"
         );
 
-        app.entry_log_select_next();
-        assert_eq!(app.entry_log_index(), Some(1));
+        app.entry_log_select_prev();
+        assert_eq!(app.entry_log_index(), Some(0));
         assert_eq!(
             app.timeline.selected, 0,
             "the event list keeps its own place"
@@ -259,18 +259,58 @@ mod tests {
         assert!(test_support::rendered(&app).contains("cargo test backoff"));
         assert_eq!(
             app.preview_entry().map(|entry| entry.event.tag()),
-            Some("shell"),
+            Some("user"),
             "the preview shows the entry the pane's cursor is on"
         );
 
-        // And back: the movement keys belong to the event list again, so the
-        // preview returns to following its selection.
+        // And back: the movement keys belong to the event list again, but the
+        // preview keeps reading the open pane's cursor.
         app.toggle_entry_log_focus();
         assert!(!app.entry_log.focused());
+        assert_eq!(app.entry_log_index(), Some(0));
+        assert_eq!(
+            app.preview_entry().map(|entry| entry.event.tag()),
+            Some("user")
+        );
+    }
+
+    /// Closing the pane hands the preview back to the event list's selection.
+    #[test]
+    fn closing_the_pane_returns_the_preview_to_the_list_selection() {
+        let mut app = app_with_two_turns();
+        app.timeline.conversation_only = true;
+        app.timeline.selected = 0;
+        app.toggle_entry_log();
+        app.toggle_entry_log_focus();
+        app.entry_log_select_last();
+
+        app.toggle_entry_log();
         assert_eq!(app.entry_log_index(), None);
         assert_eq!(
             app.preview_entry().map(|entry| entry.event.tag()),
             Some("user")
+        );
+    }
+
+    /// Moving the event list while the pane follows it moves the pane's cursor
+    /// too: the preview reads that cursor, so it has to land on the entry the
+    /// operator just selected rather than on a row of the stretch they left.
+    #[test]
+    fn an_unfocused_panes_cursor_follows_the_list_selection() {
+        let mut app = app_with_two_turns();
+        app.timeline.conversation_only = true;
+        app.select_first();
+        app.toggle_entry_log();
+
+        app.select_next_line();
+        assert_eq!(
+            app.entry_log_index(),
+            Some(app.timeline.selected),
+            "the pane's cursor is on the newly selected message"
+        );
+        assert_eq!(
+            app.preview_entry().map(|entry| entry.event.tag()),
+            Some("agent")
         );
     }
 
@@ -292,6 +332,7 @@ mod tests {
         app.select_first();
         app.toggle_entry_log();
         app.toggle_entry_log_focus();
+        app.entry_log_select_first();
 
         let screen = test_support::screen_sized(&app, 120, 30);
         assert!(screen.body().contains("cargo test case-0"));

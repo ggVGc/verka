@@ -741,11 +741,14 @@ impl App {
     }
 
     /// Toggle the entry-log pane below the event list. Opening it returns to
-    /// the event list, which is where the keys start: the pane opens following
-    /// the list selection, and `Tab` is what gives it a cursor of its own.
+    /// the event list, which is where the keys start; `Tab` is what moves them
+    /// to the pane. The cursor starts on the pane's last, newest entry, which
+    /// is what the preview then shows.
     pub fn toggle_entry_log(&mut self) {
         self.view = View::Events;
-        self.entry_log.toggle();
+        let len = self.entry_log_len();
+        self.entry_log.toggle(len);
+        self.preview.scroll.reset();
     }
 
     /// Move the navigation keys between the event list and the entry-log pane,
@@ -759,17 +762,19 @@ impl App {
         if self.entry_log.focused() {
             self.entry_log.unfocus();
         } else {
-            // The list selection as a position in what the pane is showing.
-            // A hidden entry is not there to land on, so the cursor takes the
-            // first row at or after it.
-            let shown = self.entry_log_indices();
-            let cursor = shown
-                .iter()
-                .position(|&idx| idx >= self.timeline.selected)
-                .unwrap_or(0);
-            self.entry_log.focus(cursor);
+            self.entry_log.focus();
         }
         self.preview.scroll.reset();
+    }
+
+    /// The list selection as a position in what the entry-log pane is showing.
+    /// A hidden entry is not there to land on, so this is the first row at or
+    /// after it.
+    fn entry_log_cursor_for_selection(&self) -> usize {
+        self.entry_log_indices()
+            .iter()
+            .position(|&idx| idx >= self.timeline.selected)
+            .unwrap_or(0)
     }
 
     /// The timeline entries the entry-log pane is showing: the selected
@@ -793,11 +798,12 @@ impl App {
         self.entry_log_indices().len()
     }
 
-    /// Where the entry-log pane's cursor is in the timeline, while that pane
-    /// has the keys. `None` whenever the event list is the active window, so
-    /// callers can treat it as "the pane is not driving this".
+    /// Where the entry-log pane's cursor is in the timeline, while the pane is
+    /// open. `None` whenever it is closed, so callers can treat it as "the
+    /// pane is not driving this". Whether the pane holds the keys does not
+    /// come into it: an open pane is what the preview reads either way.
     pub(crate) fn entry_log_index(&self) -> Option<usize> {
-        if !self.entry_log.focused() {
+        if !self.entry_log.open {
             return None;
         }
         let shown = self.entry_log_indices();
@@ -875,7 +881,7 @@ impl App {
     pub(crate) fn select_tail(&mut self) {
         self.timeline.select_tail();
         self.preview.scroll.reset();
-        self.entry_log.follow_list();
+        self.entry_log_follow_selection();
     }
 
     // --- List navigation ----------------------------------------------------
@@ -887,8 +893,15 @@ impl App {
     fn moved(&mut self, moved: bool) {
         if moved {
             self.preview.scroll.reset();
-            self.entry_log.follow_list();
+            self.entry_log_follow_selection();
         }
+    }
+
+    /// Put the entry-log pane's cursor back on the list selection after that
+    /// selection moved; see [`EntryLog::follow_list`].
+    fn entry_log_follow_selection(&mut self) {
+        let cursor = self.entry_log_cursor_for_selection();
+        self.entry_log.follow_list(cursor);
     }
 
     /// Move to the next entry with an arrow (something beyond its bare
