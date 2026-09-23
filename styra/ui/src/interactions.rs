@@ -31,6 +31,18 @@ pub enum InteractionRow<'a> {
         selected: bool,
         loading: bool,
         newly_idle: bool,
+        /// Why a stopped interaction stopped. Unlike the reasons the other
+        /// statuses carry, this one is rendered on the row: the stopped
+        /// entries sit at the foot of the list precisely so they can be read
+        /// through, and "stopped" on its own does not say whether the operator
+        /// paused it, a plan window refused it, or the agent fell over.
+        stop_reason: Option<Cow<'a, str>>,
+        /// The window that refused this interaction's work, when it is idle
+        /// because a plan window turned it away rather than because its turn
+        /// ended. Idling of that kind is not the operator's turn to speak:
+        /// nothing they send will run until the window turns over, so the row
+        /// says so instead of reading as ordinary idle.
+        rate_limited: Option<Cow<'a, str>>,
         /// The interaction has stopped and left work uncommitted in its
         /// repository — see [`crate::footer::FooterView::uncommitted_changes`].
         uncommitted: bool,
@@ -109,6 +121,8 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
         current,
         loading,
         newly_idle,
+        stop_reason,
+        rate_limited,
         uncommitted,
         completed,
         tags,
@@ -138,10 +152,24 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
             Style::default().fg(palette::ACCENT),
         ),
     ];
+    if let Some(why) = stop_reason {
+        main.push(Span::styled(
+            format!(" · {why}"),
+            Style::default().fg(palette::INACTIVE),
+        ));
+    }
     if *loading {
         main.push(Span::styled(
             " · loading…",
             Style::default().fg(palette::INACTIVE),
+        ));
+    }
+    if let Some(window) = rate_limited {
+        main.push(Span::styled(
+            format!(" · RATE LIMITED ({window})"),
+            Style::default()
+                .fg(palette::ERROR)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     if *newly_idle {
@@ -239,6 +267,8 @@ mod tests {
                     selected: true,
                     loading: false,
                     newly_idle: true,
+                    stop_reason: None,
+                    rate_limited: None,
                     uncommitted: false,
                     completed: false,
                     tags: &tags,
@@ -271,6 +301,8 @@ mod tests {
                 selected: false,
                 loading: false,
                 newly_idle: false,
+                stop_reason: None,
+                rate_limited: None,
                 uncommitted: true,
                 completed: false,
                 tags: &[],
@@ -278,6 +310,61 @@ mod tests {
             }],
         };
         assert!(rendered(&view).contains("repair checkout · claude · UNCOMMITTED"));
+    }
+
+    /// A stopped entry is one the operator has to decide whether to resume,
+    /// and the reason it stopped is what that decision turns on.
+    #[test]
+    fn a_stopped_interaction_says_why_it_stopped() {
+        let view = InteractionNavigator {
+            scope: "Payments".into(),
+            all_workspaces: false,
+            completion_filter: "completed hidden".into(),
+            rows: vec![InteractionRow::Interaction {
+                name: "repair checkout".into(),
+                provider: "claude",
+                status: InteractionStatus::Stopped,
+                current: false,
+                selected: false,
+                loading: false,
+                newly_idle: false,
+                stop_reason: Some("you paused it".into()),
+                rate_limited: None,
+                uncommitted: false,
+                completed: false,
+                tags: &[],
+                last_message: None,
+            }],
+        };
+        assert!(rendered(&view).contains("# repair checkout · claude · you paused it"));
+    }
+
+    /// An interaction idling because a plan window refused it looks exactly
+    /// like one waiting for the operator, and is the opposite situation: the
+    /// row has to say which of the two it is.
+    #[test]
+    fn an_idle_interaction_says_when_a_plan_window_is_holding_it() {
+        let view = InteractionNavigator {
+            scope: "Payments".into(),
+            all_workspaces: false,
+            completion_filter: "completed hidden".into(),
+            rows: vec![InteractionRow::Interaction {
+                name: "repair checkout".into(),
+                provider: "claude",
+                status: InteractionStatus::Idle,
+                current: false,
+                selected: false,
+                loading: false,
+                newly_idle: false,
+                stop_reason: None,
+                rate_limited: Some("five_hour".into()),
+                uncommitted: false,
+                completed: false,
+                tags: &[],
+                last_message: None,
+            }],
+        };
+        assert!(rendered(&view).contains("repair checkout · claude · RATE LIMITED (five_hour)"));
     }
 
     #[test]
@@ -295,6 +382,8 @@ mod tests {
                     selected: false,
                     loading: false,
                     newly_idle: false,
+                    stop_reason: None,
+                    rate_limited: None,
                     uncommitted: false,
                     completed: false,
                     tags: &[],
@@ -308,6 +397,8 @@ mod tests {
                     selected: true,
                     loading: true,
                     newly_idle: false,
+                    stop_reason: None,
+                    rate_limited: None,
                     uncommitted: false,
                     completed: false,
                     tags: &[],
