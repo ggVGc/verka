@@ -192,8 +192,11 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
             format!("{prefix}{}", message.text)
         })
         .collect();
+    let label = app.launch_label();
     styra_ui::modal_input::ModalInput {
         title,
+        model: Some(label.model.unwrap_or_else(|| "default model".into())),
+        model_reported: label.model_reported,
         note: app
             .outbox
             .contract()

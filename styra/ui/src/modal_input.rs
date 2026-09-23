@@ -22,6 +22,13 @@ pub struct ModalInput<'a> {
     /// view's answer contract. Drawn in the accent color to set it apart from
     /// the box's own name.
     pub note: Option<String>,
+    /// The model the message will be sent to, named at the top right so the
+    /// box says what is about to answer — the status line it covers is not
+    /// readable while the box is open.
+    pub model: Option<String>,
+    /// Whether the agent confirmed that model, rather than it only being what
+    /// the launch asked for. Dimmed until it has, as the status line does.
+    pub model_reported: bool,
     /// Text above the buffer: already-composed messages still waiting. Wrapped
     /// with the buffer, and dimmed to set it apart from what is being typed.
     pub preceding: Vec<String>,
@@ -84,6 +91,19 @@ pub fn render(frame: &mut Frame, input: &ModalInput<'_>) {
             note.clone(),
             Style::default().fg(palette::ACCENT),
         ));
+    }
+    if let Some(model) = &input.model {
+        block = block.title(
+            Line::from(Span::styled(
+                format!(" {model} "),
+                Style::default().fg(if input.model_reported {
+                    palette::TEXT
+                } else {
+                    palette::ADDITIONAL_INFO
+                }),
+            ))
+            .right_aligned(),
+        );
     }
     if let Some(notice) = &input.notice {
         block = block.title_bottom(Span::styled(
@@ -171,6 +191,8 @@ mod tests {
         ModalInput {
             title: " message ".into(),
             note: None,
+            model: None,
+            model_reported: false,
             preceding,
             notice: None,
             text,
