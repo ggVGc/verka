@@ -195,7 +195,11 @@ pub struct Interaction {
 /// Translate a provider's sandbox cwd through the Workspace mount. A provider
 /// is not trusted to name arbitrary host paths: the reported directory must be
 /// absolute, beneath the sandbox-side Workspace, and free of `..` components.
-fn host_working_directory(
+///
+/// Shared with the replay in [`crate::server`], which reads the same reports
+/// back out of a stopped Session's journal: a path that was not fit to show
+/// while it was live is not fit to show afterwards either.
+pub(crate) fn host_working_directory(
     reported: &str,
     sandbox_workspace: &Path,
     host_workspace: &Path,

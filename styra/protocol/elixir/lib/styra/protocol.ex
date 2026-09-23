@@ -679,7 +679,8 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "summary", required: true, type: %{kind: :ref, name: "SessionSummary"}},
         %{name: "events", required: true, type: %{kind: :list, item: %{kind: :ref, name: "AgentEvent"}}},
-        %{name: "raw", required: true, type: %{kind: :list, item: %{kind: :ref, name: "RawLine"}}}
+        %{name: "raw", required: true, type: %{kind: :list, item: %{kind: :ref, name: "RawLine"}}},
+        %{name: "working_directory", required: false, type: %{kind: :optional, inner: %{kind: :string, path: true}}}
       ]
     },
 

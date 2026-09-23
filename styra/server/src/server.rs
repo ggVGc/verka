@@ -1662,7 +1662,14 @@ impl ServerState {
         // all subsequent native-resume traffic as one sequence. The client
         // initiating this resume already displays the journal, so it starts
         // after this explicit boundary.
-        let seeded_updates = replayed_session_updates(&summary.path, profile.protocol)?;
+        let seeded_updates = replayed_session_updates(
+            &summary.path,
+            profile.protocol,
+            WorkspaceMount {
+                host: &checkout,
+                sandbox: &layout.workspace,
+            },
+        )?;
         let updates_after = seeded_updates.len() as u64;
         let mut journal = Journal::open(&summary.path)?;
         // A resume onto a different model or effort is recorded the same way a
@@ -2191,7 +2198,18 @@ impl ServerState {
             return Ok(None);
         };
         let meta = journal::read_session_meta(&session_path)?;
-        let replayed = replayed_session_updates(&session_path, meta.protocol)?;
+        // The mount the previous run actually launched under, taken from the
+        // row it mirrored rather than re-derived: what a launch *now* would
+        // bind is a different question, and the directories this row's journal
+        // names are the old sandbox's.
+        let replayed = replayed_session_updates(
+            &session_path,
+            meta.protocol,
+            WorkspaceMount {
+                host: &summary.workspace,
+                sandbox: &summary.driva.working_directory,
+            },
+        )?;
         let next = replayed
             .last()
             .map(|update| update.sequence)
@@ -2507,6 +2525,28 @@ impl ServerState {
             }
         }
         anyhow::bail!("stored session {id:?} was not found")
+    }
+
+    /// The two ends of the Workspace mount a stored Session ran under: the host
+    /// directory bound into it, and where the agent saw it.
+    ///
+    /// Read off what the Session and its Workspace already say, never by
+    /// preparing anything: this answers a question about a run that is over, and
+    /// a Session holding a checkout that has since been removed is one whose
+    /// journal still names directories inside it. The rule is
+    /// [`launch_layout`]'s — a checkout is bound at the fixed layout because its
+    /// path under the store means nothing to the agent, a Workspace directory at
+    /// its own host path — applied to stored state rather than to worktrees this
+    /// Session may no longer have.
+    fn stored_workspace_mount(&self, summary: &SessionSummary) -> Result<(PathBuf, PathBuf)> {
+        if let Some(checkout) = journal::read_session_checkout(&summary.path)? {
+            return Ok((checkout.path, SandboxLayout::default().workspace));
+        }
+        let workspace = crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
+        Ok((
+            workspace.host_path.clone(),
+            workspace_layout(&workspace.host_path).workspace,
+        ))
     }
 
     fn list_tags(&self) -> Result<Vec<String>> {
@@ -2827,10 +2867,23 @@ impl ServerState {
                 } else {
                     Vec::new()
                 };
+                // Where it was working, which a replay screen has no other way
+                // to learn: it has no live Interaction to be told by, and the
+                // directory is not in any event it is about to show.
+                let (host, sandbox) = self.stored_workspace_mount(&summary)?;
+                let working_directory = replayed_working_directory(
+                    &summary.path,
+                    meta.protocol,
+                    WorkspaceMount {
+                        host: &host,
+                        sandbox: &sandbox,
+                    },
+                );
                 Ok(Response::StoredSession(StoredSession {
                     summary,
                     events,
                     raw,
+                    working_directory,
                 }))
             }
             Request::ProviderRaw { id } => {
@@ -2864,6 +2917,7 @@ impl ServerState {
 fn replayed_session_updates(
     path: &Path,
     protocol: crate::event::Protocol,
+    workspace: WorkspaceMount<'_>,
 ) -> Result<Vec<SequencedUpdate>> {
     let events = journal::replay(path, protocol)?;
     let raw = journal::replay_raw(path)?;
@@ -2878,7 +2932,52 @@ fn replayed_session_updates(
     for line in raw {
         push_sequenced(&mut updates, InteractionUpdate::Raw(line));
     }
+    // Last, because it is not a moment in the history but the state the history
+    // leaves the Session in: a client that applies these in order ends up
+    // standing where the Session was working, not where it was launched.
+    if let Some(directory) = replayed_working_directory(path, protocol, workspace) {
+        push_sequenced(
+            &mut updates,
+            InteractionUpdate::WorkingDirectoryChanged(directory),
+        );
+    }
     Ok(updates)
+}
+
+/// The two ends of the Workspace mount a Session ran under: the host directory
+/// bound into it, and the path the agent saw it at. Kept together because a
+/// reported directory means nothing without both.
+#[derive(Clone, Copy)]
+struct WorkspaceMount<'a> {
+    host: &'a Path,
+    sandbox: &'a Path,
+}
+
+/// Where a stopped Session was working when it stopped, on the host.
+///
+/// A Session that moved — a Codex told to work elsewhere, a Claude Code sent
+/// into a worktree of its own — says so only on the wire, so the journal is the
+/// only place that directory survives the process that moved there. Without
+/// this, reopening such a Session names the directory it was *launched* in
+/// until the agent happens to mention a directory again, which for a stopped
+/// one is never.
+///
+/// `None` when the journal named no directory, when the one it named is not
+/// inside the Workspace mount (see
+/// [`crate::interaction::host_working_directory`]), or when it is the root of
+/// that mount — which is where a client already stands on opening a Session,
+/// and so is not news. A journal that cannot be read is not an error here: the
+/// history it holds is what the caller came for, and a missing directory costs
+/// only the fallback to that root.
+fn replayed_working_directory(
+    path: &Path,
+    protocol: crate::event::Protocol,
+    workspace: WorkspaceMount<'_>,
+) -> Option<PathBuf> {
+    let reported = journal::last_reported_cwd(path, protocol).ok().flatten()?;
+    let host =
+        crate::interaction::host_working_directory(&reported, workspace.sandbox, workspace.host)?;
+    (host != workspace.host).then_some(host)
 }
 
 /// What a Session's replayed history says it last ran on.
@@ -3796,6 +3895,98 @@ mod tests {
         std::fs::remove_dir_all(host).ok();
     }
 
+    /// Where a Session was working is said on the wire and written down
+    /// nowhere else, so reopening one that moved — a Codex told to work
+    /// elsewhere, a Claude Code that checked out a worktree of its own — means
+    /// reading it back out of the journal. Without that it comes back naming
+    /// the directory it was launched in and keeps naming it until the agent
+    /// mentions a directory again, which for a stopped Session is never.
+    #[test]
+    fn a_reopened_session_stands_where_it_was_working() {
+        let (store, host, state, _workspace, id, session_path) = stored_session("replayed-cwd");
+        let worktree = host.join(".worktrees/audio");
+        {
+            let mut journal = Journal::open(&session_path).unwrap();
+            journal
+                .record_agent_line(
+                    &serde_json::json!({ "result": { "cwd": worktree } }).to_string(),
+                )
+                .unwrap();
+        }
+
+        let Response::StoredSession(stored) = state
+            .handle(Request::StoredSession {
+                id: id.clone(),
+                raw: false,
+            })
+            .unwrap()
+        else {
+            panic!("expected a stored session");
+        };
+        assert_eq!(stored.working_directory, Some(worktree));
+
+        // The replayed stream ends standing there too, which is what a client
+        // attaching to a restored row applies.
+        let updates = replayed_session_updates(
+            &session_path,
+            crate::event::Protocol::CodexAppServer,
+            WorkspaceMount {
+                host: &host,
+                sandbox: &host,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            updates.last().map(|update| &update.update),
+            Some(InteractionUpdate::WorkingDirectoryChanged(directory))
+                if directory == &host.join(".worktrees/audio")
+        ));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// A Session that never left its Workspace directory reports no move: the
+    /// client already stands at the root of the mount when it opens one, and
+    /// an update restating that is noise in every Session that behaved.
+    #[test]
+    fn a_session_that_stayed_put_reports_no_directory() {
+        let (store, host, state, _workspace, id, session_path) = stored_session("unmoved-cwd");
+        {
+            let mut journal = Journal::open(&session_path).unwrap();
+            journal
+                .record_agent_line(&serde_json::json!({ "result": { "cwd": host } }).to_string())
+                .unwrap();
+            // A directory outside the Workspace mount is not the client's to be
+            // shown either, for the reason the live reader will not show one.
+            journal
+                .record_agent_line(&serde_json::json!({ "result": { "cwd": "/etc" } }).to_string())
+                .unwrap();
+        }
+
+        let Response::StoredSession(stored) = state
+            .handle(Request::StoredSession { id, raw: false })
+            .unwrap()
+        else {
+            panic!("expected a stored session");
+        };
+        assert_eq!(stored.working_directory, None);
+        assert!(!replayed_session_updates(
+            &session_path,
+            crate::event::Protocol::CodexAppServer,
+            WorkspaceMount {
+                host: &host,
+                sandbox: &host,
+            },
+        )
+        .unwrap()
+        .iter()
+        .any(|update| matches!(update.update, InteractionUpdate::WorkingDirectoryChanged(_))));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
     /// The Session states which checkout it works in, so a resume asks the
     /// Session rather than the shape of a directory name. Without it a
     /// checkout named after its first prompt is not recognised, and the
@@ -4520,8 +4711,15 @@ mod tests {
         };
         assert_eq!(events_only.events.len(), 2);
         assert!(events_only.raw.is_empty());
-        let replayed =
-            replayed_session_updates(&session_dir, crate::event::Protocol::CodexAppServer).unwrap();
+        let replayed = replayed_session_updates(
+            &session_dir,
+            crate::event::Protocol::CodexAppServer,
+            WorkspaceMount {
+                host: &host,
+                sandbox: &host,
+            },
+        )
+        .unwrap();
         assert_eq!(
             replayed
                 .iter()

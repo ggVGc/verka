@@ -247,6 +247,13 @@ pub struct StoredSession {
     pub events: Vec<AgentEvent>,
     /// Empty when the request asked for no raw lines.
     pub raw: Vec<RawLine>,
+    /// The host directory the Session was last working in, when its journal
+    /// says it moved out of the one it was launched in — a Codex told to work
+    /// elsewhere, a Claude Code that made a worktree of its own. `None` when it
+    /// worked where it was launched, which is the Workspace directory or the
+    /// Session's checkout; a replay screen shows that instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<PathBuf>,
 }
 
 /// A provider's own persisted session file, kept distinct from Styra's wire

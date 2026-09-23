@@ -878,6 +878,58 @@ pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
     Ok(raw)
 }
 
+/// The last working directory the agent named on the wire in this journal, as
+/// it named it.
+///
+/// Where an agent is working is live session metadata: it is reported on the
+/// wire and nothing writes it down in its own right, so the only durable record
+/// of a Session that moved out of the directory it was launched in is the lines
+/// it said so on. Folding them here is what lets a reopened Session say where
+/// it was working, the way folding its model reports is what lets it say what
+/// it last ran on (`replayed_selection`, in [`crate::server`]).
+///
+/// The path is the agent's own — a sandbox path, and one no provider is trusted
+/// to have chosen. The caller translates and vets it through the Workspace
+/// mount with [`crate::interaction::host_working_directory`] before it goes
+/// anywhere near a client.
+///
+/// A record carrying its own protocol is read with that one: branched history
+/// can hold lines from the provider it was copied from, which name their cwd in
+/// a different place on the line.
+pub fn last_reported_cwd(path: &Path, protocol: Protocol) -> Result<Option<String>> {
+    let file_path = if path.is_dir() {
+        path.join(JOURNAL_FILE)
+    } else {
+        path.to_path_buf()
+    };
+    let file = File::open(&file_path)
+        .with_context(|| format!("opening journal {}", file_path.display()))?;
+    let mut cwd = None;
+    for line in BufReader::new(file).lines() {
+        let line = line.context("reading journal line")?;
+        // Every provider spells the field `cwd`, so a line without those three
+        // characters cannot carry one. Worth checking first: this walks whole
+        // journals, and the two JSON parses below are the cost.
+        if !line.contains("cwd") {
+            continue;
+        }
+        let Ok(Record::Agent {
+            raw,
+            protocol: record_protocol,
+            ..
+        }) = serde_json::from_str::<Record>(&line)
+        else {
+            continue;
+        };
+        if let Some(reported) =
+            crate::event::reported_cwd(record_protocol.unwrap_or(protocol), &raw)
+        {
+            cwd = Some(reported);
+        }
+    }
+    Ok(cwd)
+}
+
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -990,6 +1042,73 @@ mod tests {
         assert_eq!(events, vec![decode_line(Protocol::CodexJsonl, raw)]);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Where the agent was working is only ever said on the wire, so the last
+    /// line that says it is the whole answer — and a Session that moved twice
+    /// is in the second place, not the first.
+    #[test]
+    fn the_last_directory_the_agent_reported_is_the_one_read_back() {
+        let dir = temp_dir("reported-cwd");
+        {
+            let mut journal = Journal::create(&dir).unwrap();
+            journal
+                .record_agent_line(r#"{"type":"system","subtype":"init","cwd":"/workspace"}"#)
+                .unwrap();
+            journal.record_user_message("make a worktree").unwrap();
+            journal
+                .record_agent_line(
+                    r#"{"type":"system","subtype":"init","cwd":"/workspace/.worktrees/audio"}"#,
+                )
+                .unwrap();
+            // A later line that names no directory leaves the answer alone.
+            journal
+                .record_agent_line(r#"{"type":"assistant","message":{"role":"assistant"}}"#)
+                .unwrap();
+        }
+
+        assert_eq!(
+            last_reported_cwd(&dir, Protocol::ClaudeJsonl).unwrap(),
+            Some("/workspace/.worktrees/audio".to_owned())
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Copied history is read with the protocol that produced it: the two
+    /// providers put their cwd in different places, so reading a Codex line as
+    /// a Claude one finds nothing at all.
+    #[test]
+    fn a_converted_session_reads_its_copied_history_for_a_directory_too() {
+        let source = temp_dir("cwd-source");
+        {
+            let mut journal = Journal::create(&source).unwrap();
+            journal
+                .record_agent_line(
+                    r#"{"type":"session_meta","payload":{"cwd":"/workspace/crates/ui"}}"#,
+                )
+                .unwrap();
+        }
+        let branch = temp_dir("cwd-branch");
+        {
+            let mut journal = Journal::create(&branch).unwrap();
+            journal
+                .copy_branch_from(
+                    &source,
+                    Protocol::CodexJsonl,
+                    None,
+                    crate::protocol::BranchHistory::ThroughSelected,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            last_reported_cwd(&branch, Protocol::ClaudeJsonl).unwrap(),
+            Some("/workspace/crates/ui".to_owned())
+        );
+
+        std::fs::remove_dir_all(&source).ok();
+        std::fs::remove_dir_all(&branch).ok();
     }
 
     #[test]

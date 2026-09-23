@@ -437,6 +437,13 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment
     let mut app = App::new(stored.summary.selection, stored.summary.id);
     app.session_name = stored.summary.name;
     app.workspace.id = Some(stored.summary.workspace_id);
+    // A replayed Session has no live root — nothing is mounted anywhere — but
+    // the server can still say where it was working when it stopped, and the
+    // footer should name that rather than fall back to wherever this client
+    // happens to have been started.
+    if let Some(directory) = stored.working_directory {
+        app.workspace.change_directory(directory);
+    }
     replay_into(&mut app, stored.events, stored.raw);
     // A replayed session has no live agent to end; mark it stopped.
     app.on_ended(styra_protocol::InteractionEnd {
