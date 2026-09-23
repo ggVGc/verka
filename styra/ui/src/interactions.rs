@@ -133,6 +133,18 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
         unreachable!()
     };
     let (marker, color) = status_marker(*status);
+    // A running row wears its spinner inverted — a lit cell with dark dots —
+    // so the handful that are working can be picked out of a long list at a
+    // glance. The trailing space stays outside the span so the block is one
+    // cell wide rather than two.
+    let marker_style = if matches!(status, InteractionStatus::Running { .. }) {
+        Style::default()
+            .fg(palette::CODE_BACKGROUND)
+            .bg(color)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(color).add_modifier(Modifier::BOLD)
+    };
     let mut main = vec![
         Span::styled(
             if *current { "• " } else { "  " },
@@ -142,10 +154,8 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
                 palette::INACTIVE
             }),
         ),
-        Span::styled(
-            format!("{marker} "),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(marker.to_string(), marker_style),
+        Span::raw(" "),
         Span::styled(name.to_string(), Style::default().fg(palette::TEXT)),
         Span::styled(
             format!(" · {provider}"),
