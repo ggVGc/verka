@@ -63,7 +63,7 @@ pub const JSON_PUNCTUATION: Color = MUTED_SLATE;
 /// its syntax colors live here too. TextMate requires literal RGB hex values;
 /// keeping the theme beside the ratatui entries preserves one configuration
 /// point for the entire UI.
-pub const MARKDOWN_CODE_KEYWORD: Color = Color::Rgb(0, 255, 255);
+pub const MARKDOWN_CODE_KEYWORD: Color = Color::Rgb(170, 100, 50);
 pub const MARKDOWN_CODE_THEME: &str = r##"
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
@@ -85,7 +85,7 @@ pub const MARKDOWN_CODE_THEME: &str = r##"
       <key>foreground</key><string>#B87C00</string>
     </dict></dict>
     <dict><key>scope</key><string>keyword, storage</string><key>settings</key><dict>
-      <key>foreground</key><string>#00FFFF</string>
+      <key>foreground</key><string>#bfcc00</string>
     </dict></dict>
     <dict><key>scope</key><string>entity.name.function, entity.name.type, support.function</string><key>settings</key><dict>
       <key>foreground</key><string>#FFFF00</string>
