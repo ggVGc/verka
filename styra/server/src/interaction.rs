@@ -1037,6 +1037,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Barrier;
     use std::time::{Duration, SystemTime};
 
     /// The policy a spec would launch under, through the same Bubblewrap
@@ -1107,6 +1108,36 @@ mod tests {
                 exit: ProcessExit::Code(0),
                 evidence: driva::ExecutionEvidence {
                     isolation_backend: "echo".into(),
+                    effective_policy: driva::effective_policy(request),
+                    started_at: now,
+                    finished_at: now,
+                },
+            })
+        }
+    }
+
+    /// Emits one complete agent message and exits as soon as the test releases
+    /// it. The test can then hold the journal lock to keep the stdout reader
+    /// from publishing that already-buffered message while the execution
+    /// thread publishes the process ending.
+    struct BufferedExitBackend {
+        release: Arc<Barrier>,
+    }
+
+    impl Isolation for BufferedExitBackend {
+        fn run(&self, request: &ExecutionRequest, mut io: ExecutionIo) -> Result<ExecutionOutcome> {
+            self.release.wait();
+            let event = serde_json::json!({
+                "type": "assistant",
+                "message": { "role": "assistant", "content": "buffered reply" },
+            });
+            writeln!(io.stdout, "{event}")?;
+            io.stdout.flush()?;
+            let now = SystemTime::now();
+            Ok(ExecutionOutcome {
+                exit: ProcessExit::Code(0),
+                evidence: driva::ExecutionEvidence {
+                    isolation_backend: "buffered-exit-test".into(),
                     effective_policy: driva::effective_policy(request),
                     started_at: now,
                     finished_at: now,
@@ -1374,6 +1405,76 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test for an interaction being marked ended while its stdout
+    /// reader still has agent data to publish. It is ignored while the ending
+    /// is emitted by the execution thread rather than after the reader drains;
+    /// run it explicitly to reproduce the incorrect ordering.
+    #[test]
+    #[ignore = "known bug: Ended can overtake buffered agent output"]
+    fn ended_is_the_final_update_after_buffered_stdout_is_drained() {
+        let dir = std::env::temp_dir().join(format!(
+            "styra-buffered-exit-session-{}",
+            std::process::id()
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = Journal::create(&dir).unwrap();
+        let release = Arc::new(Barrier::new(2));
+
+        let (interaction, updates) = Interaction::spawn(
+            workspace_spec(&dir),
+            Box::new(BufferedExitBackend {
+                release: Arc::clone(&release),
+            }),
+            journal,
+            "buffered-exit-session".into(),
+            dir.join("diagnostics.log"),
+        )
+        .unwrap();
+
+        // The reader records a line before publishing its Raw and Event
+        // updates. Holding this lock makes the process-exit thread win the
+        // race deterministically even though the reply is already in stdout.
+        let journal_guard = interaction.journal.lock().unwrap();
+        release.wait();
+
+        let blocked_deadline = std::time::Instant::now() + Duration::from_secs(1);
+        let mut order = Vec::new();
+        while std::time::Instant::now() < blocked_deadline && !order.contains(&"ended") {
+            match updates.recv_timeout(Duration::from_millis(200)) {
+                Ok(InteractionUpdate::Ended(_)) => order.push("ended"),
+                Ok(InteractionUpdate::Event(AgentEvent::AgentMessage { .. })) => {
+                    order.push("agent message")
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        drop(journal_guard);
+        let drain_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < drain_deadline
+            && !(order.contains(&"agent message") && order.contains(&"ended"))
+        {
+            match updates.recv_timeout(Duration::from_millis(200)) {
+                Ok(InteractionUpdate::Ended(_)) => order.push("ended"),
+                Ok(InteractionUpdate::Event(AgentEvent::AgentMessage { .. })) => {
+                    order.push("agent message")
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+
+        drop(interaction);
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(
+            order,
+            vec!["agent message", "ended"],
+            "Ended must be terminal; observed updates in this order: {order:?}"
+        );
     }
 
     #[test]
