@@ -1,0 +1,8 @@
+
+Action system builds on styra API.
+Essentially pre-defined named scripts which can be written in rust or built interactively on the fly (within reason).
+
+A lot of this can/should be replaced by linka when that is integrated, but this is an exploratory step on the way.
+
+= Example actions/workflows =
+- When finished with all queued prompts, branch off new session with some specific model, reviewing the work done.
