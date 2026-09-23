@@ -28,7 +28,7 @@ pub const CODE_BACKGROUND: Color = Color::Black;
 pub const MUTED_SLATE: Color = Color::Rgb(115, 130, 155);
 
 /// Truly inactive controls and chrome retain a subdued, low-key color.
-pub const INACTIVE: Color = ADDITIONAL_INFO;
+pub const INACTIVE: Color = MUTED_SLATE;
 pub const MODAL_BACKDROP: Color = MUTED_SLATE;
 
 pub const SELECTION_BACKGROUND: Color = Color::Rgb(44, 42, 30);
