@@ -137,7 +137,7 @@ const GLOBAL: &[ReferenceRow] = &[
         action: "new session where this one works / stop and start new",
     },
     ReferenceRow::Binding {
-        keys: "L",
+        keys: "Ctrl+L",
         action: "choose model for an idle agent turn",
     },
     ReferenceRow::Binding {

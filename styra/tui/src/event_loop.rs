@@ -545,9 +545,6 @@ pub fn run(
                 app.help
                     .apply_feedback(scroll.limit, scroll.effective_offset);
             }
-        } else if let Some(launcher) = &app.launcher {
-            let launcher = presentation::launcher_view(launcher);
-            terminal.render_launcher(&launcher)?;
         } else if let Some(picker) = &app.template_picker {
             match &picker.templates {
                 Some(templates) => {

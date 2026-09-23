@@ -43,13 +43,13 @@ the first message in the details view.
 
 ## First turn and model choice
 
-At the blank start screen, choose a provider, model, and effort with `L` (or
-`Ctrl+L` in the editor), then type a message and press `Enter`. The first
+At the blank start screen, choose a provider, model, and effort with `Ctrl+L`,
+then type a message and press `Enter`. The first
 message launches the session. `D` in the picker also saves that selection as
 the default; `Enter` only uses it now. Codex and Claude Code are available when
 their executables are on the server's `PATH`.
 
-During an idle live session, `L` changes the model selection for the next turn.
+During an idle live session, `Ctrl+L` changes the model selection for the next turn.
 The agent itself is fixed while a process is up — that column reads `agent ·
 fixed`. Once the interaction is stopped or has ended, the whole picker reopens:
 the next message resumes the Session and the resume launches under whatever is
@@ -84,7 +84,7 @@ live interactions.
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
 | `Ctrl+A` | go to the next interaction that went idle unseen |
 | `Ctrl+N` | step to the next interaction that is still running |
-| `L` | choose provider, model, and effort |
+| `Ctrl+L` | choose provider, model, and effort |
 
 Sending a message to a stopped or viewed Session automatically attempts native
 provider resume. In the main interaction view, `T` edits the current

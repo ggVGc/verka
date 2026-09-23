@@ -218,6 +218,9 @@ pub fn handle_list_key(
         // does not change with the view the operator happens to be in.
         KeyCode::Char('Y') => return copy_conversation(app),
         KeyCode::Char('r') => return app.toggle_raw(),
+        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            return app.open_launcher()
+        }
         KeyCode::Char('l') => return app.toggle_view(View::Log),
         // Opening the view also refreshes it: the log lives in the daemon's
         // memory, so there is nothing local to show without asking.
@@ -236,7 +239,6 @@ pub fn handle_list_key(
         KeyCode::Char('f') => return app.toggle_files(),
         KeyCode::Char('X') => return app.toggle_answer(),
         KeyCode::Char('P') => return app.toggle_view(View::Preview),
-        KeyCode::Char('L') => return app.open_launcher(),
         // Beside `a` because it is the same list: `a` opens it to be walked,
         // ctrl-a skips the walk and goes to what the footer is counting.
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -955,6 +957,28 @@ mod tests {
         press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
         assert_eq!(app.take_request(), Some(Request::NewSession));
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn control_l_opens_the_launcher_from_the_main_view() {
+        let root = tree("launcher-shortcut");
+        let mut app = app(&root);
+        app.enter_list();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+
+        assert!(app.launcher.is_some());
         let _ = std::fs::remove_dir_all(root);
     }
 

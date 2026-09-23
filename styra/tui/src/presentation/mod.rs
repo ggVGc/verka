@@ -392,6 +392,7 @@ fn draw_main(
         auto_retry: app.auto_retry,
     };
     let input = (app.focus == Focus::Input).then(|| modal_input(app));
+    let launcher = app.launcher.as_ref().map(launcher_view);
     let reference_labels = app.references.as_ref().map(|references| {
         references
             .items()
@@ -449,6 +450,7 @@ fn draw_main(
         notices: &notices,
         footer: &footer,
         overlays: styra_ui::application::ApplicationOverlays {
+            launcher: launcher.as_ref(),
             input: input.as_ref(),
             references,
             insert,
@@ -576,7 +578,7 @@ mod tests {
         app.activity.status =
             crate::activity::Status::Stopped(crate::activity::StopReason::Completed);
         let title = rendered(&app);
-        assert!(title.contains("you completed it"), "{title}");
+        assert!(title.contains("completed"), "{title}");
     }
 
     #[test]

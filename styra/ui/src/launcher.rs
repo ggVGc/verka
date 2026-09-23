@@ -7,7 +7,7 @@ use crate::palette;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
 use ratatui::Frame;
 
 pub struct LauncherView {
@@ -30,6 +30,30 @@ pub enum LauncherColumn {
 }
 
 pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
+    frame.render_widget(
+        Block::default().style(
+            Style::default()
+                .fg(palette::MODAL_BACKDROP)
+                .add_modifier(Modifier::DIM),
+        ),
+        area,
+    );
+    let desired_height = (launcher
+        .providers
+        .len()
+        .max(launcher.models.len())
+        .max(launcher.efforts.len()) as u16)
+        .saturating_add(2)
+        .max(4);
+    let height = desired_height.min(area.height);
+    let width = area.width.saturating_sub(4).min(100);
+    let area = Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, area);
     let hint = " ? keys ";
     let frame_block = Block::default()
         .borders(Borders::ALL)
@@ -193,5 +217,17 @@ mod tests {
         let mut view = view();
         view.provider_locked = true;
         assert!(rendered(&view).contains("agent · fixed"));
+    }
+
+    #[test]
+    fn renders_as_a_centered_modal() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| render_launcher(frame, &view(), frame.area()))
+            .unwrap();
+
+        // Two rows of choices need a four-row modal; centering it in 20 rows
+        // puts its top border at row 8 rather than at the top of the screen.
+        assert_eq!(terminal.backend().buffer()[(2, 8)].symbol(), "┌");
     }
 }

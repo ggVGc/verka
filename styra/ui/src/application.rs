@@ -1,7 +1,7 @@
 //! Top-level main-application layout and overlay ordering.
 
 use crate::{
-    answer, driva, event_list, files, footer, interactions, log, messages, modal_input, overlays,
+    answer, driva, event_list, files, footer, interactions, launcher, log, messages, modal_input, overlays,
     preview, quota, raw, transcript, PanelId, RenderFeedback, ScrollFeedback,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -42,6 +42,7 @@ pub enum MainView<'a> {
 
 #[derive(Default)]
 pub struct ApplicationOverlays<'a> {
+    pub launcher: Option<&'a crate::launcher::LauncherView>,
     pub input: Option<&'a modal_input::ModalInput<'a>>,
     pub references: Option<overlays::ReferencesView<'a>>,
     pub insert: Option<overlays::InsertPromptView<'a>>,
@@ -158,6 +159,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     }
     if let Some(tags) = view.overlays.tags {
         overlays::render_tags(frame, tags);
+    }
+    if let Some(launcher) = view.overlays.launcher {
+        launcher::render_launcher(frame, launcher, frame.area());
     }
     feedback
 }

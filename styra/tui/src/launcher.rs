@@ -171,15 +171,16 @@ impl Launcher {
     }
 
     pub fn next(&mut self) {
-        let last = self.rows() - 1;
+        let rows = self.rows();
         let row = self.row();
-        *row = (*row + 1).min(last);
+        *row = (*row + 1) % rows;
         self.after_move();
     }
 
     pub fn prev(&mut self) {
+        let rows = self.rows();
         let row = self.row();
-        *row = row.saturating_sub(1);
+        *row = (*row + rows - 1) % rows;
         self.after_move();
     }
 
@@ -290,6 +291,20 @@ mod tests {
         );
         // Ordering the rows does not change which one the picker opened on.
         assert_eq!(launcher.selection().model, Provider::Claude.default_model());
+    }
+
+    #[test]
+    fn row_navigation_wraps_at_both_ends() {
+        let mut launcher = Launcher::from_selection(&Selection::new(Provider::Codex), &[], false);
+        launcher.column = LaunchColumn::Model;
+        let rows = launcher.model_rows();
+
+        launcher.model = rows - 1;
+        launcher.next();
+        assert_eq!(launcher.model, 0);
+
+        launcher.prev();
+        assert_eq!(launcher.model, rows - 1);
     }
 
     /// Switching agents drops the carried model with everything else: it named a
