@@ -947,12 +947,17 @@ pub fn decode_line(protocol: Protocol, line: &str) -> AgentEvent {
 /// it while opening a thread (and has used both result and notification
 /// shapes). The one-shot Codex transcript format keeps it in `session_meta`.
 ///
+/// Claude Code states that top-level directory only on the `system`/`init`
+/// line it writes once per turn, so an agent that moves mid-turn is read from
+/// the ingest context of the tool calls that follow instead — see
+/// [`tool_ingest_cwd`].
+///
 /// The caller must still verify that the path belongs to the workspace before
 /// trusting or presenting it.
 pub fn reported_cwd(protocol: Protocol, line: &str) -> Option<String> {
     let value: Value = serde_json::from_str(line).ok()?;
     let cwd = match protocol {
-        Protocol::ClaudeJsonl => string(&value, "cwd"),
+        Protocol::ClaudeJsonl => string(&value, "cwd").or_else(|| tool_ingest_cwd(&value)),
         Protocol::CodexJsonl => value
             .get("payload")
             .filter(|_| string(&value, "type") == Some("session_meta"))
@@ -964,6 +969,32 @@ pub fn reported_cwd(protocol: Protocol, line: &str) -> Option<String> {
             .or_else(|| value.pointer("/params/thread/cwd").and_then(Value::as_str)),
     }?;
     (!cwd.is_empty()).then(|| cwd.to_owned())
+}
+
+/// The directory Claude Code's tool calls ran in, from the `wire_ingest_context`
+/// an assistant line carries — one entry per `tool_use` id in that message.
+///
+/// This is the only place a move made during a turn appears before the turn
+/// after it, and so the only thing standing between a Session and a whole turn
+/// spent naming a directory the agent has left.
+///
+/// A tool need not run where its thread stands — a subagent works elsewhere,
+/// and a single command may `cd` on its way — so this speaks for the thread
+/// only when every entry agrees. Disagreement yields `None` rather than a
+/// guess: leaving the Session where it was is wrong for one turn, while
+/// following a subagent into its directory is wrong until something else moves
+/// it back. The entries cannot be ordered to break the tie either, since they
+/// are keyed by tool id and reach us through a sorted map.
+fn tool_ingest_cwd(value: &Value) -> Option<&str> {
+    let mut agreed: Option<&str> = None;
+    for context in value.get("wire_ingest_context")?.as_object()?.values() {
+        let cwd = string(context, "cwd")?;
+        match agreed {
+            Some(previous) if previous != cwd => return None,
+            _ => agreed = Some(cwd),
+        }
+    }
+    agreed
 }
 
 /// Decode one `codex app-server` line. Notifications (which carry a `method`)
@@ -2868,6 +2899,76 @@ mod tests {
         );
         assert_eq!(
             reported_cwd(Protocol::ClaudeJsonl, r#"{"type":"assistant"}"#),
+            None
+        );
+    }
+
+    /// Claude Code states a top-level `cwd` only on its `system`/`init` line,
+    /// which it emits once per turn. An agent that moves mid-turn says so only
+    /// through the per-tool ingest context on the assistant lines that follow,
+    /// so reading the top level alone leaves the reported directory a whole
+    /// turn stale — the Session keeps naming the directory it was launched in
+    /// until the operator happens to send another message.
+    #[test]
+    fn a_claude_move_mid_turn_is_reported_from_the_tool_ingest_context() {
+        assert_eq!(
+            reported_cwd(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"assistant","message":{},"wire_ingest_context":{"toolu_01R4iQQhVV5J6g3XqUCukR1M":{"cwd":"/workspace/.worktrees/audio-transcript"}}}"#,
+            ),
+            Some("/workspace/.worktrees/audio-transcript".into())
+        );
+    }
+
+    /// The turn's own `init` line outranks the ingest context: a tool may run
+    /// somewhere other than the thread's directory (a subagent, a `cd` inside
+    /// one command), and only the top level speaks for the thread itself.
+    #[test]
+    fn a_stated_claude_cwd_outranks_the_tool_ingest_context() {
+        assert_eq!(
+            reported_cwd(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"assistant","cwd":"/workspace","wire_ingest_context":{"toolu_1":{"cwd":"/workspace/crates/ui"}}}"#,
+            ),
+            Some("/workspace".into())
+        );
+    }
+
+    /// Tool calls that ran in different directories name no directory for the
+    /// thread: one of them is a subagent or a command that moved on its way,
+    /// and nothing on the line says which. Staying put costs the rest of a
+    /// turn; following the wrong one costs until something moves it back.
+    #[test]
+    fn disagreeing_tool_ingest_directories_report_nothing() {
+        assert_eq!(
+            reported_cwd(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"assistant","wire_ingest_context":{"toolu_1":{"cwd":"/workspace/crates/ui"},"toolu_2":{"cwd":"/workspace/.worktrees/audio"}}}"#,
+            ),
+            None
+        );
+        // Agreeing entries still speak, however many of them there are.
+        assert_eq!(
+            reported_cwd(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"assistant","wire_ingest_context":{"toolu_1":{"cwd":"/workspace/crates/ui"},"toolu_2":{"cwd":"/workspace/crates/ui"}}}"#,
+            ),
+            Some("/workspace/crates/ui".into())
+        );
+        // An entry that names no directory at all leaves the line silent
+        // rather than letting its neighbours speak for it.
+        assert_eq!(
+            reported_cwd(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"assistant","wire_ingest_context":{"toolu_1":{"cwd":"/workspace"},"toolu_2":{}}}"#,
+            ),
+            None
+        );
+        assert_eq!(
+            reported_cwd(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"assistant","wire_ingest_context":{}}"#,
+            ),
             None
         );
     }

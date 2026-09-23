@@ -1101,6 +1101,35 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A Claude Code that moves mid-turn states the new directory only in the
+    /// ingest context of the tool calls that follow — its `init` line for that
+    /// turn was written before the move and still names the old one. Reading
+    /// only `init` lines leaves a Session reopened here standing a whole turn
+    /// behind the agent, and the branch shown beside the directory with it.
+    #[test]
+    fn a_directory_entered_mid_turn_is_read_back_without_waiting_for_the_next_turn() {
+        let dir = temp_dir("reported-cwd-mid-turn");
+        {
+            let mut journal = Journal::create(&dir).unwrap();
+            journal
+                .record_agent_line(r#"{"type":"system","subtype":"init","cwd":"/workspace"}"#)
+                .unwrap();
+            journal.record_user_message("enter the worktree").unwrap();
+            journal
+                .record_agent_line(
+                    r#"{"type":"assistant","message":{"role":"assistant"},"wire_ingest_context":{"toolu_1":{"cwd":"/workspace/.worktrees/audio"}}}"#,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            last_reported_cwd(&dir, Protocol::ClaudeJsonl).unwrap(),
+            Some("/workspace/.worktrees/audio".to_owned())
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// Copied history is read with the protocol that produced it: the two
     /// providers put their cwd in different places, so reading a Codex line as
     /// a Claude one finds nothing at all.
