@@ -409,12 +409,16 @@ const INTERACTIONS: &[ReferenceRow] = &[
         action: "move the cursor; the rested-on interaction becomes current",
     },
     ReferenceRow::Binding {
-        keys: "ctrl-j / ctrl-k",
+        keys: "J / K",
         action: "first interaction of the next / previous Workspace, in All",
     },
     ReferenceRow::Binding {
         keys: "ctrl-n",
         action: "next interaction that is still running",
+    },
+    ReferenceRow::Binding {
+        keys: "N",
+        action: "next interaction actively working, skipping idle ones",
     },
     ReferenceRow::Binding {
         keys: "w",

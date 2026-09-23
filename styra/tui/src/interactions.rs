@@ -178,6 +178,50 @@ impl LiveInteractions {
         Some(next)
     }
 
+    /// The next Interaction that is actually working — Running or Background —
+    /// from `from` in display order, wrapping past the end of the list. Unlike
+    /// [`Self::next_live`] this skips ones idle and waiting on the operator, so
+    /// the step only ever lands on work in progress.
+    pub fn next_active(&self, from: &str) -> Option<InteractionSummary> {
+        let order = grouped_by_workspace(&self.items, (0..self.items.len()).collect());
+        let start = order
+            .iter()
+            .position(|index| self.items[*index].id == from)
+            .map(|position| position + 1)
+            .unwrap_or_default();
+        order
+            .iter()
+            .cycle()
+            .skip(start)
+            .take(order.len())
+            .map(|index| &self.items[*index])
+            .find(|interaction| {
+                interaction.id != from
+                    && matches!(
+                        interaction.activity,
+                        styra_protocol::InteractionActivity::Running
+                            | styra_protocol::InteractionActivity::Background
+                    )
+            })
+            .cloned()
+    }
+
+    /// Move the cursor onto the next actively working Interaction, as a j/k
+    /// move does, so the jump loads only where it comes to rest. Reveals All
+    /// scope for the same reason [`Self::cursor_to_next_live`] does.
+    pub fn cursor_to_next_active(
+        &mut self,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        let next = self.next_active(current)?;
+        if self.only_current_workspace && Some(next.workspace_id.as_str()) != workspace_id {
+            self.only_current_workspace = false;
+        }
+        self.move_cursor_to(next.id.clone(), current);
+        Some(next)
+    }
+
     /// Move the cursor onto the next Interaction that went idle unseen, as a
     /// j/k move does — so the jump loads only where it comes to rest.
     ///
@@ -708,6 +752,43 @@ mod tests {
         assert_eq!(live.next_live("waiting").unwrap().id, "current");
         assert_eq!(live.next_live("current").unwrap().id, "background");
         assert_eq!(live.next_live("background").unwrap().id, "waiting");
+    }
+
+    /// The step between actively working interactions skips ones idle and
+    /// waiting on the operator, unlike [`LiveInteractions::next_live`].
+    #[test]
+    fn the_active_step_skips_idle_interactions_and_wraps() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("current", InteractionActivity::Running),
+                interaction("waiting", InteractionActivity::Pending),
+                interaction("background", InteractionActivity::Background),
+                completed("finished"),
+                interaction("stopped", InteractionActivity::Stopped),
+            ],
+            vec![],
+        );
+
+        assert_eq!(live.next_active("current").unwrap().id, "background");
+        assert_eq!(live.next_active("background").unwrap().id, "current");
+    }
+
+    /// With nothing else actively working there is nowhere to step to: an
+    /// idle interaction is not a destination even though it is still live.
+    #[test]
+    fn the_active_step_has_nowhere_to_go_without_another_working_interaction() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("current", InteractionActivity::Running),
+                interaction("waiting", InteractionActivity::Pending),
+                interaction("stopped", InteractionActivity::Stopped),
+            ],
+            vec![],
+        );
+
+        assert!(live.next_active("current").is_none());
     }
 
     /// With nothing else running there is nowhere to step to: the interaction

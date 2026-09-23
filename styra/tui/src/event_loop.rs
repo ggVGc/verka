@@ -746,7 +746,7 @@ pub fn run(
             let session_id = app.session_id.clone();
             match key.code {
                 // In All scope the entries are grouped under Workspace
-                // headings, and ctrl-j/ctrl-k skip whole groups: one press per
+                // headings, and J/K skip whole groups: one press per
                 // Workspace rather than one per interaction. They move the
                 // cursor like j/k, so a skip across several groups costs no
                 // more loads than a step across one row.
@@ -775,12 +775,26 @@ pub fn run(
                     }
                     continue;
                 }
-                KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // The same step as ctrl-n, narrowed to interactions actually
+                // working rather than every live one — so it skips past those
+                // idle and waiting on the operator, which ctrl-a already
+                // reaches.
+                KeyCode::Char('N') => {
+                    if app
+                        .interactions
+                        .cursor_to_next_active(&session_id, app.workspace.id.as_deref())
+                        .is_none()
+                    {
+                        app.show_action_message("no other interaction is actively working");
+                    }
+                    continue;
+                }
+                KeyCode::Char('J') => {
                     app.interactions
                         .cursor_next_workspace(&session_id, app.workspace.id.as_deref());
                     continue;
                 }
-                KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('K') => {
                     app.interactions
                         .cursor_previous_workspace(&session_id, app.workspace.id.as_deref());
                     continue;
@@ -1024,9 +1038,9 @@ pub fn run(
                 interactions_refreshed = Instant::now();
             }
             // Asked with the navigator closed, so the interaction is loaded
-            // outright rather than through the cursor's settle, and the live
-            // list opens around it: the operator asked to be taken to work
-            // waiting elsewhere, and wants to see what else is waiting.
+            // outright rather than through the cursor's settle. The navigator
+            // itself stays closed: the operator asked to be taken to the work
+            // waiting elsewhere, not to be shown the whole list.
             Some(Request::NextIdleInteraction) => {
                 // The footer's snapshot is up to a refresh old, and the
                 // interaction it points at is one this client is not watching,
@@ -1040,11 +1054,10 @@ pub fn run(
                     continue;
                 };
                 make_interaction_current(app, live, client, standing_launch, next);
-                open_interaction_navigator(app, client);
             }
             // The same jump as the unseen-idle one, over every live interaction
             // instead: asked with the navigator closed, so the interaction is
-            // loaded outright and the list opens around it.
+            // loaded outright and the navigator stays closed.
             Some(Request::NextLiveInteraction) => {
                 // The client's snapshot is up to a refresh old, and an
                 // interaction that has since stopped is not one to step onto.
@@ -1057,7 +1070,6 @@ pub fn run(
                     continue;
                 };
                 make_interaction_current(app, live, client, standing_launch, next);
-                open_interaction_navigator(app, client);
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
