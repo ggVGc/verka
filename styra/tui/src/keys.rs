@@ -5,14 +5,17 @@ use crate::activity::Status;
 use crate::app::{App, Request, View};
 use crate::insert;
 use crate::launch;
+use crate::launcher::LaunchColumn;
 use crate::preferences;
 use crate::session::{self, Attachment};
 use styra_protocol::{Contract, LogEntry};
 use styra_server::Client;
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
-/// them, `Enter` to apply the choice to this workspace, `D` to also save it as
-/// the standing default, `Esc`/`q` to leave it as it was.
+/// them, `p`/`P`, `m`/`M` and `e`/`E` to jump straight to the provider, model
+/// or effort column and move down/up it in one key, `Enter` to apply the
+/// choice to this workspace, `D` to also save it as the standing default,
+/// `Esc`/`q` to leave it as it was.
 ///
 /// Neither launches: before launch the operator's first message still starts
 /// the agent. On a live session, confirming switches its model there and then
@@ -26,6 +29,33 @@ pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path
         KeyCode::Char('k' | 'K') | KeyCode::Up => launcher.prev(),
         KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => launcher.next_column(),
         KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => launcher.prev_column(),
+        // The agent column is out of reach on a live session (see
+        // `provider_locked`), so its shortcut is dropped rather than jumping
+        // the keys to a column that cannot be stepped.
+        KeyCode::Char('p') if !launcher.provider_locked => {
+            launcher.jump_to_column(LaunchColumn::Provider);
+            launcher.next();
+        }
+        KeyCode::Char('P') if !launcher.provider_locked => {
+            launcher.jump_to_column(LaunchColumn::Provider);
+            launcher.prev();
+        }
+        KeyCode::Char('m') => {
+            launcher.jump_to_column(LaunchColumn::Model);
+            launcher.next();
+        }
+        KeyCode::Char('M') => {
+            launcher.jump_to_column(LaunchColumn::Model);
+            launcher.prev();
+        }
+        KeyCode::Char('e') => {
+            launcher.jump_to_column(LaunchColumn::Effort);
+            launcher.next();
+        }
+        KeyCode::Char('E') => {
+            launcher.jump_to_column(LaunchColumn::Effort);
+            launcher.prev();
+        }
         KeyCode::Enter => confirm(app, preferences_path),
         KeyCode::Char('D') => {
             confirm(app, preferences_path);

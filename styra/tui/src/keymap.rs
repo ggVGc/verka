@@ -605,6 +605,10 @@ const LAUNCHER: &[ReferenceRow] = &[
         action: "move launch column",
     },
     ReferenceRow::Binding {
+        keys: "p/P, m/M, e/E",
+        action: "move down/up provider, model, effort",
+    },
+    ReferenceRow::Binding {
         keys: "Enter",
         action: "select",
     },

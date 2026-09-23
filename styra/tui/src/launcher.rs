@@ -197,6 +197,14 @@ impl Launcher {
         }
     }
 
+    /// Move the keys to `column` directly, without cycling through the ones
+    /// between it and the current one. Used by the picker's per-column
+    /// shortcuts (`p`/`m`/`e`), which name a column outright rather than
+    /// stepping toward it.
+    pub fn jump_to_column(&mut self, column: LaunchColumn) {
+        self.column = column;
+    }
+
     pub fn next_column(&mut self) {
         self.column = match self.column {
             LaunchColumn::Provider => LaunchColumn::Model,
