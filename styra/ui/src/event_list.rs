@@ -8,6 +8,7 @@ use crate::markdown::{
     markdown_block_lines_with_links, parse_inline_spans, structural_indent, LinkDisplay,
 };
 use crate::palette;
+use crate::search::{self, SearchView};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -69,7 +70,25 @@ pub struct EventListView<'a> {
     pub moved_backward: bool,
     pub protocol: Protocol,
     pub links: LinkDisplay,
+    /// The `/` search: what has been typed, and whether the prompt still has
+    /// the keys. See [`crate::search`].
+    pub search: SearchView<'a>,
     pub status: EventListStatus,
+}
+
+/// What every row of the list renders the same way: the protocol that reads
+/// its events, and the operator's display choices over the result.
+///
+/// Passed as one value because it is one thing — how this list is being read —
+/// and because each row is built twice, once for its height and once clipped
+/// to the space left for it.
+#[derive(Clone, Copy)]
+pub struct EntryRender<'a> {
+    pub protocol: Protocol,
+    pub links: LinkDisplay,
+    /// The term whose matching words are marked, once enough of one has been
+    /// typed. See [`crate::search::term`].
+    pub search: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -147,10 +166,17 @@ pub fn render_entry_log(
     );
     let width = usize::from(area.width.saturating_sub(2));
     let viewport = usize::from(area.height.saturating_sub(2));
+    // The pane is not searched: `/` belongs to the list above it, and marking
+    // the same words twice on one screen would say nothing more.
+    let entry_render = EntryRender {
+        protocol: view.protocol,
+        links: view.links,
+        search: None,
+    };
     let items = view
         .entries
         .iter()
-        .map(|entry| entry_item(entry, width, viewport, view.protocol, view.links));
+        .map(|entry| entry_item(entry, width, viewport, entry_render));
     let limit = view
         .entries
         .len()
@@ -198,6 +224,9 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     if view.uncommitted_changes {
         block = crate::chrome::uncommitted_title(block);
     }
+    if let Some(search) = search_title(&view.search) {
+        block = block.title_bottom(search);
+    }
 
     if view.entries.is_empty() {
         // Before anything is launched, the empty list is the start screen: the
@@ -234,10 +263,15 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
 
     let width = area.width.saturating_sub(2) as usize;
     let viewport_height = area.height.saturating_sub(2) as usize;
+    let entry_render = EntryRender {
+        protocol: view.protocol,
+        links: view.links,
+        search: view.search.term(),
+    };
     let mut items: Vec<ListItem> = view
         .entries
         .iter()
-        .map(|entry| entry_item(entry, width, viewport_height, view.protocol, view.links))
+        .map(|entry| entry_item(entry, width, viewport_height, entry_render))
         .collect();
     items.push(ListItem::new(status_tail(&view.status)));
     // Include the status tail when deciding whether scrolling would reveal
@@ -264,8 +298,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         offset,
         viewport_height,
         width,
-        view.protocol,
-        view.links,
+        entry_render,
     );
     let list = List::new(items).block(block);
     // `ListState::select(None)` also resets the offset to zero, and this list
@@ -294,8 +327,7 @@ fn clip_boundary_entry(
     offset: usize,
     viewport_height: usize,
     width: usize,
-    protocol: Protocol,
-    links: LinkDisplay,
+    entry_render: EntryRender<'_>,
 ) {
     let mut remaining = viewport_height;
     for item_index in offset..items.len() {
@@ -315,7 +347,7 @@ fn clip_boundary_entry(
         } else {
             remaining
         };
-        items[item_index] = entry_item_with_max_rows(entry, width, max_rows, protocol, links);
+        items[item_index] = entry_item_with_max_rows(entry, width, max_rows, entry_render);
         return;
     }
 }
@@ -500,15 +532,13 @@ pub fn entry_item(
     entry: &EventEntry<'_>,
     width: usize,
     viewport_height: usize,
-    protocol: Protocol,
-    links: LinkDisplay,
+    render: EntryRender<'_>,
 ) -> ListItem<'static> {
     entry_item_with_max_rows(
         entry,
         width,
         viewport_height.saturating_sub(1).max(1),
-        protocol,
-        links,
+        render,
     )
 }
 
@@ -516,9 +546,13 @@ fn entry_item_with_max_rows(
     entry: &EventEntry<'_>,
     width: usize,
     max_rows: usize,
-    protocol: Protocol,
-    links: LinkDisplay,
+    render: EntryRender<'_>,
 ) -> ListItem<'static> {
+    let EntryRender {
+        protocol,
+        links,
+        search,
+    } = render;
     let is_conversation = matches!(
         entry.event,
         AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
@@ -534,7 +568,14 @@ fn entry_item_with_max_rows(
         // one long message push the rest of the session off screen, and the
         // available width shrinks whenever the preview pane opens.
         let row = truncate_line(summary, width, entry.has_detail);
-        return ListItem::new(vec![with_selection_backdrop(row, entry.selected)]);
+        // Marked after the row is cut to width, so a match is only claimed
+        // where the operator can actually see it.
+        let row = search::highlight_lines(vec![row], search);
+        return ListItem::new(
+            row.into_iter()
+                .map(|row| with_selection_backdrop(row, entry.selected))
+                .collect::<Vec<_>>(),
+        );
     }
     let mut lines = vec![summary];
     let mut detail = detail_lines_with_links(entry.event, protocol, None, links);
@@ -580,6 +621,10 @@ fn entry_item_with_max_rows(
             )));
         }
     }
+    // After wrapping, so a word broken across two rows is marked on the row it
+    // is actually on rather than half-marked on both. The mark is a span
+    // style and the selection below is the row's own, so they coexist.
+    let mut wrapped = search::highlight_lines(wrapped, search);
     if let Some(first) = wrapped.first_mut() {
         *first = with_selection_backdrop(std::mem::take(first), entry.selected);
     }
@@ -1277,6 +1322,32 @@ pub fn detail_lines_with_links(
     lines
 }
 
+/// The `/` search, shown along the bottom of the list it is marking.
+///
+/// It says how much is still missing while the term is too short, so a search
+/// that highlights nothing yet does not look like a search that found nothing.
+fn search_title(search: &SearchView<'_>) -> Option<Line<'static>> {
+    let query = search.query?;
+    let mut text = format!(" /{query}");
+    if search.typing {
+        text.push('▌');
+    }
+    let missing = search::MIN_TERM.saturating_sub(query.trim().chars().count());
+    if missing > 0 {
+        text.push_str(&format!(
+            " · {missing} more character{}",
+            if missing == 1 { "" } else { "s" }
+        ));
+    }
+    text.push(' ');
+    Some(Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(palette::ACCENT)
+            .add_modifier(Modifier::BOLD),
+    )))
+}
+
 fn conversation_only_title(
     block: ratatui::widgets::Block<'static>,
 ) -> ratatui::widgets::Block<'static> {
@@ -1320,9 +1391,108 @@ fn format_scaled(tokens: u64, unit: u64, suffix: char) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::{format_tokens, list_offset_with_scrolloff, wrap_log_lines};
+    use crate::chrome::StatusTone;
     use crate::markdown::markdown_block_lines;
+    use ratatui::backend::TestBackend;
     use ratatui::style::Style;
+    use ratatui::Terminal;
+
+    /// One agent message, drawn with `search` typed into the `/` prompt.
+    fn searched_screen(text: &str, search: SearchView<'_>) -> (Vec<String>, Vec<String>) {
+        let event = AgentEvent::AgentMessage { text: text.into() };
+        let view = EventListView {
+            chrome: PanelChrome {
+                focused: true,
+                workspace: None,
+                agent: "codex".into(),
+                model: "gpt-5.6-sol".into(),
+                model_reported: true,
+                effort: None,
+                effort_reported: true,
+                status: "running".into(),
+                status_tone: StatusTone::Running,
+                elapsed: None,
+                suffix: None,
+                session: None,
+            },
+            entries: vec![EventEntry {
+                event: &event,
+                expanded: false,
+                has_detail: false,
+                contract: None,
+                selected: true,
+            }],
+            conversation_only: false,
+            uncommitted_changes: false,
+            usage: None,
+            can_configure_launch: false,
+            selection_name: "codex".into(),
+            requested_offset: 0,
+            moved_backward: false,
+            protocol: Protocol::default(),
+            links: LinkDisplay::Compact,
+            search,
+            status: EventListStatus::Idle { reason: None },
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(frame, &view, frame.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        // The marked text, row by row, so a test can say what was marked
+        // without depending on where on the row it landed.
+        let marked = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .filter(|x| buffer.cell((*x, y)).unwrap().bg == palette::ACCENT)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        (rows, marked)
+    }
+
+    #[test]
+    fn a_search_marks_the_matching_words_of_the_rows_on_screen() {
+        let (_, marked) = searched_screen(
+            "reworked the retry in src/retry.rs",
+            SearchView {
+                query: Some("retry"),
+                typing: false,
+            },
+        );
+
+        assert_eq!(marked.concat(), "retrysrc/retry.rs");
+    }
+
+    #[test]
+    fn a_search_marks_nothing_until_three_characters_are_typed() {
+        let (rows, marked) = searched_screen(
+            "reworked the retry",
+            SearchView {
+                query: Some("re"),
+                typing: true,
+            },
+        );
+
+        assert_eq!(marked.concat(), "");
+        // And the prompt says why nothing is marked yet.
+        assert!(
+            rows.concat().contains("/re▌ · 1 more character"),
+            "{rows:?}"
+        );
+    }
 
     #[test]
     fn token_counts_read_as_k_and_m_past_a_thousand() {

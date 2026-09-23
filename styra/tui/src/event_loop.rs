@@ -595,6 +595,7 @@ pub fn run(
             && app.insert.is_none()
             && app.git_repository_prompt.is_none()
             && app.launch.prompt.is_none()
+            && !app.search.typing()
             && !app
                 .tag_picker
                 .as_ref()
@@ -736,6 +737,13 @@ pub fn run(
                 }
                 _ => {}
             }
+            continue;
+        }
+        // The event list's `/` search is modal while it is being typed: every
+        // printable key is part of the term, including the ones bound to
+        // commands on the list it is marking.
+        if app.search.typing() {
+            keys::handle_search_key(app, key);
             continue;
         }
         // The embedded interaction list owns navigation while it is open.

@@ -249,6 +249,10 @@ const EVENTS: &[ReferenceRow] = &[
         action: "toggle link destinations",
     },
     ReferenceRow::Binding {
+        keys: "/",
+        action: "search: mark words matching a term of 3+ characters (Esc clears)",
+    },
+    ReferenceRow::Binding {
         keys: "PgUp/PgDn",
         action: "scroll preview (full-screen: j/k, entry: J/K)",
     },
