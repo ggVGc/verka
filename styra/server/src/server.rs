@@ -2226,7 +2226,55 @@ impl ServerState {
         )?;
         self.record_source_branch(id, &summary.path, &new_id, summary.name.as_deref())?;
 
+        // A provider conversion leaves the source Session's native transcript
+        // behind for good — the branch is the only copy the new provider can
+        // read — so continuing to work in the source would build history the
+        // conversion can never pick up. Sealing it says so permanently,
+        // unlike a same-provider branch, which starts a sibling but leaves
+        // the source exactly as usable as before.
+        if to_provider != from_provider {
+            self.set_session_completion(id, CompletionState::Sealed)?;
+        }
+
         self.stored_summary(&new_id)
+    }
+
+    /// Set whether the operator is finished with a Session, whether or not it
+    /// has a live interaction behind it.
+    ///
+    /// Restored rows already stopped when the previous server exited. They
+    /// are still selectable in the navigator but are not represented by a
+    /// live [`ManagedInteraction`] here, so the state is written straight to
+    /// the Session's stored metadata and the mirrored row is told to catch
+    /// up.
+    ///
+    /// A Session that never ran under this server is not even mirrored in
+    /// the roster — the stored-sessions picker lists it straight off disk —
+    /// and completion is still its own stored property, so the same write
+    /// serves it with no row to update.
+    fn set_session_completion(&self, id: &str, completed: CompletionState) -> Result<()> {
+        if !self.has_live_interaction(id) {
+            let summary = self.stored_summary(id)?;
+            if journal::read_session_completed(&summary.path)? == CompletionState::Sealed
+                && completed != CompletionState::Sealed
+            {
+                anyhow::bail!("a sealed session cannot be un-sealed");
+            }
+            journal::store_session_completed(&summary.path, completed)?;
+            if self.inner.roster.set_completed(id, completed) {
+                self.publish_roster();
+            }
+            return Ok(());
+        }
+        let interaction = self.interaction(id)?;
+        if interaction.summary().completed == CompletionState::Sealed
+            && completed != CompletionState::Sealed
+        {
+            anyhow::bail!("a sealed session cannot be un-sealed");
+        }
+        interaction.set_completed(completed)?;
+        self.publish_roster();
+        Ok(())
     }
 
     /// Mark, in the source Session, that its history was continued in
@@ -2836,37 +2884,7 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::SetSessionCompleted { id, completed } => {
-                // Restored rows already stopped when the previous server
-                // exited. They are still selectable in the navigator but are
-                // not represented by a live `ManagedInteraction` here, so the
-                // flag is written straight to the Session's stored metadata
-                // and the mirrored row is told to catch up.
-                //
-                // A Session that never ran under this server is not even
-                // mirrored in the roster — the stored-sessions picker lists it
-                // straight off disk — and completion is still its own stored
-                // property, so the same write serves it with no row to update.
-                if !self.has_live_interaction(&id) {
-                    let summary = self.stored_summary(&id)?;
-                    if journal::read_session_completed(&summary.path)? == CompletionState::Sealed
-                        && completed != CompletionState::Sealed
-                    {
-                        anyhow::bail!("a sealed session cannot be un-sealed");
-                    }
-                    journal::store_session_completed(&summary.path, completed)?;
-                    if self.inner.roster.set_completed(&id, completed) {
-                        self.publish_roster();
-                    }
-                    return Ok(Response::Accepted);
-                }
-                let interaction = self.interaction(&id)?;
-                if interaction.summary().completed == CompletionState::Sealed
-                    && completed != CompletionState::Sealed
-                {
-                    anyhow::bail!("a sealed session cannot be un-sealed");
-                }
-                interaction.set_completed(completed)?;
-                self.publish_roster();
+                self.set_session_completion(&id, completed)?;
                 Ok(Response::Accepted)
             }
             Request::CloseInteraction { id } => {
