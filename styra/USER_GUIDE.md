@@ -114,7 +114,9 @@ shows or hides the Sessions marked completed, and `C` marks the selected
 Session completed — or, on one already marked, unmarks it. `n` leaves the list
 without resuming anything and starts a new Session in the Workspace whose list
 you were reading. `V` opens the Workspace list, where `/` filters the same way
-over the Workspace name.
+over the Workspace name. Press `r` in the Workspace list to change the selected
+Workspace's display name; submitting a blank name restores its directory-name
+fallback.
 
 A Session you did not name yourself is named after what you asked for — a
 short phrase like `Fix flaky checkout test`, summarised from your first prompt

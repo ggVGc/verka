@@ -697,6 +697,68 @@ pub fn run_workspace_picker(
                 )));
             }
             KeyCode::Char('c') => return Ok(Some(WorkspaceChoice::CreateCurrentDirectory)),
+            KeyCode::Char('r') if !workspaces.is_empty() => {
+                if let Some(name) = read_workspace_name(
+                    terminal,
+                    &workspaces,
+                    selected,
+                    &interactions,
+                    preview,
+                    filter.as_deref(),
+                    workspaces[selected].name.as_deref().unwrap_or(""),
+                )? {
+                    let renamed = client.rename_workspace(
+                        &workspaces[selected].id,
+                        (!name.trim().is_empty()).then_some(name.as_str()),
+                    )?;
+                    let id = renamed.id.clone();
+                    workspaces[selected] = renamed.clone();
+                    if let Some(index) = all_workspaces
+                        .iter()
+                        .position(|workspace| workspace.id == id)
+                    {
+                        all_workspaces[index] = renamed;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn read_workspace_name(
+    terminal: &mut dyn Ui,
+    workspaces: &[WorkspaceSummary],
+    selected: usize,
+    interactions: &[InteractionSummary],
+    preview: presentation::SessionsPreview<'_>,
+    filter: Option<&str>,
+    initial: &str,
+) -> Result<Option<String>> {
+    let mut value = initial.to_owned();
+    loop {
+        terminal.render_workspace_picker_name_prompt(
+            workspaces,
+            selected,
+            interactions,
+            preview,
+            filter,
+            false,
+            &value,
+        )?;
+        let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Esc => return Ok(None),
+            KeyCode::Enter => return Ok(Some(value)),
+            KeyCode::Backspace => {
+                value.pop();
+            }
+            KeyCode::Char(ch) if value.chars().count() < 80 && !ch.is_control() => value.push(ch),
             _ => {}
         }
     }

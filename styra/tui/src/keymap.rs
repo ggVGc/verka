@@ -577,6 +577,10 @@ const WORKSPACE_PICKER: &[ReferenceRow] = &[
         action: "create a Workspace for the current directory",
     },
     ReferenceRow::Binding {
+        keys: "r",
+        action: "rename the selected Workspace",
+    },
+    ReferenceRow::Binding {
         keys: "/",
         action: "filter by name (Esc clears)",
     },

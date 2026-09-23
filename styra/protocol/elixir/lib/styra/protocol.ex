@@ -68,6 +68,7 @@ defmodule Styra.Protocol do
             %{name: "path", required: true, type: %{kind: :string, path: true}}
           ]
         }},
+        %{name: "rename_workspace", payload: %{kind: :newtype, type: %{kind: :ref, name: "RenameWorkspace"}}},
         %{name: "set_workspace_git_repository", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -281,6 +282,7 @@ defmodule Styra.Protocol do
         %{name: "workspaces", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "WorkspaceSummary"}}}},
         %{name: "workspace", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
         %{name: "workspace_for_path", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "WorkspaceSummary"}}}},
+        %{name: "workspace_renamed", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
         %{name: "workspace_git_repository_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
         %{name: "workspace_launch", payload: %{kind: :newtype, type: %{kind: :ref, name: "LaunchPolicy"}}},
         %{name: "session_created", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionInfo"}}},
@@ -336,6 +338,16 @@ defmodule Styra.Protocol do
         %{name: "host_path", required: true, type: %{kind: :string, path: true}},
         %{name: "name", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "git_repository", required: false, type: %{kind: :optional, inner: %{kind: :string, path: true}}}
+      ]
+    },
+
+    # Change a Workspace's optional operator-facing name.
+    "RenameWorkspace" => %{
+      kind: :struct,
+      deny_unknown_fields: true,
+      fields: [
+        %{name: "id", required: true, type: %{kind: :string}},
+        %{name: "name", required: true, type: %{kind: :optional, inner: %{kind: :string}}}
       ]
     },
 
@@ -1433,6 +1445,7 @@ defmodule Styra.Protocol do
     "list_workspaces",
     "workspace",
     "workspace_for_path",
+    "rename_workspace",
     "set_workspace_git_repository",
     "workspace_launch",
     "create_session",
@@ -1981,6 +1994,17 @@ defmodule Styra.Protocol do
     def workspace_for_path!(data), do: Styra.Protocol.build!("workspace_for_path", data)
 
     @doc ~S"""
+    Fields of `data`:
+
+      * `id  `  string
+      * `name`  string|null
+    """
+    def rename_workspace(data), do: Styra.Protocol.build("rename_workspace", data)
+
+    @doc "`rename_workspace/1`, raising on a request the server would refuse."
+    def rename_workspace!(data), do: Styra.Protocol.build!("rename_workspace", data)
+
+    @doc ~S"""
     Associate (or disassociate) a Workspace with a Git checkout. The path
     may be anywhere inside the checkout; the server stores its root.
 
@@ -2447,6 +2471,7 @@ defmodule Styra.Protocol.Response do
     {:workspaces, "workspaces"},
     {:workspace, "workspace"},
     {:workspace_for_path, "workspace_for_path"},
+    {:workspace_renamed, "workspace_renamed"},
     {:workspace_git_repository_updated, "workspace_git_repository_updated"},
     {:workspace_launch, "workspace_launch"},
     {:session_created, "session_created"},
@@ -2509,6 +2534,8 @@ defmodule Styra.Protocol.Response do
   The Workspace covering a host directory, or nothing if none does.
   """
   def workspace_for_path, do: "workspace_for_path"
+
+  def workspace_renamed, do: "workspace_renamed"
 
   def workspace_git_repository_updated, do: "workspace_git_repository_updated"
 

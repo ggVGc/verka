@@ -58,6 +58,7 @@ M.types.Request = {
         { name = "path", required = true, type = { kind = "string", path = true } },
       },
     } },
+    { name = "rename_workspace", payload = { kind = "newtype", type = { kind = "ref", name = "RenameWorkspace" } } },
     { name = "set_workspace_git_repository", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -271,6 +272,7 @@ M.types.Response = {
     { name = "workspaces", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "WorkspaceSummary" } } } },
     { name = "workspace", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
     { name = "workspace_for_path", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "ref", name = "WorkspaceSummary" } } } },
+    { name = "workspace_renamed", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
     { name = "workspace_git_repository_updated", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
     { name = "workspace_launch", payload = { kind = "newtype", type = { kind = "ref", name = "LaunchPolicy" } } },
     { name = "session_created", payload = { kind = "newtype", type = { kind = "ref", name = "SessionInfo" } } },
@@ -326,6 +328,16 @@ M.types.CreateWorkspace = {
     { name = "host_path", required = true, type = { kind = "string", path = true } },
     { name = "name", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "git_repository", required = false, type = { kind = "optional", inner = { kind = "string", path = true } } },
+  },
+}
+
+--- Change a Workspace's optional operator-facing name.
+M.types.RenameWorkspace = {
+  kind = "struct",
+  deny_unknown_fields = true,
+  fields = {
+    { name = "id", required = true, type = { kind = "string" } },
+    { name = "name", required = true, type = { kind = "optional", inner = { kind = "string" } } },
   },
 }
 
@@ -1408,7 +1420,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1416,6 +1428,7 @@ M.Request = {
   LIST_WORKSPACES = "list_workspaces",
   WORKSPACE = "workspace",
   WORKSPACE_FOR_PATH = "workspace_for_path",
+  RENAME_WORKSPACE = "rename_workspace",
   SET_WORKSPACE_GIT_REPOSITORY = "set_workspace_git_repository",
   WORKSPACE_LAUNCH = "workspace_launch",
   CREATE_SESSION = "create_session",
@@ -1452,7 +1465,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_worktree_created", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_worktree_created", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
@@ -1460,6 +1473,7 @@ M.Response = {
   WORKSPACES = "workspaces",
   WORKSPACE = "workspace",
   WORKSPACE_FOR_PATH = "workspace_for_path",
+  WORKSPACE_RENAMED = "workspace_renamed",
   WORKSPACE_GIT_REPOSITORY_UPDATED = "workspace_git_repository_updated",
   WORKSPACE_LAUNCH = "workspace_launch",
   SESSION_CREATED = "session_created",
@@ -2095,6 +2109,13 @@ end
 ---   path  path
 function M.request.workspace_for_path(data)
   return M.build("workspace_for_path", data)
+end
+
+--- Fields of `data`:
+---   id    string
+---   name  string|null
+function M.request.rename_workspace(data)
+  return M.build("rename_workspace", data)
 end
 
 --- Associate (or disassociate) a Workspace with a Git checkout. The path

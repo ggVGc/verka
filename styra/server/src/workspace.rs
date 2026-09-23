@@ -261,6 +261,21 @@ pub fn set_git_repository(
     summary_from_meta(&path, meta, now_ms())
 }
 
+/// Change a Workspace's optional operator-facing name.
+pub fn rename(store_root: &Path, id: &str, name: Option<&str>) -> Result<WorkspaceSummary> {
+    let path = workspace_dir(store_root, id);
+    if !path.is_dir() {
+        anyhow::bail!("Workspace {id:?} was not found");
+    }
+    let mut meta = read_meta(&path)?;
+    meta.name = name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
+    write_meta(&path, &meta)?;
+    summary_from_meta(&path, meta, now_ms())
+}
+
 /// Resolve every path needed at launch before making the association durable.
 /// This prevents malformed linked-worktree metadata from poisoning all future
 /// launches in the Workspace.
@@ -453,6 +468,27 @@ mod tests {
         let reread = get(&store, &workspace.id).unwrap();
         assert_eq!(reread.launch.mounts, launch.mounts);
         assert_eq!(reread.launch.network, Some(true));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn renaming_a_workspace_persists_and_a_blank_name_restores_the_fallback() {
+        let store = temp_dir("rename-store");
+        let host = temp_dir("rename-host");
+        let workspace = create(&store, &host, None).unwrap();
+
+        let renamed = rename(&store, &workspace.id, Some(" payments ")).unwrap();
+        assert_eq!(renamed.name.as_deref(), Some("payments"));
+        assert_eq!(
+            get(&store, &workspace.id).unwrap().name.as_deref(),
+            Some("payments")
+        );
+
+        let cleared = rename(&store, &workspace.id, Some("   ")).unwrap();
+        assert_eq!(cleared.name, None);
+        assert_eq!(get(&store, &workspace.id).unwrap().name, None);
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();

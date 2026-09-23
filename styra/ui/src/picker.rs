@@ -324,6 +324,27 @@ pub fn render_name_prompt(frame: &mut Frame, value: &str) {
     );
 }
 
+pub fn render_workspace_name_prompt(frame: &mut Frame, value: &str) {
+    let area = frame.area();
+    let width = area.width.saturating_sub(8).min(72);
+    let popup = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + area.height.saturating_sub(3) / 2,
+        width,
+        3,
+    );
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(value.to_owned()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(palette::ACCENT))
+                .title(" Workspace name · Enter save · Esc cancel "),
+        ),
+        popup,
+    );
+}
+
 /// Whether the picker has the selected Workspace's Session list yet. Loading
 /// is a round-trip to the server, so an unread Workspace and an empty one
 /// must not read the same.

@@ -179,6 +179,17 @@ pub trait Ui {
         searching: bool,
     ) -> UiResult<RenderFeedback>;
 
+    fn render_workspace_picker_name_prompt(
+        &mut self,
+        workspaces: &[styra_protocol::WorkspaceSummary],
+        selected: usize,
+        interactions: &[styra_protocol::InteractionSummary],
+        preview: picker::SessionsPreview<'_>,
+        filter: Option<&str>,
+        searching: bool,
+        value: &str,
+    ) -> UiResult<RenderFeedback>;
+
     fn render_template_picker(
         &mut self,
         templates: &[styra_protocol::TemplateSummary],
@@ -420,6 +431,31 @@ where
         })
     }
 
+    fn render_workspace_picker_name_prompt(
+        &mut self,
+        workspaces: &[styra_protocol::WorkspaceSummary],
+        selected: usize,
+        interactions: &[styra_protocol::InteractionSummary],
+        preview: picker::SessionsPreview<'_>,
+        filter: Option<&str>,
+        searching: bool,
+        value: &str,
+    ) -> UiResult<RenderFeedback> {
+        self.draw(|frame| {
+            picker::render_workspace_picker(
+                frame,
+                workspaces,
+                selected,
+                interactions,
+                preview,
+                filter,
+                searching,
+            );
+            picker::render_workspace_name_prompt(frame, value);
+            RenderFeedback::default()
+        })
+    }
+
     fn render_template_picker(
         &mut self,
         templates: &[styra_protocol::TemplateSummary],
@@ -578,6 +614,28 @@ where
             preview,
             filter,
             searching,
+        )
+    }
+
+    fn render_workspace_picker_name_prompt(
+        &mut self,
+        workspaces: &[styra_protocol::WorkspaceSummary],
+        selected: usize,
+        interactions: &[styra_protocol::InteractionSummary],
+        preview: picker::SessionsPreview<'_>,
+        filter: Option<&str>,
+        searching: bool,
+        value: &str,
+    ) -> UiResult<RenderFeedback> {
+        TerminalUi::render_workspace_picker_name_prompt(
+            self,
+            workspaces,
+            selected,
+            interactions,
+            preview,
+            filter,
+            searching,
+            value,
         )
     }
 

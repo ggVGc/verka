@@ -108,6 +108,16 @@ pub struct RenameSession {
     pub name: Option<String>,
 }
 
+/// Change a Workspace's optional operator-facing name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenameWorkspace {
+    pub id: String,
+    /// `None` (or whitespace-only text) clears the name and restores the
+    /// host-directory display fallback.
+    pub name: Option<String>,
+}
+
 /// Replace a Session's operator-assigned tags.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -292,6 +302,7 @@ pub enum Request {
     WorkspaceForPath {
         path: PathBuf,
     },
+    RenameWorkspace(RenameWorkspace),
     /// Associate (or disassociate) a Workspace with a Git checkout. The path
     /// may be anywhere inside the checkout; the server stores its root.
     SetWorkspaceGitRepository {
@@ -496,6 +507,7 @@ pub enum Response {
     Workspace(WorkspaceSummary),
     /// The Workspace covering a host directory, or nothing if none does.
     WorkspaceForPath(Option<WorkspaceSummary>),
+    WorkspaceRenamed(WorkspaceSummary),
     WorkspaceGitRepositoryUpdated(WorkspaceSummary),
     WorkspaceLaunch(LaunchPolicy),
     SessionCreated(SessionInfo),
@@ -580,6 +592,19 @@ mod tests {
             serde_json::from_str::<Request>(r#"{"api_version":"v3","operation":"health"}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn workspace_rename_is_a_named_request_with_a_workspace_summary_response() {
+        let request = Request::RenameWorkspace(RenameWorkspace {
+            id: "workspace-1".into(),
+            name: Some("payments".into()),
+        });
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "rename_workspace");
+        assert_eq!(json["data"]["id"], "workspace-1");
+        assert_eq!(json["data"]["name"], "payments");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 
     #[test]

@@ -4,9 +4,9 @@
 
 use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
-    LoadedInteraction, PlanSession, QueuedMessage, RenameSession, Request, Response, ResumeSession,
-    SendMessage, SessionInfo, SetSessionTags, ShellInfo, StoredSession, TemplateSummary, Updates,
-    WireResponse, WorkspaceLaunchChange,
+    LoadedInteraction, PlanSession, QueuedMessage, RenameSession, RenameWorkspace, Request,
+    Response, ResumeSession, SendMessage, SessionInfo, SetSessionTags, ShellInfo, StoredSession,
+    TemplateSummary, Updates, WireResponse, WorkspaceLaunchChange,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -207,6 +207,16 @@ impl Client {
         })? {
             Response::WorkspaceForPath(value) => Ok(value),
             other => unexpected("workspace_for_path", other),
+        }
+    }
+
+    pub fn rename_workspace(&self, id: &str, name: Option<&str>) -> Result<WorkspaceSummary> {
+        match self.request(Request::RenameWorkspace(RenameWorkspace {
+            id: id.to_owned(),
+            name: name.map(str::to_owned),
+        }))? {
+            Response::WorkspaceRenamed(value) => Ok(value),
+            other => unexpected("workspace_renamed", other),
         }
     }
 

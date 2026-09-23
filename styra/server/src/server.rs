@@ -2686,6 +2686,18 @@ impl ServerState {
             Request::WorkspaceForPath { path } => Ok(Response::WorkspaceForPath(
                 crate::workspace::for_path(&self.inner.store_root, &path)?,
             )),
+            Request::RenameWorkspace(request) => {
+                let _metadata = self
+                    .inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned");
+                Ok(Response::WorkspaceRenamed(crate::workspace::rename(
+                    &self.inner.store_root,
+                    &request.id,
+                    request.name.as_deref(),
+                )?))
+            }
             Request::SetWorkspaceGitRepository {
                 workspace_id,
                 git_repository,
