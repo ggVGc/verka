@@ -471,7 +471,7 @@ fn picker_sessions(
         .iter()
         .filter(|session| {
             (showing_all || is_recent_session(session, now_ms))
-                && (show_completed || session.completed == CompletionState::Active)
+                && (show_completed || !session.completed.is_done())
                 && filter.as_ref().is_none_or(|filter| {
                     session
                         .name

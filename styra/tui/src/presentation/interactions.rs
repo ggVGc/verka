@@ -55,7 +55,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         let stop_reason = match &reported {
             // A completed (or sealed) row already says so with its own badge,
             // and "you completed it" next to it would only repeat the badge.
-            Status::Stopped(_) if interaction.completed != CompletionState::Active => None,
+            Status::Stopped(_) if interaction.completed.is_done() => None,
             Status::Stopped(why) => Some(Cow::Owned(why.label())),
             _ => None,
         };
@@ -96,7 +96,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             stop_reason,
             rate_limited,
             uncommitted: interaction.uncommitted_changes,
-            completed: interaction.completed != CompletionState::Active,
+            completed: interaction.completed.is_done(),
             sealed: interaction.completed == CompletionState::Sealed,
             tags: &interaction.tags,
             last_message: interaction.last_message.as_deref(),

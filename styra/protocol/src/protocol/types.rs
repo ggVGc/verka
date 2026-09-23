@@ -900,14 +900,10 @@ pub enum CompletionState {
 
 impl CompletionState {
     /// Whether the operator has finished with the Session, whichever way.
+    /// What every reader that only cares that a Session is done — the
+    /// listings that hide it, the badge that marks it — asks.
     pub fn is_done(self) -> bool {
         !matches!(self, CompletionState::Active)
-    }
-
-    /// Whether a client is allowed to undo this state — turn it back to
-    /// [`Self::Active`], or resume the Session out of it.
-    pub fn can_undo(self) -> bool {
-        matches!(self, CompletionState::Active | CompletionState::Completed)
     }
 }
 

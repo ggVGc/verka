@@ -2118,10 +2118,16 @@ impl ServerState {
     /// Branch a stored Session into a new sibling Session in the same
     /// Workspace, seeded with its history up to `at_ms` (the whole history
     /// when `None`), optionally under a different provider. The source
-    /// Session, its native transcript, and its Styra journal are left
-    /// untouched — a branch is always a fresh copy, never a live reference,
-    /// so nothing the source does afterwards is visible on the branch and
-    /// nothing the branch does is visible on the source.
+    /// Session's native transcript and Styra journal are left untouched — a
+    /// branch is always a fresh copy, never a live reference, so nothing the
+    /// source does afterwards is visible on the branch and nothing the branch
+    /// does is visible on the source.
+    ///
+    /// A branch that changes provider additionally seals the source: the
+    /// conversation continues under the new provider, and the old transcript
+    /// is not somewhere the operator can go on adding to and have the
+    /// conversion see it. A same-provider branch seals nothing — it is a
+    /// checkpoint, and the source is as usable after it as before.
     ///
     /// The branch always gets a fresh native provider session id, even when
     /// the provider does not change: Genta's own conversion only generates
@@ -2281,8 +2287,10 @@ impl ServerState {
     /// `branch_id`. A live source records through its interaction, so an
     /// attached client sees the marker arrive in its event stream; a source
     /// that is only stored gets the record appended to its journal, where its
-    /// next replay picks it up. The source keeps running either way — a
-    /// branch takes a copy and leaves the conversation it came from intact.
+    /// next replay picks it up. Recording the marker never stops the source —
+    /// a branch takes a copy and leaves the conversation it came from intact.
+    /// A provider conversion does stop it, but by sealing it afterwards; see
+    /// [`Self::branch_session`].
     fn record_source_branch(
         &self,
         id: &str,

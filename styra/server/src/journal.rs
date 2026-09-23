@@ -69,10 +69,32 @@ struct StoredSessionMeta {
     /// it is [`CompletionState::Sealed`]: an interaction working on it again
     /// is not one the operator is done with, but a seal is not undone by that
     /// either.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_completion")]
     completed: CompletionState,
     #[serde(flatten)]
     agent: SessionMeta,
+}
+
+/// Decode a Session's completion state, accepting the JSON boolean that stood
+/// in this field before completion became an enum. Sessions written by an
+/// older Styra are still on disk, and the operator's completed ones are
+/// exactly the ones that spelled it `true`: refusing to read them would make
+/// the Sessions they had finished with the ones that stopped loading at all.
+fn deserialize_completion<'de, D>(deserializer: D) -> std::result::Result<CompletionState, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Legacy(bool),
+        State(CompletionState),
+    }
+    Ok(match Stored::deserialize(deserializer)? {
+        Stored::Legacy(true) => CompletionState::Completed,
+        Stored::Legacy(false) => CompletionState::Active,
+        Stored::State(state) => state,
+    })
 }
 
 /// One line of the journal. Tagged by source so replay knows whether to decode
@@ -1519,6 +1541,39 @@ mod tests {
         assert_eq!(
             read_session_meta(directory).unwrap().protocol,
             Protocol::CodexJsonl
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&host).ok();
+    }
+
+    /// Sessions stored before completion became an enum carry a JSON boolean
+    /// in the same field, and there are only two spellings of it on disk: a
+    /// completed Session wrote `true`, and every other one omitted the field.
+    /// Both have to keep loading, or upgrading would make exactly the
+    /// Sessions the operator had finished with unreadable.
+    #[test]
+    fn metadata_written_before_completion_was_an_enum_still_loads() {
+        let root = temp_dir("legacy-completed-store");
+        let host = temp_dir("legacy-completed-host");
+        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, _) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+        let directory = journal.path().parent().unwrap().to_path_buf();
+        drop(journal);
+        let meta_path = directory.join(SESSION_META_FILE);
+
+        let text = std::fs::read_to_string(&meta_path).unwrap();
+        let mut stored: serde_json::Value = serde_json::from_str(&text).unwrap();
+        stored["completed"] = serde_json::Value::Bool(true);
+        std::fs::write(&meta_path, serde_json::to_string_pretty(&stored).unwrap()).unwrap();
+
+        assert_eq!(
+            read_session_completed(&directory).unwrap(),
+            CompletionState::Completed,
+            "a Session stored as completed reads back as completed"
         );
 
         std::fs::remove_dir_all(&root).ok();

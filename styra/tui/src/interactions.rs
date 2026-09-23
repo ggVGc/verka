@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use styra_protocol::{CompletionState, InteractionSummary, WorkspaceSummary};
+use styra_protocol::{InteractionSummary, WorkspaceSummary};
 
 /// How long the cursor must rest on an entry before that Interaction is
 /// loaded, matching the Session and Workspace pickers' settle: short enough to
@@ -91,7 +91,7 @@ impl LiveInteractions {
             .filter_map(|(index, interaction)| {
                 ((!self.only_current_workspace
                     || workspace_id.is_some_and(|id| interaction.workspace_id == id))
-                    && (self.show_completed || interaction.completed == CompletionState::Active))
+                    && (self.show_completed || !interaction.completed.is_done()))
                     .then_some(index)
             })
             .collect()
@@ -162,7 +162,7 @@ impl LiveInteractions {
             .find(|interaction| {
                 interaction.id != from
                     && interaction.activity.accepting()
-                    && interaction.completed == CompletionState::Active
+                    && !interaction.completed.is_done()
             })
             .cloned()
     }
@@ -554,7 +554,7 @@ fn is_idle(interaction: &InteractionSummary) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use styra_protocol::{DrivaOptions, InteractionActivity};
+    use styra_protocol::{CompletionState, DrivaOptions, InteractionActivity};
 
     fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
