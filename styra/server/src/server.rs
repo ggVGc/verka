@@ -110,6 +110,14 @@ impl Drop for ServerInner {
 /// frame it spent redrawing or blocked on another request.
 const WATCHED_FOR: Duration = Duration::from_secs(3);
 
+/// How long after an operator focuses an interaction its checkout is asked
+/// about again — see [`WorkingTree::recheck_after`].
+///
+/// Long enough that the reading is not simply the one the load already
+/// reported back, short enough that the operator has not looked away again by
+/// the time the row corrects itself.
+const RECHECK_AFTER_FOCUS: Duration = Duration::from_secs(2);
+
 /// The "newly idle" notification for one interaction: whether the interaction
 /// reaching its input-waiting state is still unacknowledged news.
 ///
@@ -216,6 +224,10 @@ struct WorkingTree {
     checkout: PathBuf,
     uncommitted: AtomicBool,
     state: Mutex<Option<CheckoutState>>,
+    /// Whether a delayed re-reading is already on its way, so an operator
+    /// moving in and out of an interaction queues one `git` process rather
+    /// than one per visit.
+    rechecking: AtomicBool,
 }
 
 impl WorkingTree {
@@ -225,7 +237,38 @@ impl WorkingTree {
             checkout,
             uncommitted: AtomicBool::new(false),
             state: Mutex::new(None),
+            rechecking: AtomicBool::new(false),
         }
+    }
+
+    /// Ask Git again shortly, because the operator has just arrived at this
+    /// interaction and was told it left work uncommitted.
+    ///
+    /// Arriving is often arriving to deal with it: they commit in a terminal,
+    /// or discard, and the row they came from would otherwise go on claiming
+    /// uncommitted work until the agent ran another turn. The reading is
+    /// delayed rather than taken on the spot because the load that triggers it
+    /// has just reported the current answer — a reading in the same instant
+    /// could only repeat it.
+    ///
+    /// Nothing is scheduled unless there is something to correct: a checkout
+    /// that is clean, or was never read, has no claim standing that a visit
+    /// should refresh. If a turn starts during the wait the reading is a
+    /// mid-turn one, which is harmless — a working interaction reports no
+    /// uncommitted work at all, and going idle reads the checkout again.
+    fn recheck_after(self: &Arc<Self>, delay: Duration) {
+        if !self.uncommitted() {
+            return;
+        }
+        if self.rechecking.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let tree = Arc::clone(self);
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            tree.reread();
+            tree.rechecking.store(false, Ordering::Release);
+        });
     }
 
     /// Ask Git again, because the interaction has stopped writing to the
@@ -2826,6 +2869,11 @@ impl ServerState {
                 // the interaction. Listing it must leave an idle notification
                 // intact, but the focused screen acknowledges it.
                 interaction.mark_idle_seen();
+                // And it is the point at which they can act on what the agent
+                // left behind, which is usually why they came — so the
+                // checkout is asked about once more just after they arrive,
+                // rather than standing unread until the next turn ends.
+                interaction.working_tree.recheck_after(RECHECK_AFTER_FOCUS);
                 let summary = interaction.summary();
                 let all = interaction
                     .updates
@@ -3832,6 +3880,40 @@ mod tests {
         assert!(tree.uncommitted(), "still what the turn left behind");
         tree.reread();
         assert!(!tree.uncommitted());
+    }
+
+    /// An operator arriving at an interaction that left work uncommitted is
+    /// usually arriving to commit it. The claim is checked again just after
+    /// they get there, so it stops being made once it stops being true — and
+    /// no check is scheduled where there is no claim to correct.
+    #[test]
+    fn focusing_an_interaction_rereads_work_it_left_behind() {
+        let host = temp_path("working-tree-focus-host");
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let tree = Arc::new(WorkingTree::new(git.clone(), host.clone()));
+
+        // Nothing left behind, nothing to go and look at again.
+        tree.recheck_after(Duration::from_millis(0));
+        git.set_uncommitted_changes(&host, true);
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!tree.uncommitted(), "no reading was scheduled");
+
+        tree.reread();
+        assert!(tree.uncommitted(), "the turn left work behind");
+
+        // The operator arrives and commits it.
+        git.set_uncommitted_changes(&host, false);
+        tree.recheck_after(Duration::from_millis(0));
+        for _ in 0..200 {
+            if !tree.uncommitted() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!tree.uncommitted(), "the checkout was read again");
     }
 
     /// A workspace outside a repository has no answer to give, and the

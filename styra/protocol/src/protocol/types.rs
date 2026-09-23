@@ -797,9 +797,10 @@ pub struct InteractionSummary {
     pub idle_unseen: bool,
     /// True when this interaction has stopped working and the Git checkout it
     /// works in has uncommitted changes. Read when the interaction goes idle
-    /// and not after: an operator deciding what to do with work an agent has
-    /// left behind is asking about the moment it stopped, and asking again on
-    /// every listing would run `git` per interaction per refresh. `false`
+    /// and once more shortly after a client loads it: an operator deciding
+    /// what to do with work an agent has left behind is asking about the
+    /// moment it stopped, and often arriving to commit it, but asking on every
+    /// listing would run `git` per interaction per refresh. `false`
     /// while a turn runs, and for a workspace that is not in a repository at
     /// all.
     #[serde(default)]
