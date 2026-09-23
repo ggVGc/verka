@@ -1,3 +1,5 @@
+- Proper way of finishing an interaction inside a worktree by rebasing on the source branch, merging, and deleting branch/worktree if successful:
+  - This should be handled by styra, not by asking an agent.
 - Tool execution should run in a sandbox which does not have any knowledge of agent directories, e.g ~/.claude and ~/.codex
 - Simple "goal oriented":
   - Use the structured response to run a prompt, until the agent responds with "yes"
