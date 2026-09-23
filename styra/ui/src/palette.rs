@@ -31,6 +31,12 @@ pub const MUTED_SLATE: Color = Color::Rgb(115, 130, 155);
 pub const INACTIVE: Color = MUTED_SLATE;
 pub const MODAL_BACKDROP: Color = MUTED_SLATE;
 
+/// Reason text appended to a row in the live-interactions navigator.
+///
+/// Kept separate from inactive chrome so this status information can be
+/// recolored without changing disabled controls, borders, or markers.
+pub const INTERACTION_STATUS_INFO: Color = MUTED_SLATE;
+
 pub const SELECTION_BACKGROUND: Color = Color::Rgb(44, 42, 30);
 /// A slightly darker tint than the surrounding rows, for a continuation line
 /// that belongs to the row above it rather than standing on its own.

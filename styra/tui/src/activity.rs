@@ -123,9 +123,9 @@ impl IdleReason {
         match self {
             IdleReason::TurnComplete | IdleReason::Reported => None,
             IdleReason::Interrupted => Some("interrupted".into()),
-            IdleReason::Failed { .. } => Some("after an error".into()),
+            IdleReason::Failed { .. } => Some("error".into()),
             IdleReason::RateLimited(limit) => Some(format!("rate limited ({})", limit.window)),
-            IdleReason::BackgroundFinished => Some("background work finished".into()),
+            IdleReason::BackgroundFinished => Some("background finished".into()),
         }
     }
 }
@@ -196,16 +196,16 @@ impl StopReason {
     /// idling, stopping is never just what a session does next.
     pub fn label(&self) -> String {
         match self {
-            StopReason::Paused => "you paused it".into(),
-            StopReason::Completed => "you completed it".into(),
+            StopReason::Paused => "paused".into(),
+            StopReason::Completed => "completed".into(),
             StopReason::RateLimited(limit) => format!("rate limited ({})", limit.window),
             StopReason::Failed { message } => format!("failed: {message}"),
             StopReason::Exited {
                 exit_code: Some(code),
-            } => format!("the agent exited ({code})"),
-            StopReason::Exited { exit_code: None } => "the agent exited".into(),
-            StopReason::ServerRestarted => "the server restarted".into(),
-            StopReason::NotAccepting => "no longer accepting messages".into(),
+            } => format!("exited ({code})"),
+            StopReason::Exited { exit_code: None } => "exited".into(),
+            StopReason::ServerRestarted => "server restarted".into(),
+            StopReason::NotAccepting => "not accepting messages".into(),
         }
     }
 }
@@ -248,7 +248,7 @@ impl EndReason {
         match self {
             EndReason::Completed | EndReason::Unknown => None,
             EndReason::Failed => Some("failed".into()),
-            EndReason::Stopped => Some("you stopped it".into()),
+            EndReason::Stopped => Some("stopped".into()),
         }
     }
 }
@@ -330,7 +330,7 @@ impl Status {
             Status::Ended {
                 reason: EndReason::Stopped,
                 ..
-            } => "ended · you stopped it".into(),
+            } => "ended · stopped".into(),
             Status::Ended {
                 exit_code: Some(code),
                 ..
@@ -803,7 +803,7 @@ mod tests {
         );
         assert_eq!(
             Status::Stopped(StopReason::Paused).label(),
-            "stopped · you paused it"
+            "stopped · paused"
         );
     }
 

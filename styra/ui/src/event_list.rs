@@ -461,12 +461,12 @@ fn rows_after_selection(
 /// worth reporting.
 const QUIET_THRESHOLD: Duration = Duration::from_secs(3);
 
-/// A reason as the fragment that precedes "waiting…", or nothing at all
-/// where the state is its own explanation.
+/// A reason appended to a state, or nothing at all where the state explains
+/// itself.
 fn why(reason: &Option<String>) -> String {
     reason
         .as_ref()
-        .map(|reason| format!("{reason} · "))
+        .map(|reason| format!(" · {reason}"))
         .unwrap_or_default()
 }
 
@@ -483,10 +483,9 @@ fn status_tail(status: &EventListStatus) -> Line<'static> {
         } => (running_tail(*elapsed, *quiet, *events), palette::WARNING),
         // Idle carries no elapsed figure: nothing is happening, so a
         // climbing counter only draws the eye to a number that means nothing.
-        EventListStatus::Idle { reason } => (
-            format!("  ── idle · {}waiting for your message ──", why(reason)),
-            palette::SUCCESS,
-        ),
+        EventListStatus::Idle { reason } => {
+            (format!("  ── idle{} ──", why(reason)), palette::SUCCESS)
+        }
         EventListStatus::Background { elapsed } => (
             format!(
                 "  ── idle {} · background work still running ──",
@@ -494,14 +493,9 @@ fn status_tail(status: &EventListStatus) -> Line<'static> {
             ),
             palette::WARNING,
         ),
-        EventListStatus::Stopped { elapsed, reason } => (
-            format!(
-                "  ── paused {} · {}waiting for your next message ──",
-                format_duration(*elapsed),
-                why(reason)
-            ),
-            palette::INACTIVE,
-        ),
+        EventListStatus::Stopped { reason, .. } => {
+            (format!("  ── stopped{} ──", why(reason)), palette::INACTIVE)
+        }
         _ => return Line::default(),
     };
     Line::from(Span::styled(text, Style::default().fg(color)))

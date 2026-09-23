@@ -164,7 +164,7 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
     if let Some(why) = stop_reason {
         main.push(Span::styled(
             format!(" · {why}"),
-            Style::default().fg(palette::INACTIVE),
+            Style::default().fg(palette::INTERACTION_STATUS_INFO),
         ));
     }
     if *loading {
@@ -337,7 +337,7 @@ mod tests {
                 selected: false,
                 loading: false,
                 newly_idle: false,
-                stop_reason: Some("you paused it".into()),
+                stop_reason: Some("paused".into()),
                 rate_limited: None,
                 uncommitted: false,
                 completed: false,
@@ -345,7 +345,7 @@ mod tests {
                 last_message: None,
             }],
         };
-        assert!(rendered(&view).contains("# repair checkout · claude · you paused it"));
+        assert!(rendered(&view).contains("# repair checkout · claude · paused"));
     }
 
     /// An interaction idling because a plan window refused it looks exactly
