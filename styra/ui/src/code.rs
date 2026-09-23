@@ -9,7 +9,12 @@ use super::{markdown::syntax_highlighted_code_lines, palette};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-/// Renders one code block as styled lines, each prefixed with `indent`.
+/// The left edge drawn down a code block, marking where it starts and ends
+/// without needing to know the width it will be rendered at.
+const GUTTER: &str = "│ ";
+
+/// Renders one code block as styled lines, each prefixed with `indent` and a
+/// gutter that sets the block off from the surrounding text.
 ///
 /// `suspicious_shell` marks a command that reported success while printing an
 /// error diagnostic; those output lines are colored as errors so the
@@ -21,11 +26,39 @@ pub fn code_block_lines(
     suspicious_shell: bool,
     indent: &str,
 ) -> Vec<Line<'static>> {
+    body_lines(text, language, text_color, suspicious_shell)
+        .into_iter()
+        .map(|line| with_gutter(line, indent))
+        .collect()
+}
+
+/// Prepends the indent and gutter to one already-styled code line.
+///
+/// The gutter is the same on every row rather than capped with corners: an
+/// inline block can be truncated to a line cap mid-way, and a block that had
+/// lost its closing corner would read as unfinished code.
+fn with_gutter(line: Line<'static>, indent: &str) -> Line<'static> {
+    let line_style = line.style;
+    let mut spans = vec![Span::styled(
+        format!("{indent}{GUTTER}"),
+        Style::default().fg(palette::INACTIVE),
+    )];
+    spans.extend(line.spans);
+    Line::from(spans).style(line_style)
+}
+
+/// The block's content, without the gutter.
+fn body_lines(
+    text: &str,
+    language: Option<&str>,
+    text_color: Color,
+    suspicious_shell: bool,
+) -> Vec<Line<'static>> {
     // Agent-message fences become `DetailBlock::Code` before they reach the
     // UI. Feed recognized languages back through the shared TextMate renderer
     // so they receive the same theme as fenced Markdown elsewhere.
     if !suspicious_shell {
-        if let Some(lines) = syntax_highlighted_code_lines(text, language, indent) {
+        if let Some(lines) = syntax_highlighted_code_lines(text, language, "") {
             return lines;
         }
     }
@@ -33,15 +66,10 @@ pub fn code_block_lines(
     text.lines()
         .map(|line| {
             if suspicious_shell && is_error_diagnostic(line) {
-                return indented(line, palette::ERROR, indent);
+                return plain(line, palette::ERROR);
             }
             if language == Some("bash") {
-                let mut spans = vec![Span::styled(
-                    indent.to_owned(),
-                    Style::default().fg(palette::TEXT),
-                )];
-                spans.extend(bash_spans(&line.replace('\t', "    ")));
-                return Line::from(spans);
+                return Line::from(bash_spans(&line.replace('\t', "    ")));
             }
             let color = if line.starts_with('+') && !line.starts_with("+++") {
                 palette::SUCCESS
@@ -52,14 +80,14 @@ pub fn code_block_lines(
             } else {
                 text_color
             };
-            indented(line, color, indent)
+            plain(line, color)
         })
         .collect()
 }
 
-fn indented(line: &str, color: Color, indent: &str) -> Line<'static> {
+fn plain(line: &str, color: Color) -> Line<'static> {
     Line::from(Span::styled(
-        format!("{indent}{}", line.replace('\t', "    ")),
+        line.replace('\t', "    "),
         Style::default().fg(color),
     ))
 }
@@ -135,8 +163,32 @@ fn bash_spans(line: &str) -> Vec<Span<'static>> {
 mod tests {
     use super::*;
 
+    /// The colors of one line's content, past the gutter.
     fn colors(line: &Line<'_>) -> Vec<Option<Color>> {
-        line.spans.iter().map(|span| span.style.fg).collect()
+        line.spans[1..].iter().map(|span| span.style.fg).collect()
+    }
+
+    /// One line's first content span, past the gutter.
+    fn content<'a>(line: &'a Line<'_>) -> &'a Span<'a> {
+        &line.spans[1]
+    }
+
+    #[test]
+    fn every_row_of_a_block_carries_the_gutter() {
+        let lines = code_block_lines("one\ntwo", None, palette::TEXT, false, "  ");
+
+        for line in &lines {
+            assert_eq!(line.spans[0].content.as_ref(), "  │ ");
+            assert_eq!(line.spans[0].style.fg, Some(palette::INACTIVE));
+        }
+    }
+
+    #[test]
+    fn a_highlighted_block_carries_the_gutter_too() {
+        let lines = code_block_lines("fn main() {}", Some("rust"), palette::TEXT, false, "  ");
+
+        assert_eq!(lines[0].spans[0].content.as_ref(), "  │ ");
+        assert_eq!(lines[0].spans[0].style.fg, Some(palette::INACTIVE));
     }
 
     #[test]
@@ -179,7 +231,7 @@ mod tests {
             "",
         );
 
-        let fg: Vec<Option<Color>> = lines.iter().map(|line| line.spans[0].style.fg).collect();
+        let fg: Vec<Option<Color>> = lines.iter().map(|line| content(line).style.fg).collect();
         assert_eq!(
             fg,
             vec![
@@ -203,13 +255,13 @@ mod tests {
             "",
         );
 
-        assert_eq!(lines[1].spans[0].style.fg, Some(palette::ERROR));
+        assert_eq!(content(&lines[1]).style.fg, Some(palette::ERROR));
     }
 
     #[test]
     fn tabs_become_spaces_so_columns_do_not_collapse() {
         let lines = code_block_lines("a\tb", None, palette::TEXT, false, "");
 
-        assert_eq!(lines[0].spans[0].content.as_ref(), "a    b");
+        assert_eq!(content(&lines[0]).content.as_ref(), "a    b");
     }
 }
