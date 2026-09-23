@@ -23,9 +23,13 @@ pub const SPECIAL: Color = Color::Magenta;
 pub const MUTED_WARNING: Color = Color::LightYellow;
 pub const CODE_BACKGROUND: Color = Color::Black;
 
-/// Truly inactive controls and chrome retain neutral dark gray.
-pub const INACTIVE: Color = Color::DarkGray;
-pub const MODAL_BACKDROP: Color = Color::DarkGray;
+/// `Color::DarkGray` renders too dark to read comfortably in most terminals;
+/// this desaturated slate blue replaces it while staying subdued.
+pub const MUTED_SLATE: Color = Color::Rgb(115, 130, 155);
+
+/// Truly inactive controls and chrome retain a subdued, low-key color.
+pub const INACTIVE: Color = MUTED_SLATE;
+pub const MODAL_BACKDROP: Color = MUTED_SLATE;
 
 pub const SELECTION_BACKGROUND: Color = Color::Rgb(44, 42, 30);
 /// A slightly darker tint than the surrounding rows, for a continuation line
@@ -47,7 +51,7 @@ pub const JSON_KEY: Color = Color::Cyan;
 pub const JSON_STRING: Color = Color::Green;
 pub const JSON_NUMBER: Color = Color::Rgb(184, 124, 0);
 pub const JSON_LITERAL: Color = Color::Magenta;
-pub const JSON_PUNCTUATION: Color = Color::DarkGray;
+pub const JSON_PUNCTUATION: Color = MUTED_SLATE;
 
 /// `tui-markdown` delegates fenced-code highlighting to a TextMate theme, so
 /// its syntax colors live here too. TextMate requires literal RGB hex values;
