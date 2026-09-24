@@ -256,6 +256,8 @@ impl Interaction {
         };
 
         let (updates, receiver) = channel();
+        let (stdout_drained, wait_for_stdout) = channel();
+        let (stderr_drained, wait_for_stderr) = channel();
         let journal = Arc::new(Mutex::new(journal));
         let stdin = Arc::new(Mutex::new(Some(stdin_write)));
         let execution_control = Arc::new(ExecutionControl::default());
@@ -321,6 +323,7 @@ impl Interaction {
                         Err(_) => break,
                     }
                 }
+                let _ = stderr_drained.send(());
             })
             .context("starting the stderr thread")?;
 
@@ -441,6 +444,7 @@ impl Interaction {
                         Err(_) => break,
                     }
                 }
+                let _ = stdout_drained.send(());
             })
             .context("starting the reader thread")?;
 
@@ -480,6 +484,13 @@ impl Interaction {
                 if let Some(control) = broker_control {
                     std::fs::remove_dir_all(control).ok();
                 }
+                // Process exit closes the protocol pipes, but their reader
+                // threads may still be decoding buffered output. `Ended` is
+                // the update stream's terminal record, so publish it only
+                // after both streams have reached EOF and sent everything
+                // they read before it.
+                let _ = wait_for_stdout.recv();
+                let _ = wait_for_stderr.recv();
                 let _ = exec_updates.send(InteractionUpdate::Ended(end));
             })
             .context("starting the execution thread")?;
@@ -1350,8 +1361,7 @@ mod tests {
         let mut raw_directions = Vec::new();
         let mut logs: Vec<String> = Vec::new();
         let mut ended = false;
-        // `Ended` (worker thread) and the echo event (reader thread) race, so
-        // drain until all are seen rather than stopping on `Ended`.
+        // Collect every part of the exchange, including its terminal update.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let stderr_seen = |logs: &[String]| logs.iter().any(|l| l.contains("echo backend online"));
         while std::time::Instant::now() < deadline
@@ -1408,11 +1418,8 @@ mod tests {
     }
 
     /// Regression test for an interaction being marked ended while its stdout
-    /// reader still has agent data to publish. It is ignored while the ending
-    /// is emitted by the execution thread rather than after the reader drains;
-    /// run it explicitly to reproduce the incorrect ordering.
+    /// reader still has agent data to publish.
     #[test]
-    #[ignore = "known bug: Ended can overtake buffered agent output"]
     fn ended_is_the_final_update_after_buffered_stdout_is_drained() {
         let dir = std::env::temp_dir().join(format!(
             "styra-buffered-exit-session-{}",
