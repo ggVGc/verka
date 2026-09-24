@@ -6,7 +6,7 @@
 
 use anyhow::Context;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
 };
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use ratatui::{Frame, Terminal};
@@ -218,7 +218,9 @@ impl RatatuiUi {
             .context("enabling raw mode")
             .map_err(UiError::from)?;
         let mut stdout = std::io::stdout();
-        if let Err(error) = crossterm::execute!(stdout, EnterAlternateScreen) {
+        // The title is set with the screen it belongs to: an emulator's tab
+        // says "Styra" for as long as Styra is the thing drawing in it.
+        if let Err(error) = crossterm::execute!(stdout, EnterAlternateScreen, SetTitle("Styra")) {
             disable_raw_mode().ok();
             return Err(UiError::from(
                 anyhow::Error::from(error).context("entering the alternate screen"),
