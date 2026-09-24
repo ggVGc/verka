@@ -15,3 +15,14 @@
 
 html, body { min-height: 100%; }
 body { margin: 0; background-color: #f3f4f6; color: #111827; }
+
+.voice-recorder-stop { display: none; }
+.voice-recorder[data-state="recording"] {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: white;
+  box-shadow: 0 0 0 4px rgb(220 38 38 / 0.14);
+}
+.voice-recorder[data-state="recording"] .voice-recorder-mic { display: none; }
+.voice-recorder[data-state="recording"] .voice-recorder-stop { display: block; }
+.voice-recorder[data-state="busy"] { cursor: wait; opacity: 0.65; }

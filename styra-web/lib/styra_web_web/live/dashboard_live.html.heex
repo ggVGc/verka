@@ -184,39 +184,85 @@
             </article>
           </div>
 
-          <.form
-            for={@message_form}
-            id="message-form"
-            phx-submit="send"
-            class="border-t border-gray-300 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] [&>div]:mb-0"
-          >
-            <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem] sm:gap-3 [&>div]:mb-0 [&>div]:min-w-0">
-              <.input
-                field={@message_form[:text]}
-                type="textarea"
-                aria-label="Message"
-                placeholder="Send a message to this interaction…"
-                rows="2"
-                class="min-h-20 w-full resize-none border border-gray-300 bg-white px-3 py-2 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-900 sm:min-h-16 sm:text-sm"
-              />
-              <div class="flex gap-2 sm:flex-col [&>div]:mb-0 [&>div]:min-w-0 [&>div]:flex-1">
-                <.input
-                  field={@message_form[:contract]}
-                  type="select"
-                  aria-label="Answer contract"
-                  options={contract_options()}
-                  class="h-10 w-full border border-gray-300 bg-white px-2 text-sm text-gray-800 outline-none focus:border-gray-900 sm:h-9"
-                />
-                <button
-                  id="send-button"
-                  class="flex h-10 shrink-0 touch-manipulation items-center justify-center gap-2 border border-gray-900 bg-gray-900 px-5 text-sm font-semibold text-white hover:bg-gray-700 phx-submit-loading:opacity-60 sm:h-9 sm:px-4"
-                  type="submit"
-                >
-                  Send <.icon name="hero-arrow-up" class="size-4" />
-                </button>
+          <div class="border-t border-gray-300 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            <.form
+              for={@message_form}
+              id="message-form"
+              phx-submit="send"
+              class="[&>div]:mb-0"
+            >
+              <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem] sm:gap-3 [&>div]:mb-0 [&>div]:min-w-0">
+                <div class="relative [&>div]:mb-0">
+                  <.input
+                    field={@message_form[:text]}
+                    type="textarea"
+                    aria-label="Message"
+                    placeholder="Send a message to this interaction…"
+                    rows="2"
+                    readonly={@audio_state != :idle}
+                    class="min-h-20 w-full resize-none border border-gray-300 bg-white px-3 py-2 pr-14 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-900 sm:min-h-16 sm:text-sm"
+                  />
+                  <button
+                    id="voice-recorder"
+                    type="button"
+                    phx-hook="VoiceRecorder"
+                    phx-update="ignore"
+                    data-state="idle"
+                    aria-label="Record a voice message"
+                    title="Record a voice message"
+                    class="voice-recorder absolute bottom-2 right-2 grid size-10 touch-manipulation place-items-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition hover:border-gray-500 hover:bg-gray-50 sm:size-9"
+                  >
+                    <.icon name="hero-microphone" class="voice-recorder-mic size-5" />
+                    <span class="voice-recorder-stop size-3 rounded-sm bg-current"></span>
+                  </button>
+                </div>
+                <div class="flex gap-2 sm:flex-col [&>div]:mb-0 [&>div]:min-w-0 [&>div]:flex-1">
+                  <.input
+                    field={@message_form[:contract]}
+                    type="select"
+                    aria-label="Answer contract"
+                    options={contract_options()}
+                    disabled={@audio_state != :idle}
+                    class="h-10 w-full border border-gray-300 bg-white px-2 text-sm text-gray-800 outline-none focus:border-gray-900 sm:h-9"
+                  />
+                  <button
+                    id="send-button"
+                    class="flex h-10 shrink-0 touch-manipulation items-center justify-center gap-2 border border-gray-900 bg-gray-900 px-5 text-sm font-semibold text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50 phx-submit-loading:opacity-60 sm:h-9 sm:px-4"
+                    type="submit"
+                    disabled={@audio_state != :idle}
+                  >
+                    Send <.icon name="hero-arrow-up" class="size-4" />
+                  </button>
+                </div>
               </div>
+            </.form>
+
+            <form id="audio-upload-form" phx-change="validate_audio" class="hidden">
+              <.live_file_input upload={@uploads.audio} />
+            </form>
+
+            <div
+              :if={@audio_state != :idle}
+              id="voice-status"
+              class="mt-2 flex items-center gap-2 text-xs font-medium text-gray-600"
+              role="status"
+            >
+              <span class={[
+                "size-2 rounded-full",
+                if(@audio_state == :recording,
+                  do: "animate-pulse bg-red-600",
+                  else: "bg-amber-500"
+                )
+              ]}></span>
+              {audio_status(@audio_state)}
             </div>
-          </.form>
+            <p
+              :for={error <- upload_errors(@uploads.audio)}
+              class="mt-2 text-xs font-medium text-red-700"
+            >
+              {upload_error(error)}
+            </p>
+          </div>
         <% else %>
           <div class="grid flex-1 place-items-center p-10 text-center">
             <div class="max-w-sm">

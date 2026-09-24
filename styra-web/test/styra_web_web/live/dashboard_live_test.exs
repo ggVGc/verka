@@ -36,6 +36,18 @@ defmodule StyraWebWeb.DashboardLiveTest do
 
           "send_message" ->
             ok("accepted", nil)
+
+          "transcribe_audio" ->
+            send(test_process, {:audio_path_exists, File.exists?(request["data"]["path"])})
+            ok("audio_transcript", "Summarize the latest changes")
+
+          operation
+          when operation in [
+                 "audio_recording_started",
+                 "audio_recording_stopped",
+                 "audio_transcription_error"
+               ] ->
+            ok("accepted", nil)
         end
 
       {:ok, Jason.encode!(response)}
@@ -68,6 +80,8 @@ defmodule StyraWebWeb.DashboardLiveTest do
     render_async(view)
 
     assert has_element?(view, "#update-1", "Ready when you are.")
+    assert has_element?(view, "#voice-recorder")
+    assert has_element?(view, "#audio-upload-form input[type=file]")
 
     view
     |> form("#message-form", message: %{text: "List the changed files", contract: "files"})
@@ -93,6 +107,106 @@ defmodule StyraWebWeb.DashboardLiveTest do
     assert has_element?(view, "#interaction-styra-1")
   end
 
+  test "transcribes a recording into the editor and waits for an explicit send", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    render_async(view)
+
+    view |> element("#interaction-styra-1") |> render_click()
+    render_async(view)
+
+    view |> element("#voice-recorder") |> render_hook("audio_recording_started", %{})
+    assert has_element?(view, "#voice-status", "Recording")
+    assert_receive {:styra_request, %{"operation" => "audio_recording_started"}}
+
+    view
+    |> element("#voice-recorder")
+    |> render_hook("audio_recording_stopped", %{
+      "contract" => "files",
+      "before" => "Draft: ",
+      "after" => " please"
+    })
+
+    assert_receive {:styra_request, %{"operation" => "audio_recording_stopped"}}
+
+    upload =
+      file_input(view, "#audio-upload-form", :audio, [
+        %{
+          last_modified: 1_725_000_000_000,
+          name: "voice-message.wav",
+          content: wav(),
+          type: "audio/wav"
+        }
+      ])
+
+    render_upload(upload, "voice-message.wav")
+    render_async(view)
+
+    assert_receive {:styra_request,
+                    %{
+                      "operation" => "transcribe_audio",
+                      "data" => %{"path" => path}
+                    }}
+
+    assert String.ends_with?(path, ".wav")
+    assert_receive {:audio_path_exists, true}
+    refute_receive {:styra_request, %{"operation" => "send_message"}}
+
+    assert has_element?(
+             view,
+             "#message-form textarea",
+             "Draft: Summarize the latest changes please"
+           )
+
+    view
+    |> form("#message-form",
+      message: %{
+        text: "Draft: Summarize the latest changes please",
+        contract: "files"
+      }
+    )
+    |> render_submit()
+
+    assert_receive {:styra_request,
+                    %{
+                      "operation" => "send_message",
+                      "data" => %{
+                        "id" => "styra-1",
+                        "message" => %{
+                          "text" => "Draft: Summarize the latest changes please",
+                          "contract" => "files"
+                        }
+                      }
+                    }}
+
+    view |> element("#voice-recorder") |> render_hook("audio_recording_started", %{})
+
+    view
+    |> element("#voice-recorder")
+    |> render_hook("audio_recording_stopped", %{
+      "contract" => "none",
+      "before" => "Second: ",
+      "after" => ""
+    })
+
+    second_upload =
+      file_input(view, "#audio-upload-form", :audio, [
+        %{
+          last_modified: 1_725_000_000_001,
+          name: "voice-message.wav",
+          content: wav(),
+          type: "audio/wav"
+        }
+      ])
+
+    render_upload(second_upload, "voice-message.wav")
+    render_async(view)
+
+    assert_receive {:styra_request, %{"operation" => "transcribe_audio"}}
+    assert_receive {:audio_path_exists, true}
+    refute_receive {:styra_request, %{"operation" => "send_message"}}
+    assert has_element?(view, "#message-form textarea", "Second: Summarize the latest changes")
+  end
+
   defp ok(type, data) do
     %{"status" => "ok", "response" => %{"type" => type, "data" => data}}
   end
@@ -111,5 +225,15 @@ defmodule StyraWebWeb.DashboardLiveTest do
         "effort" => "medium"
       }
     }
+  end
+
+  defp wav do
+    "RIFF" <>
+      <<36::little-32>> <>
+      "WAVEfmt " <>
+      <<16::little-32, 1::little-16, 1::little-16, 16_000::little-32, 32_000::little-32,
+        2::little-16, 16::little-16>> <>
+      "data" <>
+      <<0::little-32>>
   end
 end

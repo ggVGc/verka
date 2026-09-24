@@ -10,6 +10,7 @@ defmodule StyraWeb.StyraAPI do
   alias Styra.Protocol.{Request, Response}
 
   @timeout 1_500
+  @transcription_timeout 120_000
 
   @doc """
   Resolve the server-owned socket path.
@@ -67,6 +68,36 @@ defmodule StyraWeb.StyraAPI do
     error -> {:error, Exception.message(error)}
   end
 
+  @spec transcribe_audio(String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def transcribe_audio(socket_path, path) do
+    with {:ok, client} <- client(socket_path, @transcription_timeout),
+         {:ok, transcript} <-
+           Client.call(
+             client,
+             Request.transcribe_audio(%{path: path}),
+             Response.audio_transcript()
+           ) do
+      {:ok, transcript}
+    end
+  rescue
+    error -> {:error, Exception.message(error)}
+  end
+
+  @spec audio_recording_started(String.t()) :: :ok | {:error, String.t()}
+  def audio_recording_started(socket_path) do
+    accepted(socket_path, Request.audio_recording_started())
+  end
+
+  @spec audio_recording_stopped(String.t()) :: :ok | {:error, String.t()}
+  def audio_recording_stopped(socket_path) do
+    accepted(socket_path, Request.audio_recording_stopped())
+  end
+
+  @spec audio_transcription_error(String.t(), String.t()) :: :ok | {:error, String.t()}
+  def audio_transcription_error(socket_path, error) do
+    accepted(socket_path, Request.audio_transcription_error(%{error: error}))
+  end
+
   @spec action(String.t(), String.t(), String.t()) :: :ok | {:error, String.t()}
   def action(socket_path, id, "interrupt") do
     accepted(socket_path, Request.interrupt_interaction(%{id: id}))
@@ -85,9 +116,9 @@ defmodule StyraWeb.StyraAPI do
     end
   end
 
-  defp client(socket_path) do
+  defp client(socket_path, timeout \\ @timeout) do
     options = Application.get_env(:styra_web, :styra_client_options, [])
-    Client.new(Keyword.merge(options, socket: socket_path, timeout: @timeout))
+    Client.new(Keyword.merge(options, socket: socket_path, timeout: timeout))
   end
 
   defp updates(_client, nil, cursor), do: {:ok, %{"next" => cursor, "updates" => []}}
