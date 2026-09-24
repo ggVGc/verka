@@ -219,9 +219,17 @@ impl GoneIdle {
 /// The branch is read from Git rather than taken from the name Styra gave the
 /// checkout: an agent can `git checkout` its way somewhere else, and a
 /// Workspace that never had a worktree made for it has a branch all the same.
+///
+/// And the directory these questions are asked about moves, for the same
+/// reason. It starts as the one the launch resolved, but an agent can walk
+/// out of it — into a worktree of the project it was asked to look at, or
+/// wherever a Codex is told to work — and the interaction follows it there
+/// (see [`Self::moved_to`]). A directory pinned at launch would put the branch
+/// of the directory the agent left beside the directory it went to, which is
+/// two rows of the details view disagreeing about the same thing.
 struct WorkingTree {
     git: Arc<dyn crate::git::Git>,
-    checkout: PathBuf,
+    checkout: Mutex<PathBuf>,
     uncommitted: AtomicBool,
     state: Mutex<Option<CheckoutState>>,
     /// Whether a delayed re-reading is already on its way, so an operator
@@ -231,14 +239,57 @@ struct WorkingTree {
 }
 
 impl WorkingTree {
+    /// An interaction's working tree, located straight away.
+    ///
+    /// Where the work is happening is known the moment the interaction is
+    /// built — it is the directory the launch resolved, and Git can be asked
+    /// about it before the agent has done anything — so it is read here rather
+    /// than left blank until the first turn ends. Without that a resumed
+    /// interaction shows no checkout at all until it goes idle, and the roster
+    /// row mirrored at the resume records that blank as though the Workspace
+    /// were not in a repository. What is *not* read here is the uncommitted
+    /// work beside it: that is a statement about what an agent left behind,
+    /// and this one has not run yet.
     fn new(git: Arc<dyn crate::git::Git>, checkout: PathBuf) -> Self {
-        Self {
+        let tree = Self {
             git,
-            checkout,
+            checkout: Mutex::new(checkout),
             uncommitted: AtomicBool::new(false),
             state: Mutex::new(None),
             rechecking: AtomicBool::new(false),
+        };
+        tree.locate();
+        tree
+    }
+
+    /// Follow the agent into a directory it moved to itself.
+    ///
+    /// Driven by the same reports the working-directory row is: the reader
+    /// translates a cwd an agent names on the wire and sends it on, and this
+    /// is the other thing that has to hear about it. A move is rare and worth
+    /// a `git` process on the spot, because until one is spawned the branch on
+    /// screen is the branch of a directory the agent has left.
+    ///
+    /// Only the checkout is read, not the uncommitted work: a move happens
+    /// mid-turn, and what the agent has written so far is not what it left
+    /// behind.
+    fn moved_to(&self, directory: PathBuf) {
+        {
+            let mut checkout = self.checkout.lock().expect("checkout lock poisoned");
+            if *checkout == directory {
+                return;
+            }
+            *checkout = directory;
         }
+        self.locate();
+    }
+
+    /// The directory Git is asked about: where the agent is working now.
+    fn checkout(&self) -> PathBuf {
+        self.checkout
+            .lock()
+            .expect("checkout lock poisoned")
+            .clone()
     }
 
     /// Ask Git again shortly, because the operator has just arrived at this
@@ -281,12 +332,20 @@ impl WorkingTree {
     fn reread(&self) {
         let uncommitted = self
             .git
-            .has_uncommitted_changes(&self.checkout)
+            .has_uncommitted_changes(&self.checkout())
             .unwrap_or(false);
         self.uncommitted.store(uncommitted, Ordering::Release);
-        // A repository that has become unreadable since the last reading
-        // leaves the last reading in place rather than blanking it: the
-        // operator is better served by where the work was than by nothing.
+        self.locate();
+    }
+
+    /// Ask Git where the work is happening, and only that.
+    ///
+    /// A repository that is unreadable — a workspace outside one, a checkout
+    /// removed since the last reading — leaves the last answer in place rather
+    /// than blanking it: the operator is better served by where the work was
+    /// than by nothing, and an interaction that never had an answer has
+    /// nothing to lose by keeping none.
+    fn locate(&self) {
         if let Some(state) = self.read_checkout() {
             *self.state.lock().expect("checkout state lock poisoned") = Some(state);
         }
@@ -295,21 +354,7 @@ impl WorkingTree {
     /// Where the agent is working, in Git's terms, or `None` when the
     /// workspace is not inside a working tree.
     fn read_checkout(&self) -> Option<CheckoutState> {
-        let repository = self.git.discover(&self.checkout).ok().flatten()?;
-        // For a main checkout the common directory is its own `.git`, so its
-        // parent is that checkout; for a linked worktree it is the main
-        // checkout's, so the parent is the main checkout. Either way the
-        // parent is the repository the worktree belongs to.
-        let main = repository
-            .common_dir
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| repository.root.clone());
-        Some(CheckoutState {
-            branch: self.git.current_branch(&repository.root).ok().flatten(),
-            worktree: repository.root,
-            repository: main,
-        })
+        checkout_state(self.git.as_ref(), &self.checkout())
     }
 
     fn uncommitted(&self) -> bool {
@@ -322,6 +367,30 @@ impl WorkingTree {
             .expect("checkout state lock poisoned")
             .clone()
     }
+}
+
+/// What Git says about the working tree `checkout` sits in, or `None` when it
+/// sits in none.
+///
+/// A free function rather than a method because the question is also asked of
+/// a directory no live interaction owns: a row a previous run left behind, and
+/// the checkout it was working in.
+fn checkout_state(git: &dyn crate::git::Git, checkout: &Path) -> Option<CheckoutState> {
+    let repository = git.discover(checkout).ok().flatten()?;
+    // For a main checkout the common directory is its own `.git`, so its
+    // parent is that checkout; for a linked worktree it is the main
+    // checkout's, so the parent is the main checkout. Either way the
+    // parent is the repository the worktree belongs to.
+    let main = repository
+        .common_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| repository.root.clone());
+    Some(CheckoutState {
+        branch: git.current_branch(&repository.root).ok().flatten(),
+        worktree: repository.root,
+        repository: main,
+    })
 }
 
 /// What an interaction is doing, how it came to be doing it, and the moment it
@@ -1340,6 +1409,7 @@ impl ServerState {
             notice: Arc::clone(&idle),
             working_tree: Arc::clone(&working_tree),
         };
+        let moved = Arc::clone(&working_tree);
         let quota_session = id.clone();
         let quota_provider = selection.provider;
         std::thread::Builder::new()
@@ -1383,6 +1453,13 @@ impl ServerState {
                             {
                                 idle.became_idle();
                             }
+                        }
+                        // The agent has walked out of the directory it was
+                        // working in. The client is told so it can move the
+                        // working-directory row; the working tree is told so
+                        // the branch beside that row moves with it.
+                        InteractionUpdate::WorkingDirectoryChanged(directory) => {
+                            moved.moved_to(directory.clone());
                         }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
                             background_work.store(true, Ordering::Release);
@@ -1838,6 +1915,13 @@ impl ServerState {
             .iter()
             .filter(|sequenced| matches!(sequenced.update, InteractionUpdate::Event(_)))
             .count();
+        // A Session that moved before it stopped is resumed standing where it
+        // moved to, so that is the directory its working tree starts at: the
+        // seeded updates put the client's working-directory row there, and a
+        // tree left at the Session's own checkout would spend the whole of the
+        // next turn naming the branch of a directory nobody is in.
+        let resumed_in =
+            seeded_working_directory(&seeded_updates).unwrap_or_else(|| checkout.clone());
         let updates = Arc::new(Mutex::new(seeded_updates));
         let activity = Arc::new(CurrentActivity::new());
         let idle = Arc::new(IdleNotice::new(true));
@@ -1855,10 +1939,7 @@ impl ServerState {
         // back up in is always active.
         journal::store_session_completed(&summary.path, CompletionState::Active)?;
         let interrupt_requested = Arc::new(AtomicBool::new(false));
-        let working_tree = Arc::new(WorkingTree::new(
-            Arc::clone(&self.inner.git),
-            checkout.clone(),
-        ));
+        let working_tree = Arc::new(WorkingTree::new(Arc::clone(&self.inner.git), resumed_in));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
@@ -1892,6 +1973,7 @@ impl ServerState {
             notice: Arc::clone(&idle),
             working_tree: Arc::clone(&working_tree),
         };
+        let moved = Arc::clone(&working_tree);
         let quota_session = id.clone();
         let quota_provider = selection.provider;
         std::thread::Builder::new()
@@ -1935,6 +2017,13 @@ impl ServerState {
                             {
                                 idle.became_idle();
                             }
+                        }
+                        // The agent has walked out of the directory it was
+                        // working in. The client is told so it can move the
+                        // working-directory row; the working tree is told so
+                        // the branch beside that row moves with it.
+                        InteractionUpdate::WorkingDirectoryChanged(directory) => {
+                            moved.moved_to(directory.clone());
                         }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
                             background_work.store(true, Ordering::Release);
@@ -2355,7 +2444,7 @@ impl ServerState {
     /// conversation, readable, marked stopped; sending to it takes a resume,
     /// which is the request that actually starts an agent.
     fn load_restored(&self, id: &str) -> Result<Option<LoadedInteraction>> {
-        let Some((summary, session_path)) = self.inner.roster.restored_session(id) else {
+        let Some((mut summary, session_path)) = self.inner.roster.restored_session(id) else {
             return Ok(None);
         };
         let meta = journal::read_session_meta(&session_path)?;
@@ -2375,6 +2464,24 @@ impl ServerState {
             .last()
             .map(|update| update.sequence)
             .unwrap_or_default();
+        // A row mirrored before its interaction had been read — one stopped
+        // between a resume and the end of its first turn, or left by a build
+        // that recorded no checkout at all — carries none, and a row that
+        // carries none is shown as a Workspace that is not in a repository.
+        // So it is asked now. Only when there is nothing: a reading the
+        // previous run took is the branch its agent was on, and this run
+        // asking again would answer a different question.
+        if summary.checkout.is_none() {
+            let directory = seeded_working_directory(&replayed)
+                .or_else(|| {
+                    journal::read_session_checkout(&session_path)
+                        .ok()
+                        .flatten()
+                        .map(|checkout| checkout.path)
+                })
+                .unwrap_or_else(|| summary.workspace.clone());
+            summary.checkout = checkout_state(self.inner.git.as_ref(), &directory);
+        }
         Ok(Some(LoadedInteraction {
             summary,
             updates: Updates {
@@ -3101,6 +3208,21 @@ fn replayed_session_updates(
         );
     }
     Ok(updates)
+}
+
+/// Where a replayed history leaves the agent standing, if it moved at all.
+///
+/// Read back out of the updates rather than asked of the journal a second
+/// time: [`replayed_session_updates`] has already walked it, and the answer it
+/// found is the last thing it appends.
+fn seeded_working_directory(updates: &[SequencedUpdate]) -> Option<PathBuf> {
+    updates
+        .iter()
+        .rev()
+        .find_map(|sequenced| match &sequenced.update {
+            InteractionUpdate::WorkingDirectoryChanged(directory) => Some(directory.clone()),
+            _ => None,
+        })
 }
 
 /// The two ends of the Workspace mount a Session ran under: the host directory
@@ -3999,9 +4121,11 @@ mod tests {
         assert_eq!(tree.checkout_state(), None);
     }
 
-    /// Read at the same moment and on the same terms as the uncommitted work
-    /// beside it: nothing until the interaction stops, and then where the
-    /// agent actually was.
+    /// Where the work is happening, unlike the work left behind beside it, is
+    /// known before the agent has done anything: the directory is the one the
+    /// launch resolved, and Git can be asked about it straight away. So it is
+    /// answered from the moment the interaction exists, and again whenever the
+    /// interaction stops.
     #[test]
     fn a_working_tree_records_the_branch_it_stopped_on() {
         let host = temp_path("working-tree-branch-host");
@@ -4010,7 +4134,10 @@ mod tests {
         let repository = git.init(&host);
         let tree = WorkingTree::new(git.clone(), host.clone());
 
-        assert_eq!(tree.checkout_state(), None, "nothing has been read yet");
+        assert!(
+            tree.checkout_state().is_some(),
+            "where the agent is working needs no turn to have ended"
+        );
 
         tree.reread();
 
@@ -4299,12 +4426,10 @@ mod tests {
 
     /// Where the work is happening is two rows, and they have to agree. The
     /// directory follows the agent — a Claude sent into a worktree of the
-    /// project, a Codex told to work elsewhere — but the branch beside it is
-    /// read from the checkout the interaction was *built* with, which for a
-    /// Workspace that makes no worktrees is the Workspace directory and never
-    /// moves. So the details view names a worktree and, beside it, the branch
-    /// of the directory the agent left, and asking again cannot help: every
-    /// reading asks Git about the same pinned path.
+    /// project, a Codex told to work elsewhere — and the branch beside it has
+    /// to follow the same report, or an interaction whose Workspace makes no
+    /// worktrees names the worktree the agent went to and, beside it, the
+    /// branch of the Workspace directory it left.
     #[test]
     fn the_branch_follows_the_agent_out_of_the_directory_it_launched_in() {
         let (store, host, server, _workspace, _id, session_path) = stored_session("moved-branch");
@@ -4336,10 +4461,19 @@ mod tests {
         .expect("the journal says the agent moved");
         assert_eq!(moved, worktree);
 
-        // And this is the checkout the branch beside it is read from: the
-        // directory the launch resolved, held for the life of the interaction.
+        // The working tree starts where the launch put it — this Workspace
+        // makes no worktrees, so that is the Workspace directory — and is told
+        // about the move by the same update, which is what the collector
+        // thread does with one.
         let tree = WorkingTree::new(Arc::clone(&server.inner.git), host.clone());
-        tree.reread();
+        assert_eq!(
+            tree.checkout_state()
+                .and_then(|state| state.branch)
+                .as_deref(),
+            Some("main"),
+            "the interaction begins in the directory it was launched in"
+        );
+        tree.moved_to(moved.clone());
         let reported = tree.checkout_state().expect("the workspace is a checkout");
 
         assert_eq!(
@@ -4348,6 +4482,20 @@ mod tests {
             "the checkout reported is the one the agent is working in"
         );
         assert_eq!(reported.branch.as_deref(), Some("styra/audio"));
+
+        // And a resume starts its working tree there rather than at the
+        // Session's own checkout, which is what the replayed stream leaves the
+        // client standing on.
+        let seeded = replayed_session_updates(
+            &session_path,
+            crate::event::Protocol::CodexAppServer,
+            WorkspaceMount {
+                host: &host,
+                sandbox: &host,
+            },
+        )
+        .unwrap();
+        assert_eq!(seeded_working_directory(&seeded), Some(worktree));
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
@@ -4370,13 +4518,15 @@ mod tests {
         let git = Arc::new(crate::git::FakeGit::new());
         git.init(&host);
         let worktree = host.join(".worktrees/audio");
-        git.create_worktree(&host, "styra/audio", &worktree).unwrap();
+        git.create_worktree(&host, "styra/audio", &worktree)
+            .unwrap();
 
         let workspace = crate::workspace::create(&store, &host, None).unwrap();
         let selection = Selection::new(crate::agent::Provider::Codex);
         let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
         let (journal, id) =
-            Journal::create_in_workspace(&store, &workspace.id, &profile, &selection, None).unwrap();
+            Journal::create_in_workspace(&store, &workspace.id, &profile, &selection, None)
+                .unwrap();
         let session_path = journal.path().parent().unwrap().to_path_buf();
         drop(journal);
         journal::store_session_checkout(
