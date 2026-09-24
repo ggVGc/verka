@@ -27,6 +27,7 @@ import topbar from "../vendor/topbar"
 
 const MAX_RECORDING_MS = 120_000
 const WAV_SAMPLE_RATE = 16_000
+const RECORDING_CHUNK_MS = 250
 
 const VoiceRecorder = {
   mounted() {
@@ -65,7 +66,10 @@ const VoiceRecorder = {
         if (event.data.size > 0) capture.chunks.push(event.data)
       })
       this.capture = capture
-      recorder.start()
+      // Do not depend on the final `dataavailable` event alone. Some browsers
+      // can produce only a container header when a new recorder is started soon
+      // after the previous one stopped.
+      recorder.start(RECORDING_CHUNK_MS)
       this.setState("recording", "Stop recording")
       this.pushEvent("audio_recording_started", {})
       this.recordingTimer = window.setTimeout(() => this.finishRecording(), MAX_RECORDING_MS)
@@ -84,7 +88,6 @@ const VoiceRecorder = {
       const stopped = new Promise(resolve => capture.recorder.addEventListener("stop", resolve, {once: true}))
       capture.recorder.stop()
       await stopped
-      this.releaseCapture(capture)
       const message = document.querySelector('[name="message[text]"]')
       const selectionStart = message?.selectionStart ?? message?.value.length ?? 0
       const selectionEnd = message?.selectionEnd ?? selectionStart
@@ -98,6 +101,7 @@ const VoiceRecorder = {
       if (capture.chunks.length === 0) throw new Error("The microphone did not produce any audio.")
 
       const captured = new Blob(capture.chunks, {type: capture.recorder.mimeType})
+      this.releaseCapture(capture)
       const wav = await recordingToWav(captured)
       const file = new File([wav], "voice-message.wav", {type: "audio/wav"})
       this.upload("audio", [file])
@@ -151,6 +155,9 @@ async function recordingToWav(blob) {
   const context = new AudioContext()
   try {
     const decoded = await context.decodeAudioData(await blob.arrayBuffer())
+    if (decoded.length === 0 || decoded.numberOfChannels === 0) {
+      throw new Error("The microphone did not produce any audio.")
+    }
     return encodeMonoWav(decoded, WAV_SAMPLE_RATE)
   } finally {
     await context.close()

@@ -38,7 +38,8 @@ defmodule StyraWebWeb.DashboardLive do
         audio_state: :idle,
         audio_contract: "none",
         audio_before: "",
-        audio_after: ""
+        audio_after: "",
+        audio_task_ref: nil
       )
       |> allow_upload(:audio,
         accept: ~w(.wav),
@@ -98,25 +99,39 @@ defmodule StyraWebWeb.DashboardLive do
      |> disconnected("refresh failed: #{inspect(reason)}")}
   end
 
-  def handle_async({:voice_message, _ref}, {:ok, {:ok, transcript}}, socket) do
-    text = socket.assigns.audio_before <> transcript <> socket.assigns.audio_after
+  def handle_async({:voice_message, ref}, {:ok, {:ok, context, transcript}}, socket) do
+    if socket.assigns.audio_task_ref == ref do
+      text = context.before <> transcript <> context.after
 
-    {:noreply,
-     socket
-     |> assign(
-       audio_state: :idle,
-       error: nil,
-       message_form: message_form(socket.assigns.audio_contract, text)
-     )
-     |> push_event("voice-finished", %{})}
+      {:noreply,
+       socket
+       |> assign(
+         audio_state: :idle,
+         audio_task_ref: nil,
+         error: nil,
+         message_form: message_form(context.contract, text)
+       )
+       |> push_event("voice-finished", %{})}
+    else
+      # An older transcription must not overwrite the draft or reset a newer recorder.
+      {:noreply, socket}
+    end
   end
 
-  def handle_async({:voice_message, _ref}, {:ok, {:error, message}}, socket) do
-    {:noreply, voice_error(socket, message)}
+  def handle_async({:voice_message, ref}, {:ok, {:error, _context, message}}, socket) do
+    if socket.assigns.audio_task_ref == ref do
+      {:noreply, voice_error(socket, message)}
+    else
+      {:noreply, socket}
+    end
   end
 
-  def handle_async({:voice_message, _ref}, {:exit, reason}, socket) do
-    {:noreply, voice_error(socket, "Voice message failed: #{inspect(reason)}")}
+  def handle_async({:voice_message, ref}, {:exit, reason}, socket) do
+    if socket.assigns.audio_task_ref == ref do
+      {:noreply, voice_error(socket, "Voice message failed: #{inspect(reason)}")}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true
@@ -180,6 +195,13 @@ defmodule StyraWebWeb.DashboardLive do
     end
   end
 
+  def handle_event("update_draft", %{"message" => params}, socket) do
+    text = params["text"] || ""
+    contract = normalize_contract(params["contract"])
+
+    {:noreply, assign(socket, message_form: message_form(contract, text))}
+  end
+
   def handle_event("audio_recording_started", _params, socket) do
     if socket.assigns.selected_id do
       case StyraAPI.audio_recording_started(socket.assigns.socket_path) do
@@ -210,7 +232,8 @@ defmodule StyraWebWeb.DashboardLive do
            audio_state: :uploading,
            audio_contract: contract,
            audio_before: before,
-           audio_after: after_text
+           audio_after: after_text,
+           audio_task_ref: nil
          )}
 
       {:error, message} ->
@@ -305,16 +328,20 @@ defmodule StyraWebWeb.DashboardLive do
 
         path ->
           socket_path = socket.assigns.socket_path
+          context = %{
+            contract: socket.assigns.audio_contract,
+            before: socket.assigns.audio_before,
+            after: socket.assigns.audio_after
+          }
 
           {:noreply,
            socket
-           |> assign(audio_state: :transcribing, error: nil)
+           |> assign(audio_state: :transcribing, audio_task_ref: entry.ref, error: nil)
            |> start_async({:voice_message, entry.ref}, fn ->
              try do
-               with {:ok, transcript} <- StyraAPI.transcribe_audio(socket_path, path),
-                    transcript = String.trim(transcript),
-                    :ok <- nonempty_transcript(transcript) do
-                 {:ok, transcript}
+               case transcribe_audio(socket_path, path) do
+                 {:ok, transcript} -> {:ok, context, transcript}
+                 {:error, message} -> {:error, context, message}
                end
              after
                File.rm(path)
@@ -329,6 +356,14 @@ defmodule StyraWebWeb.DashboardLive do
   defp nonempty_transcript(""), do: {:error, "Styra could not recognize any speech."}
   defp nonempty_transcript(_transcript), do: :ok
 
+  defp transcribe_audio(socket_path, path) do
+    with {:ok, transcript} <- StyraAPI.transcribe_audio(socket_path, path),
+         transcript = String.trim(transcript),
+         :ok <- nonempty_transcript(transcript) do
+      {:ok, transcript}
+    end
+  end
+
   defp normalize_contract(contract) when is_binary(contract) do
     if contract in ["none" | Contract.values()], do: contract, else: "none"
   end
@@ -340,7 +375,7 @@ defmodule StyraWebWeb.DashboardLive do
 
   defp voice_error(socket, message) do
     socket
-    |> assign(audio_state: :idle, error: message)
+    |> assign(audio_state: :idle, audio_task_ref: nil, error: message)
     |> push_event("voice-failed", %{message: message})
   end
 

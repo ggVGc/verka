@@ -207,6 +207,28 @@ defmodule StyraWebWeb.DashboardLiveTest do
     assert has_element?(view, "#message-form textarea", "Second: Summarize the latest changes")
   end
 
+  test "keeps an edited draft when recording starts", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    render_async(view)
+
+    view |> element("#interaction-styra-1") |> render_click()
+    render_async(view)
+
+    view
+    |> form("#message-form", message: %{text: "First recording", contract: "none"})
+    |> render_change()
+
+    view
+    |> form("#message-form", message: %{text: "", contract: "none"})
+    |> render_change()
+
+    view |> element("#voice-recorder") |> render_hook("audio_recording_started", %{})
+
+    assert has_element?(view, "#message-form textarea", "")
+    refute has_element?(view, "#message-form textarea", "First recording")
+    assert_receive {:styra_request, %{"operation" => "audio_recording_started"}}
+  end
+
   defp ok(type, data) do
     %{"status" => "ok", "response" => %{"type" => type, "data" => data}}
   end
