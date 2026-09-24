@@ -25,7 +25,7 @@ pub const CODE_BACKGROUND: Color = Color::Black;
 
 /// `Color::DarkGray` renders too dark to read comfortably in most terminals;
 /// this desaturated slate blue replaces it while staying subdued.
-pub const MUTED_SLATE: Color = Color::Rgb(115, 130, 155);
+pub const MUTED_SLATE: Color = Color::Rgb(140, 150,140);
 
 /// Truly inactive controls and chrome retain a subdued, low-key color.
 pub const INACTIVE: Color = MUTED_SLATE;
