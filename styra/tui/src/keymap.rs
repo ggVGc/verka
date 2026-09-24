@@ -134,10 +134,14 @@ const GLOBAL: &[ReferenceRow] = &[
     },
     ReferenceRow::Binding {
         keys: "n / N",
-        action: "new session where this one works / stop and start new",
+        action: "step to the next interaction that is still running / stop and start new",
     },
     ReferenceRow::Binding {
-        keys: "Ctrl+L",
+        keys: "ctrl-n",
+        action: "new session where this one works",
+    },
+    ReferenceRow::Binding {
+        keys: "l",
         action: "choose model for an idle agent turn",
     },
     ReferenceRow::Binding {
@@ -165,11 +169,7 @@ const GLOBAL: &[ReferenceRow] = &[
         action: "go to the next interaction that went idle unseen",
     },
     ReferenceRow::Binding {
-        keys: "ctrl-n",
-        action: "step to the next interaction that is still running",
-    },
-    ReferenceRow::Binding {
-        keys: "r / l / t / d",
+        keys: "r / ctrl-l / t / d",
         action: "raw / log / transcript / details; press again for events",
     },
     ReferenceRow::Binding {

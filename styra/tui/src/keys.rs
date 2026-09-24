@@ -219,9 +219,9 @@ pub fn handle_list_key(
         KeyCode::Char('Y') => return copy_conversation(app),
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            return app.open_launcher()
+            return app.toggle_view(View::Log)
         }
-        KeyCode::Char('l') => return app.toggle_view(View::Log),
+        KeyCode::Char('l') => return app.open_launcher(),
         // Opening the view also refreshes it: the log lives in the daemon's
         // memory, so there is nothing local to show without asking.
         KeyCode::Char('Q') => {
@@ -245,11 +245,11 @@ pub fn handle_list_key(
             return app.ask(Request::NextIdleInteraction)
         }
         // Beside ctrl-a, and the same jump with a wider net: ctrl-a goes to
-        // work that is waiting to be read, ctrl-n steps through every
-        // interaction still running. Matched before plain `n`, which crossterm
+        // work that is waiting to be read, plain `n` steps through every
+        // interaction still running. Matched before ctrl-n, which crossterm
         // reports as the same character.
         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            return app.ask(Request::NextLiveInteraction)
+            return app.ask(Request::NewSession)
         }
         KeyCode::Char('a') if app.view != View::Files => return app.ask(Request::Interactions),
         KeyCode::Char('V') => return app.ask(Request::Workspace),
@@ -258,7 +258,7 @@ pub fn handle_list_key(
         }
         KeyCode::Char('A') => return app.ask(Request::Sessions),
         KeyCode::Char('N') => return app.ask(Request::Reset),
-        KeyCode::Char('n') => return app.ask(Request::NewSession),
+        KeyCode::Char('n') => return app.ask(Request::NextLiveInteraction),
         _ => {}
     }
     match app.view {
@@ -930,10 +930,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// ctrl-n steps through the running interactions, and must be taken before
-    /// plain `n`, which the terminal reports as the same character.
+    /// ctrl-n starts a new session, and must be taken before plain `n`, which
+    /// the terminal reports as the same character.
     #[test]
-    fn control_n_steps_to_the_next_running_interaction() {
+    fn control_n_starts_a_new_session() {
         let root = tree("live-step");
         let mut app = app(&root);
         app.enter_list();
@@ -952,17 +952,39 @@ mod tests {
         };
 
         press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
-        assert_eq!(app.take_request(), Some(Request::NextLiveInteraction));
+        assert_eq!(app.take_request(), Some(Request::NewSession));
 
         press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
-        assert_eq!(app.take_request(), Some(Request::NewSession));
+        assert_eq!(app.take_request(), Some(Request::NextLiveInteraction));
 
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn control_l_opens_the_launcher_from_the_main_view() {
+    fn plain_l_opens_the_launcher_from_the_main_view() {
         let root = tree("launcher-shortcut");
+        let mut app = app(&root);
+        app.enter_list();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+
+        assert!(app.launcher.is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn control_l_toggles_the_log_view() {
+        let root = tree("log-shortcut");
         let mut app = app(&root);
         app.enter_list();
         let client = Client::new(root.join("missing.sock"));
@@ -978,7 +1000,7 @@ mod tests {
             &root.join("preferences.toml"),
         );
 
-        assert!(app.launcher.is_some());
+        assert_eq!(app.view, View::Log);
         let _ = std::fs::remove_dir_all(root);
     }
 
