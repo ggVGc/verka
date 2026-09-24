@@ -89,10 +89,12 @@ impl Errand {
             Provider::Codex | Provider::CodexExec => Provider::CodexExec,
             Provider::Claude => Provider::Claude,
         };
+        let model = crate::agent::cheapest_model_for(self.provider).to_owned();
+        let effort = crate::agent::cheapest_effort_for(provider, &model);
         Selection {
             provider,
-            model: self.provider.cheapest_model().to_owned(),
-            effort: self.provider.cheapest_effort(),
+            model,
+            effort,
         }
     }
 
@@ -301,22 +303,30 @@ mod tests {
     }
 
     /// An errand is the operator's own agent on its cheap tier, in the
-    /// one-shot form — never the model their session runs on.
+    /// one-shot form — never the model their session runs on. Cheap, but still
+    /// launchable: the rung is the lowest that model actually accepts, and the
+    /// model is the cheapest one that takes a rung at all.
     #[test]
-    fn an_errand_runs_on_the_providers_cheapest_model() {
+    fn an_errand_runs_on_the_providers_cheapest_launchable_model() {
         let codex = Errand::new(Provider::Codex, "name this").selection();
         assert_eq!(codex.provider, Provider::CodexExec);
         assert_eq!(codex.model, "gpt-5.6-luna");
-        assert_eq!(codex.effort, Effort::Minimal);
+        assert_eq!(codex.effort, Effort::Low);
 
         let claude = Errand::new(Provider::Claude, "name this").selection();
         assert_eq!(claude.provider, Provider::Claude);
-        assert_eq!(claude.model, "claude-haiku-4-5-20251001");
+        // Not Haiku 4.5, which is cheaper but takes no effort setting at all.
+        assert_eq!(claude.model, "claude-sonnet-5");
         assert_eq!(claude.effort, Effort::Low);
 
         for provider in crate::agent::PROVIDERS {
             let errand = Errand::new(provider, "name this").selection();
             assert_ne!(errand.model, provider.default_model());
+            crate::agent::validate_selection(&Selection {
+                provider,
+                ..errand.clone()
+            })
+            .unwrap();
         }
     }
 

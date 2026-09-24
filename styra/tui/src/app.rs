@@ -647,10 +647,17 @@ impl App {
     /// `selection` is updated when the agent reports the model it resolved, so
     /// this is also the exact selection a reopened launcher starts from.
     pub fn launch_label(&self) -> LaunchLabel {
+        // A model that takes no effort setting has none to name: the
+        // selection still carries one, because a `Selection` always does, but
+        // it is a placeholder nothing sends and showing it would claim the
+        // session is running at a rung the model has never heard of.
+        let effort =
+            styra_protocol::agent::supports_effort(self.selection.provider, &self.selection.model)
+                .then(|| self.selection.effort.as_str().to_owned());
         LaunchLabel {
             agent: self.selection.provider.as_str().to_owned(),
             model: Some(self.selection.model.clone()),
-            effort: Some(self.selection.effort.as_str().to_owned()),
+            effort,
             model_reported: self.model_reported,
             effort_reported: self.effort_reported,
         }
@@ -1260,7 +1267,7 @@ mod tests {
     use super::*;
     use crate::activity::{EndReason, IdleReason, StopReason};
     use crate::launcher::LaunchColumn;
-    use styra_protocol::agent::{Effort, PROVIDERS};
+    use styra_protocol::agent::{efforts_for, models_for, Effort, PROVIDERS};
     use styra_protocol::event::{TokenUsage, TurnOutcome, TurnUsage};
     use styra_protocol::RawLine;
     use styra_protocol::{Answer, AnswerValue, FileLocation};
@@ -1990,9 +1997,8 @@ mod tests {
         app.open_launcher();
         let launcher = app.launcher.as_mut().expect("the picker is reachable");
 
-        // Provider column: move to Claude Code.
+        // Provider column: move to Claude Code, the row after codex.
         assert_eq!(launcher.column, LaunchColumn::Provider);
-        launcher.next();
         launcher.next();
         assert_eq!(launcher.provider(), Provider::Claude);
 
@@ -2001,7 +2007,7 @@ mod tests {
         launcher.next_column();
         assert_eq!(launcher.selection().model, Provider::Claude.default_model());
         launcher.next();
-        let models = Provider::Claude.models();
+        let models = models_for(Provider::Claude);
         let default = models
             .iter()
             .position(|model| *model == Provider::Claude.default_model())
@@ -2012,7 +2018,7 @@ mod tests {
         // Effort column, likewise — the ladder itself, no extra row.
         launcher.next_column();
         assert_eq!(launcher.column, LaunchColumn::Effort);
-        let effort = Provider::Claude.efforts()[0];
+        let effort = efforts_for(Provider::Claude, Provider::Claude.default_model())[0];
         while launcher.selection().effort != effort {
             launcher.prev();
         }
@@ -2058,7 +2064,7 @@ mod tests {
         );
         assert_eq!(
             launcher.model,
-            Provider::Claude.models().len(),
+            models_for(Provider::Claude).len(),
             "carried last, after the catalog"
         );
         assert_eq!(launcher.selection().model, selection.model);
@@ -2083,7 +2089,7 @@ mod tests {
         launcher.next();
         assert_eq!(
             launcher.selection().model,
-            *Provider::Claude.models().first().unwrap()
+            *models_for(Provider::Claude).first().unwrap()
         );
         launcher.prev();
         assert_eq!(launcher.selection().model, selection.model);
@@ -2479,8 +2485,7 @@ mod tests {
         assert_eq!(launcher.carried_model, None);
         assert_eq!(
             launcher.models(),
-            Provider::Claude
-                .models()
+            models_for(Provider::Claude)
                 .iter()
                 .map(|model| (*model).to_owned())
                 .collect::<Vec<_>>(),

@@ -5,7 +5,9 @@
 //! picker as `launcher`, [`crate::keys::handle_launcher_key`] drives it, and
 //! [`crate::presentation::launcher`] draws it.
 
-use styra_protocol::agent::{Provider, Selection, PROVIDERS};
+use styra_protocol::agent::{
+    default_effort_for, efforts_for, models_for, Effort, Provider, Selection, PROVIDERS,
+};
 
 /// Which of the launch picker's three columns has the keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,12 +75,15 @@ impl Launcher {
         provider_locked: bool,
     ) -> Self {
         let provider = row_of(&PROVIDERS, &selection.provider);
-        let models = selection.provider.models();
+        let models = models_for(selection.provider);
         // A model the catalog does not list is carried as an extra row rather
         // than falling back to the first.
         let carried_model = (!models.iter().any(|candidate| *candidate == selection.model))
             .then(|| selection.model.clone());
-        let effort = row_of(selection.provider.efforts(), &selection.effort);
+        let effort = row_of(
+            efforts_for(selection.provider, &selection.model),
+            &selection.effort,
+        );
         let mut launcher = Self {
             column: if provider_locked {
                 LaunchColumn::Model
@@ -112,16 +117,23 @@ impl Launcher {
             Some(model) => model.clone(),
             None => provider.default_model().to_owned(),
         };
-        let efforts = provider.efforts();
-        let effort = efforts
+        let effort = efforts_for(provider, &model)
             .get(self.effort)
             .copied()
-            .unwrap_or_else(|| provider.default_effort());
+            .unwrap_or_else(|| default_effort_for(provider, &model));
         Selection {
             provider,
             model,
             effort,
         }
+    }
+
+    /// The effort column's rows: the ladder the *currently selected model*
+    /// accepts, which is why this is not a property of the agent column alone.
+    /// Empty for a model that takes no effort setting — the column then has
+    /// nothing to offer and the drawing code says so.
+    pub fn efforts(&self) -> &'static [Effort] {
+        efforts_for(self.provider(), &self.selection().model)
     }
 
     /// The model column's rows: the provider's catalog, plus a carried model if
@@ -132,9 +144,7 @@ impl Launcher {
     /// carried model, which the catalog does not list at all, stays last
     /// until it is selected once.
     pub fn models(&self) -> Vec<String> {
-        let mut rows: Vec<String> = self
-            .provider()
-            .models()
+        let mut rows: Vec<String> = models_for(self.provider())
             .iter()
             .map(|model| (*model).to_owned())
             .collect();
@@ -150,15 +160,17 @@ impl Launcher {
 
     /// How many rows the model column has.
     pub fn model_rows(&self) -> usize {
-        self.provider().models().len() + usize::from(self.carried_model.is_some())
+        models_for(self.provider()).len() + usize::from(self.carried_model.is_some())
     }
 
-    /// How many rows the focused column has.
+    /// How many rows the focused column has. Never zero: a model with no effort
+    /// ladder leaves that column empty, and a move within it is then a move
+    /// within one nonexistent row rather than a division by it.
     fn rows(&self) -> usize {
         match self.column {
             LaunchColumn::Provider => PROVIDERS.len(),
             LaunchColumn::Model => self.model_rows(),
-            LaunchColumn::Effort => self.provider().efforts().len(),
+            LaunchColumn::Effort => self.efforts().len().max(1),
         }
     }
 
@@ -171,20 +183,25 @@ impl Launcher {
     }
 
     pub fn next(&mut self) {
+        let effort = self.selection().effort;
         let rows = self.rows();
         let row = self.row();
         *row = (*row + 1) % rows;
-        self.after_move();
+        self.after_move(effort);
     }
 
     pub fn prev(&mut self) {
+        let effort = self.selection().effort;
         let rows = self.rows();
         let row = self.row();
         *row = (*row + rows - 1) % rows;
-        self.after_move();
+        self.after_move(effort);
     }
 
-    fn after_move(&mut self) {
+    /// Put the columns back in agreement after a move, given the effort that
+    /// was selected before it. `held` is passed in because the effort *row* is
+    /// an index into a ladder the move itself may have replaced.
+    fn after_move(&mut self, held: Effort) {
         // A model or effort chosen for the previous provider means nothing to the
         // new one — the ladders and catalogs differ — so both reset to that
         // agent's own opening rows rather than to whatever sits at the same
@@ -192,9 +209,27 @@ impl Launcher {
         // picker was opened on.
         if self.column == LaunchColumn::Provider {
             let provider = self.provider();
-            self.effort = row_of(provider.efforts(), &provider.default_effort());
             self.carried_model = None;
             self.model = row_of(&self.models(), &provider.default_model().to_owned());
+            self.effort = row_of(
+                self.efforts(),
+                &default_effort_for(provider, &self.selection().model),
+            );
+        }
+        // Models of one agent do not share a ladder either: `xhigh` is a rung
+        // on Opus 4.7 and not on 4.6, so stepping down the model column must
+        // not leave the effort row pointing at a rung the new model rejects.
+        // The rung itself is kept where the new model has it, and the model's
+        // own default stands in where it does not.
+        if self.column == LaunchColumn::Model {
+            let model = self.selection().model;
+            let efforts = efforts_for(self.provider(), &model);
+            let effort = if efforts.contains(&held) {
+                held
+            } else {
+                default_effort_for(self.provider(), &model)
+            };
+            self.effort = row_of(efforts, &effort);
         }
     }
 
@@ -245,18 +280,22 @@ mod tests {
             assert_eq!(opened.model, provider.default_model());
             assert_eq!(opened.effort, provider.default_effort());
 
-            // And no reachable row in either column yields an absent value.
+            // And no reachable row in either column yields an absent value —
+            // nor one the model it names would refuse.
+            let catalog = models_for(provider);
             for column in [LaunchColumn::Model, LaunchColumn::Effort] {
                 launcher.column = column;
-                for _ in 0..provider.models().len() + provider.efforts().len() {
+                for _ in 0..catalog.len() + launcher.efforts().len() {
                     let selection = launcher.selection();
                     assert!(
-                        provider.models().contains(&selection.model.as_str()),
+                        catalog.contains(&selection.model.as_str()),
                         "{provider:?} {column:?} reached a model outside the catalog"
                     );
+                    let efforts = efforts_for(provider, &selection.model);
                     assert!(
-                        provider.efforts().contains(&selection.effort),
-                        "{provider:?} {column:?} reached an effort outside the ladder"
+                        efforts.is_empty() || efforts.contains(&selection.effort),
+                        "{provider:?} {column:?} reached an effort {} rejects",
+                        selection.model
                     );
                     launcher.next();
                 }
@@ -269,7 +308,7 @@ mod tests {
     /// a single pick.
     #[test]
     fn the_model_column_lists_recently_selected_models_first() {
-        let catalog = Provider::Claude.models();
+        let catalog = models_for(Provider::Claude);
         let recent = vec![
             catalog[catalog.len() - 1].to_owned(),
             "gpt-5.6-sol".to_owned(), // another agent's model: never a row here
@@ -291,6 +330,61 @@ mod tests {
         );
         // Ordering the rows does not change which one the picker opened on.
         assert_eq!(launcher.selection().model, Provider::Claude.default_model());
+    }
+
+    /// The ladders differ between models of the *same* agent, so stepping down
+    /// the model column has to retune the effort row: a rung the new model
+    /// shares is kept, and one it does not have gives way to its own default.
+    #[test]
+    fn changing_model_keeps_a_shared_rung_and_drops_an_unshared_one() {
+        let mut launcher = Launcher::from_selection(
+            &Selection::parse("claude:claude-opus-4-7/xhigh").unwrap(),
+            // Ordered so that stepping down the column walks 4.7 → 4.6 → 4.5.
+            &[
+                "claude-opus-4-7".into(),
+                "claude-opus-4-6".into(),
+                "claude-opus-4-5-20251101".into(),
+            ],
+            false,
+        );
+        launcher.column = LaunchColumn::Model;
+        assert_eq!(launcher.selection().effort, Effort::XHigh);
+
+        // Opus 4.6 has no `xhigh` — that rung arrived with 4.7 — so the row
+        // cannot stay where it is.
+        launcher.next();
+        let selection = launcher.selection();
+        assert_eq!(selection.model, "claude-opus-4-6");
+        assert_eq!(
+            selection.effort,
+            default_effort_for(selection.provider, &selection.model)
+        );
+
+        // `high` is on every Claude ladder, so it survives the next step.
+        while launcher.selection().effort != Effort::High {
+            launcher.column = LaunchColumn::Effort;
+            launcher.next();
+            launcher.column = LaunchColumn::Model;
+        }
+        launcher.next();
+        assert_eq!(launcher.selection().model, "claude-opus-4-5-20251101");
+        assert_eq!(launcher.selection().effort, Effort::High);
+    }
+
+    /// A model that takes no effort setting leaves the column with no rows.
+    /// Moving within it is then a no-op rather than an arithmetic fault.
+    #[test]
+    fn an_empty_effort_column_can_still_be_moved_in() {
+        let mut launcher = Launcher::from_selection(
+            &Selection::parse("claude:claude-haiku-4-5-20251001").unwrap(),
+            &[],
+            false,
+        );
+        launcher.column = LaunchColumn::Effort;
+        assert!(launcher.efforts().is_empty());
+        launcher.next();
+        launcher.prev();
+        assert_eq!(launcher.selection().model, "claude-haiku-4-5-20251001");
     }
 
     #[test]
@@ -327,7 +421,7 @@ mod tests {
         );
         // And the column is back to just that agent's catalog.
         launcher.next_column();
-        assert_eq!(launcher.model_rows(), launcher.provider().models().len());
+        assert_eq!(launcher.model_rows(), models_for(launcher.provider()).len());
     }
 
     /// A live session's agent cannot be changed without converting the
@@ -373,9 +467,9 @@ mod tests {
         // Neither the model nor the effort carries across by index: each falls
         // back to the new agent's own declared default.
         assert_eq!(selection.model, selection.provider.default_model());
-        assert_eq!(selection.effort, selection.provider.default_effort());
-        // And `max` is not offered at all under codex, so it cannot be reached
-        // by walking the column either.
-        assert!(!launcher.provider().efforts().contains(&Effort::Max));
+        assert_eq!(
+            selection.effort,
+            default_effort_for(selection.provider, &selection.model)
+        );
     }
 }

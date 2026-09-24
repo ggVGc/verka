@@ -95,6 +95,7 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
         &launcher.providers,
         launcher.provider_selected,
         launcher.focused == LauncherColumn::Provider,
+        "",
     );
     render_launcher_column(
         frame,
@@ -103,6 +104,7 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
         &launcher.models,
         launcher.model_selected,
         launcher.focused == LauncherColumn::Model,
+        "",
     );
     render_launcher_column(
         frame,
@@ -111,8 +113,15 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
         &launcher.efforts,
         launcher.effort_selected,
         launcher.focused == LauncherColumn::Effort,
+        // The effort column is the one that can legitimately have no rows:
+        // some models predate the setting entirely. An empty box would read
+        // as a bug, so it says what it is.
+        NO_EFFORTS,
     );
 }
+
+/// What the effort column shows for a model that takes no effort setting.
+pub const NO_EFFORTS: &str = "none for this model";
 
 fn render_launcher_column(
     frame: &mut Frame,
@@ -121,6 +130,9 @@ fn render_launcher_column(
     rows: &[String],
     selected: usize,
     focused: bool,
+    // Shown, dimmed and unselectable, when there are no rows at all. Empty
+    // for a column that always has some.
+    empty_note: &str,
 ) {
     let border_style = if focused {
         Style::default().fg(palette::ACCENT)
@@ -134,6 +146,16 @@ fn render_launcher_column(
             title.to_owned(),
             Style::default().fg(palette::MUTED_TEXT),
         ));
+    if rows.is_empty() {
+        let note = ListItem::new(Line::from(Span::styled(
+            format!("  {empty_note}"),
+            Style::default()
+                .fg(palette::MUTED_TEXT)
+                .add_modifier(Modifier::DIM),
+        )));
+        frame.render_widget(List::new(vec![note]).block(block), area);
+        return;
+    }
     let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
@@ -210,6 +232,24 @@ mod tests {
         ] {
             assert!(screen.contains(text), "missing {text}: {screen}");
         }
+    }
+
+    /// Some models predate the reasoning-effort setting, so the column really
+    /// can be empty. It says which it is rather than reading as a blank box.
+    #[test]
+    fn an_effort_column_with_no_rungs_says_so() {
+        let mut view = view();
+        view.selection = "claude:claude-haiku-4-5-20251001".into();
+        view.models = vec![
+            "claude-opus-5".into(),
+            "claude-sonnet-5".into(),
+            "claude-haiku-4-5-20251001".into(),
+        ];
+        view.model_selected = 2;
+        view.efforts = vec![];
+        let screen = rendered(&view);
+        assert!(screen.contains(NO_EFFORTS), "{screen}");
+        assert!(screen.contains("effort"), "the column is still there");
     }
 
     #[test]

@@ -13,33 +13,7 @@
 //! it. Lua is the language it generates today; the reading and the writing are
 //! separated so a second one is a backend rather than a rewrite.
 
-pub mod agent {
-    pub use genta::agent::*;
-
-    pub const PROVIDERS: [Provider; 2] = [Provider::Codex, Provider::Claude];
-
-    /// Validate an interactive Styra launch selection.
-    pub fn validate_selection(selection: &Selection) -> anyhow::Result<()> {
-        if !PROVIDERS.contains(&selection.provider) {
-            anyhow::bail!(
-                "agent provider {:?} is not interactive; Styra supports: {}",
-                selection.provider.as_str(),
-                PROVIDERS.map(|provider| provider.as_str()).join(", ")
-            );
-        }
-        if selection.model.trim().is_empty() {
-            anyhow::bail!("the agent model cannot be empty");
-        }
-        if !selection.provider.efforts().contains(&selection.effort) {
-            anyhow::bail!(
-                "reasoning effort {:?} is not supported by {}",
-                selection.effort.as_str(),
-                selection.provider.as_str()
-            );
-        }
-        Ok(())
-    }
-}
+pub mod agent;
 
 pub use driva::{EnvironmentOrigin, FloorEntry, FloorKind, Mount, MountAccess, WritableMountMode};
 pub use genta::{event, render};

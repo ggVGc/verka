@@ -574,7 +574,7 @@ fn stop_daemon(socket: &Path) -> Result<()> {
 mod cli_tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use styra_protocol::agent::{Provider, Selection};
+    use styra_protocol::agent::{models_for, Provider, Selection};
 
     fn workspace(id: &str, host_path: &str) -> WorkspaceSummary {
         WorkspaceSummary {
@@ -783,7 +783,7 @@ mod cli_tests {
             keys::handle_launcher_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &path);
         }
         let moved_to = app.launcher.as_ref().unwrap().selection().model;
-        assert_eq!(moved_to, Provider::Claude.models()[opened_on + 1]);
+        assert_eq!(moved_to, models_for(Provider::Claude)[opened_on + 1]);
 
         keys::handle_launcher_key(
             &mut app,

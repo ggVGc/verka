@@ -21,32 +21,12 @@
 // session runner uses; a client touches only `agent::SandboxLayout` to render
 // sandbox-relative paths.
 pub mod agent {
-    pub use genta::agent::*;
-
-    /// The interactive providers Styra can launch, in picker order.
-    pub const PROVIDERS: [Provider; 2] = [Provider::Codex, Provider::Claude];
-
-    /// Validate a Styra launch selection, excluding Genta's batch-only providers.
-    pub fn validate_selection(selection: &Selection) -> anyhow::Result<()> {
-        if !PROVIDERS.contains(&selection.provider) {
-            anyhow::bail!(
-                "agent provider {:?} is not interactive; Styra supports: {}",
-                selection.provider.as_str(),
-                PROVIDERS.map(|provider| provider.as_str()).join(", ")
-            );
-        }
-        if selection.model.trim().is_empty() {
-            anyhow::bail!("the agent model cannot be empty");
-        }
-        if !selection.provider.efforts().contains(&selection.effort) {
-            anyhow::bail!(
-                "reasoning effort {:?} is not supported by {}",
-                selection.effort.as_str(),
-                selection.provider.as_str()
-            );
-        }
-        Ok(())
-    }
+    // The catalogs — which providers are interactive, which models are worth
+    // offering, and which effort rungs each model accepts — are part of the
+    // vocabulary a client shares, so they live in `styra_protocol` and are only
+    // re-exported here. Only profile resolution, which a client never does, is
+    // the session runner's own.
+    pub use styra_protocol::agent::*;
 
     /// Resolve an internal launch profile from the operator's selection.
     pub fn resolve_profile(
@@ -55,19 +35,6 @@ pub mod agent {
     ) -> anyhow::Result<Profile> {
         validate_selection(selection)?;
         selection.resolve(layout)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn styra_only_accepts_interactive_providers() {
-            validate_selection(&Selection::new(Provider::Codex)).unwrap();
-            validate_selection(&Selection::new(Provider::Claude)).unwrap();
-            let error = validate_selection(&Selection::new(Provider::CodexExec)).unwrap_err();
-            assert!(error.to_string().contains("not interactive"));
-        }
     }
 }
 pub use genta::appserver;

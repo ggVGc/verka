@@ -258,8 +258,22 @@ provider default explicitly.
 
 Both parts reach each agent its own way — codex as `-c model=…` and
 `-c model_reasoning_effort=…` on the process it launches, Claude Code as `--model`
-and `--effort` — and the effort ladders differ at the ends (codex has `minimal`,
-Claude Code has `max`), so each provider publishes the levels it accepts.
+and `--effort`.
+
+Which efforts are *valid* is a property of the model rather than of the agent,
+so Styra publishes the ladders per model in `styra_protocol::agent`
+(`efforts_for`, `default_effort_for`, `cheapest_effort_for`, `supports_effort`)
+rather than reading Genta's one-ladder-per-provider `Provider::efforts`. The
+ends differ within a single agent: `xhigh` is a rung on Claude Opus 4.7 and not
+on 4.6, `max` is one on `gpt-5.6-sol` and not on `gpt-5.5`, and Sonnet 4.5 and
+Haiku 4.5 take no effort setting at all — an empty ladder, which is not the same
+thing as a short one. A model none of the tables name falls back to the widest
+ladder that agent has: the catalog is not a closed set, and the agent itself is
+the authority that will reject a rung it does not have. Two known gaps, both
+owned by `genta::agent::Effort`: codex's top rung `ultra` (on `gpt-6-astra`,
+`gpt-6-sol`, `gpt-5.6-sol`, `gpt-5.6-terra`) has no variant to spell it, and a
+launch cannot yet omit `--effort`, so the empty-ladder models are offered but
+an errand never picks one.
 
 The server resolves the structured selection to an internal Genta profile. The
 selection itself is persisted in `SessionMeta`, so the model and effort that ran

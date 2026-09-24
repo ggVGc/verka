@@ -214,9 +214,15 @@ The launch picker selects a provider, model, and effort. Providers:
 - `claude` — multi-turn session over Claude Code's bidirectional `stream-json`
   mode; each submitted message starts a new turn in the same session.
 
-Every selection pins a model and an effort. Codex accepts `minimal` through
-`xhigh` as its `model_reasoning_effort`; Claude Code accepts `low` through `max`
-as `--effort`. Until an operator saves another choice, new sessions begin on
+Every selection pins a model and an effort, and which efforts are on offer is a
+property of the *model*, not of the agent: the picker's effort column lists the
+rungs that model itself accepts (`styra_protocol::agent::efforts_for`). Codex
+passes the rung as `model_reasoning_effort`, Claude Code as `--effort`. The
+current codex models take `low` through `max`, the older `gpt-5.5` stops at
+`xhigh`; Claude models from Opus 4.7 onwards take `low` through `max`, the 4.6
+generation has no `xhigh`, Opus 4.5 stops at `high`, and Sonnet 4.5 and Haiku
+4.5 predate the setting entirely — for those the column is empty and the status
+line names no effort. Until an operator saves another choice, new sessions begin on
 Codex's declared defaults. Switching providers in the picker initially selects
 that provider's defaults. The selection is recorded with the session, so stored
 state always says which provider, model, and effort ran.

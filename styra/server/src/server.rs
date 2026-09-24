@@ -601,7 +601,9 @@ impl ManagedInteraction {
         selection.model = model.to_owned();
         if let Some(effort) = effort
             .and_then(|effort| crate::agent::Effort::parse(effort).ok())
-            .filter(|effort| selection.provider.efforts().contains(effort))
+            .filter(|effort| {
+                crate::agent::efforts_for(selection.provider, &selection.model).contains(effort)
+            })
         {
             selection.effort = effort;
         }
@@ -3171,7 +3173,9 @@ fn replayed_selection(updates: &[SequencedUpdate], stored: &Selection) -> Select
         if let Some(effort) = effort
             .as_deref()
             .and_then(|effort| crate::agent::Effort::parse(effort).ok())
-            .filter(|effort| stored.provider.efforts().contains(effort))
+            .filter(|effort| {
+                crate::agent::efforts_for(stored.provider, &selection.model).contains(effort)
+            })
         {
             selection.effort = effort;
         }

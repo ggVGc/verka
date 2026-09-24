@@ -9,7 +9,7 @@
 use crate::activity::{EndReason, Status, StopReason};
 use crate::app::App;
 use crate::timeline::{Entry, Step};
-use styra_protocol::agent::Effort;
+use styra_protocol::agent::{efforts_for, Effort};
 use styra_protocol::contract;
 use styra_protocol::event::{AgentEvent, TurnOutcome};
 use styra_protocol::Contract;
@@ -176,7 +176,12 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
                 if let Some(effort) = effort
                     .as_deref()
                     .and_then(|effort| Effort::parse(effort).ok())
-                    .filter(|effort| app.selection.provider.efforts().contains(effort))
+                    // Judged against the model now in effect — the one this
+                    // same report may have just changed — because the ladders
+                    // differ per model, not per agent.
+                    .filter(|effort| {
+                        efforts_for(app.selection.provider, &app.selection.model).contains(effort)
+                    })
                 {
                     app.selection.effort = effort;
                     app.effort_reported = matches!(event, AgentEvent::ThreadStarted { .. });
