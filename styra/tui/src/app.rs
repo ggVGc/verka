@@ -22,6 +22,7 @@ use styra_protocol::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 
 use crate::activity::{Activity, RateLimit, Status};
 use crate::answer::AnswerView;
+use crate::audio::Recorded;
 use crate::branch::BranchPrompt;
 use crate::composer::Composer;
 use crate::entry_log::EntryLog;
@@ -290,6 +291,11 @@ pub struct App {
     pub references: Option<References>,
     /// The modal choice of how the selected entry seeds a new Session.
     pub branch_prompt: Option<BranchPrompt>,
+    /// The microphone capture that is running, if one is; see [`Recorded`].
+    /// While it is set the message box is the level meter, and the keys that
+    /// would type into the box finish, cancel, or boost the recording instead:
+    /// there is no text being edited to compete with them.
+    pub recording: Option<Recorded>,
     /// The open "insert a path" prompt, while the operator is using it; see
     /// [`crate::insert`]. Held here rather than in [`Composer`] because its
     /// second question is about the sandbox, not about the message.
@@ -462,6 +468,7 @@ impl App {
             answer: AnswerView::default(),
             references: None,
             branch_prompt: None,
+            recording: None,
             insert: None,
             requests: VecDeque::new(),
         }

@@ -9,6 +9,7 @@ use std::process::Command;
 mod activity;
 mod answer;
 mod app;
+mod audio;
 mod branch;
 mod cli;
 mod clipboard;

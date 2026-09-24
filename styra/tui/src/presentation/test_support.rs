@@ -114,7 +114,9 @@ impl Screen {
             .unwrap_or_else(|| panic!("no cell contains {needle:?}"))
     }
 
-    fn locate(&self, needle: &str) -> Option<(u16, u16)> {
+    /// [`Screen::find`] without the panic, for a test asserting that
+    /// something is *not* on screen.
+    pub(crate) fn locate(&self, needle: &str) -> Option<(u16, u16)> {
         let needle: Vec<char> = needle.chars().collect();
         for (y, row) in self.0.iter().enumerate() {
             let symbols = row.chars().collect::<Vec<_>>();

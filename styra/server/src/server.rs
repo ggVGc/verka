@@ -19,7 +19,7 @@ use crate::protocol::{
 use crate::transport::MAX_REQUEST_BYTES;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -31,6 +31,17 @@ use std::time::{Duration, Instant};
 /// — the broker's control directory, the interaction's worktree — are only
 /// created once the session exists.
 const PENDING_SESSION_ID: &str = "<pending>";
+
+/// One audio-transcription lifecycle line on server stdout.
+///
+/// A manually launched server leaves this on its terminal. The normal
+/// connect-or-spawn path already redirects stdout to `styra-server.log`, so
+/// the same write becomes a durable daemon log entry there. Flush explicitly
+/// because redirected stdout is block-buffered.
+fn audio_log(message: impl std::fmt::Display) {
+    println!("[styra audio] {message}");
+    let _ = std::io::stdout().flush();
+}
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -2828,6 +2839,20 @@ impl ServerState {
         Ok(tags.into_iter().collect())
     }
 
+    /// Record one audio lifecycle line, if this server has a stdout of its own.
+    ///
+    /// A server bound to a socket does: the connect-or-spawn path points it at
+    /// `styra-server.log`, and a manually launched one has its terminal. A
+    /// server running inside its client shares that client's stdout, which for
+    /// the TUI is the drawn screen — the same line would be painted over the
+    /// interface rather than logged. The client reports the same lifecycle into
+    /// its own log view, so a standalone run loses nothing by staying quiet.
+    fn audio_log(&self, message: impl std::fmt::Display) {
+        if self.inner.socket.is_some() {
+            audio_log(message);
+        }
+    }
+
     /// Serve one request. Available to a host running the server in-process so
     /// it can call the same dispatch without a socket (see
     /// [`crate::Client::in_process`]).
@@ -2954,6 +2979,31 @@ impl ServerState {
                 ))
             }
             Request::ListTags => Ok(Response::Tags(self.list_tags()?)),
+            Request::TranscribeAudio { path } => {
+                self.audio_log(format!("transcribing {}", path.display()));
+                match styra_transcription::transcribe(&path) {
+                    Ok(transcript) => {
+                        self.audio_log(format!("transcription finished:\n{transcript}"));
+                        Ok(Response::AudioTranscript(transcript))
+                    }
+                    Err(error) => {
+                        self.audio_log(format!("transcription error: {error:#}"));
+                        Err(error)
+                    }
+                }
+            }
+            Request::AudioRecordingStarted => {
+                self.audio_log("recording started");
+                Ok(Response::Accepted)
+            }
+            Request::AudioRecordingStopped => {
+                self.audio_log("recording stopped");
+                Ok(Response::Accepted)
+            }
+            Request::AudioTranscriptionError { error } => {
+                self.audio_log(format!("recording error reported by client: {error}"));
+                Ok(Response::Accepted)
+            }
             Request::ChangeWorkspaceLaunch {
                 workspace_id,
                 change,

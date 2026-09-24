@@ -365,6 +365,14 @@ const ANSWER: &[ReferenceRow] = &[
 const MESSAGE_EDITOR: &[ReferenceRow] = &[
     ReferenceRow::Section("Message editor"),
     ReferenceRow::Binding {
+        keys: "Ctrl+R",
+        action: "record from the microphone; the box becomes a level meter",
+    },
+    ReferenceRow::Binding {
+        keys: "while recording: Enter / Esc; ↑/↓",
+        action: "transcribe into the message / discard it; boost a quiet input",
+    },
+    ReferenceRow::Binding {
         keys: "Ctrl+T",
         action: "ask this message's reply for a shape (text/lines/files/json)",
     },

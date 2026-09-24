@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::activity::Status;
 use crate::app::{App, Focus, LaunchPolicy, Request};
+use crate::audio::AudioInput;
 use crate::config::Configuration;
 use crate::keys;
 use crate::launch::{self, LaunchScope};
@@ -37,6 +38,20 @@ pub enum RunOutcome {
 }
 
 const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
+
+/// How long one round of the loop waits for a key before coming back to poll
+/// the server for updates, interactions and quota.
+const KEY_POLL: Duration = Duration::from_millis(100);
+
+/// How long a level-meter frame waits for one instead.
+///
+/// The loop's own period is the server's, and a meter repainted on it moves in
+/// ten steps a second — slower than speech, so the bar lands on syllables
+/// rather than following them and reads as a stutter rather than as a level.
+/// These frames cost nothing but a repaint: they ask the device for the level
+/// it has already measured, and nothing else about the loop's round happens in
+/// them.
+const METER_FRAME: Duration = Duration::from_millis(25);
 
 /// Quota readings change on the scale of whole interactions, not keystrokes,
 /// so this is slow enough to cost the server nothing and quick enough that the
@@ -416,6 +431,32 @@ fn poll_quota(app: &mut App, client: &Client) {
     }
 }
 
+/// Wait out one round's [`KEY_POLL`] in short frames, repainting the level
+/// meter in each — or return as soon as a key arrives, which is the loop's
+/// real business.
+///
+/// Only called while a capture is running, and a capture is only ever running
+/// with the message box up: no other window can be on screen to repaint the
+/// wrong thing over.
+fn meter_frames(
+    terminal: &mut dyn Ui,
+    app: &mut App,
+    audio: &mut AudioInput,
+) -> Result<Option<Event>> {
+    let until = Instant::now() + KEY_POLL;
+    loop {
+        if let Some(event) = terminal.poll_event(METER_FRAME)? {
+            return Ok(Some(event));
+        }
+        if Instant::now() >= until {
+            return Ok(None);
+        }
+        audio.note_level(app);
+        let feedback = presentation::draw_application(terminal, app)?;
+        presentation::apply_feedback(app, &feedback);
+    }
+}
+
 /// Return the running interaction an in-client transition explicitly stops.
 pub fn stops_current_interaction(outcome: &RunOutcome, live: &Attachment) -> bool {
     match (outcome, live) {
@@ -442,6 +483,7 @@ pub fn run(
     // before the picker can be opened.
     app.recent_models = preferences::load_recent_models(preferences_path);
     let launch_effects = LaunchEffects::new(client.clone());
+    let mut audio = AudioInput::new();
     let mut pending_fold = false;
     let mut interactions_refreshed = Instant::now();
     let mut quota_refreshed = Instant::now();
@@ -449,6 +491,12 @@ pub fn run(
         let workspace_id = app.workspace.id.clone().unwrap_or_default();
         app.notices.expire();
         launch_effects.apply_ready(app, &workspace_id);
+        audio.apply_ready(app, client);
+        // The microphone follows the message box: opening an input costs real
+        // time — seconds of it on a headset the machine has to switch profiles
+        // for — and the box being opened is the earliest moment that cost can
+        // be paid, rather than the moment the operator starts speaking.
+        audio.follow_focus(app);
         // Workspace launch policy is a server-owned read model. Refresh it
         // independently of input so edits from another Styra client flow into
         // this Driva view and invalidate its planned options.
@@ -559,7 +607,12 @@ pub fn run(
             presentation::apply_feedback(app, &feedback);
         }
 
-        let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
+        let waited = if audio.is_recording() {
+            meter_frames(terminal, app, &mut audio)?
+        } else {
+            terminal.poll_event(KEY_POLL)?
+        };
+        let Some(Event::Key(key)) = waited else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
@@ -930,6 +983,31 @@ pub fn run(
                     preferences_path,
                 ),
                 Focus::Input => {
+                    // A running capture owns the message box and its keys:
+                    // there is no text being typed for them to mean anything
+                    // else to, and the operator is speaking rather than
+                    // looking for a modifier.
+                    if audio.is_recording() {
+                        match key.code {
+                            KeyCode::Enter => audio.finish(app, client.clone()),
+                            KeyCode::Esc => audio.cancel(app, client.clone()),
+                            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                audio.finish(app, client.clone())
+                            }
+                            KeyCode::Up | KeyCode::Char('+') | KeyCode::Char('=') => {
+                                audio.boost(app)
+                            }
+                            KeyCode::Down | KeyCode::Char('-') => audio.quieten(app),
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    if key.code == KeyCode::Char('r')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        audio.toggle(app, client.clone());
+                        continue;
+                    }
                     // Ctrl-Enter branches the repository and checks out a
                     // linked worktree before the prompt is even sent, which
                     // takes long enough to look like a hang. The send is

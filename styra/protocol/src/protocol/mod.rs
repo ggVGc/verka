@@ -364,6 +364,27 @@ pub enum Request {
     SetSessionTags(SetSessionTags),
     /// All tags known to the server, alphabetically.
     ListTags,
+    /// Transcribe one host audio file and return its text.
+    ///
+    /// The server runs a local Whisper model in its own process. No agent
+    /// provider, session, or sandbox is involved, so the operation names no
+    /// selection and costs no interactive quota.
+    TranscribeAudio {
+        path: PathBuf,
+    },
+    /// Tell the server that its client has begun capturing microphone audio.
+    /// Recording happens on the client's host; this notification exists so
+    /// the server's stdout/log still carries the complete transcription
+    /// lifecycle.
+    AudioRecordingStarted,
+    /// Tell the server that microphone capture has stopped and transcription
+    /// is about to be requested.
+    AudioRecordingStopped,
+    /// Report a client-side recording failure to the server's stdout/log.
+    /// Transcription failures are logged by the server directly.
+    AudioTranscriptionError {
+        error: String,
+    },
     /// Apply one edit to the latest stored Workspace sandbox policy. Applies to
     /// launches made after it, not to interactions already running under the
     /// old one.
@@ -534,6 +555,7 @@ pub enum Response {
     StoredSessions(Vec<SessionSummary>),
     StoredSession(StoredSession),
     ProviderRaw(ProviderRaw),
+    AudioTranscript(String),
     Shell(ShellInfo),
     Answer(Answer),
     QuotaLog(Vec<QuotaEvent>),
@@ -617,6 +639,39 @@ mod tests {
         assert_eq!(json["operation"], "provider_raw");
         assert_eq!(json["data"]["id"], "s-1");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    #[test]
+    fn audio_transcription_names_only_a_host_file() {
+        let request = Request::TranscribeAudio {
+            path: PathBuf::from("/tmp/note.wav"),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "transcribe_audio");
+        assert_eq!(json["data"]["path"], "/tmp/note.wav");
+        assert!(json["data"]["provider"].is_null());
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+
+        let response = Response::AudioTranscript("hello world".into());
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["type"], "audio_transcript");
+        assert_eq!(json["data"], "hello world");
+    }
+
+    #[test]
+    fn audio_lifecycle_notifications_carry_only_the_error() {
+        let started = serde_json::to_value(Request::AudioRecordingStarted).unwrap();
+        assert_eq!(started["operation"], "audio_recording_started");
+
+        let stopped = serde_json::to_value(Request::AudioRecordingStopped).unwrap();
+        assert_eq!(stopped["operation"], "audio_recording_stopped");
+
+        let failed = serde_json::to_value(Request::AudioTranscriptionError {
+            error: "no input".into(),
+        })
+        .unwrap();
+        assert_eq!(failed["operation"], "audio_transcription_error");
+        assert_eq!(failed["data"]["error"], "no input");
     }
 
     #[test]

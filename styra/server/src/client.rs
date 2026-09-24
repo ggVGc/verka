@@ -61,6 +61,41 @@ impl Client {
         }
     }
 
+    /// Transcribe a host audio file with the server's local Whisper model.
+    ///
+    /// The first call after the server starts also loads the model, so it
+    /// takes longer than the ones that follow. It fails outright if the
+    /// weights have not been fetched with `styra-transcribe --download-model`.
+    pub fn transcribe_audio(&self, path: &Path) -> Result<String> {
+        match self.request(Request::TranscribeAudio {
+            path: path.to_path_buf(),
+        })? {
+            Response::AudioTranscript(transcript) => Ok(transcript),
+            other => unexpected("audio_transcript", other),
+        }
+    }
+
+    pub fn audio_recording_started(&self) -> Result<()> {
+        self.audio_event(Request::AudioRecordingStarted)
+    }
+
+    pub fn audio_recording_stopped(&self) -> Result<()> {
+        self.audio_event(Request::AudioRecordingStopped)
+    }
+
+    pub fn audio_transcription_error(&self, error: impl Into<String>) -> Result<()> {
+        self.audio_event(Request::AudioTranscriptionError {
+            error: error.into(),
+        })
+    }
+
+    fn audio_event(&self, request: Request) -> Result<()> {
+        match self.request(request)? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
     pub fn create_session(&self, request: &CreateSession) -> Result<SessionInfo> {
         match self.request(Request::CreateSession(request.clone()))? {
             Response::SessionCreated(value) => Ok(value),

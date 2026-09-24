@@ -111,6 +111,22 @@ M.types.Request = {
     { name = "rename_session", payload = { kind = "newtype", type = { kind = "ref", name = "RenameSession" } } },
     { name = "set_session_tags", payload = { kind = "newtype", type = { kind = "ref", name = "SetSessionTags" } } },
     { name = "list_tags", payload = { kind = "unit" } },
+    { name = "transcribe_audio", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "path", required = true, type = { kind = "string", path = true } },
+      },
+    } },
+    { name = "audio_recording_started", payload = { kind = "unit" } },
+    { name = "audio_recording_stopped", payload = { kind = "unit" } },
+    { name = "audio_transcription_error", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "error", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "change_workspace_launch", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -296,6 +312,7 @@ M.types.Response = {
     { name = "stored_sessions", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "SessionSummary" } } } },
     { name = "stored_session", payload = { kind = "newtype", type = { kind = "ref", name = "StoredSession" } } },
     { name = "provider_raw", payload = { kind = "newtype", type = { kind = "ref", name = "ProviderRaw" } } },
+    { name = "audio_transcript", payload = { kind = "newtype", type = { kind = "string" } } },
     { name = "shell", payload = { kind = "newtype", type = { kind = "ref", name = "ShellInfo" } } },
     { name = "answer", payload = { kind = "newtype", type = { kind = "ref", name = "Answer" } } },
     { name = "quota_log", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "QuotaEvent" } } } },
@@ -1441,7 +1458,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1462,6 +1479,10 @@ M.Request = {
   RENAME_SESSION = "rename_session",
   SET_SESSION_TAGS = "set_session_tags",
   LIST_TAGS = "list_tags",
+  TRANSCRIBE_AUDIO = "transcribe_audio",
+  AUDIO_RECORDING_STARTED = "audio_recording_started",
+  AUDIO_RECORDING_STOPPED = "audio_recording_stopped",
+  AUDIO_TRANSCRIPTION_ERROR = "audio_transcription_error",
   CHANGE_WORKSPACE_LAUNCH = "change_workspace_launch",
   SEND_MESSAGE = "send_message",
   SET_SESSION_SELECTION = "set_session_selection",
@@ -1486,7 +1507,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_worktree_created", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_worktree_created", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
@@ -1518,6 +1539,7 @@ M.Response = {
   STORED_SESSIONS = "stored_sessions",
   STORED_SESSION = "stored_session",
   PROVIDER_RAW = "provider_raw",
+  AUDIO_TRANSCRIPT = "audio_transcript",
   SHELL = "shell",
   ANSWER = "answer",
   QUOTA_LOG = "quota_log",
@@ -2272,6 +2294,41 @@ end
 --- All tags known to the server, alphabetically.
 function M.request.list_tags()
   return M.build("list_tags")
+end
+
+--- Transcribe one host audio file and return its text.
+---
+--- The server runs a local Whisper model in its own process. No agent
+--- provider, session, or sandbox is involved, so the operation names no
+--- selection and costs no interactive quota.
+---
+--- Fields of `data`:
+---   path  path
+function M.request.transcribe_audio(data)
+  return M.build("transcribe_audio", data)
+end
+
+--- Tell the server that its client has begun capturing microphone audio.
+--- Recording happens on the client's host; this notification exists so
+--- the server's stdout/log still carries the complete transcription
+--- lifecycle.
+function M.request.audio_recording_started()
+  return M.build("audio_recording_started")
+end
+
+--- Tell the server that microphone capture has stopped and transcription
+--- is about to be requested.
+function M.request.audio_recording_stopped()
+  return M.build("audio_recording_stopped")
+end
+
+--- Report a client-side recording failure to the server's stdout/log.
+--- Transcription failures are logged by the server directly.
+---
+--- Fields of `data`:
+---   error  string
+function M.request.audio_transcription_error(data)
+  return M.build("audio_transcription_error", data)
 end
 
 --- Apply one edit to the latest stored Workspace sandbox policy. Applies to

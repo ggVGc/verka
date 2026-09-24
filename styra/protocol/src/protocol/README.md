@@ -106,6 +106,30 @@ return `{"text":…,"contract":…}` objects rather than bare strings. A queue f
 written before contracts existed is an array of strings and still loads, as
 untyped messages.
 
+## Audio transcription
+
+`transcribe_audio` takes a host file path and nothing else. The server
+transcribes it in its own process with a local Whisper model, so no agent
+provider, Session, or sandbox is involved and no interactive quota is spent.
+The model is loaded once per server and kept. It is never downloaded on
+demand: the weights are fetched separately by
+`styra-transcribe --download-model`, and a request made before that fails
+naming the command to run.
+
+The client also reports recording start, stop, and client-side capture
+failures so the server can print the whole lifecycle. A manually run server
+prints those lines to its terminal; the automatically spawned daemon redirects
+the same stdout to `styra-server.log`. Successful completion includes the full
+transcript.
+
+```json
+{"operation":"transcribe_audio","data":{"path":"/tmp/note.wav"}}
+```
+
+```json
+{"status":"ok","response":{"type":"audio_transcript","data":"Meeting at ten."}}
+```
+
 ## Clients in other languages
 
 The Serde definitions are also the source client libraries in other languages

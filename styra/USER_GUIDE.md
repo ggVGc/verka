@@ -58,6 +58,29 @@ converts its history into that agent's format as a sibling Session, and the
 view follows the sibling — the conversation comes along, and both Sessions keep
 a marker naming the other.
 `Ctrl+T` asks the message's reply to have a shape: text, lines, files, or JSON.
+`Ctrl+R` in the message editor starts recording from the system's default audio
+input; press `Ctrl+R` again to stop. The device is opened when the message
+editor is — not when `Ctrl+R` is pressed — and closed when the editor is left,
+so that opening it costs nothing at the moment you start speaking; on a
+Bluetooth headset, whose profile switch takes seconds, that is the difference
+between recording the first words and losing them. `styra-server` transcribes
+the temporary recording with a local Whisper model and the text is inserted
+into the draft —
+no agent provider is involved and no quota is spent. Recording needs no
+external tool — `styra` opens the device itself — but the model has to be
+fetched once with `styra-transcribe --download-model` — recording before that reports the model
+as missing rather than starting a download nobody asked for. The default model
+is Whisper `large-v3-turbo-q5_0`: large-v3-turbo accuracy with a roughly 548 MB
+quantized model suitable for an integrated GPU. `STYRA_WHISPER_MODEL` selects
+another model such as `base`, `tiny-q5_1`, or `small`, and applies to both the
+download and the transcription, so set it for both. A normal build uses the
+CPU. Build the workspace with `--features transcription/vulkan` to use a Vulkan
+GPU (including AMD GPUs), or with `--features transcription/rocm` to use an
+installed ROCm toolchain. An accelerated build selects the GPU automatically;
+`STYRA_WHISPER_DEVICE=cpu` forces its CPU fallback and `gpu` requires an
+accelerated build.
+`styra-transcribe FILE` prints the transcript of a file on its own, without a
+server or a session.
 `/cd DIR` changes the working directory of an idle Codex interaction; relative
 paths are from the Workspace root and absolute paths must remain inside it.
 
@@ -73,6 +96,7 @@ live interactions.
 | Key | Use |
 | --- | --- |
 | `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send first prompt in a new Git workspace and branch / insert editor newline |
+| `Ctrl+R` (message editor) | start/stop recording and insert its transcript |
 | `W` (existing session) | create and associate a linked workspace and branch; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `s` / `S` | interrupt the active turn / stop its interaction |

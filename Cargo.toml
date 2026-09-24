@@ -13,6 +13,7 @@ members = [
     "styra/cli",
     "styra/protocol",
     "styra/server",
+    "styra/transcription",
     "styra/ui",
     "styra/tui",
 ]
@@ -25,9 +26,19 @@ edition = "2021"
 anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
+cpal = "0.15"
 crossterm = "0.28"
+futures-util = "0.3"
+hf-hub = "0.3"
+hound = "3.5"
 inotify = { version = "0.9", default-features = false }
 libc = "0.2"
+# The whisper.cpp bindings and decoder used by local transcription. GPU
+# backends are selected by the transcription crate's features rather than
+# here, so a plain workspace build remains portable and CPU-only.
+whisper-rs = "0.16"
+rodio = { version = "0.20", default-features = false, features = ["wav", "mp3", "flac", "vorbis"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
 ratatui = "0.30"
 pulldown-cmark = { version = "0.13", default-features = false }
 tui-markdown = "0.3"
@@ -50,5 +61,12 @@ linka-tui = { path = "linka-tui" }
 orka = { path = "orka" }
 nota = { path = "nota" }
 server = { path = "styra/server" }
+transcription = { path = "styra/transcription" }
 protocol = { path = "styra/protocol" }
 styra-ui = { path = "styra/ui" }
+
+# Whisper inference is the only compute-bound work in the workspace. Keep its
+# Rust wrapper optimized in a debug Styra build without obscuring the debug
+# view of Styra's own code; its bundled C++ runtime is always a release build.
+[profile.dev.package.whisper-rs]
+opt-level = 3

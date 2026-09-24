@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 description = "Local server and client library for interactive, isolated agent sessions"
 
+[features]
+default = []
+vulkan = ["transcription/vulkan"]
+rocm = ["transcription/rocm"]
+
 [[bin]]
 name = "styra-server"
 path = "src/main.rs"
@@ -23,3 +28,4 @@ protocol.workspace = true
 libc.workspace = true
 time.workspace = true
 uuid.workspace = true
+transcription.workspace = true

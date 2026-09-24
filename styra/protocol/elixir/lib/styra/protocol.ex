@@ -121,6 +121,22 @@ defmodule Styra.Protocol do
         %{name: "rename_session", payload: %{kind: :newtype, type: %{kind: :ref, name: "RenameSession"}}},
         %{name: "set_session_tags", payload: %{kind: :newtype, type: %{kind: :ref, name: "SetSessionTags"}}},
         %{name: "list_tags", payload: %{kind: :unit}},
+        %{name: "transcribe_audio", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "path", required: true, type: %{kind: :string, path: true}}
+          ]
+        }},
+        %{name: "audio_recording_started", payload: %{kind: :unit}},
+        %{name: "audio_recording_stopped", payload: %{kind: :unit}},
+        %{name: "audio_transcription_error", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "error", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "change_workspace_launch", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -306,6 +322,7 @@ defmodule Styra.Protocol do
         %{name: "stored_sessions", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "SessionSummary"}}}},
         %{name: "stored_session", payload: %{kind: :newtype, type: %{kind: :ref, name: "StoredSession"}}},
         %{name: "provider_raw", payload: %{kind: :newtype, type: %{kind: :ref, name: "ProviderRaw"}}},
+        %{name: "audio_transcript", payload: %{kind: :newtype, type: %{kind: :string}}},
         %{name: "shell", payload: %{kind: :newtype, type: %{kind: :ref, name: "ShellInfo"}}},
         %{name: "answer", payload: %{kind: :newtype, type: %{kind: :ref, name: "Answer"}}},
         %{name: "quota_log", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "QuotaEvent"}}}}
@@ -1479,6 +1496,10 @@ defmodule Styra.Protocol do
     "rename_session",
     "set_session_tags",
     "list_tags",
+    "transcribe_audio",
+    "audio_recording_started",
+    "audio_recording_stopped",
+    "audio_transcription_error",
     "change_workspace_launch",
     "send_message",
     "set_session_selection",
@@ -2200,6 +2221,55 @@ defmodule Styra.Protocol do
     def list_tags!, do: Styra.Protocol.build!("list_tags")
 
     @doc ~S"""
+    Transcribe one host audio file and return its text.
+
+    The server runs a local Whisper model in its own process. No agent
+    provider, session, or sandbox is involved, so the operation names no
+    selection and costs no interactive quota.
+
+    Fields of `data`:
+
+      * `path`  path
+    """
+    def transcribe_audio(data), do: Styra.Protocol.build("transcribe_audio", data)
+
+    @doc "`transcribe_audio/1`, raising on a request the server would refuse."
+    def transcribe_audio!(data), do: Styra.Protocol.build!("transcribe_audio", data)
+
+    @doc ~S"""
+    Tell the server that its client has begun capturing microphone audio.
+    Recording happens on the client's host; this notification exists so
+    the server's stdout/log still carries the complete transcription
+    lifecycle.
+    """
+    def audio_recording_started, do: Styra.Protocol.build("audio_recording_started")
+
+    @doc "`audio_recording_started/0`, raising on a request the server would refuse."
+    def audio_recording_started!, do: Styra.Protocol.build!("audio_recording_started")
+
+    @doc ~S"""
+    Tell the server that microphone capture has stopped and transcription
+    is about to be requested.
+    """
+    def audio_recording_stopped, do: Styra.Protocol.build("audio_recording_stopped")
+
+    @doc "`audio_recording_stopped/0`, raising on a request the server would refuse."
+    def audio_recording_stopped!, do: Styra.Protocol.build!("audio_recording_stopped")
+
+    @doc ~S"""
+    Report a client-side recording failure to the server's stdout/log.
+    Transcription failures are logged by the server directly.
+
+    Fields of `data`:
+
+      * `error`  string
+    """
+    def audio_transcription_error(data), do: Styra.Protocol.build("audio_transcription_error", data)
+
+    @doc "`audio_transcription_error/1`, raising on a request the server would refuse."
+    def audio_transcription_error!(data), do: Styra.Protocol.build!("audio_transcription_error", data)
+
+    @doc ~S"""
     Apply one edit to the latest stored Workspace sandbox policy. Applies to
     launches made after it, not to interactions already running under the
     old one.
@@ -2519,6 +2589,7 @@ defmodule Styra.Protocol.Response do
     {:stored_sessions, "stored_sessions"},
     {:stored_session, "stored_session"},
     {:provider_raw, "provider_raw"},
+    {:audio_transcript, "audio_transcript"},
     {:shell, "shell"},
     {:answer, "answer"},
     {:quota_log, "quota_log"}
@@ -2606,6 +2677,8 @@ defmodule Styra.Protocol.Response do
   def stored_session, do: "stored_session"
 
   def provider_raw, do: "provider_raw"
+
+  def audio_transcript, do: "audio_transcript"
 
   def shell, do: "shell"
 

@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 description = "A terminal interface for interactive, isolated agent sessions"
 
+[features]
+default = []
+vulkan = ["server/vulkan"]
+rocm = ["server/rocm"]
+
 [[bin]]
 name = "styra"
 path = "src/main.rs"
@@ -12,11 +17,13 @@ path = "src/main.rs"
 anyhow.workspace = true
 base64.workspace = true
 clap.workspace = true
+cpal.workspace = true
+hound.workspace = true
 pulldown-cmark.workspace = true
 crossterm.workspace = true
-libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 server.workspace = true
 protocol.workspace = true
 styra-ui.workspace = true

@@ -230,6 +230,19 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
     }
 }
 
+/// Map a running microphone capture to the meter that replaces the message
+/// box while it runs.
+fn recording(recorded: &crate::audio::Recorded) -> styra_ui::recording::RecordingView {
+    styra_ui::recording::RecordingView {
+        level: recorded.level,
+        loudest: recorded.loudest,
+        gain: recorded.gain,
+        captured: recorded
+            .capturing_since
+            .map(|since| format_duration(since.elapsed())),
+    }
+}
+
 /// Prepare and draw the main application without exposing `App` or Ratatui to
 /// the UI trait. Derived strings and file contents live for this draw only;
 /// event histories and protocol records remain borrowed.
@@ -406,8 +419,9 @@ fn draw_main(
         quota: &quota_alert,
         auto_retry: app.auto_retry,
     };
-    let input = (app.focus == Focus::Input).then(|| modal_input(app));
     let launcher = app.launcher.as_ref().map(launcher_view);
+    let capture = app.recording.as_ref().map(recording);
+    let input = (app.focus == Focus::Input && capture.is_none()).then(|| modal_input(app));
     let reference_labels = app.references.as_ref().map(|references| {
         references
             .items()
@@ -467,6 +481,7 @@ fn draw_main(
         overlays: styra_ui::application::ApplicationOverlays {
             launcher: launcher.as_ref(),
             input: input.as_ref(),
+            recording: capture.as_ref(),
             references,
             insert,
             branch,
@@ -608,6 +623,26 @@ mod tests {
         assert!(
             input_y > view_y,
             "the message box should float over the primary view"
+        );
+    }
+
+    /// A recording takes the message box's place rather than sitting beside
+    /// it: the box's keys belong to the capture while it runs, so leaving the
+    /// buffer on screen would offer typing that does not happen.
+    #[test]
+    fn a_running_recording_replaces_the_message_box() {
+        let mut app = test_support::app("s1");
+        app.enter_input();
+        app.composer.insert("half a sentence");
+        app.recording = Some(crate::audio::Recorded::for_test(0.4, 0.6, 2.0));
+
+        let screen = test_support::screen(&app);
+
+        assert!(screen.all().contains("recording"), "{}", screen.all());
+        assert!(screen.all().contains("boost ×2"), "{}", screen.all());
+        assert!(
+            screen.locate("half a sentence").is_none(),
+            "the buffer is not being typed into while the microphone is open"
         );
     }
 

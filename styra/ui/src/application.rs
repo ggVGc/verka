@@ -2,7 +2,7 @@
 
 use crate::{
     answer, driva, event_list, files, footer, interactions, launcher, log, messages, modal_input, overlays,
-    preview, quota, raw, transcript, PanelId, RenderFeedback, ScrollFeedback,
+    preview, quota, raw, recording, transcript, PanelId, RenderFeedback, ScrollFeedback,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::Frame;
@@ -44,6 +44,10 @@ pub enum MainView<'a> {
 pub struct ApplicationOverlays<'a> {
     pub launcher: Option<&'a crate::launcher::LauncherView>,
     pub input: Option<&'a modal_input::ModalInput<'a>>,
+    /// A microphone capture in progress, which takes the message box's place:
+    /// nothing is being typed while it runs, and the level is what the
+    /// operator needs to see there instead.
+    pub recording: Option<&'a recording::RecordingView>,
     pub references: Option<overlays::ReferencesView<'a>>,
     pub insert: Option<overlays::InsertPromptView<'a>>,
     pub branch: Option<overlays::BranchPromptView>,
@@ -147,7 +151,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
         messages::render(frame, view.notices, chunks[1]);
     }
     footer::render(frame, view.footer, chunks[2]);
-    if let Some(input) = view.overlays.input {
+    if let Some(capture) = view.overlays.recording {
+        recording::render(frame, capture);
+    } else if let Some(input) = view.overlays.input {
         modal_input::render(frame, input);
     }
     render_reading_overlays(frame, &view.overlays);

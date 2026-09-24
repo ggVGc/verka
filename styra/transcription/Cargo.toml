@@ -1,0 +1,25 @@
+[package]
+name = "transcription"
+version.workspace = true
+edition.workspace = true
+description = "Local speech-to-text for Styra, on a Whisper model"
+
+[lib]
+name = "styra_transcription"
+path = "src/lib.rs"
+
+[[bin]]
+name = "styra-transcribe"
+path = "src/bin/styra-transcribe.rs"
+
+[features]
+default = []
+vulkan = ["whisper-rs/vulkan"]
+rocm = ["whisper-rs/hipblas"]
+
+[dependencies]
+anyhow.workspace = true
+hf-hub.workspace = true
+libc.workspace = true
+rodio.workspace = true
+whisper-rs.workspace = true
