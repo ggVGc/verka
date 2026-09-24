@@ -13,6 +13,10 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
             has_detail: entry.has_detail(),
             contract: entry.contract.as_ref(),
             selected: false,
+            link_highlight: app
+                .link_highlight
+                .filter(|highlight| highlight.entry == app.timeline.selected)
+                .map(|highlight| highlight.link),
         });
     styra_ui::preview::PreviewView {
         entry,
@@ -23,6 +27,10 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
             PreviewTarget::Command => styra_ui::preview::PreviewTarget::Command,
         },
         links: ui_link_display(app.link_display),
+        link_highlight: app
+            .link_highlight
+            .filter(|highlight| highlight.entry == app.timeline.selected)
+            .map(|highlight| highlight.link),
         requested_scroll: app.preview.scroll.offset,
         fullscreen,
     }

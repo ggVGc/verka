@@ -25,7 +25,7 @@ pub const CODE_BACKGROUND: Color = Color::Black;
 
 /// `Color::DarkGray` renders too dark to read comfortably in most terminals;
 /// this desaturated slate blue replaces it while staying subdued.
-pub const MUTED_SLATE: Color = Color::Rgb(140, 150,140);
+pub const MUTED_SLATE: Color = Color::Rgb(140, 150, 140);
 
 /// Truly inactive controls and chrome retain a subdued, low-key color.
 pub const INACTIVE: Color = MUTED_SLATE;
@@ -44,6 +44,9 @@ pub const SUBORDINATE_BACKGROUND: Color = Color::Rgb(24, 24, 24);
 /// Text on a continuation line. It is subdued without looking disabled.
 pub const SUBORDINATE_TEXT: Color = Color::Rgb(190, 190, 150);
 pub const SELECTION_MARKER: Color = Color::Yellow;
+/// The focused Markdown link: visible without the hard yellow used for a row
+/// cursor, since it sits directly behind the link's own syntax styling.
+pub const LINK_HIGHLIGHT_BACKGROUND: Color = Color::Rgb(102, 82, 42);
 pub const LIVE_MARKER: Color = Color::Green;
 
 pub const AGENT_TAG: Color = Color::Rgb(211, 158, 96);

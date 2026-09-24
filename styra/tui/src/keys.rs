@@ -264,11 +264,12 @@ pub fn handle_list_key(
     match app.view {
         View::Events => match key.code {
             KeyCode::Char('T') => edit_current_interaction_tags(app, client),
-            KeyCode::Char('F') => app.open_references(),
+            KeyCode::Char('F') => app.highlight_first_link(),
             KeyCode::Char('/') => app.search.open(),
             // A search that stands after the prompt has closed is cleared
             // where it is being read, rather than by reopening the prompt in
             // order to cancel it.
+            KeyCode::Esc if app.link_highlight.is_some() => app.clear_link_highlight(),
             KeyCode::Esc if app.search.query().is_some() => app.search.cancel(),
             KeyCode::Char('u') => app.toggle_link_display(),
             KeyCode::Char('b') => session::follow_branch(app),
@@ -308,8 +309,11 @@ pub fn handle_list_key(
             KeyCode::PageUp if app.entry_log.open => app.entry_log.scroll.page_up(),
             KeyCode::Char('J') | KeyCode::Down => app.select_next(),
             KeyCode::Char('K') | KeyCode::Up => app.select_prev(),
+            KeyCode::Char('j') if app.link_highlight.is_some() => app.highlight_next_link(),
+            KeyCode::Char('k') if app.link_highlight.is_some() => app.highlight_prev_link(),
             KeyCode::Char('j') => app.select_next_line(),
             KeyCode::Char('k') => app.select_prev_line(),
+            KeyCode::Enter if app.link_highlight.is_some() => app.open_highlighted_link(),
             // Branch markers are reciprocal links between the source and its
             // child Session. Enter follows either direction; all other
             // entries retain Enter's usual fold/unfold behavior.
@@ -381,7 +385,7 @@ pub fn handle_list_key(
             _ => {}
         },
         View::Transcript => match key.code {
-            KeyCode::Char('F') => app.open_references(),
+            KeyCode::Char('F') => app.highlight_first_link(),
             KeyCode::Char('c') => app.toggle_conversation_only(),
             KeyCode::Char('j') | KeyCode::Down => app.transcript.line_down(),
             KeyCode::Char('k') | KeyCode::Up => app.transcript.line_up(),
@@ -500,12 +504,14 @@ pub fn handle_list_key(
         // list, is what the reader is moving through: `j`/`k` scroll it a line
         // at a time and the shifted pair changes entry.
         View::Preview => match key.code {
-            KeyCode::Char('F') => app.open_references(),
+            KeyCode::Char('F') => app.highlight_first_link(),
             KeyCode::Char('u') => app.toggle_link_display(),
             KeyCode::Char('v') => app.preview.toggle_mode(),
             KeyCode::Char('C') => app.preview.toggle_target(),
             KeyCode::PageDown => app.preview.scroll.page_down(),
             KeyCode::PageUp => app.preview.scroll.page_up(),
+            KeyCode::Char('j') if app.link_highlight.is_some() => app.highlight_next_link(),
+            KeyCode::Char('k') if app.link_highlight.is_some() => app.highlight_prev_link(),
             KeyCode::Char('j') => app.preview.scroll.line_down(),
             KeyCode::Char('k') => app.preview.scroll.line_up(),
             KeyCode::Char('J') | KeyCode::Down => app.select_next_line(),
@@ -563,25 +569,6 @@ fn toggle_provider_raw(app: &mut App, client: &Client) {
             app.provider_raw_open = true;
         }
         Err(error) => app.show_action_message(format!("could not read provider raw: {error:#}")),
-    }
-}
-
-/// Keys for the list of files a reply cites. It is modal — nothing underneath
-/// it can be acted on while it is open — so the event loop routes keys here
-/// ahead of every view and global binding. `Enter` hands the highlighted file
-/// to the configured opener; `Esc` and `q` leave the reply as it was.
-pub fn handle_references_key(app: &mut App, key: KeyEvent) {
-    let Some(references) = app.references.as_mut() else {
-        return;
-    };
-    match key.code {
-        KeyCode::Char('j') | KeyCode::Down => references.select_next(),
-        KeyCode::Char('k') | KeyCode::Up => references.select_prev(),
-        KeyCode::Char('g') => references.select_first(),
-        KeyCode::Char('G') => references.select_last(),
-        KeyCode::Enter | KeyCode::Char('e') => app.open_selected_reference(),
-        KeyCode::Esc | KeyCode::Char('q') => app.references = None,
-        _ => {}
     }
 }
 
@@ -1172,70 +1159,6 @@ mod tests {
         );
 
         assert_eq!(app.take_request(), Some(Request::OpenDirectory));
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// The path from reading a citation to reading the file: `F` over the reply
-    /// lists what it cites, `Enter` asks for the highlighted one.
-    #[test]
-    fn f_lists_the_files_a_reply_cites_and_enter_asks_to_open_one() {
-        let root = tree("references");
-        let mut app = app(&root);
-        app.enter_list();
-        app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
-            text: format!(
-                "Fixed it in notes.txt:12 ({}/notes.txt:12).",
-                root.display()
-            ),
-        });
-        app.select_last();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-        handle_list_key(
-            &mut app,
-            &client,
-            &mut live,
-            KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
-        );
-
-        let open = app.references.as_ref().expect("the citation was listed");
-        assert_eq!(open.items().len(), 1, "one file, cited twice");
-        assert_eq!(open.selected().line, Some(12));
-
-        handle_references_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert!(app.references.is_none(), "choosing closes the list");
-        assert_eq!(
-            app.take_request(),
-            Some(Request::OpenPath(root.join("notes.txt")))
-        );
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// A reply that cites nothing openable says so rather than opening an
-    /// empty list.
-    #[test]
-    fn a_reply_citing_nothing_on_this_host_opens_no_list() {
-        let root = tree("references-none");
-        let mut app = app(&root);
-        app.enter_list();
-        app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
-            text: "Nothing needed changing. e.g. absent.txt:3".into(),
-        });
-        app.select_last();
-
-        app.open_references();
-
-        assert!(app.references.is_none());
-        assert!(app
-            .notices
-            .iter()
-            .any(|notice| notice.text.contains("no file references")));
 
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -3,7 +3,7 @@
 use crate::code::code_block_lines;
 use crate::event_list::{summary_line, suspicious_shell_success, wrap_rendered, EventEntry};
 use crate::footer::message_text_color;
-use crate::markdown::{markdown_block_lines_with_links, LinkDisplay};
+use crate::markdown::{markdown_block_render, EntryIndex, LinkDisplay};
 use crate::palette;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -26,6 +26,7 @@ pub struct PreviewView<'a> {
     pub mode: PresentationMode,
     pub target: PreviewTarget,
     pub links: LinkDisplay,
+    pub link_highlight: Option<EntryIndex>,
     pub requested_scroll: u16,
     pub fullscreen: bool,
 }
@@ -111,6 +112,7 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         .protocol
         .presented_detail(entry.event, view.mode)
         .into_iter();
+    let mut entries_before = 0;
     if let Some(first) = blocks.next() {
         lines.extend(presented_block_lines(
             first,
@@ -118,6 +120,8 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
             view.mode,
             suspicious,
             view.links,
+            view.link_highlight,
+            &mut entries_before,
         ));
         for block in blocks {
             lines.push(Line::from(""));
@@ -127,6 +131,8 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
                 view.mode,
                 suspicious,
                 view.links,
+                view.link_highlight,
+                &mut entries_before,
             ));
         }
     }
@@ -139,15 +145,20 @@ fn presented_block_lines(
     mode: PresentationMode,
     suspicious: bool,
     links: LinkDisplay,
+    highlight: Option<EntryIndex>,
+    entries_before: &mut EntryIndex,
 ) -> Vec<Line<'static>> {
     if mode == PresentationMode::Pretty {
         if let DetailBlock::Text(text) = &block {
-            return markdown_block_lines_with_links(
+            let rendered = markdown_block_render(
                 text,
                 Style::default().fg(color),
                 DETAIL_INDENT,
                 links,
+                highlight.and_then(|index| index.checked_sub(*entries_before)),
             );
+            *entries_before += rendered.entries;
+            return rendered.lines;
         }
     }
     let (text, language) = match block {

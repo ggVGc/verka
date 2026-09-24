@@ -36,6 +36,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
             has_detail: entry.has_detail(),
             contract: entry.contract.as_ref(),
             selected: cursor == Some(index),
+            link_highlight: None,
         })
         .collect();
     styra_ui::event_list::EntryLogView {

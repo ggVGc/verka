@@ -147,9 +147,6 @@ pub(crate) fn current_window(app: &App) -> crate::keymap::Window {
     if app.branch_prompt.is_some() {
         return Window::Branch;
     }
-    if app.references.is_some() {
-        return Window::References;
-    }
     if app.tag_picker.is_some() {
         return Window::Tags;
     }
@@ -422,36 +419,6 @@ fn draw_main(
     let launcher = app.launcher.as_ref().map(launcher_view);
     let capture = app.recording.as_ref().map(recording);
     let input = (app.focus == Focus::Input && capture.is_none()).then(|| modal_input(app));
-    let reference_labels = app.references.as_ref().map(|references| {
-        references
-            .items()
-            .iter()
-            .map(|reference| reference.label())
-            .collect::<Vec<_>>()
-    });
-    let reference_items =
-        app.references
-            .as_ref()
-            .zip(reference_labels.as_ref())
-            .map(|(references, labels)| {
-                references
-                    .items()
-                    .iter()
-                    .zip(labels)
-                    .map(|(reference, label)| styra_ui::overlays::ReferenceView {
-                        label,
-                        line: reference.line,
-                    })
-                    .collect::<Vec<_>>()
-            });
-    let references =
-        app.references
-            .as_ref()
-            .zip(reference_items.as_ref())
-            .map(|(references, items)| styra_ui::overlays::ReferencesView {
-                items,
-                selected: references.selected_index(),
-            });
     let insert = app.insert.as_ref().map(|prompt| match prompt.state() {
         Insert::Typing(text) => styra_ui::overlays::InsertPromptView::Typing(text),
         Insert::Grant(host) => {
@@ -482,7 +449,7 @@ fn draw_main(
             launcher: launcher.as_ref(),
             input: input.as_ref(),
             recording: capture.as_ref(),
-            references,
+            references: None,
             insert,
             branch,
             tags,

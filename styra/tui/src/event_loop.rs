@@ -290,9 +290,9 @@ pub struct RunContext<'a> {
 /// Hand one host path to the configured opener, reporting the outcome the way
 /// [`terminal::open_shell`](crate::terminal::open_shell) does.
 ///
-/// The one place a file is opened, so every route to it — the Files view, a
-/// typed `files` answer, a reference in a reply — obeys the same configuration
-/// and says the same thing about it afterwards.
+/// The one place a file is opened, so the Files view, a typed `files` answer,
+/// and a selected Markdown link obey the same configuration and say the same
+/// thing afterwards.
 fn open_path(app: &mut App, config: &dyn Configuration, path: &Path) {
     let mut command = config.open_file(path);
     // Named in both messages, because what opens a file is configuration: an
@@ -705,17 +705,6 @@ pub fn run(
             continue;
         }
 
-        // The list of files a reply cites is modal: while it is open nothing
-        // underneath it can be acted on.
-        if app.references.is_some() {
-            keys::handle_references_key(app, key);
-            // Choosing a file closes the picker and asks for that file. It has
-            // to open on this key rather than sit behind the next one.
-            if let Some(Request::OpenPath(path)) = app.take_open_path_request() {
-                open_path(app, config, &path);
-            }
-            continue;
-        }
         // The message editor's path prompt is modal, and its second question is
         // answered by a bare letter that means something else everywhere else,
         // so it is handled ahead of the reference.

@@ -101,6 +101,25 @@ pub fn markdown_block_lines_with_links(
     markdown_block_render(text, base_style, indent, links, None).lines
 }
 
+/// How many Markdown links a block contains, in reading order.
+///
+/// This is the same numbering used by [`markdown_block_render`], allowing a
+/// caller to keep one selection while the links live in separate messages.
+pub fn markdown_link_count(text: &str) -> usize {
+    markdown_block_render(text, Style::default(), "", LinkDisplay::Compact, None).entries
+}
+
+/// Destination of the `index`th Markdown link, in the same reading order as
+/// [`markdown_link_count`] and [`markdown_block_render`].
+pub fn markdown_link_destination(text: &str, index: EntryIndex) -> Option<String> {
+    Parser::new_ext(text, Options::all())
+        .filter_map(|event| match event {
+            Event::Start(Tag::Link { dest_url, .. }) => Some(dest_url.into_string()),
+            _ => None,
+        })
+        .nth(index)
+}
+
 /// Syntax-highlights a standalone fenced-code block when `language` is known
 /// to tui-markdown.  Code reaches Styra as a separate `DetailBlock`, so it
 /// cannot otherwise take the Markdown renderer's fenced-code path.
@@ -241,14 +260,13 @@ fn render_markdown_block(
 
 /// The selection drawn over a highlighted entry.
 ///
-/// Yellow is what Styra already marks a selection with (see
-/// [`palette::SELECTION_MARKER`]), and filling the entry rather than tinting
-/// its text keeps it visible on the selected row too, whose own background is
-/// already [`palette::SELECTION_BACKGROUND`].
+/// A muted amber fill stays visible on the selected row too, whose own
+/// background is already [`palette::SELECTION_BACKGROUND`], without competing
+/// with the bright-yellow row cursor.
 fn entry_highlight_style() -> Style {
     Style::new()
-        .fg(palette::SELECTION_BACKGROUND)
-        .bg(palette::SELECTION_MARKER)
+        .fg(palette::TEXT)
+        .bg(palette::LINK_HIGHLIGHT_BACKGROUND)
 }
 
 /// Drops the destination `tui-markdown` appends to every link, leaving the
@@ -262,8 +280,8 @@ fn entry_highlight_style() -> Style {
 /// `tui-markdown` renders a link as `label (destination)`, and agents cite
 /// their work as links: a reply reads `app.rs:120 (/home/me/src/app.rs:120)`,
 /// saying the same thing twice and at twice the width. What a citation points
-/// at is not lost with the destination — the references modal (`F`) still opens
-/// it; see [`crate::references`].
+/// at is not lost with the destination — conversation link navigation (`F`)
+/// selects it by this same reading-order index.
 ///
 /// A link that wrote no label keeps its destination, since collapsing it would
 /// leave nothing on screen at all.

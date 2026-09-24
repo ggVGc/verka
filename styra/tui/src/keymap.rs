@@ -40,7 +40,6 @@ pub(crate) enum Window {
     Interactions,
     Branch,
     Tags,
-    References,
     SessionPicker,
     WorkspacePicker,
     Launcher,
@@ -65,7 +64,6 @@ impl Window {
             Self::Interactions => "interactions",
             Self::Branch => "branch",
             Self::Tags => "tags",
-            Self::References => "files in this entry",
             Self::SessionPicker => "sessions",
             Self::WorkspacePicker => "Workspaces",
             Self::Launcher => "launch",
@@ -87,7 +85,6 @@ impl Window {
             Self::Interactions => &[INTERACTIONS, GLOBAL],
             Self::Branch => &[BRANCH, GLOBAL],
             Self::Tags => &[TAGS, GLOBAL],
-            Self::References => &[REFERENCES, GLOBAL],
             Self::SessionPicker => &[SESSION_PICKER],
             Self::WorkspacePicker => &[WORKSPACE_PICKER],
             Self::Launcher => &[LAUNCHER],
@@ -258,7 +255,7 @@ const EVENTS: &[ReferenceRow] = &[
     },
     ReferenceRow::Binding {
         keys: "F",
-        action: "open a file the entry cites (Enter opens, q cancels)",
+        action: "highlight conversation links (j/k moves, Enter opens, Esc exits)",
     },
     ReferenceRow::Binding {
         keys: "y",
@@ -275,6 +272,10 @@ const READING: &[ReferenceRow] = &[
     ReferenceRow::Binding {
         keys: "j/k or ↓/↑",
         action: "move or scroll",
+    },
+    ReferenceRow::Binding {
+        keys: "F",
+        action: "highlight conversation links (j/k moves, Enter opens, Esc exits)",
     },
     ReferenceRow::Binding {
         keys: "R (quota)",
@@ -494,22 +495,6 @@ const TAGS: &[ReferenceRow] = &[
     },
 ];
 
-const REFERENCES: &[ReferenceRow] = &[
-    ReferenceRow::Section("Files in this entry"),
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "move selection",
-    },
-    ReferenceRow::Binding {
-        keys: "Enter",
-        action: "open the selected file",
-    },
-    ReferenceRow::Binding {
-        keys: "Esc or q",
-        action: "cancel",
-    },
-];
-
 const SESSION_PICKER: &[ReferenceRow] = &[
     ReferenceRow::Section("Stored sessions"),
     ReferenceRow::Binding {
@@ -676,7 +661,6 @@ mod tests {
             Window::Interactions,
             Window::Branch,
             Window::Tags,
-            Window::References,
             Window::SessionPicker,
             Window::WorkspacePicker,
             Window::Launcher,

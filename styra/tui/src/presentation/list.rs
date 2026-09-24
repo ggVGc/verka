@@ -24,6 +24,10 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
             has_detail: entry.has_detail(),
             contract: entry.contract.as_ref(),
             selected: index == app.timeline.selected,
+            link_highlight: app
+                .link_highlight
+                .filter(|highlight| highlight.entry == index)
+                .map(|highlight| highlight.link),
         })
         .collect();
     let progress = app.activity.progress();

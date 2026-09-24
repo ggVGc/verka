@@ -5,7 +5,7 @@ use crate::chrome::{panel_block, PanelChrome};
 use crate::code::{code_block_lines, is_error_diagnostic};
 use crate::footer::{message_text_color, tag_color};
 use crate::markdown::{
-    markdown_block_lines_with_links, parse_inline_spans, structural_indent, LinkDisplay,
+    markdown_block_render, parse_inline_spans, structural_indent, EntryIndex, LinkDisplay,
 };
 use crate::palette;
 use crate::search::{self, SearchView};
@@ -28,6 +28,8 @@ pub struct EventEntry<'a> {
     pub has_detail: bool,
     pub contract: Option<&'a Contract>,
     pub selected: bool,
+    /// The Markdown link within this entry to mark, if link navigation is on it.
+    pub link_highlight: Option<EntryIndex>,
 }
 
 pub enum EventListStatus {
@@ -572,8 +574,12 @@ fn entry_item_with_max_rows(
         );
     }
     let mut lines = vec![summary];
-    let mut detail = detail_lines_with_links(entry.event, protocol, None, links);
-    if !detail.is_empty() {
+    let mut detail =
+        detail_lines_with_links(entry.event, protocol, None, links, entry.link_highlight);
+    // Normally the first rendered line merely repeats the summary. Keep it
+    // while link navigation is on this entry: the first Markdown link often
+    // lives on that line, and a selection must always be visible.
+    if !detail.is_empty() && entry.link_highlight.is_none() {
         detail.remove(0);
     }
     if suspicious_shell_success(entry.event) {
@@ -1277,20 +1283,25 @@ pub fn detail_lines_with_links(
     protocol: Protocol,
     cap: Option<usize>,
     links: LinkDisplay,
+    highlight: Option<EntryIndex>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let text_color = message_text_color(event.tag());
     let suspicious_shell = suspicious_shell_success(event);
+    let mut entries_before = 0;
     for block in protocol.presented_detail(event, PresentationMode::Pretty) {
         match block {
             DetailBlock::Text(text) => {
                 let base_style = Style::default().fg(text_color);
-                lines.extend(markdown_block_lines_with_links(
+                let rendered = markdown_block_render(
                     &text,
                     base_style,
                     DETAIL_INDENT,
                     links,
-                ));
+                    highlight.and_then(|index| index.checked_sub(entries_before)),
+                );
+                entries_before += rendered.entries;
+                lines.extend(rendered.lines);
             }
             DetailBlock::Code { text, language } => {
                 lines.extend(code_block_lines(
@@ -1417,6 +1428,7 @@ mod tests {
                 has_detail: false,
                 contract: None,
                 selected: true,
+                link_highlight: None,
             }],
             conversation_only: false,
             uncommitted_changes: false,

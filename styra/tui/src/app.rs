@@ -38,7 +38,6 @@ use crate::outbox::Outbox;
 use crate::picker::TemplatePicker;
 use crate::preview::{self, Preview};
 use crate::raw::{ProviderRawView, RawView};
-use crate::references::{self, References};
 use crate::search::Search;
 use crate::tag_picker::TagPicker;
 use crate::tail::Tail;
@@ -62,6 +61,13 @@ pub enum LinkDisplay {
     Compact,
     /// Include the destination after the label.
     Full,
+}
+
+/// The link selected while walking the rendered conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinkHighlight {
+    pub entry: usize,
+    pub link: usize,
 }
 
 impl LinkDisplay {
@@ -284,11 +290,8 @@ pub struct App {
     /// The typed answer last fetched for this session, and the selection
     /// within it; see [`AnswerView`].
     pub answer: AnswerView,
-    /// The open list of files the focused reply cites, while the operator is
-    /// choosing one to open; see [`References`]. Modal, so it is held here
-    /// rather than inside any one view: it is opened over whichever view the
-    /// reply was being read in.
-    pub references: Option<References>,
+    /// The Markdown link selected while walking the conversation with `F`.
+    pub link_highlight: Option<LinkHighlight>,
     /// The modal choice of how the selected entry seeds a new Session.
     pub branch_prompt: Option<BranchPrompt>,
     /// The microphone capture that is running, if one is; see [`Recorded`].
@@ -348,9 +351,7 @@ pub enum Request {
     /// terminal window of its own. Like [`Request::OpenShell`] the window is
     /// configured, so the event loop runs it.
     OpenDirectory,
-    /// Open one already-resolved host path in the configured opener. Unlike
-    /// [`Request::EditFile`] the path travels with the request, because the
-    /// reference picker that asks for it closes as it does.
+    /// Open a Markdown link's resolved path in the configured editor.
     OpenPath(PathBuf),
     /// Choose which Driva templates the next interaction launches with. The
     /// list of them lives on the server, so the event loop fetches it and runs
@@ -466,7 +467,7 @@ impl App {
             entry_log: EntryLog::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
-            references: None,
+            link_highlight: None,
             branch_prompt: None,
             recording: None,
             insert: None,
@@ -1043,34 +1044,152 @@ impl App {
             .map(|item| item.resolved.clone())
     }
 
-    // --- File references in a reply -------------------------------------------
+    // --- Markdown-link navigation ------------------------------------------
 
-    /// Open the list of files the focused reply cites; see
-    /// [`crate::references`]. The reply is the entry the preview and `y`
-    /// already act on, so what the picker offers is what the operator is
-    /// looking at.
-    ///
-    /// A reply that cites nothing on this host opens nothing and says so: an
-    /// empty modal would be a worse answer than a one-line notice.
-    pub fn open_references(&mut self) {
-        let Some(text) = self.preview_entry().map(files::entry_text) else {
-            return self.show_action_message("no entry to take file references from");
-        };
-        let root = self.workspace.root_or_current_directory();
-        self.references = References::new(references::in_reply(&text, root.as_deref()));
-        if self.references.is_none() {
-            self.show_action_message("no file references in this entry");
+    /// Select the first link at or below the selected event. The selection is
+    /// kept in timeline coordinates, so it remains correct as messages wrap
+    /// or link destinations are toggled.
+    pub fn highlight_first_link(&mut self) {
+        self.view = View::Events;
+        let start = self.timeline.selected;
+        self.link_highlight = self.find_link_from(start, 0);
+        if self.link_highlight.is_none() {
+            self.show_action_message("no Markdown links in the visible conversation");
         }
+        self.reveal_highlighted_link();
     }
 
-    /// Close the picker and ask the event loop to open what it was on. The
-    /// path is resolved here rather than after the picker closes, since the
-    /// selection it was taken from does not outlive this call.
-    pub fn open_selected_reference(&mut self) {
-        if let Some(references) = self.references.take() {
-            let path = references.selected().resolved.clone();
-            self.ask(Request::OpenPath(path));
+    pub fn highlight_next_link(&mut self) {
+        let Some(current) = self.link_highlight else {
+            return;
+        };
+        self.link_highlight = self
+            .find_link_from(current.entry, current.link + 1)
+            .or(self.link_highlight);
+        self.reveal_highlighted_link();
+    }
+
+    pub fn highlight_prev_link(&mut self) {
+        let Some(current) = self.link_highlight else {
+            return;
+        };
+        let mut found = None;
+        for index in 0..=current
+            .entry
+            .min(self.timeline.entries.len().saturating_sub(1))
+        {
+            if !self.timeline.is_visible(index) {
+                continue;
+            }
+            let count = self.entry_link_count(index);
+            let limit = if index == current.entry {
+                current.link
+            } else {
+                count
+            };
+            if limit > 0 {
+                found = Some(LinkHighlight {
+                    entry: index,
+                    link: limit - 1,
+                });
+            }
         }
+        self.link_highlight = found.or(self.link_highlight);
+        self.reveal_highlighted_link();
+    }
+
+    /// Leave link navigation and restore ordinary list navigation keys.
+    pub fn clear_link_highlight(&mut self) {
+        self.link_highlight = None;
+    }
+
+    /// Ask the event loop to open the selected Markdown link in the configured
+    /// editor. Relative destinations are rooted in the current workspace, as
+    /// file citations were before link navigation replaced their picker.
+    pub fn open_highlighted_link(&mut self) {
+        let Some(highlight) = self.link_highlight else {
+            return;
+        };
+        let destination = self
+            .selection
+            .provider
+            .protocol()
+            .presented_detail(
+                &self.timeline.entries[highlight.entry].event,
+                styra_protocol::event::PresentationMode::Pretty,
+            )
+            .into_iter()
+            .filter_map(|block| match block {
+                DetailBlock::Text(text) => Some(text),
+                DetailBlock::Code { .. } => None,
+            })
+            .scan(highlight.link, |remaining, text| {
+                let count = styra_ui::markdown::markdown_link_count(&text);
+                if *remaining < count {
+                    let destination =
+                        styra_ui::markdown::markdown_link_destination(&text, *remaining);
+                    *remaining = 0;
+                    Some(destination)
+                } else {
+                    *remaining -= count;
+                    Some(None)
+                }
+            })
+            .flatten()
+            .next();
+        let Some(destination) = destination else {
+            return self.show_action_message("selected link no longer exists");
+        };
+        let path = PathBuf::from(destination);
+        let path = if path.is_absolute() {
+            path
+        } else if let Some(root) = self.workspace.root_or_current_directory() {
+            root.join(path)
+        } else {
+            path
+        };
+        self.ask(Request::OpenPath(path));
+        self.clear_link_highlight();
+    }
+
+    fn find_link_from(&self, start: usize, first_link: usize) -> Option<LinkHighlight> {
+        for index in start..self.timeline.entries.len() {
+            if !self.timeline.is_visible(index) {
+                continue;
+            }
+            let link = if index == start { first_link } else { 0 };
+            if link < self.entry_link_count(index) {
+                return Some(LinkHighlight { entry: index, link });
+            }
+        }
+        None
+    }
+
+    fn entry_link_count(&self, index: usize) -> usize {
+        self.selection
+            .provider
+            .protocol()
+            .presented_detail(
+                &self.timeline.entries[index].event,
+                styra_protocol::event::PresentationMode::Pretty,
+            )
+            .into_iter()
+            .map(|block| match block {
+                DetailBlock::Text(text) => styra_ui::markdown::markdown_link_count(&text),
+                DetailBlock::Code { .. } => 0,
+            })
+            .sum()
+    }
+
+    fn reveal_highlighted_link(&mut self) {
+        let Some(highlight) = self.link_highlight else {
+            return;
+        };
+        self.timeline.selected = highlight.entry;
+        self.timeline.entries[highlight.entry].expanded = true;
+        self.timeline.follow = false;
+        self.preview.scroll.reset();
+        self.entry_log_follow_selection();
     }
 
     /// The entry the preview panel and the `y` shortcut act on: the one the
@@ -1234,16 +1353,6 @@ impl App {
     /// Take the operator's pending request, if any, for the event loop to act on.
     pub fn take_request(&mut self) -> Option<Request> {
         self.requests.pop_front()
-    }
-
-    /// Take the next effect only when it is "open this file". The reference
-    /// picker uses this to open on the key that chose the file, the same way
-    /// the modal launch controls dispatch their own edit, and without
-    /// consuming an unrelated request that was already ahead of it.
-    pub fn take_open_path_request(&mut self) -> Option<Request> {
-        matches!(self.requests.front(), Some(Request::OpenPath(_)))
-            .then(|| self.requests.pop_front())
-            .flatten()
     }
 
     /// Take the next effect only when it is "open this Session". The branch
@@ -3157,5 +3266,52 @@ mod tests {
             app.copy_text().as_deref(),
             Some(r#"{"type":"turn.started"}"#)
         );
+    }
+
+    #[test]
+    fn link_highlight_starts_at_the_selected_entry_and_jk_walks_links() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage {
+            text: "[old](https://old.example)".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "[first](/tmp/first.md) then [second](/tmp/second.md)".into(),
+        });
+        app.timeline.selected = 1;
+
+        app.highlight_first_link();
+        assert_eq!(
+            app.link_highlight,
+            Some(LinkHighlight { entry: 1, link: 0 })
+        );
+        assert_eq!(app.timeline.selected, 1);
+        assert!(app.timeline.entries[1].expanded);
+
+        app.highlight_next_link();
+        assert_eq!(
+            app.link_highlight,
+            Some(LinkHighlight { entry: 1, link: 1 })
+        );
+        app.highlight_next_link();
+        assert_eq!(
+            app.link_highlight,
+            Some(LinkHighlight { entry: 1, link: 1 })
+        );
+        app.highlight_prev_link();
+        assert_eq!(
+            app.link_highlight,
+            Some(LinkHighlight { entry: 1, link: 0 })
+        );
+
+        app.open_highlighted_link();
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenPath(PathBuf::from("/tmp/first.md")))
+        );
+        assert!(app.link_highlight.is_none());
+
+        app.highlight_first_link();
+        app.clear_link_highlight();
+        assert!(app.link_highlight.is_none());
     }
 }

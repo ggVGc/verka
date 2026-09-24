@@ -174,7 +174,7 @@ resumed.
 | `r`, `l`, `t`, `d` | raw wire records, client/server log, transcript, Workspace/interaction details; press again for events |
 | `Q` | quota readings observed by the server (`R` there: keep at it after a rate limit) |
 | `f` | files associated with the selected event (or the whole session) |
-| `F` | open a file the selected event cites (`path:line` included) |
+| `F` | highlight links in the conversation (`j`/`k` moves between them) |
 | `X` | typed answer from the last turn |
 | `p` / `P` | toggle side preview / full-screen preview |
 | `v` / `C` | pretty versus diff preview / preview newest command |
@@ -191,12 +191,11 @@ use `j`/`k` plus `g`/`G` to navigate. In the raw view, `v` switches between
 Styra's captured app-server wire traffic and the provider's native persisted
 session JSONL (when the provider still has it).
 
-`F` — in the event list, transcript, or full-screen preview — lists every file
-the selected event names that exists on this host, including citations of the
-form `monitor.c:484`. `j`/`k` and `g`/`G` move, `Enter` opens the highlighted
-file in the configured opener (`nvim` by default), and `q` or `Esc` cancels.
-The cited line is shown but not jumped to: only the opener knows how it is
-asked to.
+`F` starts link highlighting from the selected event. It opens the event list when pressed from transcript or
+full-screen preview. While a link is highlighted, `j` and `k` move forward and
+backward through Markdown links across the visible conversation, `Enter` opens
+the link in the configured editor, and `Esc` returns `j`/`k` to normal list
+navigation.
 
 In Files: `e` opens the selected path in the configured opener, `a` switches
 focused-event/all-session files, `p` previews, `y` copies its path, and `J`/`K`
