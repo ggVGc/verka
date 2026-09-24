@@ -182,7 +182,7 @@ const GLOBAL: &[ReferenceRow] = &[
         action: "plan quota readings, refreshed from the server",
     },
     ReferenceRow::Binding {
-        keys: "f",
+        keys: "F",
         action: "files mentioned by the focused entry",
     },
     ReferenceRow::Binding {
@@ -254,7 +254,7 @@ const EVENTS: &[ReferenceRow] = &[
         action: "scroll preview (full-screen: j/k, entry: J/K)",
     },
     ReferenceRow::Binding {
-        keys: "F",
+        keys: "f",
         action: "highlight conversation links (j/k moves, Enter opens, Esc exits)",
     },
     ReferenceRow::Binding {
@@ -274,7 +274,7 @@ const READING: &[ReferenceRow] = &[
         action: "move or scroll",
     },
     ReferenceRow::Binding {
-        keys: "F",
+        keys: "f",
         action: "highlight conversation links (j/k moves, Enter opens, Esc exits)",
     },
     ReferenceRow::Binding {

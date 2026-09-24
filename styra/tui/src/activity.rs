@@ -174,7 +174,10 @@ impl StopReason {
     /// The reasons that describe a turn ending — interrupted, background work
     /// running out — say nothing about why the interaction then stopped, so
     /// they come through as the bare fact that it has.
-    pub fn reported(completed: CompletionState, reason: Option<&InteractionActivityReason>) -> Self {
+    pub fn reported(
+        completed: CompletionState,
+        reason: Option<&InteractionActivityReason>,
+    ) -> Self {
         match completed {
             CompletionState::Sealed => return StopReason::Sealed,
             CompletionState::Completed => return StopReason::Completed,

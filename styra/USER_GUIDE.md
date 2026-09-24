@@ -173,8 +173,8 @@ resumed.
 | --- | --- |
 | `r`, `l`, `t`, `d` | raw wire records, client/server log, transcript, Workspace/interaction details; press again for events |
 | `Q` | quota readings observed by the server (`R` there: keep at it after a rate limit) |
-| `f` | files associated with the selected event (or the whole session) |
-| `F` | highlight links in the conversation (`j`/`k` moves between them) |
+| `F` | files associated with the selected event (or the whole session) |
+| `f` | highlight links in the conversation (`j`/`k` moves between them) |
 | `X` | typed answer from the last turn |
 | `p` / `P` | toggle side preview / full-screen preview |
 | `v` / `C` | pretty versus diff preview / preview newest command |
@@ -191,7 +191,7 @@ use `j`/`k` plus `g`/`G` to navigate. In the raw view, `v` switches between
 Styra's captured app-server wire traffic and the provider's native persisted
 session JSONL (when the provider still has it).
 
-`F` starts link highlighting from the selected event. It opens the event list when pressed from transcript or
+`f` starts link highlighting from the selected event. It opens the event list when pressed from transcript or
 full-screen preview. While a link is highlighted, `j` and `k` move forward and
 backward through Markdown links across the visible conversation, `Enter` opens
 the link in the configured editor, and `Esc` returns `j`/`k` to normal list

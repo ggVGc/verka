@@ -92,7 +92,7 @@ impl LiveInteractions {
                 ((!self.only_current_workspace
                     || workspace_id.is_some_and(|id| interaction.workspace_id == id))
                     && (self.show_completed || !interaction.completed.is_done()))
-                    .then_some(index)
+                .then_some(index)
             })
             .collect()
     }

@@ -304,7 +304,8 @@ pub fn run_session_picker(
             // source behind — and nothing they type undoes it either, so `C`
             // passes over a sealed row rather than appearing to reopen it.
             KeyCode::Char('C')
-                if !sessions.is_empty() && sessions[selected].completed != CompletionState::Sealed =>
+                if !sessions.is_empty()
+                    && sessions[selected].completed != CompletionState::Sealed =>
             {
                 let completed = if sessions[selected].completed == CompletionState::Active {
                     CompletionState::Completed

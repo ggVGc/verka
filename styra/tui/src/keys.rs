@@ -236,7 +236,12 @@ pub fn handle_list_key(
             return app.toggle_entry_log()
         }
         KeyCode::Char('d') => return app.toggle_view(View::Driva),
-        KeyCode::Char('f') => return app.toggle_files(),
+        KeyCode::Char('F') if app.view != View::Answer => return app.toggle_files(),
+        KeyCode::Char('f')
+            if !matches!(app.view, View::Events | View::Transcript | View::Preview) =>
+        {
+            return app.toggle_files()
+        }
         KeyCode::Char('X') => return app.toggle_answer(),
         KeyCode::Char('P') => return app.toggle_view(View::Preview),
         // Beside `a` because it is the same list: `a` opens it to be walked,
@@ -264,7 +269,7 @@ pub fn handle_list_key(
     match app.view {
         View::Events => match key.code {
             KeyCode::Char('T') => edit_current_interaction_tags(app, client),
-            KeyCode::Char('F') => app.highlight_first_link(),
+            KeyCode::Char('f') => app.highlight_first_link(),
             KeyCode::Char('/') => app.search.open(),
             // A search that stands after the prompt has closed is cleared
             // where it is being read, rather than by reopening the prompt in
@@ -385,7 +390,7 @@ pub fn handle_list_key(
             _ => {}
         },
         View::Transcript => match key.code {
-            KeyCode::Char('F') => app.highlight_first_link(),
+            KeyCode::Char('f') => app.highlight_first_link(),
             KeyCode::Char('c') => app.toggle_conversation_only(),
             KeyCode::Char('j') | KeyCode::Down => app.transcript.line_down(),
             KeyCode::Char('k') | KeyCode::Up => app.transcript.line_up(),
@@ -504,7 +509,7 @@ pub fn handle_list_key(
         // list, is what the reader is moving through: `j`/`k` scroll it a line
         // at a time and the shifted pair changes entry.
         View::Preview => match key.code {
-            KeyCode::Char('F') => app.highlight_first_link(),
+            KeyCode::Char('f') => app.highlight_first_link(),
             KeyCode::Char('u') => app.toggle_link_display(),
             KeyCode::Char('v') => app.preview.toggle_mode(),
             KeyCode::Char('C') => app.preview.toggle_target(),
