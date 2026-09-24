@@ -1,3 +1,8 @@
+2026-09-24 20:25
+My goal is to mainly review test cases and other automatic validation, and sometimes data structures and interfaces.
+If the focus can be spend on this, implementation details matter less, and that is where the majority of content is. Just like the old days, but now it's much easier to produce good test suites, and get high level overview of codebases.
+
+
 2026-09-24
 On language choice for LLM-driven development.
 Two dimensions:
