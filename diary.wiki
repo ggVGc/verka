@@ -1,3 +1,17 @@
+2026-09-24
+On language choice for LLM-driven development.
+Two dimensions:
+  - Terseness/expressiveness of the language, resulting in token efficiency as long as the glyphs used are common (for example, J instead of APL).
+  - Iteration time and verification speed. E.g how quickly do things compile and how fast do tests run
+
+Haskell scores high on the terseness axis, but not on iteration time.
+
+
+References:
+  - Token efficiency: https://martinalderson.com/posts/which-programming-languages-are-most-token-efficient/
+  - Scarf drops Haskell: https://avi.press/posts/2026-07-10-after-7-years-in-production-scarf-has-reluctantly-moved-away-from-haskell.html
+
+
 2026-09-11
 
 I think styra-server should morph into an "LLM workflow runtime".
