@@ -4297,6 +4297,141 @@ mod tests {
         std::fs::remove_dir_all(host).ok();
     }
 
+    /// Where the work is happening is two rows, and they have to agree. The
+    /// directory follows the agent — a Claude sent into a worktree of the
+    /// project, a Codex told to work elsewhere — but the branch beside it is
+    /// read from the checkout the interaction was *built* with, which for a
+    /// Workspace that makes no worktrees is the Workspace directory and never
+    /// moves. So the details view names a worktree and, beside it, the branch
+    /// of the directory the agent left, and asking again cannot help: every
+    /// reading asks Git about the same pinned path.
+    #[test]
+    fn the_branch_follows_the_agent_out_of_the_directory_it_launched_in() {
+        let (store, host, server, _workspace, _id, session_path) = stored_session("moved-branch");
+        let worktree = host.join(".worktrees/audio");
+        server
+            .inner
+            .git
+            .create_worktree(&host, "styra/audio", &worktree)
+            .unwrap();
+        {
+            let mut journal = Journal::open(&session_path).unwrap();
+            journal
+                .record_agent_line(
+                    &serde_json::json!({ "result": { "cwd": worktree } }).to_string(),
+                )
+                .unwrap();
+        }
+
+        // The server knows where the agent went: this is the directory the
+        // working-directory row is drawn from, live and on reopening.
+        let moved = replayed_working_directory(
+            &session_path,
+            crate::event::Protocol::CodexAppServer,
+            WorkspaceMount {
+                host: &host,
+                sandbox: &host,
+            },
+        )
+        .expect("the journal says the agent moved");
+        assert_eq!(moved, worktree);
+
+        // And this is the checkout the branch beside it is read from: the
+        // directory the launch resolved, held for the life of the interaction.
+        let tree = WorkingTree::new(Arc::clone(&server.inner.git), host.clone());
+        tree.reread();
+        let reported = tree.checkout_state().expect("the workspace is a checkout");
+
+        assert_eq!(
+            reported.worktree,
+            moved.canonicalize().unwrap(),
+            "the checkout reported is the one the agent is working in"
+        );
+        assert_eq!(reported.branch.as_deref(), Some("styra/audio"));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// A checkout is only ever read when an interaction stops working, and the
+    /// roster is only ever mirrored when the list of interactions changes — at
+    /// a launch, a resume, or a close. An interaction resumed and not yet idle
+    /// is therefore mirrored with nothing, and the row the next run restores
+    /// says not that the server has not looked, but that there is no
+    /// repository at all — while the Session on disk records exactly which
+    /// checkout it works in.
+    #[test]
+    fn entering_a_restored_row_still_says_which_checkout_it_works_in() {
+        let store = temp_path("restored-checkout-store");
+        let host = temp_path("restored-checkout-host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let worktree = host.join(".worktrees/audio");
+        git.create_worktree(&host, "styra/audio", &worktree).unwrap();
+
+        let workspace = crate::workspace::create(&store, &host, None).unwrap();
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
+        let (journal, id) =
+            Journal::create_in_workspace(&store, &workspace.id, &profile, &selection, None).unwrap();
+        let session_path = journal.path().parent().unwrap().to_path_buf();
+        drop(journal);
+        journal::store_session_checkout(
+            &session_path,
+            &crate::worktree::Checkout::at(worktree.clone()),
+        )
+        .unwrap();
+
+        // The row the previous run left: mirrored at the resume, before the
+        // interaction had gone idle even once, so it carries no reading.
+        let driva = DrivaOptions {
+            working_directory: host.clone(),
+            ..Default::default()
+        };
+        crate::roster::Roster::open(&store).publish(vec![(
+            session_path.clone(),
+            InteractionSummary {
+                id: id.clone(),
+                name: None,
+                tags: Vec::new(),
+                workspace_id: workspace.id.clone(),
+                selection,
+                workspace: worktree.clone(),
+                driva,
+                activity: InteractionActivity::Running,
+                activity_reason: None,
+                activity_since_ms: 1,
+                idle_unseen: false,
+                uncommitted_changes: false,
+                checkout: None,
+                last_message: None,
+                auto_retry: false,
+                events: 0,
+                completed: CompletionState::Active,
+            },
+        )]);
+
+        let state = ServerState::with_git(git, store.clone());
+        let Response::InteractionLoaded(loaded) =
+            state.handle(Request::LoadInteraction { id }).unwrap()
+        else {
+            panic!("expected the restored row to open");
+        };
+
+        let checkout = loaded
+            .summary
+            .checkout
+            .expect("entering after a restart still says where the work is");
+        assert_eq!(checkout.branch.as_deref(), Some("styra/audio"));
+        assert_eq!(checkout.worktree, worktree.canonicalize().unwrap());
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
     /// A Session that never left its Workspace directory reports no move: the
     /// client already stands at the root of the mount when it opens one, and
     /// an update restating that is noise in every Session that behaved.
