@@ -37,7 +37,10 @@ pub const MODAL_BACKDROP: Color = MUTED_SLATE;
 /// recolored without changing disabled controls, borders, or markers.
 pub const INTERACTION_STATUS_INFO: Color = MUTED_SLATE;
 
-pub const SELECTION_BACKGROUND: Color = Color::Rgb(44, 42, 30);
+/// A restrained cue behind operator-authored rows, separating prompts from
+/// agent output without turning the log into chat bubbles.
+pub const USER_MESSAGE_BACKGROUND: Color = Color::Rgb(18, 28, 21);
+pub const SELECTION_BACKGROUND: Color = Color::Rgb(56, 52, 36);
 /// A slightly darker tint than the surrounding rows, for a continuation line
 /// that belongs to the row above it rather than standing on its own.
 pub const SUBORDINATE_BACKGROUND: Color = Color::Rgb(24, 24, 24);

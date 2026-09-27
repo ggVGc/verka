@@ -570,7 +570,7 @@ fn entry_item_with_max_rows(
         let row = search::highlight_lines(vec![row], search);
         return ListItem::new(
             row.into_iter()
-                .map(|row| with_selection_backdrop(row, entry.selected))
+                .map(|row| with_entry_backdrop(row, entry))
                 .collect::<Vec<_>>(),
         );
     }
@@ -626,22 +626,31 @@ fn entry_item_with_max_rows(
     // style and the selection below is the row's own, so they coexist.
     let mut wrapped = search::highlight_lines(wrapped, search);
     if let Some(first) = wrapped.first_mut() {
-        *first = with_selection_backdrop(std::mem::take(first), entry.selected);
+        *first = with_entry_backdrop(std::mem::take(first), entry);
     }
     ListItem::new(wrapped)
 }
 
-/// Mark the selection by backing its first row — and only that row — with
-/// [`palette::SELECTION_BACKGROUND`]. An expanded entry's detail body keeps the plain
-/// background, so the highlight reads as one line rather than as a block.
+/// Tint operator messages, and mark a selected row, by backing its first row
+/// only. An expanded entry's detail body keeps the plain background, so either
+/// cue reads as one line rather than as a block.
 /// The style sits on the [`Line`], not on its spans, so the fill runs to the
 /// full width of the row instead of stopping at the end of the text.
-fn with_selection_backdrop(line: Line<'static>, selected: bool) -> Line<'static> {
-    if !selected {
-        return line;
+fn with_entry_backdrop(line: Line<'static>, entry: &EventEntry<'_>) -> Line<'static> {
+    let background = if entry.selected {
+        Some(palette::SELECTION_BACKGROUND)
+    } else if matches!(entry.event, AgentEvent::UserMessage { .. }) {
+        Some(palette::USER_MESSAGE_BACKGROUND)
+    } else {
+        None
+    };
+    match background {
+        Some(background) => {
+            let style = line.style.bg(background);
+            line.style(style)
+        }
+        None => line,
     }
-    let style = line.style.bg(palette::SELECTION_BACKGROUND);
-    line.style(style)
 }
 
 /// A conversation already starts with a direction glyph, so tint that glyph
