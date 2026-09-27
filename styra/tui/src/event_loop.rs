@@ -12,6 +12,7 @@ use crate::audio::AudioInput;
 use crate::config::Configuration;
 use crate::keys;
 use crate::launch::{self, LaunchScope};
+use crate::launcher;
 use crate::picker;
 use crate::preferences;
 use crate::presentation;
@@ -955,7 +956,7 @@ pub fn run(
         // live session), so it falls through to the request match below rather
         // than skipping straight to the next frame.
         if app.launcher.is_some() {
-            keys::handle_launcher_key(app, key, preferences_path);
+            launcher::handle_key(app, key, preferences_path);
         } else {
             match app.focus {
                 Focus::List => keys::handle_list_key(

@@ -748,7 +748,7 @@ mod cli_tests {
         let mut app = App::pending(selection.clone());
         app.open_launcher();
 
-        keys::handle_launcher_key(
+        launcher::handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             &path,
@@ -779,12 +779,12 @@ mod cli_tests {
             KeyCode::Char('j'),
             KeyCode::Char('k'),
         ] {
-            keys::handle_launcher_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &path);
+            launcher::handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &path);
         }
         let moved_to = app.launcher.as_ref().unwrap().selection().model;
         assert_eq!(moved_to, models_for(Provider::Claude)[opened_on + 1]);
 
-        keys::handle_launcher_key(
+        launcher::handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             &path,
@@ -818,7 +818,7 @@ mod cli_tests {
         let mut app = App::pending(selection.clone());
         app.open_launcher();
 
-        keys::handle_launcher_key(
+        launcher::handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
             &path,

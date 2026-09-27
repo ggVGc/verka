@@ -1,13 +1,20 @@
 //! The launch picker: the agent, model, and reasoning effort the *next* session
 //! will start with.
 //!
-//! State and column arithmetic only. [`App`](crate::app::App) carries an open
-//! picker as `launcher`, [`crate::keys::handle_launcher_key`] drives it, and
-//! [`crate::presentation::launcher`] draws it.
+//! [`App`](crate::app::App) carries an open picker as `launcher`; this module
+//! owns both its state and keyboard handling. [`crate::presentation::launcher`]
+//! draws it.
 
+use crossterm::event::KeyEvent;
+use std::path::Path;
 use styra_protocol::agent::{
     default_effort_for, efforts_for, models_for, Effort, Provider, Selection, PROVIDERS,
 };
+use styra_protocol::LogEntry;
+
+use crate::app::App;
+use crate::keys;
+use crate::preferences;
 
 /// Which of the launch picker's three columns has the keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +22,63 @@ pub enum LaunchColumn {
     Provider,
     Model,
     Effort,
+}
+
+/// Apply a key to the open launch picker.
+pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
+    let Some(launcher) = app.launcher.as_mut() else {
+        return;
+    };
+    match key {
+        k if keys::LAUNCHER_NEXT.matches(k) => launcher.next(),
+        k if keys::LAUNCHER_PREV.matches(k) => launcher.prev(),
+        k if keys::LAUNCHER_NEXT_COLUMN.matches(k) => launcher.next_column(),
+        k if keys::LAUNCHER_PREV_COLUMN.matches(k) => launcher.prev_column(),
+        k if keys::LAUNCHER_PROVIDER_DOWN.matches(k) && !launcher.provider_locked => {
+            launcher.jump_to_column(LaunchColumn::Provider);
+            launcher.next();
+        }
+        k if keys::LAUNCHER_PROVIDER_UP.matches(k) && !launcher.provider_locked => {
+            launcher.jump_to_column(LaunchColumn::Provider);
+            launcher.prev();
+        }
+        k if keys::LAUNCHER_MODEL_DOWN.matches(k) => {
+            launcher.jump_to_column(LaunchColumn::Model);
+            launcher.next();
+        }
+        k if keys::LAUNCHER_MODEL_UP.matches(k) => {
+            launcher.jump_to_column(LaunchColumn::Model);
+            launcher.prev();
+        }
+        k if keys::LAUNCHER_EFFORT_DOWN.matches(k) => {
+            launcher.jump_to_column(LaunchColumn::Effort);
+            launcher.next();
+        }
+        k if keys::LAUNCHER_EFFORT_UP.matches(k) => {
+            launcher.jump_to_column(LaunchColumn::Effort);
+            launcher.prev();
+        }
+        k if keys::LAUNCHER_SELECT.matches(k) => confirm(app, preferences_path),
+        k if keys::LAUNCHER_DEFAULT.matches(k) => {
+            confirm(app, preferences_path);
+            if let Err(error) = preferences::save_selection(preferences_path, &app.selection) {
+                app.push_log(LogEntry::error(format!(
+                    "could not save launch defaults: {error:#}"
+                )));
+            }
+        }
+        k if keys::LAUNCHER_CANCEL.matches(k) => app.cancel_launcher(),
+        _ => {}
+    }
+}
+
+fn confirm(app: &mut App, preferences_path: &Path) {
+    app.confirm_launcher();
+    if let Err(error) = preferences::save_recent_models(preferences_path, &app.recent_models) {
+        app.push_log(LogEntry::error(format!(
+            "could not save the model ordering: {error:#}"
+        )));
+    }
 }
 
 /// Which row of a column holds `value`, falling back to the first. Used to open

@@ -29,6 +29,115 @@ pub enum Attachment {
     Detached,
 }
 
+/// Submit a composed message to the current interaction, or create one when
+/// this is the first message.  Keyboard dispatch deliberately stays outside
+/// this operation; this owns the session lifecycle it triggers.
+pub fn submit_message(
+    app: &mut App,
+    client: &Client,
+    workspace_id: &str,
+    live: &mut Attachment,
+    message: String,
+    create_worktree: bool,
+) {
+    if let Some(directory) = message.strip_prefix("/cd ") {
+        let Attachment::Attached { .. } = live else {
+            return app.push_log(LogEntry::warn("/cd requires a live Codex interaction"));
+        };
+        if directory.trim().is_empty() {
+            return app.push_log(LogEntry::warn("usage: /cd <directory>"));
+        }
+        match client.set_interaction_working_directory(&app.session_id, directory.trim().into()) {
+            Ok(()) => app.show_action_message(format!("working directory: {}", directory.trim())),
+            Err(error) => app.push_log(LogEntry::error(format!(
+                "could not change working directory: {error:#}"
+            ))),
+        }
+        return;
+    }
+
+    // A directory command is not a turn, so it must not consume the selected
+    // answer contract.
+    let contract = app.outbox.take_contract();
+    match live {
+        Attachment::Attached { .. } if app.activity.status == Status::Running => {
+            let turn = turn(&message, &app.selection, contract);
+            match client.queue_turn(&app.session_id, turn) {
+                Ok(queued) => {
+                    app.outbox.replace_queued(queued);
+                    app.push_log(LogEntry::info(format!(
+                        "message queued ({} waiting)",
+                        app.outbox.queued_count()
+                    )));
+                }
+                Err(error) => app.push_log(LogEntry::error(format!(
+                    "could not persist queued message: {error:#}"
+                ))),
+            }
+        }
+        Attachment::Attached { .. }
+            if matches!(app.activity.status, Status::Idle(_) | Status::Background) =>
+        {
+            let turn = turn(&message, &app.selection, contract);
+            match client.send_turn(&app.session_id, turn) {
+                Ok(()) => app.activity.status = Status::Running,
+                Err(error) => app.push_log(LogEntry::error(format!("send failed: {error:#}"))),
+            }
+        }
+        Attachment::Attached { .. } => resume_and_send(app, client, live, message, contract),
+        Attachment::Detached if !app.session_id.is_empty() => {
+            resume_and_send(app, client, live, message, contract)
+        }
+        Attachment::Detached => {
+            let selection = app.selection.clone();
+            let launch = app.launch.interaction.clone();
+            match create_session(
+                client,
+                &launch,
+                workspace_id,
+                &selection,
+                Some(&message),
+                Start {
+                    contract,
+                    create_worktree,
+                    checkout_from: app.checkout_from.clone(),
+                },
+            ) {
+                Ok(info) => {
+                    app.selection = info.selection;
+                    app.workspace.id = Some(info.workspace_id);
+                    app.session_id = info.id.clone();
+                    app.checkout_from = None;
+                    app.session_name = info.name;
+                    if create_worktree {
+                        app.show_action_message(format!(
+                            "new Git workspace ready: {}",
+                            info.workspace.display()
+                        ));
+                    }
+                    app.workspace.enter(info.workspace);
+                    app.launch.record(info.driva);
+                    app.push_log(LogEntry::info(format!(
+                        "journal: {}",
+                        info.journal_path.display()
+                    )));
+                    app.activity.status = Status::Running;
+                    *live = Attachment::Attached {
+                        cursor: info.updates_after,
+                    };
+                }
+                Err(error) => {
+                    app.push_log(LogEntry::error(format!(
+                        "could not launch the agent: {error:#}"
+                    )));
+                    app.set_input(message);
+                    app.enter_input();
+                }
+            }
+        }
+    }
+}
+
 pub fn resolve_workspace(workspace: Option<&Path>) -> Result<PathBuf> {
     let raw = match workspace {
         Some(path) => path.to_path_buf(),

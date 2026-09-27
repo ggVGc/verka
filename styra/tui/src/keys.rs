@@ -694,84 +694,13 @@ mod reference_tests {
 
 use std::path::Path;
 
-use crate::activity::Status;
 use crate::app::{App, Request, View};
 use crate::insert;
 use crate::launch;
-use crate::launcher::LaunchColumn;
 use crate::preferences;
 use crate::session::{self, Attachment};
 use styra_protocol::{Contract, LogEntry};
 use styra_server::Client;
-
-/// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
-/// them, and a letter pair per column to jump straight to it and move down or
-/// up it in one key. See the [`LAUNCHER`] section for the full list.
-///
-/// Neither launches: before launch the operator's first message still starts
-/// the agent. On a live session, confirming switches its model there and then
-/// (see [`App::confirm_launcher`]).
-pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
-    let Some(launcher) = app.launcher.as_mut() else {
-        return;
-    };
-    match key {
-        k if LAUNCHER_NEXT.matches(k) => launcher.next(),
-        k if LAUNCHER_PREV.matches(k) => launcher.prev(),
-        k if LAUNCHER_NEXT_COLUMN.matches(k) => launcher.next_column(),
-        k if LAUNCHER_PREV_COLUMN.matches(k) => launcher.prev_column(),
-        // The agent column is out of reach on a live session (see
-        // `provider_locked`), so its shortcut is dropped rather than jumping
-        // the keys to a column that cannot be stepped.
-        k if LAUNCHER_PROVIDER_DOWN.matches(k) && !launcher.provider_locked => {
-            launcher.jump_to_column(LaunchColumn::Provider);
-            launcher.next();
-        }
-        k if LAUNCHER_PROVIDER_UP.matches(k) && !launcher.provider_locked => {
-            launcher.jump_to_column(LaunchColumn::Provider);
-            launcher.prev();
-        }
-        k if LAUNCHER_MODEL_DOWN.matches(k) => {
-            launcher.jump_to_column(LaunchColumn::Model);
-            launcher.next();
-        }
-        k if LAUNCHER_MODEL_UP.matches(k) => {
-            launcher.jump_to_column(LaunchColumn::Model);
-            launcher.prev();
-        }
-        k if LAUNCHER_EFFORT_DOWN.matches(k) => {
-            launcher.jump_to_column(LaunchColumn::Effort);
-            launcher.next();
-        }
-        k if LAUNCHER_EFFORT_UP.matches(k) => {
-            launcher.jump_to_column(LaunchColumn::Effort);
-            launcher.prev();
-        }
-        k if LAUNCHER_SELECT.matches(k) => confirm(app, preferences_path),
-        k if LAUNCHER_DEFAULT.matches(k) => {
-            confirm(app, preferences_path);
-            if let Err(error) = preferences::save_selection(preferences_path, &app.selection) {
-                app.push_log(LogEntry::error(format!(
-                    "could not save launch defaults: {error:#}"
-                )));
-            }
-        }
-        k if LAUNCHER_CANCEL.matches(k) => app.cancel_launcher(),
-        _ => {}
-    }
-}
-
-/// Adopt the picker's choice, and remember the model it names so the picker
-/// lists it first next time. The ordering is a convenience rather than a
-/// setting, so failing to persist it is logged and no more.
-fn confirm(app: &mut App, preferences_path: &Path) {
-    app.confirm_launcher();
-    if let Err(error) = preferences::save_recent_models(preferences_path, &app.recent_models) {
-        app.push_log(LogEntry::error(format!(
-            "could not save the model ordering: {error:#}"
-        )));
-    }
-}
 
 /// Keys for the event list's `/` search prompt. It is modal — every printable
 /// key is part of the term, including the letters bound to commands on the
@@ -1396,117 +1325,7 @@ pub fn handle_input_key(
         k if EDITOR_SEND.matches(k) || EDITOR_SEND_IN_BRANCH.matches(k) => {
             if let Some(message) = app.take_message() {
                 app.enter_list();
-                if let Some(directory) = message.strip_prefix("/cd ") {
-                    let Attachment::Attached { .. } = live else {
-                        return app
-                            .push_log(LogEntry::warn("/cd requires a live Codex interaction"));
-                    };
-                    if directory.trim().is_empty() {
-                        return app.push_log(LogEntry::warn("usage: /cd <directory>"));
-                    }
-                    match client
-                        .set_interaction_working_directory(&app.session_id, directory.trim().into())
-                    {
-                        Ok(()) => app.show_action_message(format!(
-                            "working directory: {}",
-                            directory.trim()
-                        )),
-                        Err(error) => app.push_log(LogEntry::error(format!(
-                            "could not change working directory: {error:#}"
-                        ))),
-                    }
-                    return;
-                }
-                // The contract belongs to this message, so it is taken here
-                // and travels with it down whichever send path applies.
-                let contract = app.outbox.take_contract();
-                match live {
-                    Attachment::Attached { .. } if app.activity.status == Status::Running => {
-                        // Queued as composed, contract included: the shape was
-                        // chosen for this question and is asked for whenever
-                        // the agent gets to it.
-                        let turn = session::turn(&message, &app.selection, contract);
-                        match client.queue_turn(&app.session_id, turn) {
-                            Ok(queued) => {
-                                app.outbox.replace_queued(queued);
-                                app.push_log(LogEntry::info(format!(
-                                    "message queued ({} waiting)",
-                                    app.outbox.queued_count()
-                                )));
-                            }
-                            Err(error) => app.push_log(LogEntry::error(format!(
-                                "could not persist queued message: {error:#}"
-                            ))),
-                        }
-                    }
-                    Attachment::Attached { .. }
-                        if matches!(app.activity.status, Status::Idle(_) | Status::Background) =>
-                    {
-                        let turn = session::turn(&message, &app.selection, contract);
-                        match client.send_turn(&app.session_id, turn) {
-                            Ok(()) => app.activity.status = Status::Running,
-                            Err(error) => {
-                                app.push_log(LogEntry::error(format!("send failed: {error:#}")))
-                            }
-                        }
-                    }
-                    Attachment::Attached { .. } => {
-                        session::resume_and_send(app, client, live, message, contract)
-                    }
-                    Attachment::Detached if !app.session_id.is_empty() => {
-                        session::resume_and_send(app, client, live, message, contract)
-                    }
-                    Attachment::Detached => {
-                        let selection = app.selection.clone();
-                        let launch = app.launch.interaction.clone();
-                        match session::create_session(
-                            client,
-                            &launch,
-                            workspace_id,
-                            &selection,
-                            Some(&message),
-                            session::Start {
-                                contract,
-                                create_worktree,
-                                checkout_from: app.checkout_from.clone(),
-                            },
-                        ) {
-                            Ok(info) => {
-                                app.selection = info.selection;
-                                app.workspace.id = Some(info.workspace_id);
-                                app.session_id = info.id.clone();
-                                app.checkout_from = None;
-                                app.session_name = info.name;
-                                if create_worktree {
-                                    // Closes the "creating…" notice the event
-                                    // loop put up, and says where the branch
-                                    // this Session now works in landed.
-                                    app.show_action_message(format!(
-                                        "new Git workspace ready: {}",
-                                        info.workspace.display()
-                                    ));
-                                }
-                                app.workspace.enter(info.workspace);
-                                app.launch.record(info.driva);
-                                app.push_log(LogEntry::info(format!(
-                                    "journal: {}",
-                                    info.journal_path.display()
-                                )));
-                                app.activity.status = Status::Running;
-                                *live = Attachment::Attached {
-                                    cursor: info.updates_after,
-                                };
-                            }
-                            Err(error) => {
-                                app.push_log(LogEntry::error(format!(
-                                    "could not launch the agent: {error:#}"
-                                )));
-                                app.set_input(message);
-                                app.enter_input();
-                            }
-                        }
-                    }
-                }
+                session::submit_message(app, client, workspace_id, live, message, create_worktree);
             }
         }
         k if EDITOR_DELETE_WORD.matches(k) => app.composer.delete_word(),
