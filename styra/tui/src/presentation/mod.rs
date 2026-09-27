@@ -173,9 +173,10 @@ pub(crate) fn help_rows(window: crate::keys::Window) -> Vec<styra_ui::help::Help
         .into_iter()
         .map(|row| match row {
             crate::keys::ReferenceRow::Section(name) => styra_ui::help::HelpRow::Section(name),
-            crate::keys::ReferenceRow::Binding { keys, action } => {
-                styra_ui::help::HelpRow::Binding { keys, action }
-            }
+            crate::keys::ReferenceRow::Binding(binding) => styra_ui::help::HelpRow::Binding {
+                keys: binding.label().into(),
+                action: binding.action(),
+            },
             crate::keys::ReferenceRow::Blank => styra_ui::help::HelpRow::Blank,
         })
         .collect()
@@ -409,8 +410,9 @@ fn draw_main(
         .map(|path| path.display().to_string())
         .unwrap_or_default();
     let quota_alert = quota::alert(app);
+    let help_key = crate::keys::HELP.label();
     let footer = styra_ui::footer::FooterView {
-        help_key: crate::keys::HELP,
+        help_key: &help_key,
         working_directory: &working_directory,
         idle_interactions: app.interactions.idle_notification_count(),
         quota: &quota_alert,

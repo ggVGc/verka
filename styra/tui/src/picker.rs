@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use styra_protocol::{
@@ -8,7 +8,7 @@ use styra_protocol::{
 use styra_server::Client;
 
 use crate::help::Help;
-use crate::keys::Window;
+use crate::keys::{self, Window};
 use crate::launch::LaunchScope;
 use crate::presentation;
 use crate::session::{is_recent_session, session_tree_depths, sort_sessions_tree, SessionOrder};
@@ -190,7 +190,7 @@ pub fn run_session_picker(
         }
         // The reference is modal: it describes the list underneath, so none of
         // what it describes acts while it is up.
-        if handle_help_key(&mut help, key.code) {
+        if handle_help_key(&mut help, key) {
             continue;
         }
         if searching {
@@ -224,8 +224,8 @@ pub fn run_session_picker(
                 .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
             continue;
         }
-        match key.code {
-            KeyCode::Esc if filter.is_some() => {
+        match key {
+            k if k.code == KeyCode::Esc && filter.is_some() => {
                 filter = None;
                 sessions = picker_sessions(
                     &all_sessions,
@@ -237,28 +237,28 @@ pub fn run_session_picker(
                 );
                 selected = initial_session_selection(&sessions, current_id);
             }
-            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
-            KeyCode::Char('?') => help.open(),
-            KeyCode::Char('/') => {
+            k if keys::SESSIONS_CANCEL.matches(k) => return Ok(None),
+            k if keys::SESSIONS_HELP.matches(k) => help.open(),
+            k if keys::SESSIONS_FILTER.matches(k) => {
                 filter = Some(String::new());
                 searching = true;
             }
-            KeyCode::Char('j') | KeyCode::Down => {
+            k if keys::SESSIONS_NEXT.matches(k) => {
                 selected = (selected + 1).min(sessions.len().saturating_sub(1));
             }
-            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
-            KeyCode::Char('g') => selected = 0,
-            KeyCode::Char('G') => selected = sessions.len().saturating_sub(1),
-            KeyCode::Char('J') => {
+            k if keys::SESSIONS_PREV.matches(k) => selected = selected.saturating_sub(1),
+            k if keys::SESSIONS_FIRST.matches(k) => selected = 0,
+            k if keys::SESSIONS_LAST.matches(k) => selected = sessions.len().saturating_sub(1),
+            k if keys::SESSIONS_NEXT_ROOT.matches(k) => {
                 selected = next_top_level_session(&sessions, selected).unwrap_or(selected)
             }
-            KeyCode::Char('K') => {
+            k if keys::SESSIONS_PREV_ROOT.matches(k) => {
                 selected = previous_top_level_session(&sessions, selected).unwrap_or(selected)
             }
             // Re-ordering keeps the cursor on the Session it was on: the
             // operator is changing how the list is arranged, not which
             // conversation they were looking at.
-            KeyCode::Char('s') => {
+            k if keys::SESSIONS_SORT.matches(k) => {
                 let cursor_id = sessions.get(selected).map(|session| session.id.clone());
                 order = order.toggled();
                 sort_sessions_tree(&mut sessions, order);
@@ -266,7 +266,7 @@ pub fn run_session_picker(
                     .and_then(|id| sessions.iter().position(|session| session.id == id))
                     .unwrap_or(0);
             }
-            KeyCode::Char('a') => {
+            k if keys::SESSIONS_OLDER.matches(k) => {
                 let cursor_id = sessions.get(selected).map(|session| session.id.clone());
                 showing_all = !showing_all;
                 sessions = picker_sessions(
@@ -281,7 +281,7 @@ pub fn run_session_picker(
                     .and_then(|id| sessions.iter().position(|session| session.id == id))
                     .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
             }
-            KeyCode::Char('c') => {
+            k if keys::SESSIONS_COMPLETED.matches(k) => {
                 let cursor_id = sessions.get(selected).map(|session| session.id.clone());
                 show_completed = !show_completed;
                 sessions = picker_sessions(
@@ -303,9 +303,9 @@ pub fn run_session_picker(
             // a Session — Styra does that itself when a conversion leaves the
             // source behind — and nothing they type undoes it either, so `C`
             // passes over a sealed row rather than appearing to reopen it.
-            KeyCode::Char('C')
-                if !sessions.is_empty()
-                    && sessions[selected].completed != CompletionState::Sealed =>
+            k if keys::SESSIONS_COMPLETE.matches(k)
+                && !sessions.is_empty()
+                && sessions[selected].completed != CompletionState::Sealed =>
             {
                 let completed = if sessions[selected].completed == CompletionState::Active {
                     CompletionState::Completed
@@ -343,11 +343,13 @@ pub fn run_session_picker(
                     .position(|session| session.id == id)
                     .unwrap_or_else(|| selected.min(sessions.len().saturating_sub(1)));
             }
-            KeyCode::Char('n') if can_start_new => return Ok(Some(SessionChoice::New)),
-            KeyCode::Enter if !sessions.is_empty() => {
+            k if keys::SESSIONS_NEW.matches(k) && can_start_new => {
+                return Ok(Some(SessionChoice::New))
+            }
+            k if keys::SESSIONS_OPEN.matches(k) && !sessions.is_empty() => {
                 return Ok(Some(SessionChoice::Open(sessions[selected].id.clone())));
             }
-            KeyCode::Char('r') if !sessions.is_empty() => {
+            k if keys::SESSIONS_RENAME.matches(k) && !sessions.is_empty() => {
                 if let Some(name) = read_session_name(
                     terminal,
                     &sessions,
@@ -368,7 +370,7 @@ pub fn run_session_picker(
                     }
                 }
             }
-            KeyCode::Char('x') if !sessions.is_empty() => {
+            k if keys::SESSIONS_CONVERT.matches(k) && !sessions.is_empty() => {
                 match client.convert_session_provider(&sessions[selected].id) {
                     Ok(converted) => return Ok(Some(SessionChoice::Open(converted.id))),
                     Err(error) => show_message(
@@ -393,7 +395,7 @@ fn render_help(terminal: &mut dyn Ui, window: Window, help: &mut Help) -> Result
     let feedback = terminal.render_help(
         window.name(),
         &rows,
-        crate::keys::CLOSE_REFERENCE,
+        &crate::keys::CLOSE_REFERENCE.label(),
         help.offset(),
     )?;
     if let Some(scroll) = feedback
@@ -408,17 +410,17 @@ fn render_help(terminal: &mut dyn Ui, window: Window, help: &mut Help) -> Result
 
 /// Handle a key while the reference is open, reporting whether it owned it.
 /// The reference is modal, so it owns every key until it is closed.
-fn handle_help_key(help: &mut Help, code: KeyCode) -> bool {
+fn handle_help_key(help: &mut Help, key: KeyEvent) -> bool {
     if !help.is_open() {
         return false;
     }
-    match code {
-        KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => help.close(),
-        KeyCode::Char('j') | KeyCode::Down => help.line_down(),
-        KeyCode::Char('k') | KeyCode::Up => help.line_up(),
-        KeyCode::PageDown => help.page_down(),
-        KeyCode::PageUp => help.page_up(),
-        KeyCode::Char('g') => help.scroll_to_top(),
+    match key {
+        k if keys::CLOSE_REFERENCE.matches(k) => help.close(),
+        k if keys::REFERENCE_DOWN.matches(k) => help.line_down(),
+        k if keys::REFERENCE_UP.matches(k) => help.line_up(),
+        k if keys::REFERENCE_PAGE_DOWN.matches(k) => help.page_down(),
+        k if keys::REFERENCE_PAGE_UP.matches(k) => help.page_up(),
+        k if keys::REFERENCE_TOP.matches(k) => help.scroll_to_top(),
         _ => {}
     }
     true
@@ -651,7 +653,7 @@ pub fn run_workspace_picker(
         if key.kind != KeyEventKind::Press {
             continue;
         }
-        if handle_help_key(&mut help, key.code) {
+        if handle_help_key(&mut help, key) {
             continue;
         }
         if searching {
@@ -683,8 +685,8 @@ pub fn run_workspace_picker(
                 .unwrap_or(0);
             continue;
         }
-        match key.code {
-            KeyCode::Esc if filter.is_some() => {
+        match key {
+            k if k.code == KeyCode::Esc && filter.is_some() => {
                 let cursor_id = workspaces
                     .get(selected)
                     .map(|workspace| workspace.id.clone());
@@ -694,23 +696,25 @@ pub fn run_workspace_picker(
                     .and_then(|id| workspaces.iter().position(|workspace| workspace.id == id))
                     .unwrap_or(0);
             }
-            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
-            KeyCode::Char('?') => help.open(),
-            KeyCode::Char('/') => {
+            k if keys::WORKSPACES_CANCEL.matches(k) => return Ok(None),
+            k if keys::WORKSPACES_HELP.matches(k) => help.open(),
+            k if keys::WORKSPACES_FILTER.matches(k) => {
                 filter = Some(String::new());
                 searching = true;
             }
-            KeyCode::Char('j') | KeyCode::Down => {
+            k if keys::WORKSPACES_NEXT.matches(k) => {
                 selected = (selected + 1).min(workspaces.len().saturating_sub(1));
             }
-            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
-            KeyCode::Enter if !workspaces.is_empty() => {
+            k if keys::WORKSPACES_PREV.matches(k) => selected = selected.saturating_sub(1),
+            k if keys::WORKSPACES_OPEN.matches(k) && !workspaces.is_empty() => {
                 return Ok(Some(WorkspaceChoice::Existing(
                     workspaces[selected].clone(),
                 )));
             }
-            KeyCode::Char('c') => return Ok(Some(WorkspaceChoice::CreateCurrentDirectory)),
-            KeyCode::Char('r') if !workspaces.is_empty() => {
+            k if keys::WORKSPACES_CREATE.matches(k) => {
+                return Ok(Some(WorkspaceChoice::CreateCurrentDirectory))
+            }
+            k if keys::WORKSPACES_RENAME.matches(k) && !workspaces.is_empty() => {
                 if let Some(name) = read_workspace_name(
                     terminal,
                     &workspaces,
@@ -854,25 +858,25 @@ impl TemplatePicker {
         self.cursor = 0;
     }
 
-    pub fn handle_key(&mut self, code: KeyCode) -> TemplatePickerAction {
+    pub fn handle_key(&mut self, key: KeyEvent) -> TemplatePickerAction {
         let Some(templates) = self.templates.as_ref() else {
-            return if matches!(code, KeyCode::Char('q') | KeyCode::Esc) {
+            return if keys::TEMPLATES_CANCEL.matches(key) {
                 TemplatePickerAction::Cancel
             } else {
                 TemplatePickerAction::None
             };
         };
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => TemplatePickerAction::Cancel,
-            KeyCode::Char('j') | KeyCode::Down => {
+        match key {
+            k if keys::TEMPLATES_CANCEL.matches(k) => TemplatePickerAction::Cancel,
+            k if keys::TEMPLATES_NEXT.matches(k) => {
                 self.cursor = (self.cursor + 1).min(templates.len().saturating_sub(1));
                 TemplatePickerAction::None
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            k if keys::TEMPLATES_PREV.matches(k) => {
                 self.cursor = self.cursor.saturating_sub(1);
                 TemplatePickerAction::None
             }
-            KeyCode::Char(' ') => {
+            k if keys::TEMPLATES_TOGGLE.matches(k) => {
                 if let Some(template) = templates.get(self.cursor) {
                     match self.chosen.iter().position(|name| name == &template.name) {
                         Some(index) => {
@@ -883,8 +887,10 @@ impl TemplatePicker {
                 }
                 TemplatePickerAction::None
             }
-            KeyCode::Enter if self.chosen == self.initial => TemplatePickerAction::Unchanged,
-            KeyCode::Enter => TemplatePickerAction::Apply {
+            k if keys::TEMPLATES_APPLY.matches(k) && self.chosen == self.initial => {
+                TemplatePickerAction::Unchanged
+            }
+            k if keys::TEMPLATES_APPLY.matches(k) => TemplatePickerAction::Apply {
                 scope: self.scope,
                 chosen: self.chosen.clone(),
             },
@@ -1077,20 +1083,20 @@ mod tests {
             vec!["rust".into(), "removed".into()],
         );
         assert_eq!(
-            picker.handle_key(KeyCode::Enter),
+            picker.handle_key(KeyCode::Enter.into()),
             TemplatePickerAction::None
         );
 
         picker.loaded(vec![template("rust"), template("browser")]);
         assert_eq!(picker.chosen, vec!["rust"]);
         assert_eq!(
-            picker.handle_key(KeyCode::Enter),
+            picker.handle_key(KeyCode::Enter.into()),
             TemplatePickerAction::Unchanged
         );
-        picker.handle_key(KeyCode::Down);
-        picker.handle_key(KeyCode::Char(' '));
+        picker.handle_key(KeyCode::Down.into());
+        picker.handle_key(KeyCode::Char(' ').into());
         assert_eq!(
-            picker.handle_key(KeyCode::Enter),
+            picker.handle_key(KeyCode::Enter.into()),
             TemplatePickerAction::Apply {
                 scope: LaunchScope::Workspace,
                 chosen: vec!["rust".into(), "browser".into()],

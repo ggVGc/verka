@@ -1,7 +1,10 @@
 //! Terminal keyboard bindings and their visible reference.
 //!
-//! Keep a command's displayed keys and description here.  Renderers consume
-//! this catalogue rather than carrying their own copies of the shortcut text.
+//! Every binding is declared once, by the [`bindings!`] macro below: the keys
+//! that trigger it, and the line the reference shows for it.  The dispatchers
+//! in this file — and in the few other modules that read keys — ask a binding
+//! whether it matches the keypress rather than spelling the key out again, so
+//! rebinding a command is one edit and the reference cannot drift from it.
 //!
 //! The map is cut into sections, and each window names the sections that apply
 //! to it: `?` answers for what is on screen rather than for the whole client.
@@ -9,19 +12,470 @@
 //! the strip could only ever list the few that fit, and it cost a line of the
 //! list it sat above.
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+/// One key, as the operator presses it.
+///
+/// Shift is not compared: a shifted letter already arrives as its capital, and
+/// terminals disagree about whether they also set the modifier for punctuation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Key {
+    code: KeyCode,
+    modifiers: KeyModifiers,
+}
+
+impl Key {
+    /// A key with no modifier: `Enter`, `Tab`, an arrow, a page key.
+    pub(crate) const fn code(code: KeyCode) -> Self {
+        Self {
+            code,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// A plain character.
+    pub(crate) const fn ch(character: char) -> Self {
+        Self::code(KeyCode::Char(character))
+    }
+
+    /// A character held with control. Terminals report the unshifted letter,
+    /// so these are written lowercase.
+    pub(crate) const fn ctrl(character: char) -> Self {
+        Self {
+            code: KeyCode::Char(character),
+            modifiers: KeyModifiers::CONTROL,
+        }
+    }
+
+    /// Control with a named key, such as ctrl-Enter.
+    pub(crate) const fn ctrl_code(code: KeyCode) -> Self {
+        Self {
+            code,
+            modifiers: KeyModifiers::CONTROL,
+        }
+    }
+
+    /// Alt with a named key, such as alt-Enter.
+    pub(crate) const fn alt_code(code: KeyCode) -> Self {
+        Self {
+            code,
+            modifiers: KeyModifiers::ALT,
+        }
+    }
+
+    fn matches(self, event: KeyEvent) -> bool {
+        let compared = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        event.code == self.code && (event.modifiers & compared) == (self.modifiers & compared)
+    }
+
+    /// What the reference calls this key.
+    fn label(self) -> String {
+        let base = match self.code {
+            KeyCode::Char(' ') => "Space".to_owned(),
+            KeyCode::Char(character) => character.to_string(),
+            KeyCode::Enter => "Enter".to_owned(),
+            KeyCode::Esc => "Esc".to_owned(),
+            KeyCode::Tab => "Tab".to_owned(),
+            KeyCode::BackTab => "Shift+Tab".to_owned(),
+            KeyCode::Backspace => "Backspace".to_owned(),
+            KeyCode::Up => "↑".to_owned(),
+            KeyCode::Down => "↓".to_owned(),
+            KeyCode::Left => "←".to_owned(),
+            KeyCode::Right => "→".to_owned(),
+            KeyCode::PageUp => "PgUp".to_owned(),
+            KeyCode::PageDown => "PgDn".to_owned(),
+            other => format!("{other:?}"),
+        };
+        if self.modifiers.contains(KeyModifiers::CONTROL) {
+            format!("ctrl-{base}")
+        } else if self.modifiers.contains(KeyModifiers::ALT) {
+            format!("alt-{base}")
+        } else {
+            base
+        }
+    }
+}
+
+/// One command: the keys that reach it, and what the reference says about it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Binding {
+    keys: &'static [Key],
+    /// Used instead of the keys' own names where the command is not a single
+    /// press — a chord, or something typed into the message box.
+    label: Option<&'static str>,
+    /// When the binding only applies in a narrower situation than the section
+    /// it sits in, shown in parentheses after the keys.
+    note: Option<&'static str>,
+    action: &'static str,
+}
+
+impl Binding {
+    /// Whether this keypress is this command. A binding with no keys of its
+    /// own — one the reference describes but the event loop does not dispatch
+    /// — never matches.
+    pub(crate) fn matches(&self, event: KeyEvent) -> bool {
+        self.keys.iter().any(|key| key.matches(event))
+    }
+
+    /// The keys column of the reference.
+    pub(crate) fn label(&self) -> String {
+        let keys = match self.label {
+            Some(label) => label.to_owned(),
+            None => self
+                .keys
+                .iter()
+                .map(|key| key.label())
+                .collect::<Vec<_>>()
+                .join("/"),
+        };
+        match self.note {
+            Some(note) => format!("{keys} ({note})"),
+            None => keys,
+        }
+    }
+
+    pub(crate) fn action(&self) -> &'static str {
+        self.action
+    }
+}
+
+/// Declare a section of the reference, and with it the bindings it is made of.
+///
+/// ```ignore
+/// bindings! { SECTION = "Heading";
+///     NAME: [Key::ch('j'), Key::code(KeyCode::Down)] => "what it does";
+///     CHORD: [Key::ch('R')] as "z R" => "what it does";
+///     NARROW: [Key::ch('v')] ("preview open") => "what it does";
+/// }
+/// ```
+macro_rules! bindings {
+    (@label) => { None };
+    (@label $label:literal) => { Some($label) };
+    (@note) => { None };
+    (@note $note:literal) => { Some($note) };
+    (
+        $rows:ident = $title:literal;
+        $(
+            $(#[$meta:meta])*
+            $name:ident: [$($key:expr),* $(,)?] $(as $label:literal)? $(($note:literal))? => $action:literal;
+        )*
+    ) => {
+        $(
+            $(#[$meta])*
+            pub(crate) const $name: Binding = Binding {
+                keys: &[$($key),*],
+                label: bindings!(@label $($label)?),
+                note: bindings!(@note $($note)?),
+                action: $action,
+            };
+        )*
+        /// Not every group is a window's reference: some only exist to give
+        /// their bindings a home.
+        #[allow(dead_code)]
+        const $rows: &[ReferenceRow] = &[
+            ReferenceRow::Section($title),
+            $(ReferenceRow::Binding(&$name),)*
+        ];
+    };
+}
+
 /// One row in the keyboard reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReferenceRow {
     Section(&'static str),
-    Binding {
-        keys: &'static str,
-        action: &'static str,
-    },
+    Binding(&'static Binding),
     Blank,
 }
 
-pub(crate) const HELP: &str = "?";
-pub(crate) const CLOSE_REFERENCE: &str = "?, Esc, or q";
+bindings! { GLOBAL = "Global";
+    HELP: [Key::ch('?')] => "show/close the reference for this window";
+    GLOBAL_FOCUS_MESSAGE: [Key::ch('i')] => "focus the message box";
+    GLOBAL_LEAVE_MESSAGE: [Key::code(KeyCode::Esc)] => "return to the list";
+    GLOBAL_QUIT: [Key::ch('q')] => "quit";
+    GLOBAL_INTERRUPT: [Key::ch('s')] => "interrupt the active turn";
+    GLOBAL_STOP: [Key::ch('S')] => "stop the interaction";
+    GLOBAL_BRANCH: [Key::ch('B')] => "branch from history through, or only, the selected entry";
+    GLOBAL_NEXT_LIVE: [Key::ch('n')] => "step to the next interaction that is still running";
+    GLOBAL_NEW_SESSION: [Key::ch('N')] => "new session where this one works";
+    GLOBAL_LAUNCHER: [Key::ch('l')] => "choose model for an idle agent turn";
+    GLOBAL_SHELL: [Key::ch('!')] => "open session shell in a new terminal";
+    GLOBAL_DIRECTORY: [Key::ch('~')] => "open a terminal in the interaction's working directory";
+    GLOBAL_INTERACTIONS: [Key::ch('a')] => "live interactions";
+    GLOBAL_SESSIONS: [Key::ch('A')] => "stored sessions";
+    GLOBAL_WORKSPACES: [Key::ch('V')] => "Workspaces";
+    GLOBAL_SESSION_WORKTREE: [Key::ch('W')] ("existing session")
+        => "create and associate a Git branch and workspace";
+    GLOBAL_TAGS: [Key::ch('T')] => "edit the current interaction's tags";
+    GLOBAL_NEXT_IDLE: [Key::ctrl('a')] => "go to the next interaction that went idle unseen";
+    GLOBAL_RAW: [Key::ch('r')] => "raw view; press again for events";
+    GLOBAL_LOG: [Key::ctrl('l')] => "log view; press again for events";
+    GLOBAL_TRANSCRIPT: [Key::ch('t')] => "transcript view; press again for events";
+    GLOBAL_DETAILS: [Key::ch('d')] => "details view; press again for events";
+    GLOBAL_ENTRY_LOG: [Key::ch('e')] => "toggle the entry log below the event list";
+    GLOBAL_ENTRY_LOG_FOCUS: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]
+        => "move between the event list and the open entry log";
+    GLOBAL_QUOTA: [Key::ch('Q')] => "plan quota readings, refreshed from the server";
+    GLOBAL_FILES: [Key::ch('F')] => "files mentioned by the focused entry";
+    GLOBAL_FILES_ALIAS: [Key::ch('f')] ("other views")
+        => "files mentioned by the focused entry";
+    GLOBAL_ANSWER: [Key::ch('X')] => "the last turn's typed answer";
+    GLOBAL_PREVIEW: [Key::ch('P')] => "toggle full-screen preview";
+    GLOBAL_COPY_CONVERSATION: [Key::ch('Y')] => "copy the whole conversation (any view)";
+}
+
+bindings! { EVENTS = "Events and previews";
+    EVENTS_NEXT_ENTRY: [Key::ch('J'), Key::code(KeyCode::Down)] => "next entry";
+    EVENTS_PREV_ENTRY: [Key::ch('K'), Key::code(KeyCode::Up)] => "previous entry";
+    EVENTS_NEXT_LINE: [Key::ch('j')] => "next line, or next link while links are highlighted";
+    EVENTS_PREV_LINE: [Key::ch('k')] => "previous line, or previous link";
+    EVENTS_FIRST: [Key::ch('g')] => "first entry";
+    EVENTS_LAST: [Key::ch('G')] => "last entry";
+    EVENTS_FOLLOW_BRANCH: [Key::ch('b')] ("or Enter on a branch marker")
+        => "follow the linked Session";
+    EVENTS_TOGGLE_EXPAND: [Key::ch(' '), Key::code(KeyCode::Enter), Key::ch('o')]
+        => "toggle selected entry";
+    EVENTS_EXPAND_ONLY: [Key::ch('O')] => "expand only selected";
+    EVENTS_EXPAND_ALL: [Key::ch('R')] as "z R" => "expand all";
+    EVENTS_COLLAPSE_ALL: [Key::ch('M')] as "z M" => "collapse all";
+    EVENTS_MINOR: [Key::ch('m')] => "toggle minor events";
+    EVENTS_PREVIEW_PANEL: [Key::ch('p')] => "toggle preview panel";
+    EVENTS_CONVERSATION_ONLY: [Key::ch('c')] => "toggle conversation-only events";
+    EVENTS_PREVIEW_MODE: [Key::ch('v')] ("preview open") => "pretty/diff preview";
+    EVENTS_PREVIEW_TARGET: [Key::ch('C')] ("preview open") => "preview the newest command";
+    EVENTS_COMPLETE: [Key::ch('C')] ("preview closed")
+        => "mark this interaction completed and stop it";
+    EVENTS_LINK_DESTINATIONS: [Key::ch('u')] => "toggle link destinations";
+    EVENTS_SEARCH: [Key::ch('/')]
+        => "search: mark words matching a term of 3+ characters (Esc clears)";
+    EVENTS_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => "scroll the preview or the entry log down";
+    EVENTS_PAGE_UP: [Key::code(KeyCode::PageUp)] => "scroll the preview or the entry log up";
+    EVENTS_LINKS: [Key::ch('f')]
+        => "highlight conversation links (j/k moves, Enter opens, Esc exits)";
+    EVENTS_COPY: [Key::ch('y')] => "copy selected entry to clipboard";
+}
+
+bindings! { READING = "Raw, log, quota, and transcript";
+    READING_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => "move or scroll down";
+    READING_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => "move or scroll up";
+    READING_FIRST: [Key::ch('g')] => "first line, or top";
+    READING_LAST: [Key::ch('G')] => "last line, or bottom";
+    READING_LINKS: [Key::ch('f')] ("transcript")
+        => "highlight conversation links (j/k moves, Enter opens, Esc exits)";
+    READING_CONVERSATION_ONLY: [Key::ch('c')] ("transcript")
+        => "toggle conversation-only events";
+    READING_RETRY: [Key::ch('R')] ("quota")
+        => "after a rate limit, ask this session again once the window resets";
+    READING_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => "scroll the raw-line preview down";
+    READING_PAGE_UP: [Key::code(KeyCode::PageUp)] => "scroll the raw-line preview up";
+    READING_PROVIDER_RAW: [Key::ch('v')] ("raw")
+        => "switch Styra wire capture / provider-native session JSONL";
+    READING_COPY: [Key::ch('y')] ("raw") => "copy selected line to clipboard";
+}
+
+bindings! { PREVIEW = "Full-screen preview";
+    PREVIEW_SCROLL_DOWN: [Key::ch('j')] => "scroll a line down, or step to the next link";
+    PREVIEW_SCROLL_UP: [Key::ch('k')] => "scroll a line up, or step to the previous link";
+    PREVIEW_NEXT_ENTRY: [Key::ch('J'), Key::code(KeyCode::Down)] => "next entry";
+    PREVIEW_PREV_ENTRY: [Key::ch('K'), Key::code(KeyCode::Up)] => "previous entry";
+    PREVIEW_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => "page down";
+    PREVIEW_PAGE_UP: [Key::code(KeyCode::PageUp)] => "page up";
+    PREVIEW_FIRST: [Key::ch('g')] => "first entry";
+    PREVIEW_LAST: [Key::ch('G')] => "last entry";
+    PREVIEW_MODE: [Key::ch('v')] => "pretty/diff preview";
+    PREVIEW_TARGET: [Key::ch('C')] => "preview the newest command";
+    PREVIEW_LINKS: [Key::ch('f')] => "highlight conversation links";
+    PREVIEW_LINK_DESTINATIONS: [Key::ch('u')] => "toggle link destinations";
+    PREVIEW_COPY: [Key::ch('y')] => "copy the previewed entry to clipboard";
+}
+
+bindings! { DRIVA = "Details (Workspace, interaction, and launch policy)";
+    DRIVA_SCOPE: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]
+        => "edit the Workspace's policy / this interaction's";
+    DRIVA_NEXT_MOUNT: [Key::ch('j'), Key::code(KeyCode::Down)] => "next mount";
+    DRIVA_PREV_MOUNT: [Key::ch('k'), Key::code(KeyCode::Up)] => "previous mount";
+    DRIVA_NETWORK: [Key::ch('w')] => "permit/forbid agent networking, in the focused layer";
+    DRIVA_ACCESS: [Key::ch('R')]
+        => "mount the workspace read-write/read-only, in the focused layer";
+    DRIVA_TEMPLATES: [Key::ch('T')] => "choose Driva templates";
+    DRIVA_ADD_MOUNT: [Key::ch('m')] => "add a mount";
+    DRIVA_GIT_CHECKOUT: [Key::ch('G')] => "set this Workspace's Git checkout";
+    DRIVA_REMOVE_MOUNT: [Key::ch('x')] => "remove selected mount";
+    DRIVA_IGNORE_WORKSPACE: [Key::ch('I')]
+        => "this interaction adds to / ignores the Workspace policy";
+    DRIVA_PROMOTE: [Key::ch('U')] => "move this interaction's policy up into the Workspace's";
+    DRIVA_SAVE_DEFAULT: [Key::ch('D')] => "save this interaction's policy for new clients";
+    DRIVA_PAGE_DOWN: [Key::code(KeyCode::PageDown)]
+        => "scroll the sandbox account down: mounts, floor, environment, private root";
+    DRIVA_PAGE_UP: [Key::code(KeyCode::PageUp)] => "scroll the sandbox account up";
+}
+
+bindings! { FILES = "Files";
+    FILES_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] => "next file";
+    FILES_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => "previous file";
+    FILES_NEXT_ENTRY: [Key::ch('J')] => "next interaction-log entry";
+    FILES_PREV_ENTRY: [Key::ch('K')] => "previous interaction-log entry";
+    FILES_FIRST: [Key::ch('g')] => "first file";
+    FILES_LAST: [Key::ch('G')] => "last file";
+    FILES_EDIT: [Key::ch('e')] => "open selected file in editor";
+    FILES_PREVIEW: [Key::ch('p')] => "toggle interaction preview";
+    FILES_SCOPE: [Key::ch('a')] => "focused-entry / all-session files";
+    FILES_COPY: [Key::ch('y')] => "copy the path";
+}
+
+bindings! { ANSWER = "Typed answer";
+    ANSWER_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] => "next item";
+    ANSWER_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => "previous item";
+    ANSWER_FIRST: [Key::ch('g')] => "first item";
+    ANSWER_LAST: [Key::ch('G')] => "last item";
+    ANSWER_EDIT: [Key::ch('e')] => "open location in editor";
+    ANSWER_COPY: [Key::ch('y')] => "copy";
+    ANSWER_AS_TEXT: [Key::ch('T')] => "re-read as text";
+    ANSWER_AS_LINES: [Key::ch('L')] => "re-read as lines";
+    ANSWER_AS_FILES: [Key::ch('F')] => "re-read as files";
+    ANSWER_AS_JSON: [Key::ch('J')] => "re-read as json";
+    ANSWER_REREAD: [Key::ch('R')] => "re-read as the turn asked";
+}
+
+bindings! { MESSAGE_EDITOR = "Message editor";
+    EDITOR_RECORD: [Key::ctrl('r')]
+        => "record from the microphone; the box becomes a level meter";
+    EDITOR_RECORD_FINISH: [Key::code(KeyCode::Enter)] ("while recording")
+        => "transcribe into the message";
+    EDITOR_RECORD_CANCEL: [Key::code(KeyCode::Esc)] ("while recording") => "discard the recording";
+    EDITOR_RECORD_LOUDER: [Key::code(KeyCode::Up), Key::ch('+'), Key::ch('=')] ("while recording")
+        => "boost a quiet input";
+    EDITOR_RECORD_QUIETER: [Key::code(KeyCode::Down), Key::ch('-')] ("while recording")
+        => "take a loud input down";
+    EDITOR_CONTRACT: [Key::ctrl('t')]
+        => "ask this message's reply for a shape (text/lines/files/json)";
+    EDITOR_SEND: [Key::code(KeyCode::Enter)] => "send message";
+    EDITOR_SEND_IN_BRANCH: [Key::ctrl_code(KeyCode::Enter)] ("first prompt")
+        => "send in a new Git branch and workspace";
+    EDITOR_CHANGE_DIRECTORY: [] as "/cd <directory>"
+        => "change the live Codex interaction directory";
+    EDITOR_NEWLINE: [Key::alt_code(KeyCode::Enter)] => "insert newline";
+    EDITOR_HISTORY_OLDER: [Key::code(KeyCode::Up)] => "older message history";
+    EDITOR_HISTORY_NEWER: [Key::code(KeyCode::Down)] => "newer message history";
+    EDITOR_DELETE_WORD: [Key::ctrl('w')] => "delete previous word";
+    EDITOR_LAUNCHER: [Key::ctrl('l')]
+        => "choose model before first message or idle agent turn";
+    EDITOR_INSERT_PATH: [Key::ctrl('f')] => "insert a file path (Tab completes, Enter inserts)";
+    EDITOR_MOUNT_READABLE: [Key::ch('r')] ("unmounted path") => "mount it readable";
+    EDITOR_MOUNT_WRITABLE: [Key::ch('w')] ("unmounted path") => "mount it writable";
+    EDITOR_MOUNT_NEITHER: [Key::ch('n')] ("unmounted path") => "insert it with no mount";
+}
+
+bindings! { INTERACTIONS = "Interactions";
+    INTERACTIONS_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)]
+        => "move the cursor down; the rested-on interaction becomes current";
+    INTERACTIONS_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => "move the cursor up";
+    INTERACTIONS_NEXT_WORKSPACE: [Key::ch('J')]
+        => "first interaction of the next Workspace, in All";
+    INTERACTIONS_PREV_WORKSPACE: [Key::ch('K')]
+        => "first interaction of the previous Workspace, in All";
+    INTERACTIONS_NEXT_LIVE: [Key::ctrl('n')] => "next interaction that is still running";
+    INTERACTIONS_NEXT_WORKING: [Key::ch('N')]
+        => "next interaction actively working, skipping idle ones";
+    INTERACTIONS_NEXT_IDLE: [Key::ctrl('a')] => "next interaction that went idle unseen";
+    INTERACTIONS_SCOPE: [Key::ch('w')] => "current Workspace / all Workspaces";
+    INTERACTIONS_COMPLETED: [Key::ch('c')] => "show/hide completed";
+    INTERACTIONS_COMPLETE: [Key::ch('C')] => "mark selected completed and stop it";
+    INTERACTIONS_TAGS: [Key::ch('T')] => "edit the selected interaction's tags";
+    INTERACTIONS_STOP: [Key::ch('S')] => "stop the selected interaction";
+    INTERACTIONS_DELETE: [Key::ch('D')] => "delete it once stopped";
+    INTERACTIONS_CLOSE: [Key::code(KeyCode::Enter), Key::ch('a'), Key::code(KeyCode::Esc)]
+        => "close the list";
+}
+
+bindings! { BRANCH = "Branch from selected entry";
+    BRANCH_NEXT: [Key::ch('j'), Key::ch('J'), Key::code(KeyCode::Down)]
+        => "entire interaction through this entry";
+    BRANCH_PREV: [Key::ch('k'), Key::ch('K'), Key::code(KeyCode::Up)] => "only this entry";
+    BRANCH_CONFIRM: [Key::code(KeyCode::Enter)] => "branch, and open the result";
+    BRANCH_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => "cancel";
+}
+
+bindings! { TAGS = "Interaction tags";
+    TAGS_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] => "move selection down";
+    TAGS_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => "move selection up";
+    TAGS_TOGGLE: [Key::ch(' ')] => "toggle the selected tag";
+    TAGS_NEW: [Key::ch('n')] => "add a new tag (Enter adds and saves)";
+    TAGS_SAVE: [Key::code(KeyCode::Enter)] => "save";
+    TAGS_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => "cancel";
+}
+
+bindings! { SESSION_PICKER = "Stored sessions";
+    SESSIONS_HELP: [Key::ch('?')] => "show/close this reference";
+    SESSIONS_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] => "move selection down";
+    SESSIONS_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => "move selection up";
+    SESSIONS_NEXT_ROOT: [Key::ch('J')] => "next root conversation, skipping its branches";
+    SESSIONS_PREV_ROOT: [Key::ch('K')] => "previous root conversation";
+    SESSIONS_FIRST: [Key::ch('g')] => "first session";
+    SESSIONS_LAST: [Key::ch('G')] => "last session";
+    SESSIONS_OPEN: [Key::code(KeyCode::Enter)] => "open the selected session";
+    SESSIONS_NEW: [Key::ch('n')] => "start a new session in this Workspace";
+    SESSIONS_COMPLETED: [Key::ch('c')] => "show/hide completed";
+    SESSIONS_COMPLETE: [Key::ch('C')] => "mark selected completed or not";
+    SESSIONS_FILTER: [Key::ch('/')] => "filter by name or first prompt (Esc clears)";
+    SESSIONS_SORT: [Key::ch('s')] => "sort by last activity / by creation";
+    SESSIONS_OLDER: [Key::ch('a')] => "show/hide history older than a week";
+    SESSIONS_RENAME: [Key::ch('r')] => "rename the selected session";
+    SESSIONS_CONVERT: [Key::ch('x')] => "convert the selected session to the other provider";
+    SESSIONS_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => "cancel";
+}
+
+bindings! { WORKSPACE_PICKER = "Workspaces";
+    WORKSPACES_HELP: [Key::ch('?')] => "show/close this reference";
+    WORKSPACES_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] => "move selection down";
+    WORKSPACES_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => "move selection up";
+    WORKSPACES_OPEN: [Key::code(KeyCode::Enter)] => "open the selected Workspace";
+    WORKSPACES_CREATE: [Key::ch('c')] => "create a Workspace for the current directory";
+    WORKSPACES_RENAME: [Key::ch('r')] => "rename the selected Workspace";
+    WORKSPACES_FILTER: [Key::ch('/')] => "filter by name (Esc clears)";
+    WORKSPACES_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => "cancel";
+}
+
+bindings! { LAUNCHER = "Launch";
+    LAUNCHER_HELP: [Key::ch('?')] => "show/close this reference";
+    LAUNCHER_NEXT: [Key::ch('j'), Key::ch('J'), Key::code(KeyCode::Down)] => "move selection down";
+    LAUNCHER_PREV: [Key::ch('k'), Key::ch('K'), Key::code(KeyCode::Up)] => "move selection up";
+    LAUNCHER_NEXT_COLUMN: [Key::ch('l'), Key::code(KeyCode::Right), Key::code(KeyCode::Tab)]
+        => "next launch column";
+    LAUNCHER_PREV_COLUMN: [Key::ch('h'), Key::code(KeyCode::Left), Key::code(KeyCode::BackTab)]
+        => "previous launch column";
+    LAUNCHER_PROVIDER_DOWN: [Key::ch('p')] => "move down the provider column";
+    LAUNCHER_PROVIDER_UP: [Key::ch('P')] => "move up the provider column";
+    LAUNCHER_MODEL_DOWN: [Key::ch('m')] => "move down the model column";
+    LAUNCHER_MODEL_UP: [Key::ch('M')] => "move up the model column";
+    LAUNCHER_EFFORT_DOWN: [Key::ch('e')] => "move down the effort column";
+    LAUNCHER_EFFORT_UP: [Key::ch('E')] => "move up the effort column";
+    LAUNCHER_SELECT: [Key::code(KeyCode::Enter)] => "select";
+    LAUNCHER_DEFAULT: [Key::ch('D')] => "select and save launch default";
+    LAUNCHER_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => "cancel";
+}
+
+bindings! { TEMPLATE_PICKER = "Driva templates";
+    TEMPLATES_HELP: [Key::ch('?')] => "show/close this reference";
+    TEMPLATES_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] => "move selection down";
+    TEMPLATES_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => "move selection up";
+    TEMPLATES_TOGGLE: [Key::ch(' ')] => "add/remove the selected template";
+    TEMPLATES_APPLY: [Key::code(KeyCode::Enter)] => "apply; templates layer in the order chosen";
+    TEMPLATES_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => "cancel";
+}
+
+// Bindings that belong to no window's reference: the prefix of a chord, and
+// the keys of the reference overlay itself, which says how to leave in its own
+// footer rather than in a list of rows.
+bindings! { REFERENCE_OVERLAY = "Reference";
+    EVENTS_FOLD_PREFIX: [Key::ch('z')] => "fold prefix: z R expands all, z M collapses all";
+    CLOSE_REFERENCE: [Key::ch('?'), Key::code(KeyCode::Esc), Key::ch('q')]
+        => "close the reference";
+    REFERENCE_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => "scroll down";
+    REFERENCE_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => "scroll up";
+    REFERENCE_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => "page down";
+    REFERENCE_PAGE_UP: [Key::code(KeyCode::PageUp)] => "page up";
+    REFERENCE_TOP: [Key::ch('g')] => "back to the top";
+}
 
 /// A screen the operator can be looking at, and so a reference `?` can answer
 /// with. The main application's windows are its views and its modal overlays;
@@ -76,9 +530,10 @@ impl Window {
     fn sections(self) -> &'static [&'static [ReferenceRow]] {
         match self {
             Self::Events => &[EVENTS, MESSAGE_EDITOR, GLOBAL],
-            Self::Raw | Self::Log | Self::Quota | Self::Transcript | Self::Preview => {
+            Self::Raw | Self::Log | Self::Quota | Self::Transcript => {
                 &[READING, MESSAGE_EDITOR, GLOBAL]
             }
+            Self::Preview => &[PREVIEW, MESSAGE_EDITOR, GLOBAL],
             Self::Driva => &[DRIVA, GLOBAL],
             Self::Files => &[FILES, GLOBAL],
             Self::Answer => &[ANSWER, GLOBAL],
@@ -106,566 +561,35 @@ impl Window {
     }
 }
 
-/// What holds anywhere in a loaded session, whichever of its windows is up.
-const GLOBAL: &[ReferenceRow] = &[
-    ReferenceRow::Section("Global"),
-    ReferenceRow::Binding {
-        keys: HELP,
-        action: "show/close the reference for this window",
-    },
-    ReferenceRow::Binding {
-        keys: "i / Esc",
-        action: "focus message / return to list",
-    },
-    ReferenceRow::Binding {
-        keys: "q",
-        action: "quit",
-    },
-    ReferenceRow::Binding {
-        keys: "s / S",
-        action: "interrupt active turn / stop interaction",
-    },
-    ReferenceRow::Binding {
-        keys: "B",
-        action: "branch from history through, or only, the selected entry",
-    },
-    ReferenceRow::Binding {
-        keys: "n",
-        action: "step to the next interaction that is still running",
-    },
-    ReferenceRow::Binding {
-        keys: "N",
-        action: "new session where this one works",
-    },
-    ReferenceRow::Binding {
-        keys: "l",
-        action: "choose model for an idle agent turn",
-    },
-    ReferenceRow::Binding {
-        keys: "!",
-        action: "open session shell in a new terminal",
-    },
-    ReferenceRow::Binding {
-        keys: "~",
-        action: "open a terminal in the interaction's working directory",
-    },
-    ReferenceRow::Binding {
-        keys: "a / A / V",
-        action: "live interactions/sessions/Workspaces",
-    },
-    ReferenceRow::Binding {
-        keys: "W (existing session)",
-        action: "create and associate a Git branch and workspace",
-    },
-    ReferenceRow::Binding {
-        keys: "T",
-        action: "edit the current interaction's tags",
-    },
-    ReferenceRow::Binding {
-        keys: "ctrl-a",
-        action: "go to the next interaction that went idle unseen",
-    },
-    ReferenceRow::Binding {
-        keys: "r / ctrl-l / t / d",
-        action: "raw / log / transcript / details; press again for events",
-    },
-    ReferenceRow::Binding {
-        keys: "e",
-        action: "toggle the entry log below the event list",
-    },
-    ReferenceRow::Binding {
-        keys: "Tab",
-        action: "move between the event list and the open entry log",
-    },
-    ReferenceRow::Binding {
-        keys: "Q",
-        action: "plan quota readings, refreshed from the server",
-    },
-    ReferenceRow::Binding {
-        keys: "F",
-        action: "files mentioned by the focused entry",
-    },
-    ReferenceRow::Binding {
-        keys: "X",
-        action: "the last turn's typed answer",
-    },
-];
-
-const EVENTS: &[ReferenceRow] = &[
-    ReferenceRow::Section("Events and previews"),
-    ReferenceRow::Binding {
-        keys: "J/K or ↓/↑",
-        action: "next/previous entry",
-    },
-    ReferenceRow::Binding {
-        keys: "j/k",
-        action: "next/previous line",
-    },
-    ReferenceRow::Binding {
-        keys: "g/G",
-        action: "first/last entry",
-    },
-    ReferenceRow::Binding {
-        keys: "Enter (branch marker), b",
-        action: "follow the linked Session",
-    },
-    ReferenceRow::Binding {
-        keys: "Space, Enter, o",
-        action: "toggle selected entry",
-    },
-    ReferenceRow::Binding {
-        keys: "O",
-        action: "expand only selected",
-    },
-    ReferenceRow::Binding {
-        keys: "z R / z M",
-        action: "expand all / collapse all",
-    },
-    ReferenceRow::Binding {
-        keys: "m / p",
-        action: "toggle minor events / preview panel",
-    },
-    ReferenceRow::Binding {
-        keys: "c",
-        action: "toggle conversation-only events",
-    },
-    ReferenceRow::Binding {
-        keys: "P",
-        action: "toggle full-screen preview",
-    },
-    ReferenceRow::Binding {
-        keys: "v / C (preview open)",
-        action: "pretty/diff preview; preview the newest command",
-    },
-    ReferenceRow::Binding {
-        keys: "C (preview closed)",
-        action: "mark this interaction completed and stop it",
-    },
-    ReferenceRow::Binding {
-        keys: "u",
-        action: "toggle link destinations",
-    },
-    ReferenceRow::Binding {
-        keys: "/",
-        action: "search: mark words matching a term of 3+ characters (Esc clears)",
-    },
-    ReferenceRow::Binding {
-        keys: "PgUp/PgDn",
-        action: "scroll preview (full-screen: j/k, entry: J/K)",
-    },
-    ReferenceRow::Binding {
-        keys: "f",
-        action: "highlight conversation links (j/k moves, Enter opens, Esc exits)",
-    },
-    ReferenceRow::Binding {
-        keys: "y",
-        action: "copy selected entry to clipboard",
-    },
-    ReferenceRow::Binding {
-        keys: "Y",
-        action: "copy the whole conversation (any view)",
-    },
-];
-
-const READING: &[ReferenceRow] = &[
-    ReferenceRow::Section("Raw, log, quota, and transcript"),
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "move or scroll",
-    },
-    ReferenceRow::Binding {
-        keys: "f",
-        action: "highlight conversation links (j/k moves, Enter opens, Esc exits)",
-    },
-    ReferenceRow::Binding {
-        keys: "R (quota)",
-        action: "after a rate limit, ask this session again once the window resets",
-    },
-    ReferenceRow::Binding {
-        keys: "g/G",
-        action: "first/top or last/bottom",
-    },
-    ReferenceRow::Binding {
-        keys: "PgUp/PgDn",
-        action: "scroll raw-line preview",
-    },
-    ReferenceRow::Binding {
-        keys: "v (raw)",
-        action: "switch Styra wire capture / provider-native session JSONL",
-    },
-    ReferenceRow::Binding {
-        keys: "y",
-        action: "copy selected line to clipboard (raw view)",
-    },
-];
-
-const DRIVA: &[ReferenceRow] = &[
-    ReferenceRow::Section("Details (Workspace, interaction, and launch policy)"),
-    ReferenceRow::Binding {
-        keys: "Tab; j/k or ↓/↑",
-        action: "edit the Workspace's policy / this interaction's; its mounts",
-    },
-    ReferenceRow::Binding {
-        keys: "w",
-        action: "permit/forbid agent networking, in the focused layer",
-    },
-    ReferenceRow::Binding {
-        keys: "R",
-        action: "mount the workspace read-write/read-only, in the focused layer",
-    },
-    ReferenceRow::Binding {
-        keys: "T",
-        action: "choose Driva templates",
-    },
-    ReferenceRow::Binding {
-        keys: "m / G / x",
-        action: "add a mount / set this Workspace's Git checkout / remove selected mount",
-    },
-    ReferenceRow::Binding {
-        keys: "I",
-        action: "this interaction adds to / ignores the Workspace policy",
-    },
-    ReferenceRow::Binding {
-        keys: "U / D / W",
-        action: "move this interaction's up / save for new clients / store the Workspace's",
-    },
-    ReferenceRow::Binding {
-        keys: "PgDn/PgUp",
-        action: "scroll the sandbox account: mounts, floor, environment, private root",
-    },
-];
-
-const FILES: &[ReferenceRow] = &[
-    ReferenceRow::Section("Files"),
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑; J/K",
-        action: "next/previous file; interaction-log entry",
-    },
-    ReferenceRow::Binding {
-        keys: "e; p",
-        action: "open selected file in editor; toggle interaction preview",
-    },
-    ReferenceRow::Binding {
-        keys: "a; y",
-        action: "focused-entry/all-session files; copy the path",
-    },
-];
-
-const ANSWER: &[ReferenceRow] = &[
-    ReferenceRow::Section("Typed answer"),
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑; e; y",
-        action: "next/previous item; open location in editor; copy",
-    },
-    ReferenceRow::Binding {
-        keys: "T/L/F/J; R",
-        action: "re-read as text/lines/files/json; as the turn asked",
-    },
-];
-
-const MESSAGE_EDITOR: &[ReferenceRow] = &[
-    ReferenceRow::Section("Message editor"),
-    ReferenceRow::Binding {
-        keys: "Ctrl+R",
-        action: "record from the microphone; the box becomes a level meter",
-    },
-    ReferenceRow::Binding {
-        keys: "while recording: Enter / Esc; ↑/↓",
-        action: "transcribe into the message / discard it; boost a quiet input",
-    },
-    ReferenceRow::Binding {
-        keys: "Ctrl+T",
-        action: "ask this message's reply for a shape (text/lines/files/json)",
-    },
-    ReferenceRow::Binding {
-        keys: "Enter",
-        action: "send message",
-    },
-    ReferenceRow::Binding {
-        keys: "Ctrl+Enter (first prompt)",
-        action: "send in a new Git branch and workspace",
-    },
-    ReferenceRow::Binding {
-        keys: "/cd <directory>",
-        action: "change the live Codex interaction directory",
-    },
-    ReferenceRow::Binding {
-        keys: "Alt+Enter",
-        action: "insert newline",
-    },
-    ReferenceRow::Binding {
-        keys: "↑/↓",
-        action: "older/newer message history",
-    },
-    ReferenceRow::Binding {
-        keys: "Ctrl+W",
-        action: "delete previous word",
-    },
-    ReferenceRow::Binding {
-        keys: "Ctrl+L",
-        action: "choose model before first message or idle agent turn",
-    },
-    ReferenceRow::Binding {
-        keys: "Ctrl+F",
-        action: "insert a file path (Tab completes, Enter inserts)",
-    },
-    ReferenceRow::Binding {
-        keys: "r / w / n",
-        action: "when that path is unmounted: mount it readable / writable / neither",
-    },
-];
-
-const INTERACTIONS: &[ReferenceRow] = &[
-    ReferenceRow::Section("Interactions"),
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "move the cursor; the rested-on interaction becomes current",
-    },
-    ReferenceRow::Binding {
-        keys: "J / K",
-        action: "first interaction of the next / previous Workspace, in All",
-    },
-    ReferenceRow::Binding {
-        keys: "ctrl-n",
-        action: "next interaction that is still running",
-    },
-    ReferenceRow::Binding {
-        keys: "N",
-        action: "next interaction actively working, skipping idle ones",
-    },
-    ReferenceRow::Binding {
-        keys: "w",
-        action: "current Workspace / all Workspaces",
-    },
-    ReferenceRow::Binding {
-        keys: "c / C",
-        action: "show/hide completed / mark selected completed and stop it",
-    },
-    ReferenceRow::Binding {
-        keys: "T",
-        action: "edit the selected interaction's tags",
-    },
-    ReferenceRow::Binding {
-        keys: "S / D",
-        action: "stop the selected interaction / delete it once stopped",
-    },
-    ReferenceRow::Binding {
-        keys: "Enter or a",
-        action: "close the list",
-    },
-];
-
-const BRANCH: &[ReferenceRow] = &[
-    ReferenceRow::Section("Branch from selected entry"),
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "entire interaction through this entry / only this entry",
-    },
-    ReferenceRow::Binding {
-        keys: "Enter",
-        action: "branch, and open the result",
-    },
-    ReferenceRow::Binding {
-        keys: "Esc or q",
-        action: "cancel",
-    },
-];
-
-const TAGS: &[ReferenceRow] = &[
-    ReferenceRow::Section("Interaction tags"),
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "move selection",
-    },
-    ReferenceRow::Binding {
-        keys: "Space",
-        action: "toggle the selected tag",
-    },
-    ReferenceRow::Binding {
-        keys: "n",
-        action: "add a new tag (Enter adds and saves)",
-    },
-    ReferenceRow::Binding {
-        keys: "Enter",
-        action: "save",
-    },
-    ReferenceRow::Binding {
-        keys: "Esc or q",
-        action: "cancel",
-    },
-];
-
-const SESSION_PICKER: &[ReferenceRow] = &[
-    ReferenceRow::Section("Stored sessions"),
-    ReferenceRow::Binding {
-        keys: HELP,
-        action: "show/close this reference",
-    },
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "move selection",
-    },
-    ReferenceRow::Binding {
-        keys: "J/K",
-        action: "next/previous root conversation, skipping its branches",
-    },
-    ReferenceRow::Binding {
-        keys: "g/G",
-        action: "first/last session",
-    },
-    ReferenceRow::Binding {
-        keys: "Enter",
-        action: "open the selected session",
-    },
-    ReferenceRow::Binding {
-        keys: "n",
-        action: "start a new session in this Workspace",
-    },
-    ReferenceRow::Binding {
-        keys: "c / C",
-        action: "show/hide completed / mark selected completed or not",
-    },
-    ReferenceRow::Binding {
-        keys: "/",
-        action: "filter by name or first prompt (Esc clears)",
-    },
-    ReferenceRow::Binding {
-        keys: "s",
-        action: "sort by last activity / by creation",
-    },
-    ReferenceRow::Binding {
-        keys: "a",
-        action: "show/hide history older than a week",
-    },
-    ReferenceRow::Binding {
-        keys: "r",
-        action: "rename the selected session",
-    },
-    ReferenceRow::Binding {
-        keys: "x",
-        action: "convert the selected session to the other provider",
-    },
-    ReferenceRow::Binding {
-        keys: "Esc or q",
-        action: "cancel",
-    },
-];
-
-const WORKSPACE_PICKER: &[ReferenceRow] = &[
-    ReferenceRow::Section("Workspaces"),
-    ReferenceRow::Binding {
-        keys: HELP,
-        action: "show/close this reference",
-    },
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "move selection",
-    },
-    ReferenceRow::Binding {
-        keys: "Enter",
-        action: "open the selected Workspace",
-    },
-    ReferenceRow::Binding {
-        keys: "c",
-        action: "create a Workspace for the current directory",
-    },
-    ReferenceRow::Binding {
-        keys: "r",
-        action: "rename the selected Workspace",
-    },
-    ReferenceRow::Binding {
-        keys: "/",
-        action: "filter by name (Esc clears)",
-    },
-    ReferenceRow::Binding {
-        keys: "Esc or q",
-        action: "cancel",
-    },
-];
-
-const LAUNCHER: &[ReferenceRow] = &[
-    ReferenceRow::Section("Launch"),
-    ReferenceRow::Binding {
-        keys: HELP,
-        action: "show/close this reference",
-    },
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "move selection",
-    },
-    ReferenceRow::Binding {
-        keys: "Tab, h/l, ←/→",
-        action: "move launch column",
-    },
-    ReferenceRow::Binding {
-        keys: "p/P, m/M, e/E",
-        action: "move down/up provider, model, effort",
-    },
-    ReferenceRow::Binding {
-        keys: "Enter",
-        action: "select",
-    },
-    ReferenceRow::Binding {
-        keys: "D",
-        action: "select and save launch default",
-    },
-    ReferenceRow::Binding {
-        keys: "Esc or q",
-        action: "cancel",
-    },
-];
-
-const TEMPLATE_PICKER: &[ReferenceRow] = &[
-    ReferenceRow::Section("Driva templates"),
-    ReferenceRow::Binding {
-        keys: HELP,
-        action: "show/close this reference",
-    },
-    ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "move selection",
-    },
-    ReferenceRow::Binding {
-        keys: "Space",
-        action: "add/remove the selected template",
-    },
-    ReferenceRow::Binding {
-        keys: "Enter",
-        action: "apply; templates layer in the order chosen",
-    },
-    ReferenceRow::Binding {
-        keys: "Esc or q",
-        action: "cancel",
-    },
-];
-
 #[cfg(test)]
 mod reference_tests {
     use super::*;
+
+    const WINDOWS: [Window; 16] = [
+        Window::Events,
+        Window::Raw,
+        Window::Log,
+        Window::Quota,
+        Window::Transcript,
+        Window::Driva,
+        Window::Files,
+        Window::Answer,
+        Window::Preview,
+        Window::Interactions,
+        Window::Branch,
+        Window::Tags,
+        Window::SessionPicker,
+        Window::WorkspacePicker,
+        Window::Launcher,
+        Window::TemplatePicker,
+    ];
 
     /// Every window answers `?` with something, and with its own commands
     /// first: the reference is for what is on screen, not a catalogue the
     /// operator has to search.
     #[test]
     fn every_window_leads_with_its_own_section() {
-        for window in [
-            Window::Events,
-            Window::Raw,
-            Window::Log,
-            Window::Quota,
-            Window::Transcript,
-            Window::Driva,
-            Window::Files,
-            Window::Answer,
-            Window::Preview,
-            Window::Interactions,
-            Window::Branch,
-            Window::Tags,
-            Window::SessionPicker,
-            Window::WorkspacePicker,
-            Window::Launcher,
-            Window::TemplatePicker,
-        ] {
+        for window in WINDOWS {
             let rows = window.reference();
             assert!(
                 matches!(rows.first(), Some(ReferenceRow::Section(_))),
@@ -674,7 +598,7 @@ mod reference_tests {
             );
             assert!(
                 rows.iter()
-                    .any(|row| matches!(row, ReferenceRow::Binding { .. })),
+                    .any(|row| matches!(row, ReferenceRow::Binding(_))),
                 "{} lists at least one binding",
                 window.name()
             );
@@ -693,19 +617,20 @@ mod reference_tests {
             Window::TemplatePicker,
         ] {
             let rows = window.reference();
+            let help = KeyEvent::from(KeyCode::Char('?'));
             assert!(
-                rows.contains(&ReferenceRow::Binding {
-                    keys: HELP,
-                    action: "show/close this reference",
-                }),
+                rows.iter().any(|row| matches!(
+                    row,
+                    ReferenceRow::Binding(binding) if binding.matches(help)
+                )),
                 "{} says how to reopen the reference",
                 window.name()
             );
             assert!(
-                rows.iter().any(
-                    |row| matches!(row, ReferenceRow::Binding { action, .. } if *action
-                        == "cancel")
-                ),
+                rows.iter().any(|row| matches!(
+                    row,
+                    ReferenceRow::Binding(binding) if binding.action == "cancel"
+                )),
                 "{} says how to leave",
                 window.name()
             );
@@ -729,9 +654,44 @@ mod reference_tests {
         assert_eq!(headings, 3, "events, message editor, global");
         assert_eq!(blanks, headings - 1);
     }
+
+    /// The reference shows the key the dispatcher actually compares against,
+    /// so a rebinding cannot leave the documentation behind.
+    #[test]
+    fn a_bindings_label_is_made_of_its_own_keys() {
+        assert_eq!(GLOBAL_NEXT_IDLE.label(), "ctrl-a");
+        assert_eq!(EVENTS_NEXT_ENTRY.label(), "J/↓");
+        assert_eq!(EVENTS_TOGGLE_EXPAND.label(), "Space/Enter/o");
+        assert_eq!(EDITOR_NEWLINE.label(), "alt-Enter");
+        assert_eq!(
+            GLOBAL_SESSION_WORKTREE.label(),
+            "W (existing session)",
+            "a narrower binding says where it applies"
+        );
+        assert_eq!(EVENTS_EXPAND_ALL.label(), "z R", "a chord names its prefix");
+    }
+
+    /// Control is part of the binding, so ctrl-l is not plain `l`.
+    #[test]
+    fn modifiers_are_part_of_the_match() {
+        let plain = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
+        let control = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
+
+        assert!(GLOBAL_LAUNCHER.matches(plain));
+        assert!(!GLOBAL_LAUNCHER.matches(control));
+        assert!(GLOBAL_LOG.matches(control));
+        assert!(!GLOBAL_LOG.matches(plain));
+    }
+
+    /// Shift is not: a capital already arrives as its own character, and
+    /// terminals disagree about reporting the modifier for punctuation.
+    #[test]
+    fn shift_is_ignored_so_capitals_and_punctuation_still_match() {
+        assert!(GLOBAL_NEW_SESSION.matches(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT)));
+        assert!(GLOBAL_DIRECTORY.matches(KeyEvent::new(KeyCode::Char('~'), KeyModifiers::SHIFT)));
+    }
 }
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 
 use crate::activity::Status;
@@ -745,10 +705,8 @@ use styra_protocol::{Contract, LogEntry};
 use styra_server::Client;
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
-/// them, `p`/`P`, `m`/`M` and `e`/`E` to jump straight to the provider, model
-/// or effort column and move down/up it in one key, `Enter` to apply the
-/// choice to this workspace, `D` to also save it as the standing default,
-/// `Esc`/`q` to leave it as it was.
+/// them, and a letter pair per column to jump straight to it and move down or
+/// up it in one key. See the [`LAUNCHER`] section for the full list.
 ///
 /// Neither launches: before launch the operator's first message still starts
 /// the agent. On a live session, confirming switches its model there and then
@@ -757,40 +715,40 @@ pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path
     let Some(launcher) = app.launcher.as_mut() else {
         return;
     };
-    match key.code {
-        KeyCode::Char('j' | 'J') | KeyCode::Down => launcher.next(),
-        KeyCode::Char('k' | 'K') | KeyCode::Up => launcher.prev(),
-        KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => launcher.next_column(),
-        KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => launcher.prev_column(),
+    match key {
+        k if LAUNCHER_NEXT.matches(k) => launcher.next(),
+        k if LAUNCHER_PREV.matches(k) => launcher.prev(),
+        k if LAUNCHER_NEXT_COLUMN.matches(k) => launcher.next_column(),
+        k if LAUNCHER_PREV_COLUMN.matches(k) => launcher.prev_column(),
         // The agent column is out of reach on a live session (see
         // `provider_locked`), so its shortcut is dropped rather than jumping
         // the keys to a column that cannot be stepped.
-        KeyCode::Char('p') if !launcher.provider_locked => {
+        k if LAUNCHER_PROVIDER_DOWN.matches(k) && !launcher.provider_locked => {
             launcher.jump_to_column(LaunchColumn::Provider);
             launcher.next();
         }
-        KeyCode::Char('P') if !launcher.provider_locked => {
+        k if LAUNCHER_PROVIDER_UP.matches(k) && !launcher.provider_locked => {
             launcher.jump_to_column(LaunchColumn::Provider);
             launcher.prev();
         }
-        KeyCode::Char('m') => {
+        k if LAUNCHER_MODEL_DOWN.matches(k) => {
             launcher.jump_to_column(LaunchColumn::Model);
             launcher.next();
         }
-        KeyCode::Char('M') => {
+        k if LAUNCHER_MODEL_UP.matches(k) => {
             launcher.jump_to_column(LaunchColumn::Model);
             launcher.prev();
         }
-        KeyCode::Char('e') => {
+        k if LAUNCHER_EFFORT_DOWN.matches(k) => {
             launcher.jump_to_column(LaunchColumn::Effort);
             launcher.next();
         }
-        KeyCode::Char('E') => {
+        k if LAUNCHER_EFFORT_UP.matches(k) => {
             launcher.jump_to_column(LaunchColumn::Effort);
             launcher.prev();
         }
-        KeyCode::Enter => confirm(app, preferences_path),
-        KeyCode::Char('D') => {
+        k if LAUNCHER_SELECT.matches(k) => confirm(app, preferences_path),
+        k if LAUNCHER_DEFAULT.matches(k) => {
             confirm(app, preferences_path);
             if let Err(error) = preferences::save_selection(preferences_path, &app.selection) {
                 app.push_log(LogEntry::error(format!(
@@ -798,7 +756,7 @@ pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path
                 )));
             }
         }
-        KeyCode::Esc | KeyCode::Char('q') => app.cancel_launcher(),
+        k if LAUNCHER_CANCEL.matches(k) => app.cancel_launcher(),
         _ => {}
     }
 }
@@ -900,16 +858,16 @@ pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
     let Some(prompt) = app.branch_prompt.as_mut() else {
         return;
     };
-    match key.code {
-        KeyCode::Char('j' | 'J') | KeyCode::Down => prompt.select_next(),
-        KeyCode::Char('k' | 'K') | KeyCode::Up => prompt.select_previous(),
-        KeyCode::Enter => {
+    match key {
+        k if BRANCH_NEXT.matches(k) => prompt.select_next(),
+        k if BRANCH_PREV.matches(k) => prompt.select_previous(),
+        k if BRANCH_CONFIRM.matches(k) => {
             let at_ms = prompt.at_ms();
             let history = prompt.selected();
             app.branch_prompt = None;
             session::branch_session(app, client, at_ms, history);
         }
-        KeyCode::Esc | KeyCode::Char('q') => app.branch_prompt = None,
+        k if BRANCH_CANCEL.matches(k) => app.branch_prompt = None,
         _ => {}
     }
 }
@@ -923,19 +881,21 @@ pub fn handle_list_key(
     preferences_path: &Path,
 ) {
     if std::mem::take(pending_fold) {
-        match key.code {
-            KeyCode::Char('R') => app.timeline.expand_all(),
-            KeyCode::Char('M') => app.timeline.collapse_all(),
+        match key {
+            k if EVENTS_EXPAND_ALL.matches(k) => app.timeline.expand_all(),
+            k if EVENTS_COLLAPSE_ALL.matches(k) => app.timeline.collapse_all(),
             _ => {}
         }
         return;
     }
-    match key.code {
-        KeyCode::Char('q') => return app.ask(Request::Quit),
-        KeyCode::Char('s') => return session::interrupt_interaction(app, client, live),
-        KeyCode::Char('S') => return session::pause_interaction(app, client, live),
-        KeyCode::Char('B') => return session::open_branch_prompt(app),
-        KeyCode::Char('!') => {
+    match key {
+        k if GLOBAL_QUIT.matches(k) => return app.ask(Request::Quit),
+        k if GLOBAL_INTERRUPT.matches(k) => {
+            return session::interrupt_interaction(app, client, live)
+        }
+        k if GLOBAL_STOP.matches(k) => return session::pause_interaction(app, client, live),
+        k if GLOBAL_BRANCH.matches(k) => return session::open_branch_prompt(app),
+        k if GLOBAL_SHELL.matches(k) => {
             let Attachment::Attached { .. } = live else {
                 return app.show_action_message("no live interaction to open a shell for");
             };
@@ -945,166 +905,184 @@ pub fn handle_list_key(
         // agent's sandbox, `~` opens the operator's own shell on the host,
         // standing where the interaction is working. That works with no live
         // interaction — a finished one still has a directory to look at.
-        KeyCode::Char('~') => return app.ask(Request::OpenDirectory),
-        KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
+        k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
+        k if GLOBAL_FOCUS_MESSAGE.matches(k) && app.view != View::Preview => {
+            return app.enter_input()
+        }
         // Global, unlike `y`: what it copies is the session's exchange, which
         // does not change with the view the operator happens to be in.
-        KeyCode::Char('Y') => return copy_conversation(app),
-        KeyCode::Char('r') => return app.toggle_raw(),
-        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            return app.toggle_view(View::Log)
-        }
-        KeyCode::Char('l') => return app.open_launcher(),
+        k if GLOBAL_COPY_CONVERSATION.matches(k) => return copy_conversation(app),
+        k if GLOBAL_RAW.matches(k) => return app.toggle_raw(),
+        k if GLOBAL_LOG.matches(k) => return app.toggle_view(View::Log),
+        k if GLOBAL_LAUNCHER.matches(k) => return app.open_launcher(),
         // Opening the view also refreshes it: the log lives in the daemon's
         // memory, so there is nothing local to show without asking.
-        KeyCode::Char('Q') => {
+        k if GLOBAL_QUOTA.matches(k) => {
             app.toggle_view(View::Quota);
             return app.ask(Request::Quota);
         }
-        KeyCode::Char('t') => return app.toggle_view(View::Transcript),
+        k if GLOBAL_TRANSCRIPT.matches(k) => return app.toggle_view(View::Transcript),
         // `e` toggles the pane below the event list. The files and answer
         // views keep the key for opening the editor, which is the one thing
         // `e` already meant there.
-        KeyCode::Char('e') if !matches!(app.view, View::Files | View::Answer) => {
+        k if GLOBAL_ENTRY_LOG.matches(k) && !matches!(app.view, View::Files | View::Answer) => {
             return app.toggle_entry_log()
         }
-        KeyCode::Char('d') => return app.toggle_view(View::Driva),
-        KeyCode::Char('F') if app.view != View::Answer => return app.toggle_files(),
-        KeyCode::Char('f')
-            if !matches!(app.view, View::Events | View::Transcript | View::Preview) =>
+        k if GLOBAL_DETAILS.matches(k) => return app.toggle_view(View::Driva),
+        k if GLOBAL_FILES.matches(k) && app.view != View::Answer => return app.toggle_files(),
+        k if GLOBAL_FILES_ALIAS.matches(k)
+            && !matches!(app.view, View::Events | View::Transcript | View::Preview) =>
         {
             return app.toggle_files()
         }
-        KeyCode::Char('X') => return app.toggle_answer(),
-        KeyCode::Char('P') => return app.toggle_view(View::Preview),
+        k if GLOBAL_ANSWER.matches(k) => return app.toggle_answer(),
+        k if GLOBAL_PREVIEW.matches(k) => return app.toggle_view(View::Preview),
         // Beside `a` because it is the same list: `a` opens it to be walked,
         // ctrl-a skips the walk and goes to what the footer is counting.
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            return app.ask(Request::NextIdleInteraction)
+        k if GLOBAL_NEXT_IDLE.matches(k) => return app.ask(Request::NextIdleInteraction),
+        k if GLOBAL_NEW_SESSION.matches(k) => return app.ask(Request::NewSession),
+        k if GLOBAL_INTERACTIONS.matches(k) && app.view != View::Files => {
+            return app.ask(Request::Interactions)
         }
+        k if GLOBAL_WORKSPACES.matches(k) => return app.ask(Request::Workspace),
+        k if GLOBAL_SESSION_WORKTREE.matches(k) && !app.session_id.is_empty() => {
+            return app.ask(Request::CreateSessionWorktree)
+        }
+        k if GLOBAL_SESSIONS.matches(k) => return app.ask(Request::Sessions),
         // Beside ctrl-a, and the same jump with a wider net: ctrl-a goes to
         // work that is waiting to be read, plain `n` steps through every
         // interaction still running.
-        KeyCode::Char('N') => return app.ask(Request::NewSession),
-        KeyCode::Char('a') if app.view != View::Files => return app.ask(Request::Interactions),
-        KeyCode::Char('V') => return app.ask(Request::Workspace),
-        KeyCode::Char('W') if !app.session_id.is_empty() => {
-            return app.ask(Request::CreateSessionWorktree)
-        }
-        KeyCode::Char('A') => return app.ask(Request::Sessions),
-        KeyCode::Char('n') => return app.ask(Request::NextLiveInteraction),
+        k if GLOBAL_NEXT_LIVE.matches(k) => return app.ask(Request::NextLiveInteraction),
         _ => {}
     }
     match app.view {
-        View::Events => match key.code {
-            KeyCode::Char('T') => edit_current_interaction_tags(app, client),
-            KeyCode::Char('f') => app.highlight_first_link(),
-            KeyCode::Char('/') => app.search.open(),
+        View::Events => match key {
+            k if GLOBAL_TAGS.matches(k) => edit_current_interaction_tags(app, client),
+            k if EVENTS_LINKS.matches(k) => app.highlight_first_link(),
+            k if EVENTS_SEARCH.matches(k) => app.search.open(),
             // A search that stands after the prompt has closed is cleared
             // where it is being read, rather than by reopening the prompt in
             // order to cancel it.
-            KeyCode::Esc if app.link_highlight.is_some() => app.clear_link_highlight(),
-            KeyCode::Esc if app.search.query().is_some() => app.search.cancel(),
-            KeyCode::Char('u') => app.toggle_link_display(),
-            KeyCode::Char('b') => session::follow_branch(app),
-            KeyCode::Char('c') => app.toggle_conversation_only(),
-            KeyCode::Char('v') if app.preview.open => app.preview.toggle_mode(),
-            KeyCode::Char('C') if app.preview.open => app.preview.toggle_target(),
+            k if k.code == KeyCode::Esc && app.link_highlight.is_some() => {
+                app.clear_link_highlight()
+            }
+            k if k.code == KeyCode::Esc && app.search.query().is_some() => app.search.cancel(),
+            k if EVENTS_LINK_DESTINATIONS.matches(k) => app.toggle_link_display(),
+            k if EVENTS_FOLLOW_BRANCH.matches(k) => session::follow_branch(app),
+            k if EVENTS_CONVERSATION_ONLY.matches(k) => app.toggle_conversation_only(),
+            k if EVENTS_PREVIEW_MODE.matches(k) && app.preview.open => app.preview.toggle_mode(),
+            k if EVENTS_PREVIEW_TARGET.matches(k) && app.preview.open => {
+                app.preview.toggle_target()
+            }
             // Same key as the live-interactions navigator's `C`, and the same
             // action: finish the interaction on screen without first having to
             // open the navigator to find the row for it. Guarded so it does
             // not steal the preview pane's own `C`, which claims the key while
             // that pane is open.
-            KeyCode::Char('C') if !app.preview.open => {
+            k if EVENTS_COMPLETE.matches(k) && !app.preview.open => {
                 session::complete_interaction(app, client, live);
             }
             // The Events screen shows two windows when the entry-log pane is
             // open, and Tab is what moves the navigation keys between them.
-            KeyCode::Tab | KeyCode::BackTab if app.entry_log.open => app.toggle_entry_log_focus(),
+            k if GLOBAL_ENTRY_LOG_FOCUS.matches(k) && app.entry_log.open => {
+                app.toggle_entry_log_focus()
+            }
             // With the pane holding the keys, the movement keys walk its
             // entries and the preview follows them. The list stands still, so
             // the operator keeps their place in it.
-            KeyCode::Char('j' | 'J') | KeyCode::Down if app.entry_log.focused() => {
+            k if (EVENTS_NEXT_ENTRY.matches(k) || EVENTS_NEXT_LINE.matches(k))
+                && app.entry_log.focused() =>
+            {
                 app.entry_log_select_next()
             }
-            KeyCode::Char('k' | 'K') | KeyCode::Up if app.entry_log.focused() => {
+            k if (EVENTS_PREV_ENTRY.matches(k) || EVENTS_PREV_LINE.matches(k))
+                && app.entry_log.focused() =>
+            {
                 app.entry_log_select_prev()
             }
-            KeyCode::Char('g') if app.entry_log.focused() => app.entry_log_select_first(),
-            KeyCode::Char('G') if app.entry_log.focused() => app.entry_log_select_last(),
+            k if EVENTS_FIRST.matches(k) && app.entry_log.focused() => app.entry_log_select_first(),
+            k if EVENTS_LAST.matches(k) && app.entry_log.focused() => app.entry_log_select_last(),
             // A focused pane scrolls by moving its cursor: the pane always
             // shows where the cursor is, so paging the offset on its own would
             // be undone by the next draw.
-            KeyCode::PageDown if app.entry_log.focused() => app.entry_log_page_down(),
-            KeyCode::PageUp if app.entry_log.focused() => app.entry_log_page_up(),
-            KeyCode::PageDown if app.preview.open => app.preview.scroll.page_down(),
-            KeyCode::PageUp if app.preview.open => app.preview.scroll.page_up(),
-            KeyCode::PageDown if app.entry_log.open => app.entry_log.scroll.page_down(),
-            KeyCode::PageUp if app.entry_log.open => app.entry_log.scroll.page_up(),
-            KeyCode::Char('J') | KeyCode::Down => app.select_next(),
-            KeyCode::Char('K') | KeyCode::Up => app.select_prev(),
-            KeyCode::Char('j') if app.link_highlight.is_some() => app.highlight_next_link(),
-            KeyCode::Char('k') if app.link_highlight.is_some() => app.highlight_prev_link(),
-            KeyCode::Char('j') => app.select_next_line(),
-            KeyCode::Char('k') => app.select_prev_line(),
-            KeyCode::Enter if app.link_highlight.is_some() => app.open_highlighted_link(),
+            k if EVENTS_PAGE_DOWN.matches(k) && app.entry_log.focused() => {
+                app.entry_log_page_down()
+            }
+            k if EVENTS_PAGE_UP.matches(k) && app.entry_log.focused() => app.entry_log_page_up(),
+            k if EVENTS_PAGE_DOWN.matches(k) && app.preview.open => app.preview.scroll.page_down(),
+            k if EVENTS_PAGE_UP.matches(k) && app.preview.open => app.preview.scroll.page_up(),
+            k if EVENTS_PAGE_DOWN.matches(k) && app.entry_log.open => {
+                app.entry_log.scroll.page_down()
+            }
+            k if EVENTS_PAGE_UP.matches(k) && app.entry_log.open => app.entry_log.scroll.page_up(),
+            k if EVENTS_NEXT_ENTRY.matches(k) => app.select_next(),
+            k if EVENTS_PREV_ENTRY.matches(k) => app.select_prev(),
+            k if EVENTS_NEXT_LINE.matches(k) && app.link_highlight.is_some() => {
+                app.highlight_next_link()
+            }
+            k if EVENTS_PREV_LINE.matches(k) && app.link_highlight.is_some() => {
+                app.highlight_prev_link()
+            }
+            k if EVENTS_NEXT_LINE.matches(k) => app.select_next_line(),
+            k if EVENTS_PREV_LINE.matches(k) => app.select_prev_line(),
+            k if k.code == KeyCode::Enter && app.link_highlight.is_some() => {
+                app.open_highlighted_link()
+            }
             // Branch markers are reciprocal links between the source and its
             // child Session. Enter follows either direction; all other
             // entries retain Enter's usual fold/unfold behavior.
-            KeyCode::Enter
-                if app
+            k if k.code == KeyCode::Enter
+                && app
                     .timeline
                     .selected_entry()
                     .is_some_and(|entry| entry.event.branch_target().is_some()) =>
             {
                 session::follow_branch(app)
             }
-            KeyCode::Char(' ') => app.timeline.toggle_expand(),
-            KeyCode::Enter => app.timeline.toggle_expand(),
-            KeyCode::Char('o') => app.timeline.toggle_expand(),
-            KeyCode::Char('O') => app.timeline.expand_only_selected(),
-            KeyCode::Char('g') => app.select_first(),
-            KeyCode::Char('G') => app.select_last(),
-            KeyCode::Char('z') => *pending_fold = true,
-            KeyCode::Char('m') => app.toggle_minor(),
-            KeyCode::Char('p') => app.preview.toggle(),
-            KeyCode::Char('y') => copy_selection(app),
+            k if EVENTS_TOGGLE_EXPAND.matches(k) => app.timeline.toggle_expand(),
+            k if EVENTS_EXPAND_ONLY.matches(k) => app.timeline.expand_only_selected(),
+            k if EVENTS_FIRST.matches(k) => app.select_first(),
+            k if EVENTS_LAST.matches(k) => app.select_last(),
+            k if EVENTS_FOLD_PREFIX.matches(k) => *pending_fold = true,
+            k if EVENTS_MINOR.matches(k) => app.toggle_minor(),
+            k if EVENTS_PREVIEW_PANEL.matches(k) => app.preview.toggle(),
+            k if EVENTS_COPY.matches(k) => copy_selection(app),
             _ => {}
         },
-        View::Raw => match key.code {
-            KeyCode::Char('v') => toggle_provider_raw(app, client),
-            KeyCode::PageDown if app.provider_raw_open => {
+        View::Raw => match key {
+            k if READING_PROVIDER_RAW.matches(k) => toggle_provider_raw(app, client),
+            k if READING_PAGE_DOWN.matches(k) && app.provider_raw_open => {
                 app.provider_raw.as_mut().unwrap().preview.page_down()
             }
-            KeyCode::PageUp if app.provider_raw_open => {
+            k if READING_PAGE_UP.matches(k) && app.provider_raw_open => {
                 app.provider_raw.as_mut().unwrap().preview.page_up()
             }
-            KeyCode::Char('j') | KeyCode::Down if app.provider_raw_open => {
+            k if READING_DOWN.matches(k) && app.provider_raw_open => {
                 app.provider_raw.as_mut().unwrap().select_next()
             }
-            KeyCode::Char('k') | KeyCode::Up if app.provider_raw_open => {
+            k if READING_UP.matches(k) && app.provider_raw_open => {
                 app.provider_raw.as_mut().unwrap().select_prev()
             }
-            KeyCode::Char('g') if app.provider_raw_open => {
+            k if READING_FIRST.matches(k) && app.provider_raw_open => {
                 app.provider_raw.as_mut().unwrap().select_first()
             }
-            KeyCode::Char('G') if app.provider_raw_open => {
+            k if READING_LAST.matches(k) && app.provider_raw_open => {
                 app.provider_raw.as_mut().unwrap().select_last()
             }
-            KeyCode::PageDown => app.raw.preview.page_down(),
-            KeyCode::PageUp => app.raw.preview.page_up(),
-            KeyCode::Char('j') | KeyCode::Down => app.raw.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => app.raw.select_prev(),
-            KeyCode::Char('g') => app.raw.select_first(),
-            KeyCode::Char('G') => app.raw.select_last(),
-            KeyCode::Char('y') => copy_selection(app),
+            k if READING_PAGE_DOWN.matches(k) => app.raw.preview.page_down(),
+            k if READING_PAGE_UP.matches(k) => app.raw.preview.page_up(),
+            k if READING_DOWN.matches(k) => app.raw.select_next(),
+            k if READING_UP.matches(k) => app.raw.select_prev(),
+            k if READING_FIRST.matches(k) => app.raw.select_first(),
+            k if READING_LAST.matches(k) => app.raw.select_last(),
+            k if READING_COPY.matches(k) => copy_selection(app),
             _ => {}
         },
-        View::Log => match key.code {
-            KeyCode::Char('j') | KeyCode::Down => app.log.scroll_down(),
-            KeyCode::Char('k') | KeyCode::Up => app.log.scroll_up(),
-            KeyCode::Char('g') => app.log.scroll_to_top(),
-            KeyCode::Char('G') => app.log.scroll_to_bottom(),
+        View::Log => match key {
+            k if READING_DOWN.matches(k) => app.log.scroll_down(),
+            k if READING_UP.matches(k) => app.log.scroll_up(),
+            k if READING_FIRST.matches(k) => app.log.scroll_to_top(),
+            k if READING_LAST.matches(k) => app.log.scroll_to_bottom(),
             _ => {}
         },
         // `R` for retry, in the view that shows the limit and the minute it
@@ -1112,19 +1090,19 @@ pub fn handle_list_key(
         // because that is where an operator whose session has just been cut
         // off is already looking: the notice saying the window is exhausted is
         // the reason they pressed `Q`.
-        View::Quota => match key.code {
-            KeyCode::Char('R') => app.ask(Request::SetAutoRetry(!app.auto_retry)),
-            KeyCode::Char('j') | KeyCode::Down => app.quota.scroll_down(),
-            KeyCode::Char('k') | KeyCode::Up => app.quota.scroll_up(),
+        View::Quota => match key {
+            k if READING_RETRY.matches(k) => app.ask(Request::SetAutoRetry(!app.auto_retry)),
+            k if READING_DOWN.matches(k) => app.quota.scroll_down(),
+            k if READING_UP.matches(k) => app.quota.scroll_up(),
             _ => {}
         },
-        View::Transcript => match key.code {
-            KeyCode::Char('f') => app.highlight_first_link(),
-            KeyCode::Char('c') => app.toggle_conversation_only(),
-            KeyCode::Char('j') | KeyCode::Down => app.transcript.line_down(),
-            KeyCode::Char('k') | KeyCode::Up => app.transcript.line_up(),
-            KeyCode::Char('g') => app.transcript.reset(),
-            KeyCode::Char('G') => app.transcript.scroll_to_end(),
+        View::Transcript => match key {
+            k if READING_LINKS.matches(k) => app.highlight_first_link(),
+            k if READING_CONVERSATION_ONLY.matches(k) => app.toggle_conversation_only(),
+            k if READING_DOWN.matches(k) => app.transcript.line_down(),
+            k if READING_UP.matches(k) => app.transcript.line_up(),
+            k if READING_FIRST.matches(k) => app.transcript.reset(),
+            k if READING_LAST.matches(k) => app.transcript.scroll_to_end(),
             _ => {}
         },
         // Editing the launch policy. These keys deliberately avoid the letters
@@ -1135,10 +1113,10 @@ pub fn handle_list_key(
         // Every editing key acts on whichever of the two layers `Tab` has
         // focused, so there is one set of them to learn rather than one per
         // layer — and the view says which layer that is.
-        View::Driva => match key.code {
+        View::Driva => match key {
             // Git checkout association is Workspace metadata, so it does not
             // depend on which policy pane happens to be focused.
-            KeyCode::Char('G') => {
+            k if DRIVA_GIT_CHECKOUT.matches(k) => {
                 app.git_repository_prompt = Some(
                     app.workspace
                         .git_repository
@@ -1147,27 +1125,27 @@ pub fn handle_list_key(
                         .unwrap_or_default(),
                 )
             }
-            KeyCode::Tab | KeyCode::BackTab => launch::toggle_scope(app),
-            KeyCode::Char('w') => launch::cycle_network(app),
+            k if DRIVA_SCOPE.matches(k) => launch::toggle_scope(app),
+            k if DRIVA_NETWORK.matches(k) => launch::cycle_network(app),
             // `R` for read-only: the workspace mount's access. Lowercase `r`
             // is claimed globally above (the raw view) and never gets here.
-            KeyCode::Char('R') => launch::cycle_workspace_access(app),
+            k if DRIVA_ACCESS.matches(k) => launch::cycle_workspace_access(app),
             // `I` for whether this launch inherits: `S` is claimed globally
             // above (stopping the interaction) and never reaches this match.
-            KeyCode::Char('I') => launch::toggle_ignore_workspace(app),
-            KeyCode::Char('T') => {
+            k if DRIVA_IGNORE_WORKSPACE.matches(k) => launch::toggle_ignore_workspace(app),
+            k if DRIVA_TEMPLATES.matches(k) => {
                 if app.allow_launch_edit() {
                     app.ask(Request::Templates);
                 }
             }
-            KeyCode::Char('m') => launch::open_prompt(app),
-            KeyCode::Char('x') => launch::remove_selected_mount(app),
+            k if DRIVA_ADD_MOUNT.matches(k) => launch::open_prompt(app),
+            k if DRIVA_REMOVE_MOUNT.matches(k) => launch::remove_selected_mount(app),
             // Mirrors `D` in the launch picker: keep this policy as the one a
             // brand-new client starts from, rather than only this session's.
             // Only this interaction's own settings are saved — the Workspace's
             // are already durable, and saving the merge would make every launch
             // elsewhere carry grants meant for this Workspace.
-            KeyCode::Char('D') => {
+            k if DRIVA_SAVE_DEFAULT.matches(k) => {
                 if app.allow_launch_edit() {
                     let launch = app.launch.interaction.clone();
                     match preferences::save_launch(preferences_path, &launch) {
@@ -1183,76 +1161,82 @@ pub fn handle_list_key(
             // Move what this interaction added up into the Workspace's standing
             // policy, once it turns out not to be particular to this
             // conversation after all.
-            KeyCode::Char('U') => launch::promote_to_workspace(app),
-            KeyCode::Char('j') | KeyCode::Down => launch::select_next_mount(app),
-            KeyCode::Char('k') | KeyCode::Up => launch::select_prev_mount(app),
+            k if DRIVA_PROMOTE.matches(k) => launch::promote_to_workspace(app),
+            k if DRIVA_NEXT_MOUNT.matches(k) => launch::select_next_mount(app),
+            k if DRIVA_PREV_MOUNT.matches(k) => launch::select_prev_mount(app),
             // The sandbox account above the panes is longer than a terminal —
             // mounts, the backend's floor, the environment, the private root —
             // and all of it is meant to be readable, so what does not fit is
             // paged rather than lost. `j`/`k` are the mount cursor's.
-            KeyCode::PageDown => app.launch.scroll.page_down(),
-            KeyCode::PageUp => app.launch.scroll.page_up(),
+            k if DRIVA_PAGE_DOWN.matches(k) => app.launch.scroll.page_down(),
+            k if DRIVA_PAGE_UP.matches(k) => app.launch.scroll.page_up(),
             _ => {}
         },
         // Re-reading is on the capitals so `j` and `k` stay navigation, as
         // they are in every other view.
-        View::Answer => match key.code {
-            KeyCode::Char('T') => app.reread_answer(Contract::Text),
-            KeyCode::Char('L') => app.reread_answer(Contract::Lines),
-            KeyCode::Char('F') => app.reread_answer(Contract::Files),
-            KeyCode::Char('J') => app.reread_answer(Contract::Json),
-            KeyCode::Char('R') => app.ask(Request::Answer { contract: None }),
-            KeyCode::Char('e') if app.answer.selected_file().is_some() => {
+        View::Answer => match key {
+            k if ANSWER_AS_TEXT.matches(k) => app.reread_answer(Contract::Text),
+            k if ANSWER_AS_LINES.matches(k) => app.reread_answer(Contract::Lines),
+            k if ANSWER_AS_FILES.matches(k) => app.reread_answer(Contract::Files),
+            k if ANSWER_AS_JSON.matches(k) => app.reread_answer(Contract::Json),
+            k if ANSWER_REREAD.matches(k) => app.ask(Request::Answer { contract: None }),
+            k if ANSWER_EDIT.matches(k) && app.answer.selected_file().is_some() => {
                 app.ask(Request::EditFile)
             }
-            KeyCode::Char('j') | KeyCode::Down => app.answer.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => app.answer.select_prev(),
-            KeyCode::Char('g') => app.answer.select_first(),
-            KeyCode::Char('G') => app.answer.select_last(),
-            KeyCode::Char('y') => copy_selection(app),
+            k if ANSWER_NEXT.matches(k) => app.answer.select_next(),
+            k if ANSWER_PREV.matches(k) => app.answer.select_prev(),
+            k if ANSWER_FIRST.matches(k) => app.answer.select_first(),
+            k if ANSWER_LAST.matches(k) => app.answer.select_last(),
+            k if ANSWER_COPY.matches(k) => copy_selection(app),
             _ => {}
         },
-        View::Files => match key.code {
-            KeyCode::Char('e') if app.selected_file_path().is_some() => app.ask(Request::EditFile),
-            KeyCode::Char('j') | KeyCode::Down => app.file_select_next(),
-            KeyCode::Char('k') | KeyCode::Up => app.file_select_prev(),
-            KeyCode::Char('J') => {
+        View::Files => match key {
+            k if FILES_EDIT.matches(k) && app.selected_file_path().is_some() => {
+                app.ask(Request::EditFile)
+            }
+            k if FILES_NEXT.matches(k) => app.file_select_next(),
+            k if FILES_PREV.matches(k) => app.file_select_prev(),
+            k if FILES_NEXT_ENTRY.matches(k) => {
                 app.select_next_line();
                 app.files.select_first();
             }
-            KeyCode::Char('K') => {
+            k if FILES_PREV_ENTRY.matches(k) => {
                 app.select_prev_line();
                 app.files.select_first();
             }
-            KeyCode::Char('g') => app.files.select_first(),
-            KeyCode::Char('G') => {
+            k if FILES_FIRST.matches(k) => app.files.select_first(),
+            k if FILES_LAST.matches(k) => {
                 let last = app.file_paths().len().saturating_sub(1);
                 app.files.select_last(last);
             }
-            KeyCode::Char('a') => app.toggle_file_scope(),
-            KeyCode::Char('p') => app.preview.toggle(),
-            KeyCode::Char('y') => copy_selection(app),
+            k if FILES_SCOPE.matches(k) => app.toggle_file_scope(),
+            k if FILES_PREVIEW.matches(k) => app.preview.toggle(),
+            k if FILES_COPY.matches(k) => copy_selection(app),
             _ => {}
         },
         // Full-screen preview is the one view where the text, not the entry
         // list, is what the reader is moving through: `j`/`k` scroll it a line
         // at a time and the shifted pair changes entry.
-        View::Preview => match key.code {
-            KeyCode::Char('f') => app.highlight_first_link(),
-            KeyCode::Char('u') => app.toggle_link_display(),
-            KeyCode::Char('v') => app.preview.toggle_mode(),
-            KeyCode::Char('C') => app.preview.toggle_target(),
-            KeyCode::PageDown => app.preview.scroll.page_down(),
-            KeyCode::PageUp => app.preview.scroll.page_up(),
-            KeyCode::Char('j') if app.link_highlight.is_some() => app.highlight_next_link(),
-            KeyCode::Char('k') if app.link_highlight.is_some() => app.highlight_prev_link(),
-            KeyCode::Char('j') => app.preview.scroll.line_down(),
-            KeyCode::Char('k') => app.preview.scroll.line_up(),
-            KeyCode::Char('J') | KeyCode::Down => app.select_next_line(),
-            KeyCode::Char('K') | KeyCode::Up => app.select_prev_line(),
-            KeyCode::Char('g') => app.select_first(),
-            KeyCode::Char('G') => app.select_last(),
-            KeyCode::Char('y') => copy_selection(app),
+        View::Preview => match key {
+            k if PREVIEW_LINKS.matches(k) => app.highlight_first_link(),
+            k if PREVIEW_LINK_DESTINATIONS.matches(k) => app.toggle_link_display(),
+            k if PREVIEW_MODE.matches(k) => app.preview.toggle_mode(),
+            k if PREVIEW_TARGET.matches(k) => app.preview.toggle_target(),
+            k if PREVIEW_PAGE_DOWN.matches(k) => app.preview.scroll.page_down(),
+            k if PREVIEW_PAGE_UP.matches(k) => app.preview.scroll.page_up(),
+            k if PREVIEW_SCROLL_DOWN.matches(k) && app.link_highlight.is_some() => {
+                app.highlight_next_link()
+            }
+            k if PREVIEW_SCROLL_UP.matches(k) && app.link_highlight.is_some() => {
+                app.highlight_prev_link()
+            }
+            k if PREVIEW_SCROLL_DOWN.matches(k) => app.preview.scroll.line_down(),
+            k if PREVIEW_SCROLL_UP.matches(k) => app.preview.scroll.line_up(),
+            k if PREVIEW_NEXT_ENTRY.matches(k) => app.select_next_line(),
+            k if PREVIEW_PREV_ENTRY.matches(k) => app.select_prev_line(),
+            k if PREVIEW_FIRST.matches(k) => app.select_first(),
+            k if PREVIEW_LAST.matches(k) => app.select_last(),
+            k if PREVIEW_COPY.matches(k) => copy_selection(app),
             _ => {}
         },
     }
@@ -1389,8 +1373,7 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
 /// Asked from outside as well as here, because branching takes long enough to
 /// be worth saying on screen before the send blocks on it.
 pub fn creates_worktree(app: &App, key: KeyEvent) -> bool {
-    key.code == KeyCode::Enter
-        && key.modifiers.contains(KeyModifiers::CONTROL)
+    EDITOR_SEND_IN_BRANCH.matches(key)
         && app.session_id.is_empty()
         // Nothing is sent, and so nothing is branched, for a blank box.
         && !app.composer.text.trim().is_empty()
@@ -1404,15 +1387,13 @@ pub fn handle_input_key(
     key: KeyEvent,
 ) {
     let create_worktree = creates_worktree(app, key);
-    match key.code {
-        KeyCode::Esc => app.enter_list(),
+    match key {
+        k if GLOBAL_LEAVE_MESSAGE.matches(k) => app.enter_list(),
         // Choosing a shape is part of writing the message, so it lives in the
         // box rather than being a mode entered from outside it.
-        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.outbox.cycle_contract()
-        }
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.composer.newline(),
-        KeyCode::Enter => {
+        k if EDITOR_CONTRACT.matches(k) => app.outbox.cycle_contract(),
+        k if EDITOR_NEWLINE.matches(k) => app.composer.newline(),
+        k if EDITOR_SEND.matches(k) || EDITOR_SEND_IN_BRANCH.matches(k) => {
             if let Some(message) = app.take_message() {
                 app.enter_list();
                 if let Some(directory) = message.strip_prefix("/cd ") {
@@ -1528,18 +1509,24 @@ pub fn handle_input_key(
                 }
             }
         }
-        KeyCode::Backspace => app.composer.backspace(),
-        KeyCode::Up => app.composer.history_previous(),
-        KeyCode::Down => app.composer.history_next(),
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.composer.delete_word()
-        }
-        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => app.open_launcher(),
+        k if EDITOR_DELETE_WORD.matches(k) => app.composer.delete_word(),
+        k if EDITOR_LAUNCHER.matches(k) => app.open_launcher(),
         // Naming a file is part of writing the message, so it opens from the
         // box rather than from the driva view that the grant it may ask for
         // would otherwise have to be made in.
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => open_insert(app),
-        KeyCode::Char(ch) => app.composer.char(ch),
+        k if EDITOR_INSERT_PATH.matches(k) => open_insert(app),
+        k if EDITOR_HISTORY_OLDER.matches(k) => app.composer.history_previous(),
+        k if EDITOR_HISTORY_NEWER.matches(k) => app.composer.history_next(),
+        k if k.code == KeyCode::Backspace => app.composer.backspace(),
+        // Everything else printable is the message itself, once the modified
+        // keys above have had their turn.
+        k if !k.modifiers.contains(KeyModifiers::CONTROL)
+            && !k.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            if let KeyCode::Char(ch) = k.code {
+                app.composer.char(ch)
+            }
+        }
         _ => {}
     }
 }

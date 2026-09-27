@@ -7,7 +7,12 @@ use ratatui::Frame;
 
 pub enum HelpRow<'a> {
     Section(&'a str),
-    Binding { keys: &'a str, action: &'a str },
+    /// `keys` is owned where the caller builds it from a binding's own keys,
+    /// which is why it is a [`Cow`] rather than a borrow.
+    Binding {
+        keys: std::borrow::Cow<'a, str>,
+        action: &'a str,
+    },
     Blank,
 }
 

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -309,8 +309,8 @@ fn open_path(app: &mut App, config: &dyn Configuration, path: &Path) {
 
 /// Global actions which operate on the current interaction without dismissing
 /// its navigator. They fall through to the ordinary list-key handler below.
-fn interaction_navigator_passthrough(code: &KeyCode) -> bool {
-    matches!(code, KeyCode::Char('i') | KeyCode::Char('S'))
+fn interaction_navigator_passthrough(key: crossterm::event::KeyEvent) -> bool {
+    keys::GLOBAL_FOCUS_MESSAGE.matches(key) || keys::GLOBAL_STOP.matches(key)
 }
 
 /// Load the interaction the navigator's cursor has moved onto, if it is not
@@ -577,7 +577,7 @@ pub fn run(
             let feedback = terminal.render_help(
                 window.name(),
                 &rows,
-                crate::keys::CLOSE_REFERENCE,
+                &crate::keys::CLOSE_REFERENCE.label(),
                 app.help.offset(),
             )?;
             if let Some(scroll) = feedback
@@ -618,15 +618,15 @@ pub fn run(
         // described by it can accidentally act on the window underneath. It
         // comes before every other modal because it can be opened over them.
         if app.help.is_open() {
-            match key.code {
-                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => app.help.close(),
+            match key {
+                k if keys::CLOSE_REFERENCE.matches(k) => app.help.close(),
                 // The reference is taller than a short terminal, so the
                 // sections at the end have to be reachable.
-                KeyCode::Char('j') | KeyCode::Down => app.help.line_down(),
-                KeyCode::Char('k') | KeyCode::Up => app.help.line_up(),
-                KeyCode::PageDown => app.help.page_down(),
-                KeyCode::PageUp => app.help.page_up(),
-                KeyCode::Char('g') => app.help.scroll_to_top(),
+                k if keys::REFERENCE_DOWN.matches(k) => app.help.line_down(),
+                k if keys::REFERENCE_UP.matches(k) => app.help.line_up(),
+                k if keys::REFERENCE_PAGE_DOWN.matches(k) => app.help.page_down(),
+                k if keys::REFERENCE_PAGE_UP.matches(k) => app.help.page_up(),
+                k if keys::REFERENCE_TOP.matches(k) => app.help.scroll_to_top(),
                 _ => {}
             }
             continue;
@@ -636,7 +636,7 @@ pub fn run(
         // answers it — the launcher, the template chooser and the modal
         // overlays included. The prompts that take typed text are excluded:
         // there a `?` is a character of what is being typed.
-        if key.code == KeyCode::Char('?')
+        if keys::HELP.matches(key)
             && app.insert.is_none()
             && app.git_repository_prompt.is_none()
             && app.launch.prompt.is_none()
@@ -655,7 +655,7 @@ pub fn run(
         // loading state is cancellable, and no nested event loop can defer the
         // edit produced by Enter until some unrelated future keypress.
         if let Some(template_picker) = app.template_picker.as_mut() {
-            let action = template_picker.handle_key(key.code);
+            let action = template_picker.handle_key(key);
             match action {
                 picker::TemplatePickerAction::None => {}
                 picker::TemplatePickerAction::Cancel => app.template_picker = None,
@@ -758,13 +758,13 @@ pub fn run(
                 }
                 continue;
             }
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Down => picker.next(),
-                KeyCode::Char('k') | KeyCode::Up => picker.previous(),
-                KeyCode::Char(' ') => picker.toggle(),
-                KeyCode::Char('n') => picker.new_tag = Some(String::new()),
-                KeyCode::Esc | KeyCode::Char('q') => app.tag_picker = None,
-                KeyCode::Enter => {
+            match key {
+                k if keys::TAGS_NEXT.matches(k) => picker.next(),
+                k if keys::TAGS_PREV.matches(k) => picker.previous(),
+                k if keys::TAGS_TOGGLE.matches(k) => picker.toggle(),
+                k if keys::TAGS_NEW.matches(k) => picker.new_tag = Some(String::new()),
+                k if keys::TAGS_CANCEL.matches(k) => app.tag_picker = None,
+                k if keys::TAGS_SAVE.matches(k) => {
                     let tags = picker.selected.clone();
                     let id = app.session_id.clone();
                     save_tags(app, client, id, tags);
@@ -786,7 +786,7 @@ pub fn run(
         // be loaded. Enter only closes the navigator; there is no preview.
         if app.interactions.open && app.focus == Focus::List {
             let session_id = app.session_id.clone();
-            match key.code {
+            match key {
                 // In All scope the entries are grouped under Workspace
                 // headings, and J/K skip whole groups: one press per
                 // Workspace rather than one per interaction. They move the
@@ -795,7 +795,7 @@ pub fn run(
                 // The jump to the next unseen-idle interaction moves the cursor
                 // like the other skips do, so the row it lands on is the one
                 // load it pays for — and the operator sees where it went.
-                KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                k if keys::INTERACTIONS_NEXT_IDLE.matches(k) => {
                     if app
                         .interactions
                         .cursor_to_next_idle(&session_id, app.workspace.id.as_deref())
@@ -807,7 +807,7 @@ pub fn run(
                 }
                 // The step between live interactions moves the cursor for the
                 // same reason: one load, on the row it settles on.
-                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                k if keys::INTERACTIONS_NEXT_LIVE.matches(k) => {
                     if app
                         .interactions
                         .cursor_to_next_live(&session_id, app.workspace.id.as_deref())
@@ -821,7 +821,7 @@ pub fn run(
                 // working rather than every live one — so it skips past those
                 // idle and waiting on the operator, which ctrl-a already
                 // reaches.
-                KeyCode::Char('N') => {
+                k if keys::INTERACTIONS_NEXT_WORKING.matches(k) => {
                     if app
                         .interactions
                         .cursor_to_next_active(&session_id, app.workspace.id.as_deref())
@@ -831,22 +831,22 @@ pub fn run(
                     }
                     continue;
                 }
-                KeyCode::Char('J') => {
+                k if keys::INTERACTIONS_NEXT_WORKSPACE.matches(k) => {
                     app.interactions
                         .cursor_next_workspace(&session_id, app.workspace.id.as_deref());
                     continue;
                 }
-                KeyCode::Char('K') => {
+                k if keys::INTERACTIONS_PREV_WORKSPACE.matches(k) => {
                     app.interactions
                         .cursor_previous_workspace(&session_id, app.workspace.id.as_deref());
                     continue;
                 }
-                KeyCode::Char('j') | KeyCode::Down => {
+                k if keys::INTERACTIONS_NEXT.matches(k) => {
                     app.interactions
                         .cursor_next(&session_id, app.workspace.id.as_deref());
                     continue;
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
+                k if keys::INTERACTIONS_PREV.matches(k) => {
                     app.interactions
                         .cursor_previous(&session_id, app.workspace.id.as_deref());
                     continue;
@@ -857,20 +857,20 @@ pub fn run(
             // still waiting out its settle is completed first rather than
             // abandoned.
             load_cursored_interaction(app, live, client, standing_launch);
-            match key.code {
-                KeyCode::Char('a') | KeyCode::Esc | KeyCode::Enter => {
+            match key {
+                k if keys::INTERACTIONS_CLOSE.matches(k) => {
                     app.interactions.close();
                     continue;
                 }
-                KeyCode::Char('w') => {
+                k if keys::INTERACTIONS_SCOPE.matches(k) => {
                     app.interactions.toggle_workspace_scope();
                     continue;
                 }
-                KeyCode::Char('c') => {
+                k if keys::INTERACTIONS_COMPLETED.matches(k) => {
                     app.interactions.toggle_completed();
                     continue;
                 }
-                KeyCode::Char('C') => {
+                k if keys::INTERACTIONS_COMPLETE.matches(k) => {
                     let Some(interaction) = app.interactions.current(&app.session_id).cloned()
                     else {
                         continue;
@@ -902,7 +902,7 @@ pub fn run(
                     make_interaction_current(app, live, client, standing_launch, next);
                     continue;
                 }
-                KeyCode::Char('D') => {
+                k if keys::INTERACTIONS_DELETE.matches(k) => {
                     let Some(interaction) = app.interactions.current(&app.session_id).cloned()
                     else {
                         continue;
@@ -929,7 +929,7 @@ pub fn run(
                     make_interaction_current(app, live, client, standing_launch, next);
                     continue;
                 }
-                KeyCode::Char('T') => {
+                k if keys::INTERACTIONS_TAGS.matches(k) => {
                     let Some(interaction) = app.interactions.current(&app.session_id) else {
                         continue;
                     };
@@ -946,7 +946,7 @@ pub fn run(
                     }
                     continue;
                 }
-                code if interaction_navigator_passthrough(&code) => {}
+                k if interaction_navigator_passthrough(k) => {}
                 _ => app.interactions.close(),
             }
         }
@@ -972,23 +972,22 @@ pub fn run(
                     // else to, and the operator is speaking rather than
                     // looking for a modifier.
                     if audio.is_recording() {
-                        match key.code {
-                            KeyCode::Enter => audio.finish(app, client.clone()),
-                            KeyCode::Esc => audio.cancel(app, client.clone()),
-                            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        match key {
+                            k if keys::EDITOR_RECORD_FINISH.matches(k)
+                                || keys::EDITOR_RECORD.matches(k) =>
+                            {
                                 audio.finish(app, client.clone())
                             }
-                            KeyCode::Up | KeyCode::Char('+') | KeyCode::Char('=') => {
-                                audio.boost(app)
+                            k if keys::EDITOR_RECORD_CANCEL.matches(k) => {
+                                audio.cancel(app, client.clone())
                             }
-                            KeyCode::Down | KeyCode::Char('-') => audio.quieten(app),
+                            k if keys::EDITOR_RECORD_LOUDER.matches(k) => audio.boost(app),
+                            k if keys::EDITOR_RECORD_QUIETER.matches(k) => audio.quieten(app),
                             _ => {}
                         }
                         continue;
                     }
-                    if key.code == KeyCode::Char('r')
-                        && key.modifiers.contains(KeyModifiers::CONTROL)
-                    {
+                    if keys::EDITOR_RECORD.matches(key) {
                         audio.toggle(app, client.clone());
                         continue;
                     }
@@ -1311,9 +1310,10 @@ mod tests {
 
     #[test]
     fn stopping_is_a_navigator_passthrough_action() {
-        assert!(interaction_navigator_passthrough(&KeyCode::Char('S')));
-        assert!(interaction_navigator_passthrough(&KeyCode::Char('i')));
-        assert!(!interaction_navigator_passthrough(&KeyCode::Char('l')));
+        let press = |character| crossterm::event::KeyEvent::from(KeyCode::Char(character));
+        assert!(interaction_navigator_passthrough(press('S')));
+        assert!(interaction_navigator_passthrough(press('i')));
+        assert!(!interaction_navigator_passthrough(press('l')));
     }
 
     #[test]
