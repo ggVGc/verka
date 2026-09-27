@@ -335,8 +335,6 @@ pub enum Request {
     /// Where [`Request::NextIdleInteraction`] answers the footer's count, this
     /// walks the work that is still running, waiting or not.
     NextLiveInteraction,
-    /// Stop the current interaction and return to the blank start screen.
-    Reset,
     /// Return to the blank start screen without stopping the current interaction.
     NewSession,
     /// Give the current Session a linked Git workspace and branch.
@@ -2636,7 +2634,6 @@ mod tests {
             Request::Sessions,
             Request::OpenSession("s-1".into()),
             Request::Interactions,
-            Request::Reset,
             Request::NewSession,
             Request::EditFile,
         ] {

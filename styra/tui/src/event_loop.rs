@@ -1138,7 +1138,6 @@ pub fn run(
                 };
                 make_interaction_current(app, live, client, standing_launch, next);
             }
-            Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
             Some(Request::CreateSessionWorktree) => {
                 match client.create_session_worktree(&app.session_id) {

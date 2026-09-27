@@ -130,11 +130,11 @@ const GLOBAL: &[ReferenceRow] = &[
         action: "branch from history through, or only, the selected entry",
     },
     ReferenceRow::Binding {
-        keys: "n / N",
-        action: "step to the next interaction that is still running / stop and start new",
+        keys: "n",
+        action: "step to the next interaction that is still running",
     },
     ReferenceRow::Binding {
-        keys: "ctrl-n",
+        keys: "N",
         action: "new session where this one works",
     },
     ReferenceRow::Binding {
@@ -984,18 +984,14 @@ pub fn handle_list_key(
         }
         // Beside ctrl-a, and the same jump with a wider net: ctrl-a goes to
         // work that is waiting to be read, plain `n` steps through every
-        // interaction still running. Matched before ctrl-n, which crossterm
-        // reports as the same character.
-        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            return app.ask(Request::NewSession)
-        }
+        // interaction still running.
+        KeyCode::Char('N') => return app.ask(Request::NewSession),
         KeyCode::Char('a') if app.view != View::Files => return app.ask(Request::Interactions),
         KeyCode::Char('V') => return app.ask(Request::Workspace),
         KeyCode::Char('W') if !app.session_id.is_empty() => {
             return app.ask(Request::CreateSessionWorktree)
         }
         KeyCode::Char('A') => return app.ask(Request::Sessions),
-        KeyCode::Char('N') => return app.ask(Request::Reset),
         KeyCode::Char('n') => return app.ask(Request::NextLiveInteraction),
         _ => {}
     }
@@ -1655,10 +1651,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// ctrl-n starts a new session, and must be taken before plain `n`, which
-    /// the terminal reports as the same character.
+    /// N starts a new session, while plain `n` moves to another live one.
     #[test]
-    fn control_n_starts_a_new_session() {
+    fn uppercase_n_starts_a_new_session() {
         let root = tree("live-step");
         let mut app = app(&root);
         app.enter_list();
@@ -1676,7 +1671,7 @@ mod tests {
             );
         };
 
-        press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('N'), KeyModifiers::SHIFT);
         assert_eq!(app.take_request(), Some(Request::NewSession));
 
         press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
