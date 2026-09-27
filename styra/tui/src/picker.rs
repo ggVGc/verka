@@ -8,7 +8,7 @@ use styra_protocol::{
 use styra_server::Client;
 
 use crate::help::Help;
-use crate::keymap::Window;
+use crate::keys::Window;
 use crate::launch::LaunchScope;
 use crate::presentation;
 use crate::session::{is_recent_session, session_tree_depths, sort_sessions_tree, SessionOrder};
@@ -393,7 +393,7 @@ fn render_help(terminal: &mut dyn Ui, window: Window, help: &mut Help) -> Result
     let feedback = terminal.render_help(
         window.name(),
         &rows,
-        crate::keymap::CLOSE_REFERENCE,
+        crate::keys::CLOSE_REFERENCE,
         help.offset(),
     )?;
     if let Some(scroll) = feedback

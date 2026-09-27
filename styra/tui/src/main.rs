@@ -22,7 +22,6 @@ mod help;
 mod ingest;
 mod insert;
 mod interactions;
-mod keymap;
 mod keys;
 mod launch;
 mod launcher;

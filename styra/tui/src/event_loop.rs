@@ -577,7 +577,7 @@ pub fn run(
             let feedback = terminal.render_help(
                 window.name(),
                 &rows,
-                crate::keymap::CLOSE_REFERENCE,
+                crate::keys::CLOSE_REFERENCE,
                 app.help.offset(),
             )?;
             if let Some(scroll) = feedback

@@ -136,8 +136,8 @@ pub(crate) fn launcher_view(
 /// Which window `?` should describe: the topmost thing on screen. The modal
 /// overlays and the standalone chooser screens cover the session view, so they
 /// answer before it does.
-pub(crate) fn current_window(app: &App) -> crate::keymap::Window {
-    use crate::keymap::Window;
+pub(crate) fn current_window(app: &App) -> crate::keys::Window {
+    use crate::keys::Window;
     if app.launcher.is_some() {
         return Window::Launcher;
     }
@@ -167,16 +167,16 @@ pub(crate) fn current_window(app: &App) -> crate::keymap::Window {
 }
 
 /// The reference rows for one window, in the UI's vocabulary.
-pub(crate) fn help_rows(window: crate::keymap::Window) -> Vec<styra_ui::help::HelpRow<'static>> {
+pub(crate) fn help_rows(window: crate::keys::Window) -> Vec<styra_ui::help::HelpRow<'static>> {
     window
         .reference()
         .into_iter()
         .map(|row| match row {
-            crate::keymap::ReferenceRow::Section(name) => styra_ui::help::HelpRow::Section(name),
-            crate::keymap::ReferenceRow::Binding { keys, action } => {
+            crate::keys::ReferenceRow::Section(name) => styra_ui::help::HelpRow::Section(name),
+            crate::keys::ReferenceRow::Binding { keys, action } => {
                 styra_ui::help::HelpRow::Binding { keys, action }
             }
-            crate::keymap::ReferenceRow::Blank => styra_ui::help::HelpRow::Blank,
+            crate::keys::ReferenceRow::Blank => styra_ui::help::HelpRow::Blank,
         })
         .collect()
 }
@@ -410,7 +410,7 @@ fn draw_main(
         .unwrap_or_default();
     let quota_alert = quota::alert(app);
     let footer = styra_ui::footer::FooterView {
-        help_key: crate::keymap::HELP,
+        help_key: crate::keys::HELP,
         working_directory: &working_directory,
         idle_interactions: app.interactions.idle_notification_count(),
         quota: &quota_alert,
