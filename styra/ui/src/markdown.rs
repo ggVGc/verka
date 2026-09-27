@@ -556,7 +556,17 @@ impl StyleSheet for StyraStyleSheet {
 
 /// Renders inline Markdown used in compact, single-line event summaries.
 pub fn parse_inline_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
-    let spans = render_spans(text, base_style);
+    parse_inline_spans_with_highlight(text, base_style, None)
+}
+
+/// Renders inline Markdown and marks one link, when a compact event summary
+/// owns the visible copy of that link.
+pub fn parse_inline_spans_with_highlight(
+    text: &str,
+    base_style: Style,
+    highlight: Option<EntryIndex>,
+) -> Vec<Span<'static>> {
+    let spans = render_spans(text, base_style, highlight);
     if spans.is_empty() {
         vec![Span::styled(String::new(), base_style)]
     } else {
@@ -564,10 +574,16 @@ pub fn parse_inline_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
     }
 }
 
-fn render_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
+fn render_spans(
+    text: &str,
+    base_style: Style,
+    highlight: Option<EntryIndex>,
+) -> Vec<Span<'static>> {
     let parser = Parser::new_ext(text, Options::ENABLE_STRIKETHROUGH);
     let mut spans = Vec::new();
     let mut styles = vec![base_style];
+    let mut links = 0;
+    let mut active_link = None;
 
     for event in parser {
         match event {
@@ -577,6 +593,10 @@ fn render_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
                 Tag::Strikethrough => {
                     styles.push(current_style(&styles).add_modifier(Modifier::CROSSED_OUT))
                 }
+                Tag::Link { .. } => {
+                    active_link = Some(links);
+                    links += 1;
+                }
                 _ => {}
             },
             Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough) => {
@@ -584,24 +604,44 @@ fn render_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
                     styles.pop();
                 }
             }
+            Event::End(TagEnd::Link) => active_link = None,
             Event::End(_) => {}
-            Event::Text(text) => {
-                spans.push(Span::styled(text.into_string(), current_style(&styles)))
-            }
+            Event::Text(text) => spans.push(Span::styled(
+                text.into_string(),
+                inline_style(current_style(&styles), active_link, highlight),
+            )),
             Event::Code(code) => spans.push(Span::styled(
                 code.into_string(),
-                current_style(&styles).fg(palette::WARNING),
+                inline_style(
+                    current_style(&styles).fg(palette::WARNING),
+                    active_link,
+                    highlight,
+                ),
             )),
-            Event::SoftBreak | Event::HardBreak => {
-                spans.push(Span::styled(" ", current_style(&styles)))
-            }
-            Event::Html(html) | Event::InlineHtml(html) => {
-                spans.push(Span::styled(html.into_string(), current_style(&styles)))
-            }
+            Event::SoftBreak | Event::HardBreak => spans.push(Span::styled(
+                " ",
+                inline_style(current_style(&styles), active_link, highlight),
+            )),
+            Event::Html(html) | Event::InlineHtml(html) => spans.push(Span::styled(
+                html.into_string(),
+                inline_style(current_style(&styles), active_link, highlight),
+            )),
             _ => {}
         }
     }
     spans
+}
+
+fn inline_style(
+    style: Style,
+    active_link: Option<EntryIndex>,
+    highlight: Option<EntryIndex>,
+) -> Style {
+    if highlight.is_some_and(|highlight| active_link == Some(highlight)) {
+        style.patch(entry_highlight_style())
+    } else {
+        style
+    }
 }
 
 fn current_style(styles: &[Style]) -> Style {

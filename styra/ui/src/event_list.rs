@@ -5,7 +5,8 @@ use crate::chrome::{panel_block, PanelChrome};
 use crate::code::{code_block_lines, is_error_diagnostic};
 use crate::footer::{message_text_color, tag_color};
 use crate::markdown::{
-    markdown_block_render, parse_inline_spans, structural_indent, EntryIndex, LinkDisplay,
+    markdown_block_render, parse_inline_spans_with_highlight, structural_indent, EntryIndex,
+    LinkDisplay,
 };
 use crate::palette;
 use crate::search::{self, SearchView};
@@ -576,10 +577,9 @@ fn entry_item_with_max_rows(
     let mut lines = vec![summary];
     let mut detail =
         detail_lines_with_links(entry.event, protocol, None, links, entry.link_highlight);
-    // Normally the first rendered line merely repeats the summary. Keep it
-    // while link navigation is on this entry: the first Markdown link often
-    // lives on that line, and a selection must always be visible.
-    if !detail.is_empty() && entry.link_highlight.is_none() {
+    // The first detail line is the summary already shown above. Link focus is
+    // rendered on that summary, so it never needs a duplicate body line.
+    if !detail.is_empty() {
         detail.remove(0);
     }
     if suspicious_shell_success(entry.event) {
@@ -1192,7 +1192,11 @@ pub fn summary_line(
             }
             _ => &summary,
         };
-        spans.extend(parse_inline_spans(display_summary, summary_style));
+        spans.extend(parse_inline_spans_with_highlight(
+            display_summary,
+            summary_style,
+            entry.link_highlight,
+        ));
     }
     // The framing this turn was sent with is stripped from the message, so the
     // row says what was asked of it instead of showing ten lines saying so.
@@ -1497,6 +1501,50 @@ mod tests {
         assert!(
             rows.concat().contains("/re▌ · 1 more character"),
             "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn a_highlighted_link_does_not_repeat_the_selected_summary() {
+        let event = AgentEvent::AgentMessage {
+            text: "see [guide](https://example.com/guide)".into(),
+        };
+        let entry = EventEntry {
+            event: &event,
+            expanded: true,
+            has_detail: true,
+            contract: None,
+            selected: true,
+            link_highlight: Some(0),
+        };
+        let render = EntryRender {
+            protocol: Protocol::default(),
+            links: LinkDisplay::Compact,
+            search: None,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 4)).unwrap();
+        terminal
+            .draw(|frame| {
+                frame.render_widget(
+                    List::new(vec![entry_item(&entry, 80, 4, render)]),
+                    frame.area(),
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let text = (0..buffer.area.height)
+            .flat_map(|y| {
+                (0..buffer.area.width).map(move |x| buffer.cell((x, y)).unwrap().symbol())
+            })
+            .collect::<String>();
+        assert_eq!(text.matches("see guide").count(), 1);
+        assert!(
+            (0..buffer.area.width).any(|x| {
+                let cell = buffer.cell((x, 0)).unwrap();
+                cell.symbol() == "g" && cell.bg == palette::LINK_HIGHLIGHT_BACKGROUND
+            }),
+            "the selected link remains visible on the summary"
         );
     }
 
