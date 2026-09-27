@@ -492,11 +492,6 @@ pub fn run(
         app.notices.expire();
         launch_effects.apply_ready(app, &workspace_id);
         audio.apply_ready(app, client);
-        // The microphone follows the message box: opening an input costs real
-        // time — seconds of it on a headset the machine has to switch profiles
-        // for — and the box being opened is the earliest moment that cost can
-        // be paid, rather than the moment the operator starts speaking.
-        audio.follow_focus(app);
         // Workspace launch policy is a server-owned read model. Refresh it
         // independently of input so edits from another Styra client flow into
         // this Driva view and invalidate its planned options.

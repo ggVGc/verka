@@ -6,13 +6,7 @@
 //! server transcribes that file with its own local Whisper model and returns
 //! only the text.
 //!
-//! The device is opened when the message box is, and not when recording
-//! starts. Opening an input is the slow part — and on a Bluetooth headset it
-//! is slower still, because the profile switch that gives the machine a
-//! microphone happens then: seconds of it, during which the operator is
-//! already speaking. So the box taking focus arms the device, recording only
-//! begins writing what an already-open device is handing over, and the device
-//! is let go of when the box closes.
+//! The device is opened when recording starts and is released when it ends.
 //!
 //! The device is owned by a thread of its own. A capture stream cannot be
 //! moved between threads, and the terminal thread must never be the one
@@ -36,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tempfile::TempPath;
 
-use crate::app::{App, Focus};
+use crate::app::App;
 use styra_protocol::LogEntry;
 use styra_server::Client;
 
@@ -324,12 +318,11 @@ enum Completed {
 /// on the first request, which loads the model — so it must not own the
 /// terminal thread while the rest of the interface is live.
 pub struct AudioInput {
-    /// The open device, held for as long as the message box is.
+    /// The open device, held for the active recording.
     mic: Option<Mic>,
     recording: Option<Recording>,
-    /// Whether the device refused the last time it was asked for, which stops
-    /// the box from asking again every round. Cleared when the box closes, and
-    /// when the operator presses record — which is them asking again.
+    /// Whether the device refused the last time it was asked for. Cleared when
+    /// the operator presses record, which is them asking again.
     refused: bool,
     completed: std::sync::mpsc::Sender<Completed>,
     receive: Receiver<Completed>,
@@ -347,29 +340,7 @@ impl AudioInput {
         }
     }
 
-    /// Open the device because the message box is open, or let go of it
-    /// because the box has closed.
-    ///
-    /// This, rather than the record key, is what pays for opening an input:
-    /// by the time the operator has typed what they were going to type and
-    /// decided to speak the rest, the device — Bluetooth profile switch and
-    /// all — has long since answered.
-    pub(crate) fn follow_focus(&mut self, app: &mut App) {
-        match app.focus {
-            Focus::Input => self.arm(app),
-            // A recording keeps the box, so this is not a case of dropping the
-            // device out from under one; the guard is for a focus change no
-            // one has written yet.
-            Focus::List if self.recording.is_none() => self.release(),
-            Focus::List => {}
-        }
-    }
-
-    /// Have the device open and answering, if it is not already.
-    ///
-    /// Failing to arm is not worth interrupting anybody over: nobody has asked
-    /// to record yet, and the operator who does is told then. It goes in the
-    /// log, and the box stops asking until it is opened again.
+    /// Open the device for a requested recording, if it is not already open.
     fn arm(&mut self, app: &mut App) {
         if self.mic.is_some() || self.refused {
             return;
@@ -385,8 +356,7 @@ impl AudioInput {
         }
     }
 
-    /// Close the device. Dropping the command channel is what tells the device
-    /// thread to; nothing waits for it to have happened.
+    /// Close the device. Dropping the command channel tells its thread to exit.
     fn release(&mut self) {
         self.mic = None;
         self.refused = false;
@@ -437,6 +407,7 @@ impl AudioInput {
         // Only ask here: waiting for the file to be finished, and giving up
         // when it is not, is the worker's job — this is the terminal thread.
         let finished = self.stop();
+        self.release();
         self.report_stopped(app, &client);
         note_kept(app, &recording);
         self.transcribe(recording.path, finished, client);
@@ -454,6 +425,7 @@ impl AudioInput {
         };
         app.recording = None;
         let finished = self.stop();
+        self.release();
         self.report_stopped(app, &client);
         note_kept(app, &recording);
         let completed = self.completed.clone();
@@ -733,8 +705,8 @@ fn open_mic() -> Result<Mic> {
 /// capture stream cannot be moved off the thread that made it.
 fn hold_device(commands: &Receiver<Command>, meter: &Arc<Meter>) -> Result<()> {
     let capture = open(meter)?;
-    // Runs until the editor drops the command channel, which is the message
-    // box closing — or the interface going down around it.
+    // Runs until the recording releases the command channel, or the interface
+    // goes down around it.
     while let Ok(command) = commands.recv() {
         match command {
             Command::Start(path) => capture.begin(&path)?,
@@ -895,8 +867,7 @@ impl Capture {
     }
 
     /// Finish the WAV file and report what the device said while it was being
-    /// written. The device itself stays open: the message box is still up, and
-    /// the next recording should not pay for opening it again.
+    /// written.
     fn end(&self) -> Result<Option<String>> {
         // Taking the writer out under the lock is what stops the callback
         // writing; it can only be holding the lock or not holding it, and
@@ -1136,42 +1107,6 @@ mod tests {
 
         assert!(audio.recording.is_some());
         assert!(app.notices.is_empty());
-    }
-
-    /// A device that goes away while nobody is recording is the log's business
-    /// and not the operator's: they asked for a message box, not a microphone.
-    #[test]
-    fn an_armed_device_that_goes_away_says_so_only_in_the_log() {
-        let mut app = App::new(Selection::parse("codex").unwrap(), "s1");
-        let client = Client::new("/nonexistent/styra.sock");
-        let mut audio = AudioInput::new();
-        let (mic, said, _commands) = mic();
-        said.send("No such device".into()).unwrap();
-        audio.mic = Some(mic);
-
-        audio.apply_ready(&mut app, &client);
-
-        assert!(audio.mic.is_none());
-        assert!(app.notices.is_empty());
-        // And not asked for again round after round while the box stays open.
-        app.focus = Focus::Input;
-        audio.follow_focus(&mut app);
-        assert!(audio.mic.is_none());
-    }
-
-    /// The device is the message box's, and goes when it does: an input left
-    /// open over the event list is a microphone nobody asked to hold.
-    #[test]
-    fn closing_the_message_box_lets_the_device_go() {
-        let mut app = App::new(Selection::parse("codex").unwrap(), "s1");
-        let (mic, _said, _commands) = mic();
-        let mut audio = AudioInput::new();
-        audio.mic = Some(mic);
-        app.focus = Focus::List;
-
-        audio.follow_focus(&mut app);
-
-        assert!(audio.mic.is_none());
     }
 
     /// Recording is the open device being pointed at a file, and the meter

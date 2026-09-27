@@ -58,12 +58,8 @@ converts its history into that agent's format as a sibling Session, and the
 view follows the sibling — the conversation comes along, and both Sessions keep
 a marker naming the other.
 `Ctrl+T` asks the message's reply to have a shape: text, lines, files, or JSON.
-`Ctrl+R` in the message editor starts recording from the system's default audio
-input; press `Ctrl+R` again to stop. The device is opened when the message
-editor is — not when `Ctrl+R` is pressed — and closed when the editor is left,
-so that opening it costs nothing at the moment you start speaking; on a
-Bluetooth headset, whose profile switch takes seconds, that is the difference
-between recording the first words and losing them. `styra-server` transcribes
+`Ctrl+R` in the message editor opens the system's default audio input and starts
+recording; press `Ctrl+R` again to stop. `styra-server` transcribes
 the temporary recording with a local Whisper model and the text is inserted
 into the draft —
 no agent provider is involved and no quota is spent. Recording needs no
