@@ -14,10 +14,10 @@
 use std::path::{Path, PathBuf};
 
 use styra_server::agent::{MessageFormat, Profile, Provider, Selection};
+use styra_server::ensure_server;
 use styra_server::event::Protocol;
 use styra_server::journal::{self, Journal};
 use styra_server::protocol::{CompletionState, LaunchPolicy, ResumeSession};
-use styra_server::ensure_server;
 
 /// One Claude conversation, in Claude Code's own on-disk transcript shape.
 const CLAUDE_TRANSCRIPT: &str = concat!(
@@ -55,10 +55,17 @@ fn stored_claude_session(store: &Path, workspace_id: &str, home: &Path) -> (Stri
         message_format: MessageFormat::ClaudeStreamJson,
         single_turn: false,
     };
-    let (mut journal, id) =
-        Journal::create_in_workspace(store, workspace_id, &profile, &selection, Some("review".into()))
-            .unwrap();
-    journal.record_user_message("why is the checkout failing?").unwrap();
+    let (mut journal, id) = Journal::create_in_workspace(
+        store,
+        workspace_id,
+        &profile,
+        &selection,
+        Some("review".into()),
+    )
+    .unwrap();
+    journal
+        .record_user_message("why is the checkout failing?")
+        .unwrap();
     let session_path = journal.path().parent().unwrap().to_path_buf();
     drop(journal);
 

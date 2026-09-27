@@ -100,10 +100,9 @@ impl Roster {
                 // missing (caught by the filter above, but a race is still
                 // possible) is read as not completed rather than dropping the
                 // row a second time.
-                entry.summary.completed = crate::journal::read_session_completed(
-                    &entry.session_path,
-                )
-                .unwrap_or(CompletionState::Active);
+                entry.summary.completed =
+                    crate::journal::read_session_completed(&entry.session_path)
+                        .unwrap_or(CompletionState::Active);
                 (entry.summary.id.clone(), entry)
             })
             .collect();

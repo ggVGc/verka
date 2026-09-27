@@ -14,8 +14,8 @@ mod types;
 
 pub use types::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
-    BranchHistory, CheckoutState, CompletionState, Contract, Direction, DrivaOptions,
-    FileLocation, InteractionActivity, InteractionActivityReason, InteractionEnd, InteractionSummary,
+    BranchHistory, CheckoutState, CompletionState, Contract, Direction, DrivaOptions, FileLocation,
+    InteractionActivity, InteractionActivityReason, InteractionEnd, InteractionSummary,
     InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage,
     QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
     VariableOrigin, WorkspaceSummary,

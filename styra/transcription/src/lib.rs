@@ -412,7 +412,10 @@ mod tests {
 
     #[test]
     fn model_override_accepts_native_and_legacy_spellings() {
-        assert_eq!(configured_model(None).unwrap(), configured_model(Some("quantized_base")).unwrap());
+        assert_eq!(
+            configured_model(None).unwrap(),
+            configured_model(Some("quantized_base")).unwrap()
+        );
         assert_eq!(
             configured_model(Some("quantized_tiny")).unwrap().name,
             "tiny-q5_1"
