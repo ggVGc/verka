@@ -1,1 +1,6 @@
-I want to be able to get an overview of a project through features which are linked to descriptions and unit tests which showcase the existance of those features.
+= Linka is the foundation upon which multiple useful tools could be built =
+
+== Feature-first project overview ==
+Project structure where the top-level is a list of features, which in turn are connected to executable verifications of those features, and then to implementations.
+Implementation is a direct consequence of the verification that needs to pass, and similarily for verification relative feature specification.
+This turns the traditional view of a project inside-out, where a developer often starts by looking through code and asking themselves "which features does this logic related to". It also allows doing that kind of reverse lookup if needed, however the feature-first view is more natural in general, I believe.
