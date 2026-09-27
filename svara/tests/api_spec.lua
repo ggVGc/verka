@@ -271,6 +271,53 @@ do
   assert(err:find("needs a prompt"), err)
 end
 
+-- Selecting an interaction for the Workspace at the viewed file ----------
+
+do
+  local core = require("svara.core")
+  local styra, host = open({
+    ok({ type = "workspace_for_path", data = { id = "workspace-1", name = "verka" } }),
+    ok({
+      type = "interactions",
+      data = {
+        { id = "styra-10", workspace_id = "workspace-1", activity = "pending" },
+        { id = "styra-stopped", workspace_id = "workspace-1", activity = "stopped" },
+        { id = "styra-11", workspace_id = "another-workspace", activity = "pending" },
+      },
+    }),
+    ok({ type = "workspace_for_path", data = { id = "workspace-1", name = "verka" } }),
+    accepted(),
+  })
+
+  local interactions, workspace, err = core.interactions_for_directory("/home/me/verka/lib", {
+    host = host,
+    socket = styra.socket,
+  })
+  assert(interactions, err)
+  assert(workspace.id == "workspace-1")
+  assert(#interactions == 1)
+  assert(interactions[1].id == "styra-10")
+
+  assert(core.select_interaction(workspace.id, interactions[1].id))
+  assert(core.selected_interaction(workspace.id) == "styra-10")
+  assert(core.send_to_selected("review this buffer", {
+    directory = "/home/me/verka/lib",
+    host = host,
+    socket = styra.socket,
+  }))
+  assert(host.last().operation == "send_message")
+  assert(host.last().data.id == "styra-10")
+  assert(host.last().data.message.text == "review this buffer")
+
+  local unselected, unselected_error = core.send_to_selected("hello", {
+    directory = "/home/me/elsewhere",
+    host = fake_host({ ok({ type = "workspace_for_path", data = { id = "workspace-2" } }) }),
+    socket = styra.socket,
+  })
+  assert(not unselected)
+  assert(unselected_error:find("no interaction selected"), unselected_error)
+end
+
 -- Nulls are said, not left out ------------------------------------------
 
 do

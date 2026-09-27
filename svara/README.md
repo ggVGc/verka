@@ -10,7 +10,7 @@ the command-line program are both written against it.
 | `lua/svara/api.lua` | **The API.** One function per interaction with the server. Mentions Neovim nowhere. |
 | `lua/svara/nvim.lua` | Neovim, as the six fields the API asks a *host* for. |
 | `lua/svara/protocol.lua` | Where the generated `styra.protocol` is found. |
-| `lua/svara/core.lua` | What the commands do: `send_message`, and `start` behind `:Svara`. |
+| `lua/svara/core.lua` | What the commands do: sending to a selected interaction, and `start` behind `:SvaraNew`. |
 | `../styra/protocol/lua/styra/protocol.lua` | **The vocabulary**, generated, living where it is generated from. |
 
 ## The vocabulary, which is not here
@@ -167,16 +167,20 @@ blocking with it.
 Add this directory to Neovim's runtime path with your plugin manager, then run:
 
 ```vim
-:Svara Why does resuming a branched session lose its tags?
+:SvaraNew Why does resuming a branched session lose its tags?
 ```
 
-`:Svara` starts a new interaction with the rest of the line as its first
-prompt, in the Workspace covering Neovim's working directory — `:Svara` asks
-the server which one that is, so there is no id to look up and nothing to
-configure per project. The prompt goes out with the file and line being viewed
-in front of it — `I am viewing /path/to/file.lua:42` — because a prompt typed
-in an editor is nearly always about what is on screen, and saying so beats
-typing the path. A buffer with no file behind it adds nothing.
+Run `:Svara` with no argument to choose from the active interactions in the
+Workspace covering the currently viewed file. The choice is remembered per
+Workspace until Neovim exits. Thereafter `:Svara Review this buffer` sends to
+that interaction. `:SvaraNew` starts a new interaction with the rest of its
+line as the first prompt. Both commands use the Workspace covering the viewed
+file, rather than Neovim's working directory.
+
+The prompt goes out with the file and line being viewed in front of it —
+`/path/to/file.lua:42` — because a prompt typed in an editor is nearly always
+about what is on screen and saying so beats typing the path. A buffer with no
+file behind it cannot select, send, or start an interaction.
 
 The same thing from Lua, where the directory, the name and the answer's
 contract can all be said, and the prompt is sent as written:

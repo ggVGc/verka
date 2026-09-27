@@ -11,6 +11,13 @@
 
 local M = {}
 
+-- The current interaction is an editor concern, not server state: different
+-- Neovim instances may quite reasonably be looking at different interactions
+-- in the same Workspace.  Keeping this table here consequently makes a choice
+-- last for this Neovim session and no longer.
+local selected_interactions = {}
+local accepting_activity = { pending = true, running = true, background = true }
+
 --- The selection a new interaction here should run under.
 ---
 --- `vim.g.svara_selection` is the answer when it is set. Otherwise the
@@ -77,6 +84,88 @@ function M.start(prompt, options)
     name = options.name,
     contract = options.contract,
   })
+end
+
+--- The live interactions in the Workspace covering `directory`.
+---
+--- The server lists all of its live interactions.  An editor chooses from the
+--- smaller list that belongs to the file it is currently showing, so a choice
+--- in one Workspace cannot accidentally become the choice in another.
+---@param directory string
+---@param options? { socket?: string, timeout?: integer, host?: table }
+---@return table? interactions
+---@return table? workspace
+---@return string? error
+function M.interactions_for_directory(directory, options)
+  options = options or {}
+  local styra, err = require("svara.api").open(options)
+  if not styra then
+    return nil, nil, err
+  end
+  local workspace, workspace_error = styra:workspace_for_path(directory)
+  if not workspace then
+    return nil, nil, workspace_error
+  end
+  local all, interactions_error = styra:interactions()
+  if not all then
+    return nil, nil, interactions_error
+  end
+  local interactions = {}
+  for _, interaction in ipairs(all) do
+    -- `list_interactions` also retains stopped interactions so clients can
+    -- inspect their history. A Svara choice must be something it can send to.
+    if interaction.workspace_id == workspace.id and accepting_activity[interaction.activity] then
+      interactions[#interactions + 1] = interaction
+    end
+  end
+  return interactions, workspace
+end
+
+--- Remember the interaction selected for one Workspace in this Neovim session.
+---@param workspace_id string
+---@param interaction_id string
+---@return boolean? selected
+---@return string? error
+function M.select_interaction(workspace_id, interaction_id)
+  if type(workspace_id) ~= "string" or workspace_id == "" then
+    return nil, "the Workspace id must be a non-empty string"
+  end
+  if type(interaction_id) ~= "string" or interaction_id == "" then
+    return nil, "the interaction id must be a non-empty string"
+  end
+  selected_interactions[workspace_id] = interaction_id
+  return true
+end
+
+--- The interaction selected for a Workspace, if this Neovim session has one.
+---@param workspace_id string
+---@return string? interaction_id
+function M.selected_interaction(workspace_id)
+  return selected_interactions[workspace_id]
+end
+
+--- Send a message to the interaction selected for the Workspace at `directory`.
+---@param message string
+---@param options? { directory?: string, socket?: string, timeout?: integer, host?: table }
+---@return boolean? sent
+---@return string? error
+function M.send_to_selected(message, options)
+  options = options or {}
+  local styra, err = require("svara.api").open(options)
+  if not styra then
+    return nil, err
+  end
+  local directory = options.directory or (vim.uv or vim.loop).cwd()
+  local workspace, workspace_error = styra:workspace_for_path(directory)
+  if not workspace then
+    return nil, workspace_error
+  end
+  local interaction_id = selected_interactions[workspace.id]
+  if not interaction_id then
+    local named = require("svara.api").given(workspace.name) or workspace.id
+    return nil, string.format("no interaction selected for Workspace %q; run :Svara first", named)
+  end
+  return styra:send_message(interaction_id, message)
 end
 
 --- Where the operator is looking, as `path:line`, or nil.

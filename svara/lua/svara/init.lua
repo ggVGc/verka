@@ -37,4 +37,14 @@ M.send_message = require("svara.core").send_message
 --- Start an interaction in the Workspace over a directory; see `svara.core`.
 M.start = require("svara.core").start
 
+--- List live interactions in the Workspace over a directory; see `svara.core`.
+M.interactions_for_directory = require("svara.core").interactions_for_directory
+
+--- Remember or read this Neovim session's interaction choice for a Workspace.
+M.select_interaction = require("svara.core").select_interaction
+M.selected_interaction = require("svara.core").selected_interaction
+
+--- Send a message to the selected interaction in the Workspace over a directory.
+M.send_to_selected = require("svara.core").send_to_selected
+
 return M

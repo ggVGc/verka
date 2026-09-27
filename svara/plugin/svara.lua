@@ -3,9 +3,79 @@ if vim.g.loaded_svara then
 end
 vim.g.loaded_svara = true
 
+local function viewed_directory()
+  local path = vim.api.nvim_buf_get_name(0)
+  if path == "" then
+    return nil, "the current buffer has no file"
+  end
+  return vim.fn.fnamemodify(path, ":p:h")
+end
+
+local function interaction_name(interaction)
+  local name = require("svara").given(interaction.name)
+  local activity = require("svara").given(interaction.activity) or "unknown"
+  local message = require("svara").given(interaction.last_message)
+  local label = name or activity
+  if message and message ~= "" then
+    label = label .. ": " .. message:gsub("[\r\n]+", " ")
+  end
+  return label
+end
+
 vim.api.nvim_create_user_command("Svara", function(command)
   local core = require("svara.core")
-  local session, err = core.start(core.prompt_from_view(command.args, core.viewing()))
+  local directory, directory_error = viewed_directory()
+  if not directory then
+    vim.notify("Svara: " .. directory_error, vim.log.levels.ERROR)
+    return
+  end
+
+  if command.args == "" then
+    local interactions, workspace, err = core.interactions_for_directory(directory)
+    if not interactions then
+      vim.notify("Svara: " .. err, vim.log.levels.ERROR)
+      return
+    end
+    if #interactions == 0 then
+      vim.notify("Svara: no live interactions in this Workspace", vim.log.levels.WARN)
+      return
+    end
+    vim.ui.select(interactions, {
+      prompt = "Select Styra interaction",
+      format_item = interaction_name,
+    }, function(interaction)
+      if not interaction then
+        return
+      end
+      core.select_interaction(workspace.id, interaction.id)
+      vim.notify("Svara: selected " .. interaction.id, vim.log.levels.INFO)
+    end)
+    return
+  end
+
+  local sent, err = core.send_to_selected(core.prompt_from_view(command.args, core.viewing()), {
+    directory = directory,
+  })
+  if not sent then
+    vim.notify("Svara: " .. err, vim.log.levels.ERROR)
+    return
+  end
+  vim.notify("Svara: message sent", vim.log.levels.INFO)
+end, {
+  nargs = "*",
+  desc = "Select or message a Styra interaction in the Workspace over the current file",
+})
+
+vim.api.nvim_create_user_command("SvaraNew", function(command)
+  local core = require("svara.core")
+  local directory, directory_error = viewed_directory()
+  if not directory then
+    vim.notify("Svara: " .. directory_error, vim.log.levels.ERROR)
+    return
+  end
+  local session, err = core.start(core.prompt_from_view(command.args, core.viewing()), {
+    directory = directory,
+  })
   if not session then
     vim.notify("Svara: " .. err, vim.log.levels.ERROR)
     return
@@ -16,7 +86,7 @@ vim.api.nvim_create_user_command("Svara", function(command)
   )
 end, {
   nargs = "+",
-  desc = "Start a Styra interaction in the Workspace over the working directory",
+  desc = "Start a new Styra interaction in the Workspace over the current file",
 })
 
 vim.api.nvim_create_user_command("SvaraSend", function(command)
