@@ -28,6 +28,7 @@ mod keybindings;
 mod keyboard;
 mod launch;
 mod launcher;
+mod logging;
 mod mount;
 mod notices;
 mod outbox;
@@ -197,6 +198,18 @@ fn main() -> Result<()> {
         return result;
     }
     let cli = Cli::parse();
+    // Keep the TUI log beside the socket, matching the daemon log. A
+    // standalone run is intentionally still usable without XDG_RUNTIME_DIR,
+    // so logging is unavailable there when no explicit socket was supplied.
+    let log_socket = cli
+        .socket
+        .clone()
+        .or_else(|| styra_server::paths::default_socket().ok());
+    if let Some(socket) = log_socket {
+        let log_path = logging::path_for_socket(&socket);
+        logging::install(&log_path, cli.socket.is_none())?;
+        tracing::info!(target: "styra_tui::startup", log_path = %log_path.display(), "TUI logging started");
+    }
     let config = Defaults;
 
     // `--standalone` never involves a socket, so it is settled before one is

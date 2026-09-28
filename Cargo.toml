@@ -49,6 +49,8 @@ syn = { version = "2", features = ["full"] }
 tempfile = "3"
 time = { version = "0.3", features = ["parsing"] }
 toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "time"] }
 ulid = "1"
 unicode-width = "0.2"
 uuid = { version = "1", features = ["v4"] }

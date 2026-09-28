@@ -25,7 +25,7 @@ pub use styra_ui::picker::{Preview, SessionsPreview};
 use crate::activity::Status;
 use crate::app::{App, Focus, View};
 use crate::insert::Insert;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use styra_ui::{Ui, UiResult};
 /// A duration in the compact form the status line and tail use: `12s`,
 /// `2m14s`, `1h04m`. Seconds are dropped past an hour, where they no longer
@@ -216,8 +216,16 @@ fn recording(recorded: &crate::audio::Recorded) -> styra_ui::recording::Recordin
 /// the UI trait. Derived strings and file contents live for this draw only;
 /// event histories and protocol records remain borrowed.
 pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui::RenderFeedback> {
+    let started = Instant::now();
+    tracing::debug!(
+        target: "styra_tui::render",
+        session_id = %app.session_id,
+        view = ?app.view,
+        timeline_entries = app.timeline.entries.len(),
+        "rendering application"
+    );
     use styra_ui::application::{EventView, FilesView as ApplicationFiles, MainView};
-    match app.view {
+    let result = match app.view {
         View::Events => {
             let list = list::view(app);
             let navigator = app.interactions.open.then(|| interactions::view(app));
@@ -353,7 +361,25 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 }),
             )
         }
+    };
+    match &result {
+        Ok(_) => tracing::debug!(
+            target: "styra_tui::render",
+            session_id = %app.session_id,
+            view = ?app.view,
+            elapsed_ms = started.elapsed().as_millis(),
+            "rendered application"
+        ),
+        Err(error) => tracing::warn!(
+            target: "styra_tui::render",
+            session_id = %app.session_id,
+            view = ?app.view,
+            elapsed_ms = started.elapsed().as_millis(),
+            error = %error,
+            "application render failed"
+        ),
     }
+    result
 }
 
 /// Whether the interaction being shown — not the cursor's — stopped working

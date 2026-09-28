@@ -491,6 +491,11 @@ pub fn run(
     live: &mut Attachment,
     context: RunContext<'_>,
 ) -> Result<RunOutcome> {
+    tracing::debug!(
+        target: "styra_tui::event_loop",
+        session_id = %app.session_id,
+        "entered event loop"
+    );
     let RunContext {
         standing_launch,
         preferences_path,
@@ -528,6 +533,12 @@ pub fn run(
                     }
                 }
                 Err(error) => {
+                    tracing::warn!(
+                        target: "styra_tui::rpc",
+                        session_id = %app.session_id,
+                        error = %error,
+                        "update poll failed"
+                    );
                     app.push_log(LogEntry::error(format!("update poll failed: {error:#}")));
                     app.on_ended(styra_protocol::InteractionEnd {
                         exit_code: None,
