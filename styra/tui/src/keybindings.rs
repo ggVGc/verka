@@ -267,6 +267,7 @@ bindings! { LAUNCHER = "Launch";
     LAUNCHER_HELP: [Key::ch('?')] => Action::LauncherHelp;
     LAUNCHER_NEXT: [Key::code(KeyCode::Down), Key::ctrl('n')] => Action::LauncherNext;
     LAUNCHER_PREV: [Key::code(KeyCode::Up), Key::ctrl('p')] => Action::LauncherPrev;
+    LAUNCHER_DELETE_WORD: [Key::ctrl('w')] => Action::LauncherDeleteWord;
     LAUNCHER_SELECT: [Key::code(KeyCode::Enter)] => Action::LauncherSelect;
     LAUNCHER_DEFAULT: [Key::ctrl('d')] => Action::LauncherDefault;
     LAUNCHER_CANCEL: [Key::code(KeyCode::Esc)] => Action::LauncherCancel;

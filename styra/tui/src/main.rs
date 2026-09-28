@@ -840,6 +840,47 @@ mod cli_tests {
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
+    /// Typing a triple is typing an identifier, so ctrl-W takes back one part
+    /// of one — and an unbound chord is not mistaken for a letter of a name.
+    #[test]
+    fn ctrl_w_deletes_a_word_of_the_launcher_query() {
+        let path = std::env::temp_dir().join(format!(
+            "styra-launch-ctrl-w-{}/defaults.json",
+            std::process::id()
+        ));
+        let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
+        app.open_launcher();
+        for character in "claude-opus-5/mox".chars() {
+            launcher::handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+                &path,
+            );
+        }
+
+        launcher::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+            &path,
+        );
+        let launcher = app.launcher.as_ref().expect("still open");
+        assert_eq!(launcher.list.query, "claude-opus-5/");
+        assert_eq!(launcher.selection().model, "claude-opus-5");
+
+        // A chord the picker has no command for types nothing.
+        launcher::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            &path,
+        );
+        assert_eq!(
+            app.launcher.as_ref().unwrap().list.query,
+            "claude-opus-5/",
+            "an unbound chord is not a letter of the query"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
     /// Esc widens an over-narrowed list before it abandons the picker: the
     /// first press is the one the operator meant, the second closes.
     #[test]

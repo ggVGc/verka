@@ -123,6 +123,27 @@ impl FuzzyList {
         self.selected = 0;
     }
 
+    /// Drop the last word of the query (`Ctrl-W`), readline-style: the
+    /// separators at the end first, then back to the one before them.
+    ///
+    /// A word here ends at punctuation as well as at whitespace, because the
+    /// rows are identifiers rather than prose: in
+    /// `claude:claude-opus-5/high` the parts worth retyping are the ones
+    /// `:`, `-`, `.` and `/` divide, so one press peels off one of them
+    /// instead of the whole query.
+    pub fn delete_word(&mut self) {
+        let boundary = |character: char| !character.is_alphanumeric();
+        let trimmed = self.query.trim_end_matches(boundary).len();
+        self.query.truncate(trimmed);
+        let word_start = self
+            .query
+            .rfind(boundary)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        self.query.truncate(word_start);
+        self.selected = 0;
+    }
+
     /// Whether anything has been typed.
     pub fn is_filtering(&self) -> bool {
         !self.query.is_empty()
@@ -424,6 +445,33 @@ mod tests {
         list.clear(&rows);
         assert!(!list.is_filtering());
         assert_eq!(list.selected_row(&rows), Some(2));
+    }
+
+    /// The rows are identifiers, so a word of the query is what the
+    /// punctuation in them divides: one press takes back one part of a name,
+    /// not the whole thing.
+    #[test]
+    fn deleting_a_word_takes_back_one_part_of_an_identifier() {
+        let rows = rows();
+        let mut list = FuzzyList::at(&rows, 0);
+        for character in "claude:claude-opus-5/high".chars() {
+            list.push(character);
+        }
+
+        list.delete_word();
+        assert_eq!(list.query, "claude:claude-opus-5/");
+        list.delete_word();
+        assert_eq!(list.query, "claude:claude-opus-");
+        list.delete_word();
+        assert_eq!(list.query, "claude:claude-");
+        list.delete_word();
+        assert_eq!(list.query, "claude:");
+        list.delete_word();
+        assert!(list.query.is_empty());
+        // And on an empty query it is a no-op rather than an underflow.
+        list.delete_word();
+        assert!(list.query.is_empty());
+        assert!(!list.is_filtering());
     }
 
     #[test]

@@ -50,8 +50,9 @@ message launches the session. The picker is one list of whole
 letters of a triple's name in order — `chk45` for
 `claude:claude-haiku-4-5-20251001`, `opus5/max` for `claude:claude-opus-5/max` —
 narrow the list to it. `↑`/`↓` (or `Ctrl+P`/`Ctrl+N`) move through what is left,
-`Enter` launches on the selected row, and `Esc` clears the query before it
-closes the picker. `Ctrl+D` in the picker also saves that selection as the
+`Enter` launches on the selected row, `Ctrl+W` takes back one part of what was
+typed (`claude:claude-opus-5/high` → `claude:claude-opus-5/`), and `Esc` clears
+the query before it closes the picker. `Ctrl+D` in the picker also saves that selection as the
 default; `Enter` only uses it now. Codex and Claude Code are available when
 their executables are on the server's `PATH`.
 

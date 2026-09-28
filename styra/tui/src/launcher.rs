@@ -14,7 +14,7 @@
 //! owns both its state and keyboard handling. [`crate::presentation::launcher`]
 //! draws it through [`styra_ui::fuzzy_list`].
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 use styra_protocol::agent::{
     default_effort_for, efforts_for, models_for, supports_effort, Provider, Selection, PROVIDERS,
@@ -39,6 +39,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
     match key {
         k if keys::LAUNCHER_NEXT.matches(k) => launcher.next(),
         k if keys::LAUNCHER_PREV.matches(k) => launcher.prev(),
+        k if keys::LAUNCHER_DELETE_WORD.matches(k) => launcher.delete_query_word(),
         k if keys::LAUNCHER_SELECT.matches(k) => confirm(app, preferences_path),
         k if keys::LAUNCHER_DEFAULT.matches(k) => {
             confirm(app, preferences_path);
@@ -60,7 +61,14 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
         }
         _ => match key.code {
             KeyCode::Backspace => launcher.type_query(None),
-            KeyCode::Char(character) if !character.is_control() => {
+            // A chord this picker has no command for is still not a letter
+            // of a model's name, so it is ignored rather than typed.
+            KeyCode::Char(character)
+                if !character.is_control()
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 launcher.type_query(Some(character));
             }
             _ => {}
@@ -206,6 +214,14 @@ impl Launcher {
             Some(character) => self.list.push(character),
             None => self.list.backspace(),
         }
+    }
+
+    /// Drop the last word of the query, where a word is one part of a name:
+    /// `claude:claude-opus-5/high` back to `claude:claude-opus-5/`. Typing a
+    /// triple is typing an identifier, and a mistyped rung should not cost the
+    /// agent and model in front of it.
+    pub fn delete_query_word(&mut self) {
+        self.list.delete_word();
     }
 
     /// Whether anything has been typed.
@@ -444,6 +460,19 @@ mod tests {
             launcher.labels().len()
         );
         assert_eq!(launcher.selection(), found);
+    }
+
+    /// A mistyped rung costs the rung, not the agent and model in front of
+    /// it.
+    #[test]
+    fn deleting_a_word_takes_back_one_part_of_the_triple() {
+        let mut launcher = opened("claude");
+        typed(&mut launcher, "claude:claude-opus-5/mox");
+        assert!(launcher.list.matches(&launcher.labels()).is_empty());
+
+        launcher.delete_query_word();
+        assert_eq!(launcher.list.query, "claude:claude-opus-5/");
+        assert_eq!(launcher.selection().model, "claude-opus-5");
     }
 
     #[test]
