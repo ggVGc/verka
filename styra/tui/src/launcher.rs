@@ -1,30 +1,37 @@
 //! The launch picker: the agent, model, and reasoning effort the *next* session
 //! will start with.
 //!
+//! One list, not three columns. What a launch needs is a whole
+//! `agent:model/effort` triple, and the columns made the operator assemble one
+//! out of three cursors — while the constraint between them (a rung belongs to
+//! a model, not to an agent) had to be enforced move by move. Offering the
+//! triples themselves makes every row a launchable selection by construction,
+//! and the list narrows as it is typed at, so `chk45` reaches
+//! `claude:claude-haiku-4-5-20251001` without a single step through the
+//! catalog.
+//!
 //! [`App`](crate::app::App) carries an open picker as `launcher`; this module
 //! owns both its state and keyboard handling. [`crate::presentation::launcher`]
-//! draws it.
+//! draws it through [`styra_ui::fuzzy_list`].
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 use styra_protocol::agent::{
-    default_effort_for, efforts_for, models_for, Effort, Provider, Selection, PROVIDERS,
+    default_effort_for, efforts_for, models_for, supports_effort, Provider, Selection, PROVIDERS,
 };
 use styra_protocol::LogEntry;
+use styra_ui::fuzzy_list::FuzzyList;
 
 use crate::app::App;
 use crate::keybindings as keys;
 use crate::preferences;
 
-/// Which of the launch picker's three columns has the keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LaunchColumn {
-    Provider,
-    Model,
-    Effort,
-}
-
 /// Apply a key to the open launch picker.
+///
+/// Every printable key is a letter of the query — that is what makes this a
+/// narrowing list rather than a list with a search in it — so the picker's own
+/// commands are on keys no model name contains: Enter, Esc, the arrows, and
+/// control chords.
 pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
     let Some(launcher) = app.launcher.as_mut() else {
         return;
@@ -32,32 +39,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
     match key {
         k if keys::LAUNCHER_NEXT.matches(k) => launcher.next(),
         k if keys::LAUNCHER_PREV.matches(k) => launcher.prev(),
-        k if keys::LAUNCHER_NEXT_COLUMN.matches(k) => launcher.next_column(),
-        k if keys::LAUNCHER_PREV_COLUMN.matches(k) => launcher.prev_column(),
-        k if keys::LAUNCHER_PROVIDER_DOWN.matches(k) && !launcher.provider_locked => {
-            launcher.jump_to_column(LaunchColumn::Provider);
-            launcher.next();
-        }
-        k if keys::LAUNCHER_PROVIDER_UP.matches(k) && !launcher.provider_locked => {
-            launcher.jump_to_column(LaunchColumn::Provider);
-            launcher.prev();
-        }
-        k if keys::LAUNCHER_MODEL_DOWN.matches(k) => {
-            launcher.jump_to_column(LaunchColumn::Model);
-            launcher.next();
-        }
-        k if keys::LAUNCHER_MODEL_UP.matches(k) => {
-            launcher.jump_to_column(LaunchColumn::Model);
-            launcher.prev();
-        }
-        k if keys::LAUNCHER_EFFORT_DOWN.matches(k) => {
-            launcher.jump_to_column(LaunchColumn::Effort);
-            launcher.next();
-        }
-        k if keys::LAUNCHER_EFFORT_UP.matches(k) => {
-            launcher.jump_to_column(LaunchColumn::Effort);
-            launcher.prev();
-        }
+        k if keys::LAUNCHER_PAGE_DOWN.matches(k) => launcher.page_down(),
+        k if keys::LAUNCHER_PAGE_UP.matches(k) => launcher.page_up(),
+        k if keys::LAUNCHER_DELETE_WORD.matches(k) => launcher.delete_query_word(),
         k if keys::LAUNCHER_SELECT.matches(k) => confirm(app, preferences_path),
         k if keys::LAUNCHER_DEFAULT.matches(k) => {
             confirm(app, preferences_path);
@@ -67,8 +51,30 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
                 )));
             }
         }
-        k if keys::LAUNCHER_CANCEL.matches(k) => app.cancel_launcher(),
-        _ => {}
+        // Esc widens the list back out before it closes it: a query narrowed
+        // too far is the common reason to press it, and abandoning the whole
+        // picker to retype the choice is not what was meant.
+        k if keys::LAUNCHER_CANCEL.matches(k) => {
+            if launcher.is_filtering() {
+                launcher.clear_query();
+            } else {
+                app.cancel_launcher();
+            }
+        }
+        _ => match key.code {
+            KeyCode::Backspace => launcher.type_query(None),
+            // A chord this picker has no command for is still not a letter
+            // of a model's name, so it is ignored rather than typed.
+            KeyCode::Char(character)
+                if !character.is_control()
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                launcher.type_query(Some(character));
+            }
+            _ => {}
+        },
     }
 }
 
@@ -81,459 +87,481 @@ fn confirm(app: &mut App, preferences_path: &Path) {
     }
 }
 
-/// Which row of a column holds `value`, falling back to the first. Used to open
-/// a column on a provider's own declared default (see
-/// [`Provider::default_model`]), so switching agents lands on that provider's
-/// standard model and effort.
-fn row_of<T: PartialEq>(rows: &[T], value: &T) -> usize {
-    rows.iter().position(|row| row == value).unwrap_or(0)
+/// What a row of the picker says, and what its title spells out.
+///
+/// [`Selection::name`] always names a rung, because a selection always carries
+/// one. For a model that takes no effort setting that rung is a placeholder no
+/// launch sends, so the label drops it rather than advertising it.
+pub fn label(selection: &Selection) -> String {
+    if supports_effort(selection.provider, &selection.model) {
+        selection.name()
+    } else {
+        format!("{}:{}", selection.provider.as_str(), selection.model)
+    }
 }
 
 /// The picker itself.
 ///
-/// It edits a pending choice, not a running session — confirming it only records
-/// the selection, and the operator's own first message still starts the agent.
-/// Every row is a concrete choice out of the provider's own catalogs
-/// ([`Provider::models`], [`Provider::efforts`]), and a [`Selection`] always pins
-/// both, so there is nothing for a row meaning "whatever the agent is configured
-/// for" to express. A newly chosen agent opens on the model and effort
-/// the provider's declared defaults.
+/// It edits a pending choice, not a running session — confirming it only
+/// records the selection, and the operator's own first message still starts the
+/// agent. Every row is a whole [`Selection`] built out of the providers' own
+/// catalogs and ladders, so no reachable row names a combination an agent would
+/// refuse, and there is nothing for a row meaning "whatever the agent is
+/// configured for" to express.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Launcher {
-    pub column: LaunchColumn,
-    pub provider: usize,
-    /// An index into [`Provider::models`], then `carried_model` if there is one.
-    pub model: usize,
-    /// An index into [`Provider::efforts`].
-    pub effort: usize,
-    /// A model the picker does not offer but the session was nonetheless
-    /// launched with. Shown as a final row so
-    /// the operator can leave it selected; the picker cannot type one, only
-    /// carry one it was opened on.
-    pub carried_model: Option<String>,
-    /// Whether the agent column is out of reach. A live session's agent is the
-    /// process itself and cannot be changed without converting the session, so
-    /// while one is up the picker never gives the column the keys — it only
-    /// shows which agent the session is running. Once nothing is running the
-    /// column is a choice again: see [`crate::app::App::can_configure_launch`].
+    /// Every launchable triple, in the order the list offers them. Fixed for
+    /// the life of the picker: the catalogs do not change while it is open, and
+    /// narrowing is the query's job, not the row set's.
+    rows: Vec<Selection>,
+    /// The query typed at the list, and which of the rows it leaves standing
+    /// the cursor is on.
+    pub list: FuzzyList,
+    /// What the picker was opened on. It is also what a query matching nothing
+    /// falls back to: with no row under the cursor, the selection that stands
+    /// is the one that already stood.
+    opened_on: Selection,
+    /// Whether the agent is out of reach. A live session's agent is the process
+    /// itself and cannot be changed without converting the session, so while one
+    /// is up the list offers that agent's triples and no others. Once nothing is
+    /// running every agent is a choice again: see
+    /// [`crate::app::App::can_configure_launch`].
     pub provider_locked: bool,
-    /// Models the operator has confirmed before, most recent first. They are
-    /// listed ahead of the rest of the catalog, so the handful of models
-    /// actually in use sit at the top of the column instead of wherever the
-    /// catalog happens to put them. Models for other agents are kept in the
-    /// list too and simply never match this provider's rows.
+    /// Models the operator has confirmed before, most recent first. Their rows
+    /// lead the list, so the handful of models actually in use sit at the top
+    /// instead of wherever the catalogs happen to put them.
     pub recent_models: Vec<String>,
 }
 
 impl Launcher {
-    /// Open the picker on `selection` — it always names a model and an effort, so
-    /// there is always a row to open on. A model the provider's catalog does not
-    /// list is carried as its own final row rather than dropped, so confirming
-    /// the picker cannot silently change an existing selection.
-    /// `provider_locked` says an agent process is up: the agent column is then
-    /// shown but never focused, so no key can move the cursor onto a choice
-    /// the session could not adopt anyway.
+    /// Open the picker on `selection` — it always names a model and an effort,
+    /// so there is always a row to open on. A selection the catalogs do not
+    /// offer is carried as its own row rather than dropped, so confirming the
+    /// picker cannot silently change an existing selection.
     pub fn from_selection(
         selection: &Selection,
         recent_models: &[String],
         provider_locked: bool,
     ) -> Self {
-        let provider = row_of(&PROVIDERS, &selection.provider);
-        let models = models_for(selection.provider);
-        // A model the catalog does not list is carried as an extra row rather
-        // than falling back to the first.
-        let carried_model = (!models.iter().any(|candidate| *candidate == selection.model))
-            .then(|| selection.model.clone());
-        let effort = row_of(
-            efforts_for(selection.provider, &selection.model),
-            &selection.effort,
-        );
-        let mut launcher = Self {
-            column: if provider_locked {
-                LaunchColumn::Model
-            } else {
-                LaunchColumn::Provider
-            },
-            provider,
-            model: 0,
-            effort,
-            carried_model,
-            provider_locked,
-            recent_models: recent_models.to_vec(),
+        let providers: Vec<Provider> = if provider_locked {
+            vec![selection.provider]
+        } else {
+            PROVIDERS.to_vec()
         };
-        // Only now that the rows are ordered can the opening model be found:
-        // recency decides where it sits.
-        launcher.model = row_of(&launcher.models(), &selection.model);
-        launcher
-    }
-
-    pub fn provider(&self) -> Provider {
-        PROVIDERS[self.provider.min(PROVIDERS.len() - 1)]
-    }
-
-    /// What the picker currently describes. Every row is a concrete choice, so
-    /// this is always a fully pinned selection; the clamps cover a row index that
-    /// somehow outran its column rather than any "unset" state.
-    pub fn selection(&self) -> Selection {
-        let provider = self.provider();
-        let models = self.models();
-        let model = match models.get(self.model) {
-            Some(model) => model.clone(),
-            None => provider.default_model().to_owned(),
-        };
-        let effort = efforts_for(provider, &model)
-            .get(self.effort)
-            .copied()
-            .unwrap_or_else(|| default_effort_for(provider, &model));
-        Selection {
-            provider,
-            model,
-            effort,
-        }
-    }
-
-    /// The effort column's rows: the ladder the *currently selected model*
-    /// accepts, which is why this is not a property of the agent column alone.
-    /// Empty for a model that takes no effort setting — the column then has
-    /// nothing to offer and the drawing code says so.
-    pub fn efforts(&self) -> &'static [Effort] {
-        efforts_for(self.provider(), &self.selection().model)
-    }
-
-    /// The model column's rows: the provider's catalog, plus a carried model if
-    /// the picker was opened on one, ordered most recently selected first.
-    ///
-    /// The sort is stable and only ranks models the operator has actually
-    /// confirmed, so everything else keeps the catalog's own order — and a
-    /// carried model, which the catalog does not list at all, stays last
-    /// until it is selected once.
-    pub fn models(&self) -> Vec<String> {
-        let mut rows: Vec<String> = models_for(self.provider())
+        let mut rows: Vec<Selection> = providers
             .iter()
-            .map(|model| (*model).to_owned())
+            .flat_map(|provider| triples(*provider))
             .collect();
-        rows.extend(self.carried_model.clone());
+        // A selection the catalogs do not offer — a model retired out of them,
+        // or a rung a model has since dropped — is still what the session was
+        // launched with, so it gets a row of its own.
+        if !rows.contains(selection) {
+            rows.push(selection.clone());
+        }
+        // The models in actual use lead the list; everything else keeps the
+        // catalogs' own order, so the list does not reshuffle wholesale after a
+        // single pick. The sort is stable, which is what holds each model's
+        // rungs together in ladder order beneath it.
         rows.sort_by_key(|row| {
-            self.recent_models
+            recent_models
                 .iter()
-                .position(|recent| recent == row)
+                .position(|recent| *recent == row.model)
                 .unwrap_or(usize::MAX)
         });
-        rows
-    }
-
-    /// How many rows the model column has.
-    pub fn model_rows(&self) -> usize {
-        models_for(self.provider()).len() + usize::from(self.carried_model.is_some())
-    }
-
-    /// How many rows the focused column has. Never zero: a model with no effort
-    /// ladder leaves that column empty, and a move within it is then a move
-    /// within one nonexistent row rather than a division by it.
-    fn rows(&self) -> usize {
-        match self.column {
-            LaunchColumn::Provider => PROVIDERS.len(),
-            LaunchColumn::Model => self.model_rows(),
-            LaunchColumn::Effort => self.efforts().len().max(1),
+        let labels = labels_of(&rows);
+        let at = rows
+            .iter()
+            .position(|row| row == selection)
+            .unwrap_or_default();
+        Self {
+            list: FuzzyList::at(&labels, at),
+            rows,
+            opened_on: selection.clone(),
+            provider_locked,
+            recent_models: recent_models.to_vec(),
         }
     }
 
-    fn row(&mut self) -> &mut usize {
-        match self.column {
-            LaunchColumn::Provider => &mut self.provider,
-            LaunchColumn::Model => &mut self.model,
-            LaunchColumn::Effort => &mut self.effort,
-        }
+    /// The rows, as the list shows and matches them.
+    pub fn labels(&self) -> Vec<String> {
+        labels_of(&self.rows)
     }
 
+    /// What the picker currently describes. Every row is a whole selection, so
+    /// this needs no assembling; a query matching nothing leaves no row under
+    /// the cursor, and the selection the picker opened on stands.
+    pub fn selection(&self) -> Selection {
+        self.list
+            .selected_row(&self.labels())
+            .and_then(|row| self.rows.get(row))
+            .cloned()
+            .unwrap_or_else(|| self.opened_on.clone())
+    }
+
+    /// Step the cursor down the rows the query left standing, holding at the
+    /// last of them.
     pub fn next(&mut self) {
-        let effort = self.selection().effort;
-        let rows = self.rows();
-        let row = self.row();
-        *row = (*row + 1) % rows;
-        self.after_move(effort);
+        let labels = self.labels();
+        self.list.next(&labels);
     }
 
+    /// Step the cursor up the rows the query left standing, holding at the
+    /// first of them.
     pub fn prev(&mut self) {
-        let effort = self.selection().effort;
-        let rows = self.rows();
-        let row = self.row();
-        *row = (*row + rows - 1) % rows;
-        self.after_move(effort);
+        let labels = self.labels();
+        self.list.prev(&labels);
     }
 
-    /// Put the columns back in agreement after a move, given the effort that
-    /// was selected before it. `held` is passed in because the effort *row* is
-    /// an index into a ladder the move itself may have replaced.
-    fn after_move(&mut self, held: Effort) {
-        // A model or effort chosen for the previous provider means nothing to the
-        // new one — the ladders and catalogs differ — so both reset to that
-        // agent's own opening rows rather than to whatever sits at the same
-        // index. That includes a carried model, which belonged to the agent the
-        // picker was opened on.
-        if self.column == LaunchColumn::Provider {
-            let provider = self.provider();
-            self.carried_model = None;
-            self.model = row_of(&self.models(), &provider.default_model().to_owned());
-            self.effort = row_of(
-                self.efforts(),
-                &default_effort_for(provider, &self.selection().model),
-            );
+    /// Move the cursor a page down the rows the query left standing. The list
+    /// is every triple both agents offer, which is long enough that stepping
+    /// is not the only way across it.
+    pub fn page_down(&mut self) {
+        let labels = self.labels();
+        self.list.page_down(&labels);
+    }
+
+    /// Move the cursor a page up the rows the query left standing.
+    pub fn page_up(&mut self) {
+        let labels = self.labels();
+        self.list.page_up(&labels);
+    }
+
+    /// Take a character into the query, or `None` to drop the last one.
+    pub fn type_query(&mut self, character: Option<char>) {
+        match character {
+            Some(character) => self.list.push(character),
+            None => self.list.backspace(),
         }
-        // Models of one agent do not share a ladder either: `xhigh` is a rung
-        // on Opus 4.7 and not on 4.6, so stepping down the model column must
-        // not leave the effort row pointing at a rung the new model rejects.
-        // The rung itself is kept where the new model has it, and the model's
-        // own default stands in where it does not.
-        if self.column == LaunchColumn::Model {
-            let model = self.selection().model;
-            let efforts = efforts_for(self.provider(), &model);
-            let effort = if efforts.contains(&held) {
-                held
+    }
+
+    /// Drop the last word of the query, where a word is one part of a name:
+    /// `claude:claude-opus-5/high` back to `claude:claude-opus-5/`. Typing a
+    /// triple is typing an identifier, and a mistyped rung should not cost the
+    /// agent and model in front of it.
+    pub fn delete_query_word(&mut self) {
+        self.list.delete_word();
+    }
+
+    /// Whether anything has been typed.
+    pub fn is_filtering(&self) -> bool {
+        self.list.is_filtering()
+    }
+
+    /// Widen the list back out, leaving the cursor on the row it had narrowed
+    /// down to rather than at the top of the list it returns to.
+    pub fn clear_query(&mut self) {
+        let labels = self.labels();
+        self.list.clear(&labels);
+    }
+}
+
+/// Every launchable triple of one agent: its catalog crossed with each model's
+/// own ladder. A model that takes no effort setting still gets exactly one row
+/// — a selection carries a rung whether or not the launch sends it, and
+/// [`label`] is what keeps that placeholder off the screen.
+fn triples(provider: Provider) -> Vec<Selection> {
+    models_for(provider)
+        .iter()
+        .flat_map(|model| {
+            let efforts = efforts_for(provider, model);
+            let rungs: Vec<_> = if efforts.is_empty() {
+                vec![default_effort_for(provider, model)]
             } else {
-                default_effort_for(self.provider(), &model)
+                efforts.to_vec()
             };
-            self.effort = row_of(efforts, &effort);
-        }
-    }
+            rungs.into_iter().map(move |effort| Selection {
+                provider,
+                model: (*model).to_owned(),
+                effort,
+            })
+        })
+        .collect()
+}
 
-    /// Move the keys to `column` directly, without cycling through the ones
-    /// between it and the current one. Used by the picker's per-column
-    /// shortcuts (`p`/`m`/`e`), which name a column outright rather than
-    /// stepping toward it.
-    pub fn jump_to_column(&mut self, column: LaunchColumn) {
-        self.column = column;
-    }
-
-    pub fn next_column(&mut self) {
-        self.column = match self.column {
-            LaunchColumn::Provider => LaunchColumn::Model,
-            LaunchColumn::Model => LaunchColumn::Effort,
-            // A locked agent column is skipped rather than landed on and
-            // stepped off, so the cycle stays model → effort → model.
-            LaunchColumn::Effort if self.provider_locked => LaunchColumn::Model,
-            LaunchColumn::Effort => LaunchColumn::Provider,
-        };
-    }
-
-    pub fn prev_column(&mut self) {
-        self.column = match self.column {
-            LaunchColumn::Provider => LaunchColumn::Effort,
-            LaunchColumn::Model if self.provider_locked => LaunchColumn::Effort,
-            LaunchColumn::Model => LaunchColumn::Provider,
-            LaunchColumn::Effort => LaunchColumn::Model,
-        };
-    }
+fn labels_of(rows: &[Selection]) -> Vec<String> {
+    rows.iter().map(label).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use styra_protocol::agent::Effort;
+    use styra_protocol::agent::{validate_selection, Effort};
 
-    /// With no row standing for "whatever the agent is configured for", every
-    /// row of every column is a concrete choice — so whatever the picker is
-    /// opened on, confirming it pins both a model and an effort.
-    #[test]
-    fn the_picker_always_pins_a_model_and_an_effort() {
-        for provider in PROVIDERS {
-            let mut launcher = Launcher::from_selection(&Selection::new(provider), &[], false);
-            // A selection always pins both, and the picker opens on the rows
-            // naming them.
-            let opened = launcher.selection();
-            assert_eq!(opened.model, provider.default_model());
-            assert_eq!(opened.effort, provider.default_effort());
+    fn opened(selection: &str) -> Launcher {
+        Launcher::from_selection(&Selection::parse(selection).unwrap(), &[], false)
+    }
 
-            // And no reachable row in either column yields an absent value —
-            // nor one the model it names would refuse.
-            let catalog = models_for(provider);
-            for column in [LaunchColumn::Model, LaunchColumn::Effort] {
-                launcher.column = column;
-                for _ in 0..catalog.len() + launcher.efforts().len() {
-                    let selection = launcher.selection();
-                    assert!(
-                        catalog.contains(&selection.model.as_str()),
-                        "{provider:?} {column:?} reached a model outside the catalog"
-                    );
-                    let efforts = efforts_for(provider, &selection.model);
-                    assert!(
-                        efforts.is_empty() || efforts.contains(&selection.effort),
-                        "{provider:?} {column:?} reached an effort {} rejects",
-                        selection.model
-                    );
-                    launcher.next();
-                }
-            }
+    fn typed(launcher: &mut Launcher, query: &str) {
+        for character in query.chars() {
+            launcher.type_query(Some(character));
         }
     }
 
-    /// The models the operator actually uses head the column; the rest keep
-    /// the catalog's own order, so the list does not reshuffle wholesale after
-    /// a single pick.
+    /// Why the list is of triples rather than of three columns: no row can name
+    /// a combination an agent would refuse, so there is no move to get wrong.
     #[test]
-    fn the_model_column_lists_recently_selected_models_first() {
+    fn every_row_is_a_launchable_selection() {
+        let mut launcher = opened("claude");
+        for row in 0..launcher.labels().len() {
+            launcher.list.selected = row;
+            let selection = launcher.selection();
+            validate_selection(&selection).unwrap_or_else(|error| {
+                panic!("{} is not launchable: {error:#}", selection.name())
+            });
+        }
+    }
+
+    /// Both agents' catalogs are on offer at once — that is what a flat list
+    /// buys — and each model's own ladder is under it.
+    #[test]
+    fn the_list_offers_every_agents_models_and_their_own_rungs() {
+        let launcher = opened("claude");
+        let labels = launcher.labels();
+        for provider in PROVIDERS {
+            for model in models_for(provider) {
+                assert!(
+                    labels.iter().any(|label| label.contains(model)),
+                    "{model} is not on offer: {labels:?}"
+                );
+            }
+        }
+        // A model with a ladder gets one row per rung, and one with no ladder
+        // gets a single row that does not advertise a placeholder.
+        let opus = labels
+            .iter()
+            .filter(|label| label.starts_with("claude:claude-opus-5/"))
+            .count();
+        assert_eq!(opus, efforts_for(Provider::Claude, "claude-opus-5").len());
+        assert_eq!(
+            labels
+                .iter()
+                .filter(|label| label.contains("claude-haiku-4-5-20251001"))
+                .collect::<Vec<_>>(),
+            vec!["claude:claude-haiku-4-5-20251001"]
+        );
+    }
+
+    #[test]
+    fn the_picker_opens_on_the_selection_it_was_given() {
+        for name in [
+            "claude:claude-opus-5/max",
+            "codex:gpt-5.6-sol/minimal",
+            "claude:claude-haiku-4-5-20251001",
+        ] {
+            let launcher = opened(name);
+            assert_eq!(label(&launcher.selection()), name);
+        }
+    }
+
+    /// The point of the thing: a few letters of a triple's name reach it,
+    /// without the separators between them being typed.
+    #[test]
+    fn typing_narrows_the_list_to_the_triple_named() {
+        let mut launcher = opened("claude");
+        typed(&mut launcher, "chk45");
+        let selection = launcher.selection();
+        assert_eq!(selection.provider, Provider::Claude);
+        assert_eq!(selection.model, "claude-haiku-4-5-20251001");
+
+        // Down to the rung: the effort is part of what is being typed at.
+        let mut launcher = opened("claude");
+        typed(&mut launcher, "opus-5/max");
+        assert_eq!(label(&launcher.selection()), "claude:claude-opus-5/max");
+    }
+
+    /// A query can cross the agent boundary, which is the whole point of one
+    /// list: reaching another agent's model no longer means selecting the agent
+    /// first.
+    #[test]
+    fn a_query_reaches_another_agents_model_directly() {
+        let mut launcher = opened("claude:claude-opus-5/max");
+        assert_eq!(launcher.selection().provider, Provider::Claude);
+        typed(&mut launcher, "codex:");
+        assert_eq!(launcher.selection().provider, Provider::Codex);
+    }
+
+    /// The models the operator actually uses lead the list; the rest keep the
+    /// catalogs' order, and a model's rungs stay together beneath it.
+    #[test]
+    fn recently_selected_models_lead_the_list() {
         let catalog = models_for(Provider::Claude);
-        let recent = vec![
-            catalog[catalog.len() - 1].to_owned(),
-            "gpt-5.6-sol".to_owned(), // another agent's model: never a row here
-            catalog[1].to_owned(),
-        ];
+        let recent = vec![catalog[catalog.len() - 1].to_owned(), catalog[1].to_owned()];
         let launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &recent, false);
 
-        let rows = launcher.models();
-        assert_eq!(rows[0], catalog[catalog.len() - 1]);
-        assert_eq!(rows[1], catalog[1]);
+        let models: Vec<String> = launcher
+            .labels()
+            .iter()
+            .map(|label| {
+                label
+                    .split(':')
+                    .nth(1)
+                    .and_then(|rest| rest.split('/').next())
+                    .expect("a labelled model")
+                    .to_owned()
+            })
+            .collect();
         assert_eq!(
-            rows[2..],
-            catalog[..1]
-                .iter()
-                .chain(&catalog[2..catalog.len() - 1])
-                .map(|model| (*model).to_owned())
-                .collect::<Vec<_>>()[..],
-            "the unused models keep the catalog's order"
+            models.first().map(String::as_str),
+            Some(catalog[catalog.len() - 1])
+        );
+        // Every rung of the most recent model comes before the next model's.
+        let first_run = models
+            .iter()
+            .take_while(|model| *model == catalog[catalog.len() - 1])
+            .count();
+        assert_eq!(
+            models[first_run], catalog[1],
+            "the second most recent model follows the first's rungs"
         );
         // Ordering the rows does not change which one the picker opened on.
         assert_eq!(launcher.selection().model, Provider::Claude.default_model());
     }
 
-    /// The ladders differ between models of the *same* agent, so stepping down
-    /// the model column has to retune the effort row: a rung the new model
-    /// shares is kept, and one it does not have gives way to its own default.
+    /// A live session's agent is the process itself, so while one is up the
+    /// list offers that agent's triples and no others — no query can reach a
+    /// row the session could not adopt.
     #[test]
-    fn changing_model_keeps_a_shared_rung_and_drops_an_unshared_one() {
-        let mut launcher = Launcher::from_selection(
-            &Selection::parse("claude:claude-opus-4-7/xhigh").unwrap(),
-            // Ordered so that stepping down the column walks 4.7 → 4.6 → 4.5.
-            &[
-                "claude-opus-4-7".into(),
-                "claude-opus-4-6".into(),
-                "claude-opus-4-5-20251101".into(),
-            ],
-            false,
-        );
-        launcher.column = LaunchColumn::Model;
-        assert_eq!(launcher.selection().effort, Effort::XHigh);
-
-        // Opus 4.6 has no `xhigh` — that rung arrived with 4.7 — so the row
-        // cannot stay where it is.
-        launcher.next();
-        let selection = launcher.selection();
-        assert_eq!(selection.model, "claude-opus-4-6");
-        assert_eq!(
-            selection.effort,
-            default_effort_for(selection.provider, &selection.model)
-        );
-
-        // `high` is on every Claude ladder, so it survives the next step.
-        while launcher.selection().effort != Effort::High {
-            launcher.column = LaunchColumn::Effort;
-            launcher.next();
-            launcher.column = LaunchColumn::Model;
-        }
-        launcher.next();
-        assert_eq!(launcher.selection().model, "claude-opus-4-5-20251101");
-        assert_eq!(launcher.selection().effort, Effort::High);
-    }
-
-    /// A model that takes no effort setting leaves the column with no rows.
-    /// Moving within it is then a no-op rather than an arithmetic fault.
-    #[test]
-    fn an_empty_effort_column_can_still_be_moved_in() {
-        let mut launcher = Launcher::from_selection(
-            &Selection::parse("claude:claude-haiku-4-5-20251001").unwrap(),
-            &[],
-            false,
-        );
-        launcher.column = LaunchColumn::Effort;
-        assert!(launcher.efforts().is_empty());
-        launcher.next();
-        launcher.prev();
-        assert_eq!(launcher.selection().model, "claude-haiku-4-5-20251001");
-    }
-
-    #[test]
-    fn row_navigation_wraps_at_both_ends() {
-        let mut launcher = Launcher::from_selection(&Selection::new(Provider::Codex), &[], false);
-        launcher.column = LaunchColumn::Model;
-        let rows = launcher.model_rows();
-
-        launcher.model = rows - 1;
-        launcher.next();
-        assert_eq!(launcher.model, 0);
-
-        launcher.prev();
-        assert_eq!(launcher.model, rows - 1);
-    }
-
-    /// Switching agents drops the carried model with everything else: it named a
-    /// model of the agent the picker was opened on.
-    #[test]
-    fn changing_provider_drops_a_carried_model() {
-        let mut launcher = Launcher::from_selection(
-            &Selection::parse("claude:claude-opus-4-1-20250805").unwrap(),
-            &[],
-            false,
-        );
-        assert!(launcher.carried_model.is_some());
-
-        launcher.prev(); // in the provider column, back towards codex
-        assert_eq!(launcher.carried_model, None);
-        // The new agent's own declared default stands in for it.
-        assert_eq!(
-            launcher.selection().model,
-            launcher.provider().default_model()
-        );
-        // And the column is back to just that agent's catalog.
-        launcher.next_column();
-        assert_eq!(launcher.model_rows(), models_for(launcher.provider()).len());
-    }
-
-    /// A live session's agent cannot be changed without converting the
-    /// session, so the picker never gives that column the keys: it opens on the
-    /// model column and no amount of column stepping, in either direction,
-    /// reaches the agent one.
-    #[test]
-    fn a_live_session_cannot_move_the_cursor_onto_the_agent_column() {
+    fn a_locked_agent_leaves_only_its_own_rows() {
         let mut launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &[], true);
-        assert_eq!(launcher.column, LaunchColumn::Model);
-
-        for _ in 0..6 {
-            launcher.next_column();
-            assert_ne!(launcher.column, LaunchColumn::Provider);
+        for label in launcher.labels() {
+            assert!(label.starts_with("claude:"), "{label}");
         }
-        for _ in 0..6 {
-            launcher.prev_column();
-            assert_ne!(launcher.column, LaunchColumn::Provider);
-        }
-        // Both of the remaining columns are still reachable.
-        launcher.next_column();
-        assert_eq!(launcher.column, LaunchColumn::Effort);
-        launcher.next_column();
-        assert_eq!(launcher.column, LaunchColumn::Model);
-        // And the agent the session is running is the one it stays on.
+        // Even typing another agent's name reaches nothing.
+        typed(&mut launcher, "codex");
+        assert!(launcher.list.matches(&launcher.labels()).is_empty());
         assert_eq!(launcher.selection().provider, Provider::Claude);
     }
 
-    /// The two agents' model catalogs and effort ladders are unrelated, so a
-    /// choice made for one must not carry an index across to the other.
+    /// A selection the catalogs no longer offer is still what the session was
+    /// launched with, so the picker carries it as a row instead of quietly
+    /// relaunching on something else.
     #[test]
-    fn changing_provider_falls_back_to_the_new_agents_defaults() {
-        let mut launcher = Launcher::from_selection(
-            &Selection::parse("claude:claude-opus-5/max").unwrap(),
-            &[],
-            false,
-        );
-        assert_eq!(launcher.selection().name(), "claude:claude-opus-5/max");
-
-        launcher.prev(); // in the provider column, back towards codex
-        let selection = launcher.selection();
-        assert_ne!(selection.provider, Provider::Claude);
-        // Neither the model nor the effort carries across by index: each falls
-        // back to the new agent's own declared default.
-        assert_eq!(selection.model, selection.provider.default_model());
+    fn a_selection_outside_the_catalogs_is_carried_as_its_own_row() {
+        let carried = Selection::parse("claude:claude-opus-4-1-20250805").unwrap();
+        let launcher = Launcher::from_selection(&carried, &[], false);
+        assert_eq!(launcher.selection(), carried);
         assert_eq!(
-            selection.effort,
-            default_effort_for(selection.provider, &selection.model)
+            launcher
+                .labels()
+                .iter()
+                .filter(|label| label.contains("claude-opus-4-1-20250805"))
+                .count(),
+            1
         );
+    }
+
+    /// A query matching nothing leaves no row under the cursor. Confirming then
+    /// cannot invent one, so what the picker opened on is what stands.
+    #[test]
+    fn an_over_narrow_query_leaves_the_opening_selection_standing() {
+        let mut launcher = opened("claude:claude-opus-5/max");
+        typed(&mut launcher, "zzzz");
+        assert!(launcher.list.matches(&launcher.labels()).is_empty());
+        // And moving within nothing is a no-op rather than an arithmetic fault.
+        launcher.next();
+        launcher.prev();
+        assert_eq!(label(&launcher.selection()), "claude:claude-opus-5/max");
+    }
+
+    /// Widening the list back out keeps the row the query had found, so
+    /// clearing a query is not also losing the choice it reached.
+    #[test]
+    fn clearing_the_query_keeps_the_row_it_reached() {
+        let mut launcher = opened("claude");
+        typed(&mut launcher, "haiku");
+        let found = launcher.selection();
+
+        launcher.clear_query();
+        assert!(!launcher.is_filtering());
+        assert_eq!(
+            launcher.list.matches(&launcher.labels()).len(),
+            launcher.labels().len()
+        );
+        assert_eq!(launcher.selection(), found);
+    }
+
+    /// A mistyped rung costs the rung, not the agent and model in front of
+    /// it.
+    #[test]
+    fn deleting_a_word_takes_back_one_part_of_the_triple() {
+        let mut launcher = opened("claude");
+        typed(&mut launcher, "claude:claude-opus-5/mox");
+        assert!(launcher.list.matches(&launcher.labels()).is_empty());
+
+        launcher.delete_query_word();
+        assert_eq!(launcher.list.query, "claude:claude-opus-5/");
+        assert_eq!(launcher.selection().model, "claude-opus-5");
+    }
+
+    /// The list is long enough to page through, and a page lands on a row
+    /// rather than running off the end of it.
+    #[test]
+    fn paging_crosses_the_list_and_stops_at_its_ends() {
+        let mut launcher = opened("claude");
+        assert!(
+            launcher.labels().len() > styra_ui::fuzzy_list::PAGE,
+            "the list is worth paging"
+        );
+
+        let opened_at = launcher.list.selected;
+        launcher.page_down();
+        assert_eq!(
+            launcher.list.selected,
+            opened_at + styra_ui::fuzzy_list::PAGE
+        );
+        for _ in 0..launcher.labels().len() {
+            launcher.page_down();
+        }
+        assert_eq!(launcher.list.selected, launcher.labels().len() - 1);
+        validate_selection(&launcher.selection()).expect("still a launchable row");
+
+        for _ in 0..launcher.labels().len() {
+            launcher.page_up();
+        }
+        assert_eq!(launcher.list.selected, 0);
+    }
+
+    /// The cursor holds at the ends of the list rather than wrapping round
+    /// them: the top is where the best match of a query sits, and stepping off
+    /// the bottom must not land on it.
+    #[test]
+    fn row_navigation_holds_at_both_ends() {
+        let mut launcher = opened("codex");
+        let rows = launcher.labels().len();
+
+        launcher.list.selected = rows - 1;
+        launcher.next();
+        assert_eq!(launcher.list.selected, rows - 1);
+
+        launcher.list.selected = 0;
+        launcher.prev();
+        assert_eq!(launcher.list.selected, 0);
+    }
+
+    /// The rung is part of the row, so a model without `xhigh` simply has no
+    /// `xhigh` row — there is no cursor left that could point at one.
+    #[test]
+    fn a_model_only_offers_the_rungs_it_has() {
+        let launcher = opened("claude");
+        let labels = launcher.labels();
+        assert!(labels.contains(&"claude:claude-opus-5/xhigh".to_owned()));
+        assert!(
+            !labels.contains(&"claude:claude-opus-4-6/xhigh".to_owned()),
+            "that rung arrived after 4.6"
+        );
+        assert!(labels.contains(&"claude:claude-opus-4-6/high".to_owned()));
+    }
+
+    #[test]
+    fn efforts_are_offered_in_ladder_order() {
+        let launcher = opened("claude");
+        let rungs: Vec<Effort> = launcher
+            .labels()
+            .iter()
+            .zip(&launcher.rows)
+            .filter(|(label, _)| label.starts_with("claude:claude-opus-5/"))
+            .map(|(_, row)| row.effort)
+            .collect();
+        assert_eq!(rungs, efforts_for(Provider::Claude, "claude-opus-5"));
     }
 }

@@ -45,13 +45,21 @@ the first message in the details view.
 
 At the blank start screen, choose a provider, model, and effort with `Ctrl+L`,
 then type a message and press `Enter`. The first
-message launches the session. `D` in the picker also saves that selection as
-the default; `Enter` only uses it now. Codex and Claude Code are available when
+message launches the session. The picker is one list of whole
+`agent:model/effort` triples and is typed at rather than stepped through: the
+letters of a triple's name in order — `chk45` for
+`claude:claude-haiku-4-5-20251001`, `opus5/max` for `claude:claude-opus-5/max` —
+narrow the list to it. `↑`/`↓` (or `Ctrl+P`/`Ctrl+N`) move through what is left
+and `PgUp`/`PgDn` cross it a page at a time,
+`Enter` launches on the selected row, `Ctrl+W` takes back one part of what was
+typed (`claude:claude-opus-5/high` → `claude:claude-opus-5/`), and `Esc` clears
+the query before it closes the picker. `Ctrl+D` in the picker also saves that selection as the
+default; `Enter` only uses it now. Codex and Claude Code are available when
 their executables are on the server's `PATH`.
 
 During an idle live session, `Ctrl+L` changes the model selection for the next turn.
-The agent itself is fixed while a process is up — that column reads `agent ·
-fixed`. Once the interaction is stopped or has ended, the whole picker reopens:
+The agent itself is fixed while a process is up — the picker then lists only
+that agent's triples and its title reads `agent fixed`. Once the interaction is stopped or has ended, the whole picker reopens:
 the next message resumes the Session and the resume launches under whatever is
 chosen, the agent included. Choosing a different agent for a stopped Session
 converts its history into that agent's format as a sibling Session, and the
@@ -103,7 +111,7 @@ live interactions.
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
 | `Ctrl+N` | step to the next interaction that is still running |
-| `Ctrl+L` | choose provider, model, and effort |
+| `Ctrl+L` | choose provider, model, and effort (one list, typed at) |
 
 Sending a message to a stopped or viewed Session automatically attempts native
 provider resume. In the main interaction view, `T` edits the current

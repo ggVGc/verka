@@ -215,24 +215,24 @@ The launch picker selects a provider, model, and effort. Providers:
   mode; each submitted message starts a new turn in the same session.
 
 Every selection pins a model and an effort, and which efforts are on offer is a
-property of the *model*, not of the agent: the picker's effort column lists the
-rungs that model itself accepts (`styra_protocol::agent::efforts_for`). Codex
+property of the *model*, not of the agent: the picker offers each model crossed
+with the rungs that model itself accepts
+(`styra_protocol::agent::efforts_for`). Codex
 passes the rung as `model_reasoning_effort`, Claude Code as `--effort`. The
 current codex models take `low` through `max`, the older `gpt-5.5` stops at
 `xhigh`; Claude models from Opus 4.7 onwards take `low` through `max`, the 4.6
 generation has no `xhigh`, Opus 4.5 stops at `high`, and Sonnet 4.5 and Haiku
-4.5 predate the setting entirely — for those the column is empty and the status
-line names no effort. Until an operator saves another choice, new sessions begin on
-Codex's declared defaults. Switching providers in the picker initially selects
-that provider's defaults. The selection is recorded with the session, so stored
+4.5 predate the setting entirely — those get a single row naming no rung, and
+the status line names no effort. Until an operator saves another choice, new sessions begin on
+Codex's declared defaults. The selection is recorded with the session, so stored
 state always says which provider, model, and effort ran.
 
 The TUI's start screen — no session launched yet, whether at startup or after a
 reset with `S` — picks all three interactively: `L` (or `Ctrl+L` from the message
-box) opens a picker with an agent, model, and effort column, each listing that
-agent's own catalog — for Claude Code the full ids Anthropic lists as active, so a
-session records the exact model it ran on. Every row is a concrete choice, and
-switching agents lands on that agent's declared default. Applying the choice
+box) opens a picker listing every launchable `agent:model/effort` triple — for
+Claude Code the full ids Anthropic lists as active, so a session records the
+exact model it ran on. The list narrows as it is typed at, and every row is a
+whole selection, so no row can name a combination an agent would refuse. Applying the choice
 saves it in `$XDG_CONFIG_HOME/styra/defaults.json` (or
 `$HOME/.config/styra/defaults.json`) and uses it for this and future Styra
 starts, until another choice is saved. The first message still starts the

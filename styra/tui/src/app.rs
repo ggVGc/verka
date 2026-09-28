@@ -1451,8 +1451,7 @@ fn split_link_location(destination: &str) -> (&str, Option<u32>) {
 mod tests {
     use super::*;
     use crate::activity::{EndReason, IdleReason, StopReason};
-    use crate::launcher::LaunchColumn;
-    use styra_protocol::agent::{efforts_for, models_for, Effort, PROVIDERS};
+    use styra_protocol::agent::{efforts_for, Effort};
     use styra_protocol::event::{TokenUsage, TurnOutcome, TurnUsage};
     use styra_protocol::RawLine;
     use styra_protocol::{Answer, AnswerValue, FileLocation};
@@ -2174,50 +2173,33 @@ mod tests {
 
     /// The whole point of the start screen: all three of agent, model, and
     /// effort are still open, and picking them only records what the first
-    /// message will launch.
+    /// message will launch. One row names all three, so the choice is one
+    /// query rather than three cursors.
     #[test]
     fn the_launcher_records_a_provider_model_and_effort_without_launching() {
         let mut app = App::pending(Selection::new(Provider::Codex));
         assert!(app.can_configure_launch());
         app.open_launcher();
         let launcher = app.launcher.as_mut().expect("the picker is reachable");
+        assert_eq!(
+            launcher.selection().provider,
+            Provider::Codex,
+            "opens on what is chosen"
+        );
 
-        // Provider column: move to Claude Code, the row after codex.
-        assert_eq!(launcher.column, LaunchColumn::Provider);
-        launcher.next();
-        assert_eq!(launcher.provider(), Provider::Claude);
-
-        // Model column: every row is a model, and it opens on the agent's declared
-        // default, so one step lands on the entry after that.
-        launcher.next_column();
-        assert_eq!(launcher.selection().model, Provider::Claude.default_model());
-        launcher.next();
-        let models = models_for(Provider::Claude);
-        let default = models
-            .iter()
-            .position(|model| *model == Provider::Claude.default_model())
-            .unwrap_or(0);
-        let model = models[default + 1].to_owned();
-        assert_eq!(launcher.selection().model, model);
-
-        // Effort column, likewise — the ladder itself, no extra row.
-        launcher.next_column();
-        assert_eq!(launcher.column, LaunchColumn::Effort);
-        let effort = efforts_for(Provider::Claude, Provider::Claude.default_model())[0];
-        while launcher.selection().effort != effort {
-            launcher.prev();
+        // Typing the other agent's name and a rung reaches the whole triple.
+        let model = Provider::Claude.default_model();
+        let effort = efforts_for(Provider::Claude, model)[0];
+        for character in format!("claude:{model}/{}", effort.as_str()).chars() {
+            launcher.type_query(Some(character));
         }
-        assert_eq!(launcher.selection().effort, effort);
+        assert_eq!(launcher.selection().provider, Provider::Claude);
 
         app.confirm_launcher();
         assert!(app.launcher.is_none());
         assert_eq!(app.selection.provider, Provider::Claude);
         assert_eq!(app.selection.model, model);
         assert_eq!(app.selection.effort, effort);
-        // Nothing was launched or sent by the picking itself.
-        assert_eq!(app.activity.status, Status::Pending);
-        assert!(app.session_id.is_empty());
-        assert!(app.timeline.entries.is_empty());
     }
 
     #[test]
@@ -2244,39 +2226,36 @@ mod tests {
         app.open_launcher();
         let launcher = app.launcher.as_ref().unwrap();
         assert_eq!(
-            launcher.carried_model.as_deref(),
-            Some("claude-opus-4-1-20250805")
-        );
-        assert_eq!(
-            launcher.model,
-            models_for(Provider::Claude).len(),
-            "carried last, after the catalog"
+            launcher
+                .labels()
+                .iter()
+                .filter(|label| label.contains("claude-opus-4-1-20250805"))
+                .count(),
+            1,
+            "the carried model has a row of its own"
         );
         assert_eq!(launcher.selection().model, selection.model);
 
         // Confirming keeps the model rather than falling back to a catalogued
         // one — but it does pin an effort, since the picker has no row for
-        // leaving that to the agent. The launch asked for none, so it lands on
-        // the opening row.
+        // leaving that to the agent. The launch asked for none, so it keeps
+        // the rung the selection arrived with.
         app.confirm_launcher();
         assert_eq!(app.selection.model, selection.model);
         assert_eq!(app.selection.effort, Effort::High);
 
         // Having just been confirmed it is now the most recently selected
-        // model, so reopening lists it first — ahead of the catalog rather
-        // than after it. It is an ordinary row either way, just not one the
-        // picker could write.
+        // model, so reopening lists it first. It is an ordinary row either
+        // way, just not one the picker could write.
         app.open_launcher();
-        let launcher = app.launcher.as_mut().unwrap();
-        launcher.next_column();
-        assert_eq!(launcher.model, 0, "carried first, ahead of the catalog");
-        assert_eq!(launcher.selection().model, selection.model);
-        launcher.next();
-        assert_eq!(
-            launcher.selection().model,
-            *models_for(Provider::Claude).first().unwrap()
+        let launcher = app.launcher.as_ref().unwrap();
+        assert!(
+            launcher
+                .labels()
+                .first()
+                .is_some_and(|label| label.contains("claude-opus-4-1-20250805")),
+            "the model just used leads the list"
         );
-        launcher.prev();
         assert_eq!(launcher.selection().model, selection.model);
     }
 
@@ -2325,7 +2304,13 @@ mod tests {
             app.open_launcher();
             let launcher = app.launcher.as_ref().expect("the picker is reachable");
             assert!(!launcher.provider_locked, "{status:?}");
-            assert_eq!(launcher.column, LaunchColumn::Provider, "{status:?}");
+            assert!(
+                launcher
+                    .labels()
+                    .iter()
+                    .any(|label| label.starts_with("claude:")),
+                "every agent is a choice again: {status:?}"
+            );
         }
     }
 
@@ -2338,7 +2323,6 @@ mod tests {
         app.activity.status = Status::Stopped(StopReason::Paused);
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
-        launcher.next_column();
         launcher.next();
         let chosen = launcher.selection();
         app.confirm_launcher();
@@ -2358,7 +2342,7 @@ mod tests {
         assert_eq!(app.selection.provider, Provider::Codex);
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
-        while launcher.provider() != Provider::Claude {
+        while launcher.selection().provider != Provider::Claude {
             launcher.next();
         }
         app.confirm_launcher();
@@ -2379,7 +2363,7 @@ mod tests {
         let mut app = App::pending(Selection::new(Provider::Codex));
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
-        while launcher.provider() != Provider::Claude {
+        while launcher.selection().provider != Provider::Claude {
             launcher.next();
         }
         app.confirm_launcher();
@@ -2397,10 +2381,11 @@ mod tests {
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
         assert!(launcher.provider_locked);
-        launcher.provider = PROVIDERS
-            .iter()
-            .position(|provider| *provider == Provider::Claude)
-            .unwrap();
+        // The list holds only the agent the process is running, so there is no
+        // row naming another one for any key to reach.
+        for label in launcher.labels() {
+            assert!(label.starts_with("codex:"), "{label}");
+        }
         app.confirm_launcher();
 
         assert_eq!(app.selection.provider, Provider::Codex);
@@ -2423,12 +2408,11 @@ mod tests {
         app.activity.status = Status::Idle(IdleReason::TurnComplete);
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
-        while launcher.selection().model == original.model {
-            launcher.next_column();
+        while launcher.selection().model == original.model
+            || launcher.selection().effort != original.effort
+        {
             launcher.next();
         }
-        launcher.next_column();
-        launcher.next();
         app.confirm_launcher();
 
         assert_ne!(app.selection.model, original.model);
@@ -2443,7 +2427,6 @@ mod tests {
         app.activity.status = Status::Idle(IdleReason::TurnComplete);
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
-        launcher.next_column();
         launcher.next();
         app.confirm_launcher();
 
@@ -2467,7 +2450,6 @@ mod tests {
         let mut app = App::pending(Selection::new(Provider::Codex));
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
-        launcher.next_column();
         launcher.next();
         app.confirm_launcher();
 
@@ -2666,16 +2648,13 @@ mod tests {
         app.activity.status = Status::Idle(IdleReason::TurnComplete);
         app.open_launcher();
         let launcher = app.launcher.as_ref().unwrap();
-        assert_eq!(launcher.provider(), Provider::Claude);
-        assert_eq!(launcher.carried_model, None);
-        assert_eq!(
-            launcher.models(),
-            models_for(Provider::Claude)
-                .iter()
-                .map(|model| (*model).to_owned())
-                .collect::<Vec<_>>(),
-            "only the agent the Session runs offers rows"
-        );
+        assert_eq!(launcher.selection().provider, Provider::Claude);
+        for label in launcher.labels() {
+            assert!(
+                label.starts_with("claude:"),
+                "only the agent the Session runs offers rows: {label}"
+            );
+        }
     }
 
     /// The same reports from the agent the Session actually runs still settle

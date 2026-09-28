@@ -576,7 +576,7 @@ fn stop_daemon(socket: &Path) -> Result<()> {
 mod cli_tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use styra_protocol::agent::{models_for, Provider, Selection};
+    use styra_protocol::agent::Selection;
 
     fn workspace(id: &str, host_path: &str) -> WorkspaceSummary {
         WorkspaceSummary {
@@ -762,50 +762,161 @@ mod cli_tests {
         std::fs::remove_dir_all(root).ok();
     }
 
-    /// The picker moves on plain `j`/`k`, the keys its own hint names, and
-    /// confirming remembers the model so the next picker lists it first —
-    /// without touching the saved defaults, which only `D` writes.
+    /// The arrows move the picker and confirming remembers the model, so the
+    /// next picker lists it first — without touching the saved defaults, which
+    /// only ctrl-D writes.
     #[test]
-    fn j_and_k_move_the_launcher_and_confirming_remembers_the_model() {
+    fn the_arrows_move_the_launcher_and_confirming_remembers_the_model() {
         let root =
             std::env::temp_dir().join(format!("styra-launch-recent-models-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         let path = root.join("defaults.json");
         let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
         app.open_launcher();
-        let opened_on = app.launcher.as_ref().unwrap().model;
+        let opened_on = app.launcher.as_ref().unwrap().selection();
 
-        // Into the model column, then two rows down and one back up.
-        for code in [
-            KeyCode::Char('l'),
-            KeyCode::Char('j'),
-            KeyCode::Char('j'),
-            KeyCode::Char('k'),
-        ] {
+        // Two rows down and one back up.
+        for code in [KeyCode::Down, KeyCode::Down, KeyCode::Up] {
             launcher::handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &path);
         }
-        let moved_to = app.launcher.as_ref().unwrap().selection().model;
-        assert_eq!(moved_to, models_for(Provider::Claude)[opened_on + 1]);
+        let moved_to = app.launcher.as_ref().unwrap().selection();
+        assert_ne!(moved_to, opened_on, "the cursor moved");
 
         launcher::handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             &path,
         );
-        assert_eq!(app.selection.model, moved_to);
+        assert_eq!(app.selection, moved_to);
         assert!(!path.exists(), "Enter does not save a default selection");
         assert_eq!(
             preferences::load_recent_models(&path),
-            vec![moved_to.clone()]
+            vec![moved_to.model.clone()]
         );
 
         // A picker opened with that ordering puts the model at the top.
         app.recent_models = preferences::load_recent_models(&path);
         app.open_launcher();
         let launcher = app.launcher.as_ref().unwrap();
-        assert_eq!(launcher.models().first(), Some(&moved_to));
-        assert_eq!(launcher.model, 0, "and opens on it");
+        assert!(
+            launcher
+                .labels()
+                .first()
+                .is_some_and(|label| label.contains(&moved_to.model)),
+            "the model just used leads the list"
+        );
         std::fs::remove_dir_all(root).ok();
+    }
+
+    /// The list is typed at directly — no key opens a query first, because
+    /// every printable key is already a letter of one. Enter then launches on
+    /// what the query found.
+    #[test]
+    fn typing_at_the_launcher_narrows_it_and_enter_launches_on_the_row() {
+        let path = std::env::temp_dir().join(format!(
+            "styra-launch-filter-{}/defaults.json",
+            std::process::id()
+        ));
+        let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
+        app.open_launcher();
+
+        for character in "haiku".chars() {
+            launcher::handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+                &path,
+            );
+        }
+        let narrowed = app.launcher.as_ref().unwrap().selection().model;
+        assert!(narrowed.contains("haiku"), "{narrowed}");
+
+        launcher::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &path,
+        );
+        assert!(app.launcher.is_none());
+        assert_eq!(app.selection.model, narrowed);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    /// Typing a triple is typing an identifier, so ctrl-W takes back one part
+    /// of one — and an unbound chord is not mistaken for a letter of a name.
+    #[test]
+    fn ctrl_w_deletes_a_word_of_the_launcher_query() {
+        let path = std::env::temp_dir().join(format!(
+            "styra-launch-ctrl-w-{}/defaults.json",
+            std::process::id()
+        ));
+        let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
+        app.open_launcher();
+        for character in "claude-opus-5/mox".chars() {
+            launcher::handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+                &path,
+            );
+        }
+
+        launcher::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+            &path,
+        );
+        let launcher = app.launcher.as_ref().expect("still open");
+        assert_eq!(launcher.list.query, "claude-opus-5/");
+        assert_eq!(launcher.selection().model, "claude-opus-5");
+
+        // A chord the picker has no command for types nothing.
+        launcher::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            &path,
+        );
+        assert_eq!(
+            app.launcher.as_ref().unwrap().list.query,
+            "claude-opus-5/",
+            "an unbound chord is not a letter of the query"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    /// Esc widens an over-narrowed list before it abandons the picker: the
+    /// first press is the one the operator meant, the second closes.
+    #[test]
+    fn esc_clears_the_query_before_it_closes_the_launcher() {
+        let path = std::env::temp_dir().join(format!(
+            "styra-launch-esc-{}/defaults.json",
+            std::process::id()
+        ));
+        let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
+        app.open_launcher();
+        for character in "haiku".chars() {
+            launcher::handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
+                &path,
+            );
+        }
+
+        launcher::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &path,
+        );
+        let launcher = app.launcher.as_ref().expect("still open");
+        assert!(!launcher.is_filtering(), "the query is gone");
+        assert!(
+            launcher.selection().model.contains("haiku"),
+            "and the row it found is still selected"
+        );
+
+        launcher::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &path,
+        );
+        assert!(app.launcher.is_none(), "the second press closes it");
     }
 
     #[test]
@@ -823,7 +934,7 @@ mod cli_tests {
 
         launcher::handle_key(
             &mut app,
-            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
             &path,
         );
 
