@@ -773,7 +773,12 @@ mod cli_tests {
         let path = root.join("defaults.json");
         let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
         app.open_launcher();
-        let opened_on = app.launcher.as_ref().unwrap().model;
+        let opened_on = app
+            .launcher
+            .as_ref()
+            .unwrap()
+            .model_row()
+            .expect("the column opens on a row");
 
         // Into the model column, then two rows down and one back up.
         for code in [
@@ -804,8 +809,42 @@ mod cli_tests {
         app.open_launcher();
         let launcher = app.launcher.as_ref().unwrap();
         assert_eq!(launcher.models().first(), Some(&moved_to));
-        assert_eq!(launcher.model, 0, "and opens on it");
+        assert_eq!(launcher.model_row(), Some(0), "and opens on it");
         std::fs::remove_dir_all(root).ok();
+    }
+
+    /// `/` hands the model column's query the keys: a few letters reach a
+    /// model directly, and Enter closes the query, then confirms it.
+    #[test]
+    fn the_launcher_filters_the_model_column_by_typing() {
+        let path = std::env::temp_dir().join(format!(
+            "styra-launch-filter-{}/defaults.json",
+            std::process::id()
+        ));
+        let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
+        app.open_launcher();
+
+        for code in [KeyCode::Char('/')]
+            .into_iter()
+            .chain("haiku".chars().map(KeyCode::Char))
+        {
+            launcher::handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &path);
+        }
+        let narrowed = app.launcher.as_ref().unwrap().selection().model;
+        assert!(narrowed.contains("haiku"), "{narrowed}");
+
+        // The first Enter closes the query, the second launches on what it
+        // found — the same two steps the session picker's filter takes.
+        for _ in 0..2 {
+            launcher::handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &path,
+            );
+        }
+        assert!(app.launcher.is_none());
+        assert_eq!(app.selection.model, narrowed);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
     #[test]

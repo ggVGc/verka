@@ -271,6 +271,7 @@ bindings! { LAUNCHER = "Launch";
     LAUNCHER_MODEL_UP: [Key::ch('M')] => Action::LauncherModelUp;
     LAUNCHER_EFFORT_DOWN: [Key::ch('e')] => Action::LauncherEffortDown;
     LAUNCHER_EFFORT_UP: [Key::ch('E')] => Action::LauncherEffortUp;
+    LAUNCHER_FILTER: [Key::ch('/')] => Action::LauncherFilter;
     LAUNCHER_SELECT: [Key::code(KeyCode::Enter)] => Action::LauncherSelect;
     LAUNCHER_DEFAULT: [Key::ch('D')] => Action::LauncherDefault;
     LAUNCHER_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => Action::LauncherCancel;

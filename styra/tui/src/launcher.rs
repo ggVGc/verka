@@ -5,12 +5,13 @@
 //! owns both its state and keyboard handling. [`crate::presentation::launcher`]
 //! draws it.
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use std::path::Path;
 use styra_protocol::agent::{
     default_effort_for, efforts_for, models_for, Effort, Provider, Selection, PROVIDERS,
 };
 use styra_protocol::LogEntry;
+use styra_ui::fuzzy_list::FuzzyList;
 
 use crate::app::App;
 use crate::keybindings as keys;
@@ -29,7 +30,26 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
     let Some(launcher) = app.launcher.as_mut() else {
         return;
     };
+    // The model column is a narrowing list, and while it has the keys every
+    // printable key is a letter of the query rather than a shortcut — `m`
+    // cannot both type and jump. Filtering is therefore entered deliberately,
+    // with `/`, the same key the session picker filters on.
+    if launcher.filtering {
+        match key.code {
+            KeyCode::Esc => launcher.stop_filtering(),
+            KeyCode::Enter => launcher.filtering = false,
+            KeyCode::Backspace => launcher.type_into_filter(None),
+            KeyCode::Up => launcher.prev(),
+            KeyCode::Down => launcher.next(),
+            KeyCode::Char(character) if !character.is_control() => {
+                launcher.type_into_filter(Some(character));
+            }
+            _ => {}
+        }
+        return;
+    }
     match key {
+        k if keys::LAUNCHER_FILTER.matches(k) => launcher.start_filtering(),
         k if keys::LAUNCHER_NEXT.matches(k) => launcher.next(),
         k if keys::LAUNCHER_PREV.matches(k) => launcher.prev(),
         k if keys::LAUNCHER_NEXT_COLUMN.matches(k) => launcher.next_column(),
@@ -102,8 +122,11 @@ fn row_of<T: PartialEq>(rows: &[T], value: &T) -> usize {
 pub struct Launcher {
     pub column: LaunchColumn,
     pub provider: usize,
-    /// An index into [`Provider::models`], then `carried_model` if there is one.
-    pub model: usize,
+    /// The model column: a narrowing list over [`Self::models`]. It holds both
+    /// the query typed at the column and which of the rows the query leaves
+    /// standing the cursor is on, so the cursor survives a keystroke that
+    /// reorders them.
+    pub model: FuzzyList,
     /// An index into [`Provider::efforts`].
     pub effort: usize,
     /// A model the picker does not offer but the session was nonetheless
@@ -123,6 +146,9 @@ pub struct Launcher {
     /// catalog happens to put them. Models for other agents are kept in the
     /// list too and simply never match this provider's rows.
     pub recent_models: Vec<String>,
+    /// Whether the model column's query has the keys. See
+    /// [`crate::keybindings::LAUNCHER_FILTER`].
+    pub filtering: bool,
 }
 
 impl Launcher {
@@ -155,15 +181,17 @@ impl Launcher {
                 LaunchColumn::Provider
             },
             provider,
-            model: 0,
+            model: FuzzyList::default(),
             effort,
             carried_model,
             provider_locked,
             recent_models: recent_models.to_vec(),
+            filtering: false,
         };
         // Only now that the rows are ordered can the opening model be found:
         // recency decides where it sits.
-        launcher.model = row_of(&launcher.models(), &selection.model);
+        let rows = launcher.models();
+        launcher.model = FuzzyList::at(&rows, row_of(&rows, &selection.model));
         launcher
     }
 
@@ -177,7 +205,7 @@ impl Launcher {
     pub fn selection(&self) -> Selection {
         let provider = self.provider();
         let models = self.models();
-        let model = match models.get(self.model) {
+        let model = match self.model_row().and_then(|row| models.get(row)) {
             Some(model) => model.clone(),
             None => provider.default_model().to_owned(),
         };
@@ -222,6 +250,14 @@ impl Launcher {
         rows
     }
 
+    /// Which row of [`Self::models`] the model column's cursor names, or
+    /// `None` when the query has narrowed the column down to nothing — the
+    /// selection then falls back to the provider's default rather than to
+    /// whatever row the cursor last sat on.
+    pub fn model_row(&self) -> Option<usize> {
+        self.model.selected_row(&self.models())
+    }
+
     /// How many rows the model column has.
     pub fn model_rows(&self) -> usize {
         models_for(self.provider()).len() + usize::from(self.carried_model.is_some())
@@ -233,33 +269,79 @@ impl Launcher {
     fn rows(&self) -> usize {
         match self.column {
             LaunchColumn::Provider => PROVIDERS.len(),
+            // The model column moves through its own matches, not through
+            // this; it is here only for the columns that count plain rows.
             LaunchColumn::Model => self.model_rows(),
             LaunchColumn::Effort => self.efforts().len().max(1),
         }
     }
 
-    fn row(&mut self) -> &mut usize {
+    fn row(&mut self) -> Option<&mut usize> {
         match self.column {
-            LaunchColumn::Provider => &mut self.provider,
-            LaunchColumn::Model => &mut self.model,
-            LaunchColumn::Effort => &mut self.effort,
+            LaunchColumn::Provider => Some(&mut self.provider),
+            LaunchColumn::Model => None,
+            LaunchColumn::Effort => Some(&mut self.effort),
         }
     }
 
     pub fn next(&mut self) {
         let effort = self.selection().effort;
         let rows = self.rows();
-        let row = self.row();
-        *row = (*row + 1) % rows;
+        match self.row() {
+            Some(row) => *row = (*row + 1) % rows,
+            // A narrowed column wraps over what it is showing, so a move
+            // never lands on a row the query has hidden.
+            None => {
+                let models = self.models();
+                self.model.next(&models);
+            }
+        }
         self.after_move(effort);
     }
 
     pub fn prev(&mut self) {
         let effort = self.selection().effort;
         let rows = self.rows();
-        let row = self.row();
-        *row = (*row + rows - 1) % rows;
+        match self.row() {
+            Some(row) => *row = (*row + rows - 1) % rows,
+            None => {
+                let models = self.models();
+                self.model.prev(&models);
+            }
+        }
         self.after_move(effort);
+    }
+
+    /// Give the model column's query the keys, jumping to the column if the
+    /// keys were elsewhere — `/` names the column as much as it opens the
+    /// query, since no other column has one.
+    pub fn start_filtering(&mut self) {
+        self.column = LaunchColumn::Model;
+        self.filtering = true;
+    }
+
+    /// Abandon the query and the filtering it was doing, leaving the cursor on
+    /// the model it had narrowed down to rather than at the top of the column
+    /// it widens back out to.
+    pub fn stop_filtering(&mut self) {
+        let models = self.models();
+        self.model.clear(&models);
+        self.filtering = false;
+    }
+
+    /// Take a character into the model column's query, or `None` to drop the
+    /// last one. The effort column is retuned as though the cursor had been
+    /// stepped, because narrowing moves it onto a different model just as
+    /// surely.
+    pub fn type_into_filter(&mut self, character: Option<char>) {
+        let effort = self.selection().effort;
+        match character {
+            Some(character) => self.model.push(character),
+            None => self.model.backspace(),
+        }
+        let column = std::mem::replace(&mut self.column, LaunchColumn::Model);
+        self.after_move(effort);
+        self.column = column;
     }
 
     /// Put the columns back in agreement after a move, given the effort that
@@ -274,7 +356,10 @@ impl Launcher {
         if self.column == LaunchColumn::Provider {
             let provider = self.provider();
             self.carried_model = None;
-            self.model = row_of(&self.models(), &provider.default_model().to_owned());
+            // A query typed against one agent's catalog means nothing to the
+            // next one's, so the column widens back out with the switch.
+            let rows = self.models();
+            self.model = FuzzyList::at(&rows, row_of(&rows, &provider.default_model().to_owned()));
             self.effort = row_of(
                 self.efforts(),
                 &default_effort_for(provider, &self.selection().model),
@@ -302,11 +387,21 @@ impl Launcher {
     /// shortcuts (`p`/`m`/`e`), which name a column outright rather than
     /// stepping toward it.
     pub fn jump_to_column(&mut self, column: LaunchColumn) {
+        self.leave_model_column(column);
         self.column = column;
     }
 
+    /// Drop a standing model query when the keys move off the column that owns
+    /// it. A filter nobody can see themselves typing at is a column that
+    /// silently hides rows; the cursor stays on the model it had found.
+    fn leave_model_column(&mut self, going_to: LaunchColumn) {
+        if self.column == LaunchColumn::Model && going_to != LaunchColumn::Model {
+            self.stop_filtering();
+        }
+    }
+
     pub fn next_column(&mut self) {
-        self.column = match self.column {
+        let going_to = match self.column {
             LaunchColumn::Provider => LaunchColumn::Model,
             LaunchColumn::Model => LaunchColumn::Effort,
             // A locked agent column is skipped rather than landed on and
@@ -314,15 +409,19 @@ impl Launcher {
             LaunchColumn::Effort if self.provider_locked => LaunchColumn::Model,
             LaunchColumn::Effort => LaunchColumn::Provider,
         };
+        self.leave_model_column(going_to);
+        self.column = going_to;
     }
 
     pub fn prev_column(&mut self) {
-        self.column = match self.column {
+        let going_to = match self.column {
             LaunchColumn::Provider => LaunchColumn::Effort,
             LaunchColumn::Model if self.provider_locked => LaunchColumn::Effort,
             LaunchColumn::Model => LaunchColumn::Provider,
             LaunchColumn::Effort => LaunchColumn::Model,
         };
+        self.leave_model_column(going_to);
+        self.column = going_to;
     }
 }
 
@@ -451,18 +550,146 @@ mod tests {
         assert_eq!(launcher.selection().model, "claude-haiku-4-5-20251001");
     }
 
+    /// The point of typing at the column: a few letters of a model's name
+    /// reach it without stepping past everything the catalog puts in the way.
+    #[test]
+    fn typing_at_the_model_column_narrows_it_to_the_model_named() {
+        let mut launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &[], false);
+        launcher.start_filtering();
+        assert_eq!(launcher.column, LaunchColumn::Model);
+        for character in "haiku".chars() {
+            launcher.type_into_filter(Some(character));
+        }
+
+        let models = launcher.models();
+        let matches = launcher.model.matches(&models);
+        assert!(!matches.is_empty(), "the catalog has a haiku");
+        for found in &matches {
+            assert!(
+                models[found.index].contains("haiku"),
+                "{:?}",
+                models[found.index]
+            );
+        }
+        assert!(launcher.selection().model.contains("haiku"));
+    }
+
+    /// Narrowing moves the cursor onto another model just as stepping does, so
+    /// the effort column has to be retuned with it — otherwise a query lands
+    /// on a model holding a rung it does not have.
+    #[test]
+    fn narrowing_onto_a_model_retunes_the_effort_column() {
+        let mut launcher = Launcher::from_selection(
+            &Selection::parse("claude:claude-opus-5/max").unwrap(),
+            &[],
+            false,
+        );
+        assert_eq!(launcher.selection().effort, Effort::Max);
+
+        launcher.start_filtering();
+        for character in "haiku".chars() {
+            launcher.type_into_filter(Some(character));
+        }
+        let selection = launcher.selection();
+        assert!(selection.model.contains("haiku"));
+        let efforts = efforts_for(selection.provider, &selection.model);
+        assert!(
+            efforts.is_empty() || efforts.contains(&selection.effort),
+            "{} was left on a rung it rejects",
+            selection.model
+        );
+    }
+
+    /// Abandoning the query widens the column back out without losing the
+    /// model it had been narrowed down to.
+    #[test]
+    fn abandoning_the_query_keeps_the_model_it_found() {
+        let mut launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &[], false);
+        launcher.start_filtering();
+        for character in "haiku".chars() {
+            launcher.type_into_filter(Some(character));
+        }
+        let found = launcher.selection().model;
+
+        launcher.stop_filtering();
+        assert!(!launcher.filtering);
+        assert!(!launcher.model.is_filtering());
+        assert_eq!(
+            launcher.models().len(),
+            launcher.model_rows(),
+            "every row is back"
+        );
+        assert_eq!(launcher.selection().model, found);
+    }
+
+    /// A query the keys have moved away from would hide rows nobody can see
+    /// themselves typing at, so it goes when the column loses focus — and the
+    /// model it found stays selected.
+    #[test]
+    fn leaving_the_model_column_drops_the_query() {
+        let mut launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &[], false);
+        launcher.start_filtering();
+        for character in "haiku".chars() {
+            launcher.type_into_filter(Some(character));
+        }
+        let found = launcher.selection().model;
+
+        launcher.next_column();
+        assert_eq!(launcher.column, LaunchColumn::Effort);
+        assert!(!launcher.model.is_filtering());
+        assert_eq!(launcher.selection().model, found);
+    }
+
+    /// Switching agents replaces the catalog wholesale, so a query written
+    /// against the old one cannot be left standing over the new.
+    #[test]
+    fn changing_provider_drops_the_query_too() {
+        let mut launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &[], false);
+        launcher.start_filtering();
+        for character in "haiku".chars() {
+            launcher.type_into_filter(Some(character));
+        }
+
+        launcher.jump_to_column(LaunchColumn::Provider);
+        launcher.next();
+        assert!(!launcher.model.is_filtering());
+        assert_eq!(
+            launcher.selection().model,
+            launcher.provider().default_model()
+        );
+    }
+
+    /// A query matching nothing leaves the column with no row under the
+    /// cursor. Confirming then cannot invent one, so it names the agent's own
+    /// default rather than whatever the cursor last sat on.
+    #[test]
+    fn an_over_narrow_query_still_yields_a_launchable_selection() {
+        let mut launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &[], false);
+        launcher.start_filtering();
+        for character in "zzzz".chars() {
+            launcher.type_into_filter(Some(character));
+        }
+        assert_eq!(launcher.model_row(), None);
+        launcher.next();
+        launcher.prev();
+        assert_eq!(
+            launcher.selection().model,
+            launcher.provider().default_model()
+        );
+    }
+
     #[test]
     fn row_navigation_wraps_at_both_ends() {
         let mut launcher = Launcher::from_selection(&Selection::new(Provider::Codex), &[], false);
         launcher.column = LaunchColumn::Model;
         let rows = launcher.model_rows();
 
-        launcher.model = rows - 1;
+        launcher.model.selected = rows - 1;
         launcher.next();
-        assert_eq!(launcher.model, 0);
+        assert_eq!(launcher.model_row(), Some(0));
 
         launcher.prev();
-        assert_eq!(launcher.model, rows - 1);
+        assert_eq!(launcher.model_row(), Some(rows - 1));
     }
 
     /// Switching agents drops the carried model with everything else: it named a

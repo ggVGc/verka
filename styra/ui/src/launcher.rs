@@ -2,6 +2,7 @@
 //! the resulting selection spelled out along the bottom border so the
 //! operator sees exactly what it is selecting.
 
+use crate::fuzzy_list::{render_fuzzy_list, FuzzyList, FuzzyListView};
 use crate::palette;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -17,7 +18,10 @@ pub struct LauncherView {
     pub models: Vec<String>,
     pub efforts: Vec<String>,
     pub provider_selected: usize,
-    pub model_selected: usize,
+    /// The model column's narrowing list: its query and its cursor. The
+    /// column is long enough that stepping through it row by row is not how
+    /// anyone finds a model, so it is typed at instead.
+    pub model_list: FuzzyList,
     pub effort_selected: usize,
     pub focused: LauncherColumn,
 }
@@ -41,6 +45,9 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
     let desired_height = (launcher
         .providers
         .len()
+        // Sized to the whole model catalog, not to what a query has left of
+        // it: a box that shrinks around the query would move the rows under
+        // the eye that is reading them.
         .max(launcher.models.len())
         .max(launcher.efforts.len()) as u16)
         .saturating_add(2)
@@ -97,14 +104,16 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
         launcher.focused == LauncherColumn::Provider,
         "",
     );
-    render_launcher_column(
+    render_fuzzy_list(
         frame,
+        &FuzzyListView {
+            title: " model ",
+            rows: &launcher.models,
+            list: &launcher.model_list,
+            focused: launcher.focused == LauncherColumn::Model,
+            empty_note: "no models",
+        },
         columns[1],
-        " model ",
-        &launcher.models,
-        launcher.model_selected,
-        launcher.focused == LauncherColumn::Model,
-        "",
     );
     render_launcher_column(
         frame,
@@ -199,7 +208,7 @@ mod tests {
             models: vec!["gpt-5.6-sol".into(), "gpt-5.6-terra".into()],
             efforts: vec!["minimal".into(), "medium".into()],
             provider_selected: 0,
-            model_selected: 0,
+            model_list: FuzzyList::default(),
             effort_selected: 0,
             focused: LauncherColumn::Model,
         }
@@ -245,11 +254,32 @@ mod tests {
             "claude-sonnet-5".into(),
             "claude-haiku-4-5-20251001".into(),
         ];
-        view.model_selected = 2;
+        view.model_list = FuzzyList::at(&view.models, 2);
         view.efforts = vec![];
         let screen = rendered(&view);
         assert!(screen.contains(NO_EFFORTS), "{screen}");
         assert!(screen.contains("effort"), "the column is still there");
+    }
+
+    /// The model column narrows as it is typed at, and says what it is
+    /// showing: the query is on screen beside the rows it left standing.
+    #[test]
+    fn the_model_column_shows_the_query_narrowing_it() {
+        let mut view = view();
+        view.models = vec![
+            "claude-opus-5".into(),
+            "claude-sonnet-5".into(),
+            "claude-haiku-4-5-20251001".into(),
+        ];
+        view.model_list = FuzzyList::default();
+        for character in "haiku".chars() {
+            view.model_list.push(character);
+        }
+        let screen = rendered(&view);
+
+        assert!(screen.contains("/haiku"), "the query is drawn: {screen}");
+        assert!(screen.contains("claude-haiku"), "{screen}");
+        assert!(!screen.contains("opus"), "the rows it excluded are gone");
     }
 
     #[test]

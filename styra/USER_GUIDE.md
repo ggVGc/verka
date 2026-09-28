@@ -45,8 +45,11 @@ the first message in the details view.
 
 At the blank start screen, choose a provider, model, and effort with `Ctrl+L`,
 then type a message and press `Enter`. The first
-message launches the session. `D` in the picker also saves that selection as
-the default; `Enter` only uses it now. Codex and Claude Code are available when
+message launches the session. The model column is longer than the others, so
+`/` in the picker types at it instead of stepping through it: the letters of a
+model's name in order — `chk45` for `claude-haiku-4-5-20251001` — narrow the
+column to it. `Enter` closes the query, `Esc` abandons it. `D` in the picker
+also saves that selection as the default; `Enter` only uses it now. Codex and Claude Code are available when
 their executables are on the server's `PATH`.
 
 During an idle live session, `Ctrl+L` changes the model selection for the next turn.

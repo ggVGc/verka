@@ -123,7 +123,7 @@ pub(crate) fn launcher_view(
             .map(|effort| effort.as_str().to_owned())
             .collect(),
         provider_selected: launcher.provider,
-        model_selected: launcher.model,
+        model_list: launcher.model.clone(),
         effort_selected: launcher.effort,
         focused: match launcher.column {
             LaunchColumn::Provider => LauncherColumn::Provider,

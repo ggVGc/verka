@@ -2248,8 +2248,8 @@ mod tests {
             Some("claude-opus-4-1-20250805")
         );
         assert_eq!(
-            launcher.model,
-            models_for(Provider::Claude).len(),
+            launcher.model_row(),
+            Some(models_for(Provider::Claude).len()),
             "carried last, after the catalog"
         );
         assert_eq!(launcher.selection().model, selection.model);
@@ -2269,7 +2269,11 @@ mod tests {
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
         launcher.next_column();
-        assert_eq!(launcher.model, 0, "carried first, ahead of the catalog");
+        assert_eq!(
+            launcher.model_row(),
+            Some(0),
+            "carried first, ahead of the catalog"
+        );
         assert_eq!(launcher.selection().model, selection.model);
         launcher.next();
         assert_eq!(
