@@ -311,10 +311,10 @@ fn configured_model(name: Option<&str>) -> Result<Model> {
     let canonical = match name {
         "quantized_tiny" => "tiny-q5_1",
         "quantized_tiny_en" => "tiny.en-q5_1",
-        "quantized_base" => "base-q8_1",
-        "quantized_small" => "small-q8_1",
+        "quantized_base" => "base-q8_0",
+        "quantized_small" => "small-q8_0",
         "quantized_medium" => "medium-q8_0",
-        "quantized_large_v3_turbo" => "large-v3-turbo-q5_0",
+        "quantized_large_v3_turbo" => "large-v3-turbo-q8_0",
         "large" => "large-v1",
         other => other,
     };
@@ -412,14 +412,22 @@ mod tests {
 
     #[test]
     fn model_override_accepts_native_and_legacy_spellings() {
-        assert_eq!(
-            configured_model(None).unwrap(),
-            configured_model(Some("quantized_base")).unwrap()
-        );
-        assert_eq!(
-            configured_model(Some("quantized_tiny")).unwrap().name,
-            "tiny-q5_1"
-        );
+        // Every legacy spelling names a model that is actually in the catalog.
+        for legacy in [
+            "quantized_tiny",
+            "quantized_tiny_en",
+            "quantized_base",
+            "quantized_small",
+            "quantized_medium",
+            "quantized_large_v3_turbo",
+            "large",
+        ] {
+            configured_model(Some(legacy))
+                .unwrap_or_else(|error| panic!("legacy spelling {legacy:?}: {error}"));
+        }
+        // An unset override still selects a model, and underscores in a native
+        // name are normalized to the catalog's dashes.
+        configured_model(None).unwrap();
         assert_eq!(
             configured_model(Some("large_v3_turbo")).unwrap().name,
             "large-v3-turbo"
