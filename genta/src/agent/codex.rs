@@ -356,10 +356,11 @@ mod tests {
             .command
             .iter()
             .any(|arg| arg == &format!("model={:?}", Provider::Codex.default_model())));
-        assert!(profile
-            .command
-            .iter()
-            .any(|arg| arg == r#"model_reasoning_effort="medium""#));
+        assert!(profile.command.iter().any(|arg| arg
+            == &format!(
+                "model_reasoning_effort={:?}",
+                Provider::Codex.default_effort().as_str()
+            )));
         assert!(profile.network);
         // Isolation policy is shared with the exec profile.
         assert!(profile

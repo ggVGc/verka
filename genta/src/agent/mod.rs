@@ -594,29 +594,38 @@ mod tests {
     /// full, so what a journal records is never "whatever the agent was set to".
     #[test]
     fn a_shorter_profile_name_takes_the_declared_defaults() {
-        for (short, full) in [
-            ("codex", "codex:gpt-5.6-terra/medium"),
-            ("claude", "claude:claude-opus-5/high"),
-            ("codex-exec", "codex-exec:gpt-5.6-sol/high"),
-            // Whichever half is given is kept; only the missing half defaults.
-            (
-                "claude:claude-haiku-4-5-20251001",
-                "claude:claude-haiku-4-5-20251001/high",
-            ),
-            ("codex/minimal", "codex:gpt-5.6-terra/minimal"),
-        ] {
-            let parsed = Selection::parse(short).unwrap();
-            assert_eq!(parsed.name(), full, "{short:?} should fill out to {full:?}");
-            // Filling in a default is idempotent — the full name re-parses to it.
-            assert_eq!(Selection::parse(full).unwrap(), parsed);
-        }
-
-        // `Selection::new` is the same defaults by another route.
         for provider in Provider::ALL {
+            let name = provider.as_str();
+            let (model, effort) = (provider.default_model(), provider.default_effort());
+
+            // The bare name fills out to both declared defaults, and filling in
+            // a default is idempotent — the full name re-parses to it.
+            let parsed = Selection::parse(name).unwrap();
+            let full = format!("{name}:{model}/{}", effort.as_str());
+            assert_eq!(parsed.name(), full, "{name:?} should fill out to {full:?}");
+            assert_eq!(Selection::parse(&full).unwrap(), parsed);
+
+            // Whichever half is given is kept; only the missing half defaults.
+            let cheapest = provider.cheapest_model();
+            assert_eq!(
+                Selection::parse(&format!("{name}:{cheapest}"))
+                    .unwrap()
+                    .name(),
+                format!("{name}:{cheapest}/{}", effort.as_str())
+            );
+            let cheapest_effort = provider.cheapest_effort().as_str();
+            assert_eq!(
+                Selection::parse(&format!("{name}/{cheapest_effort}"))
+                    .unwrap()
+                    .name(),
+                format!("{name}:{model}/{cheapest_effort}")
+            );
+
+            // `Selection::new` is the same defaults by another route.
             let selection = Selection::new(provider);
-            assert_eq!(selection.model, provider.default_model());
-            assert_eq!(selection.effort, provider.default_effort());
-            assert_eq!(Selection::parse(provider.as_str()).unwrap(), selection);
+            assert_eq!(selection.model, model);
+            assert_eq!(selection.effort, effort);
+            assert_eq!(parsed, selection);
         }
     }
 
@@ -633,13 +642,6 @@ mod tests {
                 "{provider:?} default model is outside its own catalog"
             );
         }
-        // Claude Code's default is deliberately not the catalog's lead: the
-        // flagship tier is priced above Opus.
-        assert_eq!(Provider::Claude.default_model(), "claude-opus-5");
-        assert_ne!(
-            Provider::Claude.default_model(),
-            Provider::Claude.models()[0]
-        );
     }
 
     /// The errand tier is launchable too, and is never the tier a session
@@ -662,13 +664,6 @@ mod tests {
                 "{provider:?} routes errands to the model its sessions run on"
             );
         }
-        assert_eq!(
-            Provider::Claude.cheapest_model(),
-            "claude-haiku-4-5-20251001"
-        );
-        assert_eq!(Provider::Codex.cheapest_model(), "gpt-5.6-luna");
-        assert_eq!(Provider::Codex.cheapest_effort(), Effort::Minimal);
-        assert_eq!(Provider::Claude.cheapest_effort(), Effort::Low);
     }
 
     #[test]

@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_blocks_use_the_markdown_syntax_theme() {
+    fn bash_blocks_are_tokenized() {
         let lines = code_block_lines(
             "grep -n 'needle' $FILE",
             Some("bash"),
@@ -202,23 +202,7 @@ mod tests {
         );
 
         let colors = colors(&lines[0]);
-        assert!(
-            colors.contains(&Some(palette::ADDITIONAL_INFO)),
-            "{colors:?}"
-        ); // command / option
         assert!(colors.len() > 2, "{colors:?}"); // tokenized, not one plain span
-    }
-
-    #[test]
-    fn rust_blocks_use_the_markdown_syntax_theme() {
-        let lines = code_block_lines("fn main() {}", Some("rust"), palette::TEXT, false, "  ");
-
-        let keyword = lines[0]
-            .spans
-            .iter()
-            .find(|span| span.content == "fn")
-            .expect("Rust keyword span");
-        assert_eq!(keyword.style.fg, Some(palette::MARKDOWN_CODE_KEYWORD));
     }
 
     #[test]

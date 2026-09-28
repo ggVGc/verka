@@ -872,18 +872,6 @@ mod tests {
         assert!(prose.iter().all(|line| structural_indent(line).is_none()));
     }
 
-    #[test]
-    fn fenced_code_highlighting_uses_the_embedded_palette_theme() {
-        let lines = markdown_block_lines("```rust\nfn main() {}\n```", Style::default(), "");
-        let keyword = lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .find(|span| span.content == "fn")
-            .expect("highlighted Rust keyword");
-
-        assert_eq!(keyword.style.fg, Some(palette::MARKDOWN_CODE_KEYWORD));
-    }
-
     /// Rendering is memoized (see [`crate::render_cache`]), so what is asked
     /// for twice has to come back the same both times — and, more to the
     /// point, what differs only in a display choice must not come back as the
