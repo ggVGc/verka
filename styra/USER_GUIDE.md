@@ -96,14 +96,12 @@ live interactions.
 | `W` (existing session) | create and associate a linked workspace and branch; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `s` / `S` | interrupt the active turn / stop its interaction |
-| `n` / `N` | new session, in the current Session's checkout when it has one / stop then start a new session |
+| `n` / `N` | go to a newly idle interaction, or the next running one / start a new session in the current Session's checkout when it has one |
 | `B` | branch from history through, or only, the selected entry; opens the branch and leaves the source running |
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
-| `Ctrl+A` | go to the next interaction that went idle unseen |
-| `Ctrl+N` | step to the next interaction that is still running |
 | `Ctrl+L` | choose provider, model, and effort |
 
 Sending a message to a stopped or viewed Session automatically attempts native
@@ -147,18 +145,10 @@ by the agent you selected, running on its cheapest model in a throwaway sandbox
 worktrees](#git-checkout-association-and-linked-worktrees)). If that cannot be done,
 the opening words of the prompt name it instead, as before.
 
-`Ctrl+A` goes straight to the next such interaction, wherever it is: with the
-list open it moves the cursor there (revealing all Workspaces if it lives in
-another one), and with the list closed it makes that interaction current and
-opens the list around it. Pressing it repeatedly walks every waiting
-interaction and wraps back to the first.
-
-`Ctrl+N` moves the same way, over every interaction still running — waiting on
-you or mid-turn, seen or unseen — in the order the list shows them, wrapping
-back to the first at the end. Stopped and completed interactions are skipped, so
-pressing it repeatedly cycles the work you actually have in flight without
-opening the list to find it. Like `Ctrl+A`, it reveals all Workspaces if the
-interaction it lands on lives in another one.
+`n` first goes to an interaction that newly went idle, wherever it is. If none
+are waiting, it steps through every interaction still running — waiting on you
+or mid-turn, seen or unseen — in list order, wrapping at the end. Stopped and
+completed interactions are skipped.
 
 The tag editor lists every tag already used by a Session, across Workspaces.
 Use `Space` to select or clear one, `n` to type and add a new tag, and `Enter`

@@ -793,19 +793,6 @@ pub fn run(
                 // Workspace rather than one per interaction. They move the
                 // cursor like j/k, so a skip across several groups costs no
                 // more loads than a step across one row.
-                // The jump to the next unseen-idle interaction moves the cursor
-                // like the other skips do, so the row it lands on is the one
-                // load it pays for — and the operator sees where it went.
-                k if keys::INTERACTIONS_NEXT_IDLE.matches(k) => {
-                    if app
-                        .interactions
-                        .cursor_to_next_idle(&session_id, app.workspace.id.as_deref())
-                        .is_none()
-                    {
-                        app.show_action_message("no interaction has gone idle unseen");
-                    }
-                    continue;
-                }
                 // The step between live interactions moves the cursor for the
                 // same reason: one load, on the row it settles on.
                 k if keys::INTERACTIONS_NEXT_LIVE.matches(k) => {
@@ -819,9 +806,7 @@ pub fn run(
                     continue;
                 }
                 // The same step as ctrl-n, narrowed to interactions actually
-                // working rather than every live one — so it skips past those
-                // idle and waiting on the operator, which ctrl-a already
-                // reaches.
+                // working rather than every live one — so it skips idle work.
                 k if keys::INTERACTIONS_NEXT_WORKING.matches(k) => {
                     if app
                         .interactions
@@ -1105,26 +1090,8 @@ pub fn run(
                 interactions_refreshed = Instant::now();
             }
             // Asked with the navigator closed, so the interaction is loaded
-            // outright rather than through the cursor's settle. The navigator
-            // itself stays closed: the operator asked to be taken to the work
-            // waiting elsewhere, not to be shown the whole list.
-            Some(Request::NextIdleInteraction) => {
-                // The footer's snapshot is up to a refresh old, and the
-                // interaction it points at is one this client is not watching,
-                // so ask before jumping rather than acting on a stale row.
-                if let Ok(interactions) = client.list_interactions() {
-                    app.interactions.refresh(interactions);
-                    interactions_refreshed = Instant::now();
-                }
-                let Some(next) = app.interactions.next_idle_unseen(&app.session_id) else {
-                    app.show_action_message("no interaction has gone idle unseen");
-                    continue;
-                };
-                make_interaction_current(app, live, client, standing_launch, next);
-            }
-            // The same jump as the unseen-idle one, over every live interaction
-            // instead: asked with the navigator closed, so the interaction is
-            // loaded outright and the navigator stays closed.
+            // outright and the navigator stays closed. Newly idle work takes
+            // priority; otherwise this walks every live interaction.
             Some(Request::NextLiveInteraction) => {
                 // The client's snapshot is up to a refresh old, and an
                 // interaction that has since stopped is not one to step onto.
@@ -1132,7 +1099,8 @@ pub fn run(
                     app.interactions.refresh(interactions);
                     interactions_refreshed = Instant::now();
                 }
-                let Some(next) = app.interactions.next_live(&app.session_id) else {
+                let next = app.interactions.next_attention_or_live(&app.session_id);
+                let Some(next) = next else {
                     app.show_action_message("no other interaction is running");
                     continue;
                 };

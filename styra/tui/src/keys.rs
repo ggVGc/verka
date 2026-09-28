@@ -195,7 +195,8 @@ bindings! { GLOBAL = "Global";
     GLOBAL_INTERRUPT: [Key::ch('s')] => "interrupt the active turn";
     GLOBAL_STOP: [Key::ch('S')] => "stop the interaction";
     GLOBAL_BRANCH: [Key::ch('B')] => "branch from history through, or only, the selected entry";
-    GLOBAL_NEXT_LIVE: [Key::ch('n')] => "step to the next interaction that is still running";
+    GLOBAL_NEXT_LIVE: [Key::ch('n')]
+        => "go to a newly idle interaction, or step to the next one still running";
     GLOBAL_NEW_SESSION: [Key::ch('N')] => "new session where this one works";
     GLOBAL_LAUNCHER: [Key::ch('l')] => "choose model for an idle agent turn";
     GLOBAL_SHELL: [Key::ch('!')] => "open session shell in a new terminal";
@@ -206,7 +207,6 @@ bindings! { GLOBAL = "Global";
     GLOBAL_SESSION_WORKTREE: [Key::ch('W')] ("existing session")
         => "create and associate a Git branch and workspace";
     GLOBAL_TAGS: [Key::ch('T')] => "edit the current interaction's tags";
-    GLOBAL_NEXT_IDLE: [Key::ctrl('a')] => "go to the next interaction that went idle unseen";
     GLOBAL_RAW: [Key::ch('r')] => "raw view; press again for events";
     GLOBAL_LOG: [Key::ctrl('l')] => "log view; press again for events";
     GLOBAL_TRANSCRIPT: [Key::ch('t')] => "transcript view; press again for events";
@@ -376,7 +376,6 @@ bindings! { INTERACTIONS = "Interactions";
     INTERACTIONS_NEXT_LIVE: [Key::ctrl('n')] => "next interaction that is still running";
     INTERACTIONS_NEXT_WORKING: [Key::ch('N')]
         => "next interaction actively working, skipping idle ones";
-    INTERACTIONS_NEXT_IDLE: [Key::ctrl('a')] => "next interaction that went idle unseen";
     INTERACTIONS_SCOPE: [Key::ch('w')] => "current Workspace / all Workspaces";
     INTERACTIONS_COMPLETED: [Key::ch('c')] => "show/hide completed";
     INTERACTIONS_COMPLETE: [Key::ch('C')] => "mark selected completed and stop it";
@@ -659,7 +658,7 @@ mod reference_tests {
     /// so a rebinding cannot leave the documentation behind.
     #[test]
     fn a_bindings_label_is_made_of_its_own_keys() {
-        assert_eq!(GLOBAL_NEXT_IDLE.label(), "ctrl-a");
+        assert_eq!(GLOBAL_NEXT_LIVE.label(), "n");
         assert_eq!(EVENTS_NEXT_ENTRY.label(), "J/↓");
         assert_eq!(EVENTS_TOGGLE_EXPAND.label(), "Space/Enter/o");
         assert_eq!(EDITOR_NEWLINE.label(), "alt-Enter");
@@ -866,9 +865,6 @@ pub fn handle_list_key(
         }
         k if GLOBAL_ANSWER.matches(k) => return app.toggle_answer(),
         k if GLOBAL_PREVIEW.matches(k) => return app.toggle_view(View::Preview),
-        // Beside `a` because it is the same list: `a` opens it to be walked,
-        // ctrl-a skips the walk and goes to what the footer is counting.
-        k if GLOBAL_NEXT_IDLE.matches(k) => return app.ask(Request::NextIdleInteraction),
         k if GLOBAL_NEW_SESSION.matches(k) => return app.ask(Request::NewSession),
         k if GLOBAL_INTERACTIONS.matches(k) && app.view != View::Files => {
             return app.ask(Request::Interactions)
@@ -878,8 +874,7 @@ pub fn handle_list_key(
             return app.ask(Request::CreateSessionWorktree)
         }
         k if GLOBAL_SESSIONS.matches(k) => return app.ask(Request::Sessions),
-        // Beside ctrl-a, and the same jump with a wider net: ctrl-a goes to
-        // work that is waiting to be read, plain `n` steps through every
+        // Newly idle work needs attention first; without one, `n` walks every
         // interaction still running.
         k if GLOBAL_NEXT_LIVE.matches(k) => return app.ask(Request::NextLiveInteraction),
         _ => {}
@@ -1427,31 +1422,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// The two halves of the same list: `a` opens it, and ctrl-a asks to be
-    /// taken to the interaction the footer is counting without walking it.
+    /// `a` opens the list, while `n` takes newly idle work first and otherwise
+    /// moves through live interactions.
     #[test]
-    fn control_a_asks_for_the_next_unseen_idle_interaction() {
+    fn n_asks_for_the_next_live_interaction() {
         let root = tree("idle-jump");
         let mut app = app(&root);
         app.enter_list();
         let client = Client::new(root.join("missing.sock"));
         let mut live = Attachment::Detached;
         let mut pending_fold = false;
-        let mut press = |app: &mut App, modifiers| {
+        let mut press = |app: &mut App, code, modifiers| {
             handle_list_key(
                 app,
                 &client,
                 &mut live,
-                KeyEvent::new(KeyCode::Char('a'), modifiers),
+                KeyEvent::new(code, modifiers),
                 &mut pending_fold,
                 &root.join("preferences.toml"),
             );
         };
 
-        press(&mut app, KeyModifiers::CONTROL);
-        assert_eq!(app.take_request(), Some(Request::NextIdleInteraction));
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+        assert_eq!(app.take_request(), Some(Request::NextLiveInteraction));
 
-        press(&mut app, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('a'), KeyModifiers::NONE);
         assert_eq!(app.take_request(), Some(Request::Interactions));
 
         let _ = std::fs::remove_dir_all(root);

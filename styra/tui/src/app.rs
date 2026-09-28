@@ -326,14 +326,8 @@ pub enum Request {
     OpenSession(String),
     /// Open the server's live interactions above the main event timeline.
     Interactions,
-    /// Make the next interaction that went idle unseen current, and show the
-    /// live list around it. The footer counts those interactions; this is how
-    /// the operator gets to one without walking the navigator to find it.
-    NextIdleInteraction,
-    /// Make the next live interaction current — the one after the one on
-    /// screen in the navigator's order — and show the live list around it.
-    /// Where [`Request::NextIdleInteraction`] answers the footer's count, this
-    /// walks the work that is still running, waiting or not.
+    /// Make a newly idle interaction current when one is unseen; otherwise,
+    /// make the next live interaction current in navigator order.
     NextLiveInteraction,
     /// Return to the blank start screen without stopping the current interaction.
     NewSession,

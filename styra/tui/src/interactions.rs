@@ -167,10 +167,17 @@ impl LiveInteractions {
             .cloned()
     }
 
+    /// The next destination for the global `n` shortcut. An interaction that
+    /// became idle while unseen takes precedence over the ordinary live-work
+    /// walk; absent one, the walk retains its display-order behavior.
+    pub fn next_attention_or_live(&self, from: &str) -> Option<InteractionSummary> {
+        self.next_idle_unseen(from).or_else(|| self.next_live(from))
+    }
+
     /// Move the cursor onto the next live Interaction, as a j/k move does, so
     /// the jump loads only where it comes to rest. Reveals All scope for the
-    /// same reason [`Self::cursor_to_next_idle`] does: live work must not be
-    /// unreachable because of the filter the navigator happens to be showing.
+    /// same reason unseen idle work does: live work must not be unreachable
+    /// because of the filter the navigator happens to be showing.
     pub fn cursor_to_next_live(
         &mut self,
         current: &str,
@@ -221,25 +228,6 @@ impl LiveInteractions {
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
         let next = self.next_active(current)?;
-        if self.only_current_workspace && Some(next.workspace_id.as_str()) != workspace_id {
-            self.only_current_workspace = false;
-        }
-        self.move_cursor_to(next.id.clone(), current);
-        Some(next)
-    }
-
-    /// Move the cursor onto the next Interaction that went idle unseen, as a
-    /// j/k move does — so the jump loads only where it comes to rest.
-    ///
-    /// Landing on another Workspace's Interaction reveals All scope: a
-    /// notification must not be unreachable because of the filter the navigator
-    /// happens to be showing. `None` when nothing is waiting.
-    pub fn cursor_to_next_idle(
-        &mut self,
-        current: &str,
-        workspace_id: Option<&str>,
-    ) -> Option<InteractionSummary> {
-        let next = self.next_idle_unseen(current)?;
         if self.only_current_workspace && Some(next.workspace_id.as_str()) != workspace_id {
             self.only_current_workspace = false;
         }
@@ -760,6 +748,33 @@ mod tests {
         assert_eq!(live.next_live("background").unwrap().id, "waiting");
     }
 
+    #[test]
+    fn the_n_destination_prioritizes_unseen_idle_work_before_live_work() {
+        let mut idle = interaction("idle", InteractionActivity::Pending);
+        idle.idle_unseen = true;
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("current", InteractionActivity::Running),
+                interaction("next-live", InteractionActivity::Running),
+                idle,
+            ],
+            vec![],
+        );
+
+        assert_eq!(live.next_attention_or_live("current").unwrap().id, "idle");
+
+        live.items
+            .iter_mut()
+            .find(|interaction| interaction.id == "idle")
+            .unwrap()
+            .idle_unseen = false;
+        assert_eq!(
+            live.next_attention_or_live("current").unwrap().id,
+            "next-live"
+        );
+    }
+
     /// The step between actively working interactions skips ones idle and
     /// waiting on the operator, unlike [`LiveInteractions::next_live`].
     #[test]
@@ -857,40 +872,6 @@ mod tests {
         );
 
         assert!(live.next_idle_unseen("current").is_none());
-    }
-
-    /// The count the jump answers is of every unseen Interaction on the
-    /// server, so the Workspace filter cannot be allowed to hide one of them:
-    /// the jump reveals All rather than refusing to move.
-    #[test]
-    fn the_idle_jump_reveals_all_workspaces_to_reach_an_unseen_interaction() {
-        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
-        elsewhere.workspace_id = "other-workspace".into();
-        elsewhere.idle_unseen = true;
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                interaction("current", InteractionActivity::Running),
-                elsewhere,
-            ],
-            vec![],
-        );
-        live.toggle_workspace_scope();
-
-        let next = live
-            .cursor_to_next_idle("current", Some("workspace"))
-            .unwrap();
-
-        assert_eq!(next.id, "elsewhere");
-        assert!(!live.only_current_workspace);
-        // Moved like a j/k step, so the interaction is loaded once the cursor
-        // has come to rest rather than from inside the key handler.
-        assert_eq!(live.cursor("current"), "elsewhere");
-        assert_eq!(
-            live.pending("current")
-                .map(|interaction| interaction.id.as_str()),
-            Some("elsewhere")
-        );
     }
 
     /// Loading an Interaction replaces the whole screen, so a cursor crossing
