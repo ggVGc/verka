@@ -1102,25 +1102,29 @@ over), it launches immediately, exactly as it always has.
 
 Because nothing is launched until the first message, the blank start screen is
 also where *what to launch* is chosen. `L` (or `Ctrl+L`, since that screen opens
-in input focus) opens a modal picker with three columns — agent, model, effort —
-and applying it records a `Selection` on the `App`; the status line updates with
+in input focus) opens a modal picker: one narrowing list of whole
+`agent:model/effort` triples, and applying it records a `Selection` on the `App`; the status line updates with
 it, so the screen always names what an `Enter` would
 start. Nothing is launched or sent by picking: the operator's own message still
 does that, as everywhere else.
 
-Every row of every column is a concrete choice out of the agent's own catalogs.
-There is no row standing for "whatever
-the agent is configured for", because no selection can express that: the picker
-opens on the model and effort its current selection names, and both are always
-named. Changing the agent resets both to that provider's declared defaults,
-since neither the catalogs nor the effort ladders correspond across providers.
+Every row is a whole `Selection`: the agents' catalogs crossed with each
+*model's* own effort ladder. That is why it is one list rather than three
+columns — the constraint between the axes (a rung belongs to a model, not to an
+agent) is discharged when the rows are built, so no reachable row names a
+combination an agent would refuse and no move between columns has to retune
+another. There is no row standing for "whatever the agent is configured for",
+because no selection can express that. The list is typed at rather than stepped
+through (`styra_ui::fuzzy_list`), which is what makes a list of every triple
+navigable at all; the models the operator has confirmed before lead it.
 
 The model catalog is a fixed list per agent, not a free-text field: for Claude
 Code it is every id Anthropic lists as `Active` in its model-status table, as
 full ids rather than the moving `opus`/`sonnet` aliases, so a journal records the
 exact model a session ran on. A model outside that list can survive in stored
-state, and the picker carries it as a final row so confirming cannot silently
-swap it for a catalogued model; it can carry such an id, never author one.
+state, and the picker carries it as a row of its own so confirming cannot
+silently swap it for a catalogued model; it can carry such an id, never author
+one.
 
 The picker is reachable in `Status::Pending`, and also while a Codex app-server
 or Claude Code interaction is idle. Codex receives model and effort overrides

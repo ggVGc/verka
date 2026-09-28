@@ -198,6 +198,10 @@ pub struct FuzzyListView<'a> {
     /// Shown, dimmed, when no row matches — or when there were none to begin
     /// with. It says which of the two it is.
     pub empty_note: &'a str,
+    /// Drawn along the bottom border beside the query: what the keys are, for
+    /// a list that is the whole screen it is on. Empty for a list sitting
+    /// inside something that says so itself.
+    pub hint: &'a str,
 }
 
 /// Draw a narrowing list into `area`: a bordered box titled `title`, the
@@ -229,6 +233,15 @@ pub fn render_fuzzy_list(frame: &mut Frame, view: &FuzzyListView, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
+    }
+    if !view.hint.is_empty() {
+        block = block.title_bottom(
+            Line::from(Span::styled(
+                view.hint.to_owned(),
+                Style::default().fg(palette::MUTED_TEXT),
+            ))
+            .right_aligned(),
+        );
     }
 
     let matches = view.list.matches(view.rows);
@@ -455,6 +468,7 @@ mod tests {
             list: &list,
             focused: true,
             empty_note: "",
+            hint: "",
         });
         assert!(screen.contains("model"), "{screen}");
         assert!(
@@ -479,6 +493,7 @@ mod tests {
             list: &list,
             focused: true,
             empty_note: "",
+            hint: "",
         };
         terminal
             .draw(|frame| render_fuzzy_list(frame, &view, frame.area()))
@@ -512,6 +527,7 @@ mod tests {
             list: &list,
             focused: true,
             empty_note: "nothing here",
+            hint: "",
         });
         assert!(screen.contains("no match for zzz"), "{screen}");
     }
@@ -526,6 +542,7 @@ mod tests {
             list: &FuzzyList::default(),
             focused: false,
             empty_note: "none for this model",
+            hint: "",
         });
         assert!(screen.contains("none for this model"), "{screen}");
     }

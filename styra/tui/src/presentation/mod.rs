@@ -87,49 +87,14 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
     }
 }
 
-/// What the picker's title spells out: the selection it would confirm.
-///
-/// [`Selection::name`] always names a rung, because a selection always carries
-/// one. For a model that takes no effort setting that rung is a placeholder no
-/// launch sends, so the title drops it rather than advertising it.
-fn selection_label(selection: &styra_protocol::agent::Selection) -> String {
-    if styra_protocol::agent::supports_effort(selection.provider, &selection.model) {
-        selection.name()
-    } else {
-        format!("{}:{}", selection.provider.as_str(), selection.model)
-    }
-}
-
 pub(crate) fn launcher_view(
     launcher: &crate::launcher::Launcher,
 ) -> styra_ui::launcher::LauncherView {
-    use crate::launcher::LaunchColumn;
-    use styra_ui::launcher::LauncherColumn;
-
     styra_ui::launcher::LauncherView {
-        selection: selection_label(&launcher.selection()),
+        selection: crate::launcher::label(&launcher.selection()),
         provider_locked: launcher.provider_locked,
-        providers: styra_protocol::agent::PROVIDERS
-            .iter()
-            .map(|provider| provider.as_str().to_owned())
-            .collect(),
-        models: launcher.models(),
-        // The ladder of the selected model, not of the agent: a rung the model
-        // does not accept is not a row an operator should be able to land on.
-        // A model that takes no effort at all leaves the column empty.
-        efforts: launcher
-            .efforts()
-            .iter()
-            .map(|effort| effort.as_str().to_owned())
-            .collect(),
-        provider_selected: launcher.provider,
-        model_list: launcher.model.clone(),
-        effort_selected: launcher.effort,
-        focused: match launcher.column {
-            LaunchColumn::Provider => LauncherColumn::Provider,
-            LaunchColumn::Model => LauncherColumn::Model,
-            LaunchColumn::Effort => LauncherColumn::Effort,
-        },
+        rows: launcher.labels(),
+        list: launcher.list.clone(),
     }
 }
 

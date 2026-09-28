@@ -258,23 +258,18 @@ bindings! { WORKSPACE_PICKER = "Workspaces";
 }
 
 bindings! { LAUNCHER = "Launch";
+    // The list is typed at, so every printable key is a letter of the query
+    // and none of them can also be a command. What is left is Enter, Esc, the
+    // arrows and control chords — which is what a launch needs anyway.
+    LAUNCHER_FILTER: [] as "any letter" => Action::LauncherFilter;
+    // `?` is safe as a command here: no agent, model or rung name contains
+    // one, so it can never be a letter of the query.
     LAUNCHER_HELP: [Key::ch('?')] => Action::LauncherHelp;
-    LAUNCHER_NEXT: [Key::ch('j'), Key::ch('J'), Key::code(KeyCode::Down)] => Action::LauncherNext;
-    LAUNCHER_PREV: [Key::ch('k'), Key::ch('K'), Key::code(KeyCode::Up)] => Action::LauncherPrev;
-    LAUNCHER_NEXT_COLUMN: [Key::ch('l'), Key::code(KeyCode::Right), Key::code(KeyCode::Tab)]
-        => Action::LauncherNextColumn;
-    LAUNCHER_PREV_COLUMN: [Key::ch('h'), Key::code(KeyCode::Left), Key::code(KeyCode::BackTab)]
-        => Action::LauncherPrevColumn;
-    LAUNCHER_PROVIDER_DOWN: [Key::ch('p')] => Action::LauncherProviderDown;
-    LAUNCHER_PROVIDER_UP: [Key::ch('P')] => Action::LauncherProviderUp;
-    LAUNCHER_MODEL_DOWN: [Key::ch('m')] => Action::LauncherModelDown;
-    LAUNCHER_MODEL_UP: [Key::ch('M')] => Action::LauncherModelUp;
-    LAUNCHER_EFFORT_DOWN: [Key::ch('e')] => Action::LauncherEffortDown;
-    LAUNCHER_EFFORT_UP: [Key::ch('E')] => Action::LauncherEffortUp;
-    LAUNCHER_FILTER: [Key::ch('/')] => Action::LauncherFilter;
+    LAUNCHER_NEXT: [Key::code(KeyCode::Down), Key::ctrl('n')] => Action::LauncherNext;
+    LAUNCHER_PREV: [Key::code(KeyCode::Up), Key::ctrl('p')] => Action::LauncherPrev;
     LAUNCHER_SELECT: [Key::code(KeyCode::Enter)] => Action::LauncherSelect;
-    LAUNCHER_DEFAULT: [Key::ch('D')] => Action::LauncherDefault;
-    LAUNCHER_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => Action::LauncherCancel;
+    LAUNCHER_DEFAULT: [Key::ctrl('d')] => Action::LauncherDefault;
+    LAUNCHER_CANCEL: [Key::code(KeyCode::Esc)] => Action::LauncherCancel;
 }
 
 bindings! { TEMPLATE_PICKER = "Driva templates";

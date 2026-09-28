@@ -1,37 +1,31 @@
-//! The launch picker: agent, model, and reasoning effort side by side, with
-//! the resulting selection spelled out along the bottom border so the
-//! operator sees exactly what it is selecting.
+//! The launch picker: one narrowing list of whole `agent:model/effort`
+//! triples, with the selection it would confirm spelled out along its top
+//! border so the operator sees exactly what it is selecting.
 
 use crate::fuzzy_list::{render_fuzzy_list, FuzzyList, FuzzyListView};
 use crate::palette;
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
+use ratatui::widgets::{Block, Clear};
 use ratatui::Frame;
 
 pub struct LauncherView {
+    /// The triple the picker would confirm, drawn in the title.
     pub selection: String,
+    /// Whether a live session pins the agent. The list then holds only that
+    /// agent's rows, and the title says why it is the only one on offer.
     pub provider_locked: bool,
-    pub providers: Vec<String>,
-    pub models: Vec<String>,
-    pub efforts: Vec<String>,
-    pub provider_selected: usize,
-    /// The model column's narrowing list: its query and its cursor. The
-    /// column is long enough that stepping through it row by row is not how
-    /// anyone finds a model, so it is typed at instead.
-    pub model_list: FuzzyList,
-    pub effort_selected: usize,
-    pub focused: LauncherColumn,
+    /// Every launchable triple, in the order the list offers them.
+    pub rows: Vec<String>,
+    /// The query typed at the list and the cursor among what it left standing.
+    pub list: FuzzyList,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LauncherColumn {
-    Provider,
-    Model,
-    Effort,
-}
+/// How tall the list is allowed to grow. The catalog crossed with the ladders
+/// is longer than most terminals, and a modal that eats the whole screen hides
+/// the session it was opened over — the list scrolls to its cursor instead.
+const MAX_ROWS: u16 = 16;
 
 pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
     frame.render_widget(
@@ -42,18 +36,12 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
         ),
         area,
     );
-    let desired_height = (launcher
-        .providers
-        .len()
-        // Sized to the whole model catalog, not to what a query has left of
-        // it: a box that shrinks around the query would move the rows under
-        // the eye that is reading them.
-        .max(launcher.models.len())
-        .max(launcher.efforts.len()) as u16)
+    let desired_height = (launcher.rows.len() as u16)
+        .min(MAX_ROWS)
         .saturating_add(2)
         .max(4);
     let height = desired_height.min(area.height);
-    let width = area.width.saturating_sub(4).min(100);
+    let width = area.width.saturating_sub(4).min(60);
     let area = Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
         y: area.y + area.height.saturating_sub(height) / 2,
@@ -61,138 +49,31 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
         height,
     };
     frame.render_widget(Clear, area);
-    let hint = " ? keys ";
-    let frame_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
-        .title(Line::from(vec![
-            Span::styled(
-                " styra · launch · ",
-                Style::default().fg(palette::MUTED_TEXT),
-            ),
-            Span::styled(
-                format!("{} ", launcher.selection),
-                Style::default()
-                    .fg(palette::ACCENT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]))
-        .title_bottom(Line::from(Span::styled(
-            hint,
-            Style::default().fg(palette::MUTED_TEXT),
-        )));
-    let inner = frame_block.inner(area);
-    frame.render_widget(frame_block, area);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-        ])
-        .split(inner);
-    render_launcher_column(
-        frame,
-        columns[0],
-        if launcher.provider_locked {
-            " agent · fixed "
-        } else {
-            " agent "
-        },
-        &launcher.providers,
-        launcher.provider_selected,
-        launcher.focused == LauncherColumn::Provider,
-        "",
-    );
+
+    let title = if launcher.provider_locked {
+        " styra · launch · agent fixed · "
+    } else {
+        " styra · launch · "
+    };
     render_fuzzy_list(
         frame,
         &FuzzyListView {
-            title: " model ",
-            rows: &launcher.models,
-            list: &launcher.model_list,
-            focused: launcher.focused == LauncherColumn::Model,
-            empty_note: "no models",
+            title: &format!("{title}{} ", launcher.selection),
+            rows: &launcher.rows,
+            list: &launcher.list,
+            focused: true,
+            empty_note: NO_ROWS,
+            // The list is the whole picker, so its own border carries what the
+            // picker has to say: the keys, and the query being typed.
+            hint: " type to narrow · ? keys ",
         },
-        columns[1],
-    );
-    render_launcher_column(
-        frame,
-        columns[2],
-        " effort ",
-        &launcher.efforts,
-        launcher.effort_selected,
-        launcher.focused == LauncherColumn::Effort,
-        // The effort column is the one that can legitimately have no rows:
-        // some models predate the setting entirely. An empty box would read
-        // as a bug, so it says what it is.
-        NO_EFFORTS,
+        area,
     );
 }
 
-/// What the effort column shows for a model that takes no effort setting.
-pub const NO_EFFORTS: &str = "none for this model";
-
-fn render_launcher_column(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    rows: &[String],
-    selected: usize,
-    focused: bool,
-    // Shown, dimmed and unselectable, when there are no rows at all. Empty
-    // for a column that always has some.
-    empty_note: &str,
-) {
-    let border_style = if focused {
-        Style::default().fg(palette::ACCENT)
-    } else {
-        Style::default().fg(palette::INACTIVE)
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(Span::styled(
-            title.to_owned(),
-            Style::default().fg(palette::MUTED_TEXT),
-        ));
-    if rows.is_empty() {
-        let note = ListItem::new(Line::from(Span::styled(
-            format!("  {empty_note}"),
-            Style::default()
-                .fg(palette::MUTED_TEXT)
-                .add_modifier(Modifier::DIM),
-        )));
-        frame.render_widget(List::new(vec![note]).block(block), area);
-        return;
-    }
-    let items: Vec<ListItem> = rows
-        .iter()
-        .enumerate()
-        .map(|(index, row)| {
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    if index == selected { "• " } else { "  " },
-                    Style::default().fg(if index == selected {
-                        palette::SELECTION_MARKER
-                    } else {
-                        palette::TEXT
-                    }),
-                ),
-                Span::styled(row.clone(), Style::default().fg(palette::TEXT)),
-            ]))
-        })
-        .collect();
-    let list = List::new(items).block(block).highlight_style(
-        Style::default()
-            .bg(palette::SELECTION_BACKGROUND)
-            .add_modifier(Modifier::BOLD),
-    );
-    let mut state = ListState::default();
-    if !rows.is_empty() {
-        state.select(Some(selected.min(rows.len() - 1)));
-    }
-    frame.render_stateful_widget(list, area, &mut state);
-}
+/// What the list shows when there is nothing to launch at all. Unreachable
+/// while either agent has a catalog, but a blank box would read as a bug.
+pub const NO_ROWS: &str = "no models on offer";
 
 #[cfg(test)]
 mod tests {
@@ -200,17 +81,24 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
+    fn rows() -> Vec<String> {
+        [
+            "codex:gpt-5.6-sol/minimal",
+            "claude:claude-opus-5/max",
+            "claude:claude-haiku-4-5-20251001",
+        ]
+        .iter()
+        .map(|row| (*row).to_owned())
+        .collect()
+    }
+
     fn view() -> LauncherView {
+        let rows = rows();
         LauncherView {
             selection: "codex:gpt-5.6-sol/minimal".into(),
             provider_locked: false,
-            providers: vec!["codex".into(), "claude".into()],
-            models: vec!["gpt-5.6-sol".into(), "gpt-5.6-terra".into()],
-            efforts: vec!["minimal".into(), "medium".into()],
-            provider_selected: 0,
-            model_list: FuzzyList::default(),
-            effort_selected: 0,
-            focused: LauncherColumn::Model,
+            list: FuzzyList::at(&rows, 0),
+            rows,
         }
     }
 
@@ -228,52 +116,26 @@ mod tests {
             .collect()
     }
 
+    /// Every row is a whole triple, so what is on screen is what would launch
+    /// — no assembling a selection out of three columns.
     #[test]
-    fn shows_each_profile_axis_and_the_composed_selection() {
+    fn shows_whole_triples_and_the_one_it_would_confirm() {
         let screen = rendered(&view());
         for text in [
             "styra · launch",
-            "agent",
-            "model",
-            "effort",
-            "gpt-5.6-sol",
-            "minimal",
+            "codex:gpt-5.6-sol/minimal",
+            "claude:claude-opus-5/max",
+            "claude:claude-haiku-4-5-20251001",
         ] {
             assert!(screen.contains(text), "missing {text}: {screen}");
         }
     }
 
-    /// Some models predate the reasoning-effort setting, so the column really
-    /// can be empty. It says which it is rather than reading as a blank box.
     #[test]
-    fn an_effort_column_with_no_rungs_says_so() {
+    fn typing_narrows_the_list_and_shows_the_query() {
         let mut view = view();
-        view.selection = "claude:claude-haiku-4-5-20251001".into();
-        view.models = vec![
-            "claude-opus-5".into(),
-            "claude-sonnet-5".into(),
-            "claude-haiku-4-5-20251001".into(),
-        ];
-        view.model_list = FuzzyList::at(&view.models, 2);
-        view.efforts = vec![];
-        let screen = rendered(&view);
-        assert!(screen.contains(NO_EFFORTS), "{screen}");
-        assert!(screen.contains("effort"), "the column is still there");
-    }
-
-    /// The model column narrows as it is typed at, and says what it is
-    /// showing: the query is on screen beside the rows it left standing.
-    #[test]
-    fn the_model_column_shows_the_query_narrowing_it() {
-        let mut view = view();
-        view.models = vec![
-            "claude-opus-5".into(),
-            "claude-sonnet-5".into(),
-            "claude-haiku-4-5-20251001".into(),
-        ];
-        view.model_list = FuzzyList::default();
         for character in "haiku".chars() {
-            view.model_list.push(character);
+            view.list.push(character);
         }
         let screen = rendered(&view);
 
@@ -283,10 +145,26 @@ mod tests {
     }
 
     #[test]
+    fn a_query_matching_nothing_says_so() {
+        let mut view = view();
+        for character in "zzz".chars() {
+            view.list.push(character);
+        }
+        assert!(rendered(&view).contains("no match for zzz"));
+    }
+
+    #[test]
     fn marks_a_locked_provider_as_fixed() {
         let mut view = view();
         view.provider_locked = true;
-        assert!(rendered(&view).contains("agent · fixed"));
+        assert!(rendered(&view).contains("agent fixed"));
+    }
+
+    /// The list says how it is driven: it is typed at, not stepped through,
+    /// and nothing else on screen would say so.
+    #[test]
+    fn says_that_it_is_typed_at() {
+        assert!(rendered(&view()).contains("type to narrow"));
     }
 
     #[test]
@@ -296,8 +174,41 @@ mod tests {
             .draw(|frame| render_launcher(frame, &view(), frame.area()))
             .unwrap();
 
-        // Two rows of choices need a four-row modal; centering it in 20 rows
-        // puts its top border at row 8 rather than at the top of the screen.
-        assert_eq!(terminal.backend().buffer()[(2, 8)].symbol(), "┌");
+        // Three rows need a five-row modal, 60 columns wide; centering that in
+        // an 80x20 screen puts its top-left corner at (10, 7) rather than at
+        // the top of the screen.
+        assert_eq!(terminal.backend().buffer()[(10, 7)].symbol(), "┌");
+    }
+
+    /// A catalog longer than the screen is what the list is for, so the modal
+    /// stops growing and scrolls instead.
+    #[test]
+    fn a_long_catalog_does_not_grow_the_modal_past_its_limit() {
+        let rows: Vec<String> = (0..60)
+            .map(|index| format!("claude:model-{index}"))
+            .collect();
+        let mut view = view();
+        view.list = FuzzyList::at(&rows, 59);
+        view.rows = rows;
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+        terminal
+            .draw(|frame| render_launcher(frame, &view, frame.area()))
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            screen.contains("claude:model-59"),
+            "the list scrolls to the cursor: {screen}"
+        );
+        assert!(
+            !screen.contains("claude:model-0 "),
+            "and leaves the top off"
+        );
     }
 }
