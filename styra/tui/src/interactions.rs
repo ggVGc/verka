@@ -41,6 +41,14 @@ pub struct LiveInteractions {
     settle_from: Option<Instant>,
 }
 
+/// The footer's tally of listed Interactions by activity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ActivityCounts {
+    pub running: usize,
+    pub idle: usize,
+    pub stopped: usize,
+}
+
 impl LiveInteractions {
     pub fn open(&mut self, mut items: Vec<InteractionSummary>, workspaces: Vec<WorkspaceSummary>) {
         sort_interactions(&mut items);
@@ -72,6 +80,23 @@ impl LiveInteractions {
             .iter()
             .filter(|interaction| is_idle(interaction) && interaction.idle_unseen)
             .count()
+    }
+
+    /// How the listed Interactions divide between running, idle and stopped:
+    /// the footer's standing tally of the whole fleet, not just the unseen
+    /// ones [`Self::idle_notification_count`] counts. `Background` is work in
+    /// flight, so it counts as running.
+    pub fn activity_counts(&self) -> ActivityCounts {
+        let mut counts = ActivityCounts::default();
+        for interaction in &self.items {
+            match interaction.activity {
+                styra_protocol::InteractionActivity::Pending => counts.idle += 1,
+                styra_protocol::InteractionActivity::Running
+                | styra_protocol::InteractionActivity::Background => counts.running += 1,
+                styra_protocol::InteractionActivity::Stopped => counts.stopped += 1,
+            }
+        }
+        counts
     }
 
     pub fn close(&mut self) {
@@ -697,6 +722,32 @@ mod tests {
         assert_eq!(live.idle_notification_count(), 1);
         live.close();
         assert_eq!(live.idle_notification_count(), 1);
+    }
+
+    /// The footer's tally is of everything listed, seen or not, and counts
+    /// background work as running: it answers "what is the fleet doing", not
+    /// "what is waiting for me".
+    #[test]
+    fn the_activity_tally_covers_every_listed_interaction() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("working", InteractionActivity::Running),
+                interaction("background", InteractionActivity::Background),
+                interaction("waiting", InteractionActivity::Pending),
+                interaction("done", InteractionActivity::Stopped),
+                interaction("also-done", InteractionActivity::Stopped),
+            ],
+            Vec::new(),
+        );
+        assert_eq!(
+            live.activity_counts(),
+            ActivityCounts {
+                running: 2,
+                idle: 1,
+                stopped: 2,
+            }
+        );
     }
 
     /// The jump exists to answer the footer's count, so it walks the unseen

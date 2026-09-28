@@ -386,6 +386,14 @@ fn draw_main(
         help_key: &help_key,
         working_directory: &working_directory,
         idle_interactions: app.interactions.idle_notification_count(),
+        activity: {
+            let counts = app.interactions.activity_counts();
+            styra_ui::footer::ActivityCounts {
+                running: counts.running,
+                idle: counts.idle,
+                stopped: counts.stopped,
+            }
+        },
         quota: &quota_alert,
         auto_retry: app.auto_retry,
     };
