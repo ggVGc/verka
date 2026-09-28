@@ -46,8 +46,8 @@ pub const SOURCES: &[(&str, &str)] = &[
         include_str!("../protocol/types.rs"),
     ),
     (
-        "genta/src/agent.rs",
-        include_str!("../../../../genta/src/agent.rs"),
+        "genta/src/agent/mod.rs",
+        include_str!("../../../../genta/src/agent/mod.rs"),
     ),
     (
         "genta/src/event.rs",
