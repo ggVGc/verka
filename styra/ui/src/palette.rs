@@ -82,7 +82,7 @@ pub const MARKDOWN_CODE_THEME: &str = r##"
       <key>foreground</key><string>#FFFFFF</string>
     </dict></dict>
     <dict><key>scope</key><string>comment</string><key>settings</key><dict>
-      <key>foreground</key><string>#704848</string>
+      <key>foreground</key><string>#777777</string>
     </dict></dict>
     <dict><key>scope</key><string>string</string><key>settings</key><dict>
       <key>foreground</key><string>#73BE89</string>
