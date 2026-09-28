@@ -349,6 +349,21 @@ fn make_interaction_current(
         Ok((mut next, next_live)) => {
             next.adopt(app.take_operator_state());
             next.launch.interaction = standing_launch.clone();
+            // The Workspace list is only filled when the navigator is opened,
+            // so a switch made with it closed — `n` — would otherwise land on
+            // a screen that cannot name the Workspace it is in, and the title
+            // would lose its opening name. Ask the server for the list it is
+            // missing, and keep the answer for the switches after this one.
+            if !next
+                .interactions
+                .workspaces
+                .iter()
+                .any(|workspace| Some(workspace.id.as_str()) == next.workspace.id.as_deref())
+            {
+                if let Ok(workspaces) = client.list_workspaces() {
+                    next.interactions.workspaces = workspaces;
+                }
+            }
             if let Some(workspace) = next
                 .interactions
                 .workspaces
