@@ -20,6 +20,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
+/// Rows the cursor moves by one PageUp/PageDown press, matching the lines the
+/// rest of the client pages by: the rows here are one line each.
+pub const PAGE: usize = 10;
+
 /// A row that survived the query, with the character positions it matched at.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Match {
@@ -106,6 +110,25 @@ impl FuzzyList {
         let count = self.matches(rows).len();
         if count > 0 {
             self.selected = (self.selected + count - 1) % count;
+        }
+    }
+
+    /// Move the cursor a page down the matches, stopping at the last one.
+    ///
+    /// Paging does not wrap where stepping does: a press meant to cross a long
+    /// list should land at its end, not back at the top with nothing to say it
+    /// went round.
+    pub fn page_down(&mut self, rows: &[String]) {
+        let count = self.matches(rows).len();
+        if count > 0 {
+            self.selected = (self.selected + PAGE).min(count - 1);
+        }
+    }
+
+    /// Move the cursor a page up the matches, stopping at the first.
+    pub fn page_up(&mut self, rows: &[String]) {
+        if !self.matches(rows).is_empty() {
+            self.selected = self.selected.saturating_sub(PAGE);
         }
     }
 
@@ -415,6 +438,54 @@ mod tests {
         // And moving within nothing is a no-op rather than a panic.
         list.next(&rows);
         list.prev(&rows);
+        assert_eq!(list.selected, 0);
+    }
+
+    /// Paging crosses a long list in presses rather than keystrokes, and
+    /// stops at its ends rather than wrapping round them.
+    #[test]
+    fn paging_moves_by_a_page_and_stops_at_the_ends() {
+        let rows: Vec<String> = (0..25).map(|index| format!("model-{index:02}")).collect();
+        let mut list = FuzzyList::at(&rows, 0);
+
+        list.page_down(&rows);
+        assert_eq!(list.selected, PAGE);
+        list.page_down(&rows);
+        assert_eq!(list.selected, PAGE * 2);
+        list.page_down(&rows);
+        assert_eq!(list.selected, rows.len() - 1, "the last row, not the first");
+
+        list.page_up(&rows);
+        assert_eq!(list.selected, rows.len() - 1 - PAGE);
+        for _ in 0..5 {
+            list.page_up(&rows);
+        }
+        assert_eq!(list.selected, 0, "and the first, not the last");
+    }
+
+    /// A page is a page of what the query left standing, so paging cannot
+    /// leave the cursor past the end of a narrowed list.
+    #[test]
+    fn paging_is_held_to_the_matching_rows() {
+        let rows = rows();
+        let mut list = FuzzyList::at(&rows, 0);
+        for character in "claude-".chars() {
+            list.push(character);
+        }
+        list.page_down(&rows);
+        assert_eq!(list.selected, 2, "the last of the three matches");
+        assert_eq!(list.selected_row(&rows), Some(2));
+    }
+
+    #[test]
+    fn paging_nothing_is_a_no_op() {
+        let rows = rows();
+        let mut list = FuzzyList::at(&rows, 0);
+        for character in "zzz".chars() {
+            list.push(character);
+        }
+        list.page_down(&rows);
+        list.page_up(&rows);
         assert_eq!(list.selected, 0);
     }
 

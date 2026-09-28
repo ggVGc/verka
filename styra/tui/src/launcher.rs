@@ -39,6 +39,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
     match key {
         k if keys::LAUNCHER_NEXT.matches(k) => launcher.next(),
         k if keys::LAUNCHER_PREV.matches(k) => launcher.prev(),
+        k if keys::LAUNCHER_PAGE_DOWN.matches(k) => launcher.page_down(),
+        k if keys::LAUNCHER_PAGE_UP.matches(k) => launcher.page_up(),
         k if keys::LAUNCHER_DELETE_WORD.matches(k) => launcher.delete_query_word(),
         k if keys::LAUNCHER_SELECT.matches(k) => confirm(app, preferences_path),
         k if keys::LAUNCHER_DEFAULT.matches(k) => {
@@ -206,6 +208,20 @@ impl Launcher {
     pub fn prev(&mut self) {
         let labels = self.labels();
         self.list.prev(&labels);
+    }
+
+    /// Move the cursor a page down the rows the query left standing. The list
+    /// is every triple both agents offer, which is long enough that stepping
+    /// is not the only way across it.
+    pub fn page_down(&mut self) {
+        let labels = self.labels();
+        self.list.page_down(&labels);
+    }
+
+    /// Move the cursor a page up the rows the query left standing.
+    pub fn page_up(&mut self) {
+        let labels = self.labels();
+        self.list.page_up(&labels);
     }
 
     /// Take a character into the query, or `None` to drop the last one.
@@ -473,6 +489,34 @@ mod tests {
         launcher.delete_query_word();
         assert_eq!(launcher.list.query, "claude:claude-opus-5/");
         assert_eq!(launcher.selection().model, "claude-opus-5");
+    }
+
+    /// The list is long enough to page through, and a page lands on a row
+    /// rather than running off the end of it.
+    #[test]
+    fn paging_crosses_the_list_and_stops_at_its_ends() {
+        let mut launcher = opened("claude");
+        assert!(
+            launcher.labels().len() > styra_ui::fuzzy_list::PAGE,
+            "the list is worth paging"
+        );
+
+        let opened_at = launcher.list.selected;
+        launcher.page_down();
+        assert_eq!(
+            launcher.list.selected,
+            opened_at + styra_ui::fuzzy_list::PAGE
+        );
+        for _ in 0..launcher.labels().len() {
+            launcher.page_down();
+        }
+        assert_eq!(launcher.list.selected, launcher.labels().len() - 1);
+        validate_selection(&launcher.selection()).expect("still a launchable row");
+
+        for _ in 0..launcher.labels().len() {
+            launcher.page_up();
+        }
+        assert_eq!(launcher.list.selected, 0);
     }
 
     #[test]
