@@ -198,13 +198,15 @@ impl Launcher {
             .unwrap_or_else(|| self.opened_on.clone())
     }
 
-    /// Step the cursor down the rows the query left standing, wrapping.
+    /// Step the cursor down the rows the query left standing, holding at the
+    /// last of them.
     pub fn next(&mut self) {
         let labels = self.labels();
         self.list.next(&labels);
     }
 
-    /// Step the cursor up the rows the query left standing, wrapping.
+    /// Step the cursor up the rows the query left standing, holding at the
+    /// first of them.
     pub fn prev(&mut self) {
         let labels = self.labels();
         self.list.prev(&labels);
@@ -300,12 +302,12 @@ mod tests {
     #[test]
     fn every_row_is_a_launchable_selection() {
         let mut launcher = opened("claude");
-        for _ in 0..launcher.labels().len() {
+        for row in 0..launcher.labels().len() {
+            launcher.list.selected = row;
             let selection = launcher.selection();
             validate_selection(&selection).unwrap_or_else(|error| {
                 panic!("{} is not launchable: {error:#}", selection.name())
             });
-            launcher.next();
         }
     }
 
@@ -519,17 +521,21 @@ mod tests {
         assert_eq!(launcher.list.selected, 0);
     }
 
+    /// The cursor holds at the ends of the list rather than wrapping round
+    /// them: the top is where the best match of a query sits, and stepping off
+    /// the bottom must not land on it.
     #[test]
-    fn row_navigation_wraps_at_both_ends() {
+    fn row_navigation_holds_at_both_ends() {
         let mut launcher = opened("codex");
         let rows = launcher.labels().len();
 
         launcher.list.selected = rows - 1;
         launcher.next();
-        assert_eq!(launcher.list.selected, 0);
-
-        launcher.prev();
         assert_eq!(launcher.list.selected, rows - 1);
+
+        launcher.list.selected = 0;
+        launcher.prev();
+        assert_eq!(launcher.list.selected, 0);
     }
 
     /// The rung is part of the row, so a model without `xhigh` simply has no

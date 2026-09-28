@@ -96,28 +96,30 @@ impl FuzzyList {
             .map(|found| found.index)
     }
 
-    /// Step the cursor down the matches, wrapping. A no-op while nothing
-    /// matches, so an over-narrow query is not also an arithmetic fault.
+    /// Step the cursor down the matches, stopping at the last one. A no-op
+    /// while nothing matches, so an over-narrow query is not also an
+    /// arithmetic fault.
+    ///
+    /// The ends hold rather than wrap. The list is ranked, so its top is where
+    /// the best match is: a key held down at the bottom must not carry the
+    /// cursor back round to it, and the row under the cursor is the one thing
+    /// a press is allowed to change without the eye following it.
     pub fn next(&mut self, rows: &[String]) {
         let count = self.matches(rows).len();
         if count > 0 {
-            self.selected = (self.selected + 1) % count;
+            self.selected = (self.selected + 1).min(count - 1);
         }
     }
 
-    /// Step the cursor up the matches, wrapping.
+    /// Step the cursor up the matches, stopping at the first.
     pub fn prev(&mut self, rows: &[String]) {
-        let count = self.matches(rows).len();
-        if count > 0 {
-            self.selected = (self.selected + count - 1) % count;
+        if !self.matches(rows).is_empty() {
+            self.selected = self.selected.saturating_sub(1);
         }
     }
 
-    /// Move the cursor a page down the matches, stopping at the last one.
-    ///
-    /// Paging does not wrap where stepping does: a press meant to cross a long
-    /// list should land at its end, not back at the top with nothing to say it
-    /// went round.
+    /// Move the cursor a page down the matches, stopping at the last one, as
+    /// [`Self::next`] does.
     pub fn page_down(&mut self, rows: &[String]) {
         let count = self.matches(rows).len();
         if count > 0 {
@@ -489,18 +491,29 @@ mod tests {
         assert_eq!(list.selected, 0);
     }
 
+    /// The cursor moves within the matches, not the rows, and holds at both
+    /// ends: the top of a ranked list is where the best match is, and stepping
+    /// off the bottom must not land there.
     #[test]
-    fn the_cursor_wraps_over_the_matches_rather_than_the_rows() {
+    fn the_cursor_moves_within_the_matches_and_holds_at_both_ends() {
         let rows = rows();
         let mut list = FuzzyList::at(&rows, 0);
         for character in "claude-".chars() {
             list.push(character);
         }
         assert_eq!(list.matches(&rows).len(), 3);
+
         list.prev(&rows);
-        assert_eq!(list.selected, 2);
-        list.next(&rows);
-        assert_eq!(list.selected, 0);
+        assert_eq!(list.selected, 0, "already at the top");
+        for _ in 0..5 {
+            list.next(&rows);
+        }
+        assert_eq!(
+            list.selected, 2,
+            "the last match, not back round to the first"
+        );
+        list.prev(&rows);
+        assert_eq!(list.selected, 1);
     }
 
     /// Clearing the query puts the operator back in the full list on the row
