@@ -219,6 +219,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
     let started = Instant::now();
     tracing::debug!(
         target: "styra_tui::render",
+        pid = std::process::id(),
         session_id = %app.session_id,
         view = ?app.view,
         timeline_entries = app.timeline.entries.len(),
@@ -365,6 +366,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
     match &result {
         Ok(_) => tracing::debug!(
             target: "styra_tui::render",
+            pid = std::process::id(),
             session_id = %app.session_id,
             view = ?app.view,
             elapsed_ms = started.elapsed().as_millis(),
@@ -372,6 +374,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
         ),
         Err(error) => tracing::warn!(
             target: "styra_tui::render",
+            pid = std::process::id(),
             session_id = %app.session_id,
             view = ?app.view,
             elapsed_ms = started.elapsed().as_millis(),

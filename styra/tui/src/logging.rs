@@ -5,10 +5,14 @@
 
 use anyhow::{Context, Result};
 use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tracing::Level;
 use tracing_subscriber::fmt::time::UtcTime;
+use tracing_subscriber::fmt::MakeWriter;
 
 const LOG_NAME: &str = "styra-tui.log";
 
@@ -51,10 +55,76 @@ fn install_file(file: File) -> Result<()> {
         .with_ansi(false)
         .with_target(true)
         .with_timer(UtcTime::rfc_3339())
-        .with_writer(file)
+        .with_writer(LineWriterFactory::new(file))
         .finish();
     tracing::subscriber::set_global_default(subscriber)
         .context("installing the TUI tracing subscriber")
+}
+
+/// Makes one tracing event one append operation. `flock` serializes that
+/// operation with other Styra TUI processes, while the mutex covers writers in
+/// this process (which share one open file description, and thus one flock).
+#[derive(Clone)]
+struct LineWriterFactory {
+    file: Arc<Mutex<File>>,
+}
+
+impl LineWriterFactory {
+    fn new(file: File) -> Self {
+        Self {
+            file: Arc::new(Mutex::new(file)),
+        }
+    }
+}
+
+impl<'a> MakeWriter<'a> for LineWriterFactory {
+    type Writer = LineWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        LineWriter {
+            file: Arc::clone(&self.file),
+            bytes: Vec::new(),
+        }
+    }
+}
+
+/// Buffers formatter fragments until the event is complete, then appends them
+/// as a locked whole line when tracing drops the writer.
+struct LineWriter {
+    file: Arc<Mutex<File>>,
+    bytes: Vec<u8>,
+}
+
+impl Write for LineWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for LineWriter {
+    fn drop(&mut self) {
+        if self.bytes.is_empty() {
+            return;
+        }
+        let mut file = self
+            .file
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let descriptor = file.as_raw_fd();
+        // Every Styra TUI writer takes this advisory lock. If it cannot be
+        // acquired, skip this diagnostic event rather than delaying or
+        // destabilising the terminal UI.
+        if unsafe { libc::flock(descriptor, libc::LOCK_EX) } == -1 {
+            return;
+        }
+        let _ = file.write_all(&self.bytes);
+        let _ = unsafe { libc::flock(descriptor, libc::LOCK_UN) };
+    }
 }
 
 #[cfg(test)]
@@ -67,5 +137,24 @@ mod tests {
             path_for_socket(Path::new("/run/user/1000/styra/styra.sock")),
             PathBuf::from("/run/user/1000/styra/styra-tui.log")
         );
+    }
+
+    #[test]
+    fn formatter_fragments_become_one_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("styra-tui.log");
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let factory = LineWriterFactory::new(file);
+        let mut writer = factory.make_writer();
+
+        writer.write_all(b"first ").unwrap();
+        writer.write_all(b"record\n").unwrap();
+        drop(writer);
+
+        assert_eq!(fs::read_to_string(path).unwrap(), "first record\n");
     }
 }

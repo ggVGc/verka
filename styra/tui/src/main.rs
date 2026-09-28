@@ -208,7 +208,12 @@ fn main() -> Result<()> {
     if let Some(socket) = log_socket {
         let log_path = logging::path_for_socket(&socket);
         logging::install(&log_path, cli.socket.is_none())?;
-        tracing::info!(target: "styra_tui::startup", log_path = %log_path.display(), "TUI logging started");
+        tracing::info!(
+            target: "styra_tui::startup",
+            pid = std::process::id(),
+            log_path = %log_path.display(),
+            "TUI logging started"
+        );
     }
     let config = Defaults;
 

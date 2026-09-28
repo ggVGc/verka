@@ -493,6 +493,7 @@ pub fn run(
 ) -> Result<RunOutcome> {
     tracing::debug!(
         target: "styra_tui::event_loop",
+        pid = std::process::id(),
         session_id = %app.session_id,
         "entered event loop"
     );
@@ -535,6 +536,7 @@ pub fn run(
                 Err(error) => {
                     tracing::warn!(
                         target: "styra_tui::rpc",
+                        pid = std::process::id(),
                         session_id = %app.session_id,
                         error = %error,
                         "update poll failed"

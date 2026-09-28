@@ -3296,6 +3296,7 @@ dependencies = [
  "cpal",
  "crossterm 0.28.1",
  "hound",
+ "libc",
  "protocol",
  "pulldown-cmark",
  "serde",
