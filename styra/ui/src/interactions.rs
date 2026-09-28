@@ -26,6 +26,10 @@ pub enum InteractionRow<'a> {
     Interaction {
         name: Cow<'a, str>,
         provider: &'a str,
+        /// The Git branch checked out for this interaction. `None` means the
+        /// interaction is not associated with a Git checkout; a detached
+        /// checkout is passed as the descriptive text `detached head`.
+        branch: Option<&'a str>,
         status: InteractionStatus,
         current: bool,
         selected: bool,
@@ -122,6 +126,7 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
     let InteractionRow::Interaction {
         name,
         provider,
+        branch,
         status,
         current,
         loading,
@@ -167,6 +172,12 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
             Style::default().fg(palette::ACCENT),
         ),
     ];
+    if let Some(branch) = branch {
+        main.push(Span::styled(
+            format!(" · branch {branch}"),
+            Style::default().fg(palette::INTERACTION_STATUS_INFO),
+        ));
+    }
     if let Some(why) = stop_reason {
         main.push(Span::styled(
             format!(" · {why}"),
@@ -284,6 +295,7 @@ mod tests {
                 InteractionRow::Interaction {
                     name: "repair checkout".into(),
                     provider: "codex",
+                    branch: Some("fix"),
                     status: InteractionStatus::Running { events: 3 },
                     current: true,
                     selected: true,
@@ -301,7 +313,10 @@ mod tests {
         };
         let screen = rendered(&view);
         assert!(screen.contains("Payments"), "{screen}");
-        assert!(screen.contains("⠸ repair checkout · codex"), "{screen}");
+        assert!(
+            screen.contains("⠸ repair checkout · codex · branch fix"),
+            "{screen}"
+        );
         assert!(screen.contains("NEWLY IDLE · #bug #urgent"), "{screen}");
         assert!(screen.contains("« The checks are green."), "{screen}");
         assert_eq!(height(&view, 12), 5);
@@ -319,6 +334,7 @@ mod tests {
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 provider: "claude",
+                branch: None,
                 status: InteractionStatus::Idle,
                 current: false,
                 selected: false,
@@ -347,6 +363,7 @@ mod tests {
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 provider: "claude",
+                branch: None,
                 status: InteractionStatus::Stopped,
                 current: false,
                 selected: false,
@@ -376,6 +393,7 @@ mod tests {
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 provider: "claude",
+                branch: None,
                 status: InteractionStatus::Idle,
                 current: false,
                 selected: false,
@@ -403,6 +421,7 @@ mod tests {
                 InteractionRow::Interaction {
                     name: "shown below".into(),
                     provider: "claude",
+                    branch: None,
                     status: InteractionStatus::Idle,
                     current: true,
                     selected: false,
@@ -419,6 +438,7 @@ mod tests {
                 InteractionRow::Interaction {
                     name: "being loaded".into(),
                     provider: "codex",
+                    branch: None,
                     status: InteractionStatus::Pending,
                     current: false,
                     selected: true,

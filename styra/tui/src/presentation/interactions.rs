@@ -87,6 +87,10 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         rows.push(InteractionRow::Interaction {
             name,
             provider: interaction.selection.provider.as_str(),
+            branch: interaction
+                .checkout
+                .as_ref()
+                .map(|checkout| checkout.branch.as_deref().unwrap_or("detached head")),
             status,
             current: interaction.id == app.session_id,
             selected: interaction.id == cursor,

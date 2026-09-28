@@ -114,7 +114,9 @@ interaction's tags, and `D` deletes a stopped
 interaction (the durable Session remains). The interaction under the cursor is
 loaded once the cursor rests on it, so the list can be crossed without waiting
 for every row on the way; the row being loaded says so, and any other key acts
-on it as soon as it arrives. An interaction that went idle away from every
+on it as soon as it arrives. When an interaction is associated with a Git
+checkout, its row also names the checked-out branch (or says `detached head`).
+An interaction that went idle away from every
 client's screen, and has not been focused since, is marked `NEWLY IDLE`; the
 footer counts those rows until they are focused. Finishing a turn while a client
 is showing it is not one of them — you watched it happen.
