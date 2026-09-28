@@ -734,7 +734,7 @@ mod tests {
         let highlighted: Vec<&str> = render.lines[0]
             .spans
             .iter()
-            .filter(|span| span.style.bg == Some(palette::SELECTION_MARKER))
+            .filter(|span| span.style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND))
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(highlighted, vec!["lib.rs:7"]);
@@ -748,7 +748,7 @@ mod tests {
             markdown_block_render(source, base, "", links, Some(0)).lines[0]
                 .spans
                 .iter()
-                .filter(|span| span.style.bg == Some(palette::SELECTION_MARKER))
+                .filter(|span| span.style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND))
                 .map(|span| span.content.to_string())
                 .collect::<Vec<String>>()
                 .concat()
@@ -774,7 +774,7 @@ mod tests {
             .lines
             .iter()
             .flat_map(|line| &line.spans)
-            .all(|span| span.style.bg != Some(palette::SELECTION_MARKER)));
+            .all(|span| span.style.bg != Some(palette::LINK_HIGHLIGHT_BACKGROUND)));
     }
 
     #[test]
@@ -791,7 +791,7 @@ mod tests {
         let highlighted: Vec<&str> = render.lines[0]
             .spans
             .iter()
-            .filter(|span| span.style.bg == Some(palette::SELECTION_MARKER))
+            .filter(|span| span.style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND))
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(highlighted, vec!["app.rs"]);

@@ -388,12 +388,29 @@ mod tests {
         app.toggle_entry_log();
         app.preview.show();
 
-        let screen = test_support::screen_sized(&app, 120, 30);
+        let (width, height) = (120, 30);
+        let split = width / 2;
+        let screen = test_support::screen_sized(&app, width, height);
         let (preview_x, preview_y) = screen.find("preview · pretty");
         let (entry_log_x, entry_log_y) = screen.find("entry log · follows selection");
-        assert!(preview_x > 70, "the preview is the right-hand pane");
+        let (_, conversation_bottom) = screen.find("conversation only");
+
+        assert!(preview_x > split, "the preview is the right-hand pane");
         assert_eq!(preview_y, 0, "the preview starts at the top");
-        assert!(entry_log_x < 70, "the entry log stays in the left pane");
-        assert!(entry_log_y > 15, "the entry log stays below the main list");
+        assert!(entry_log_x < split, "the entry log stays in the left pane");
+        assert!(
+            entry_log_y > conversation_bottom,
+            "the entry log stays below the main list"
+        );
+        // The left pane closes and reopens around the entry log; the preview's
+        // own box closes only at the bottom of the primary area.
+        let bottom = screen.row(height - 2);
+        assert!(
+            bottom
+                .chars()
+                .skip(usize::from(split))
+                .any(|glyph| glyph == '└'),
+            "the preview runs the full primary height: {bottom:?}"
+        );
     }
 }
