@@ -1,3 +1,5 @@
+- User defined actions -> Store per workspace or global -> Attach such actions as hooks, e.g "run 'cargo fmt' after merge/complete-interaction"
+  - Actions = Some kind of visual DSL
 - Proper way of finishing an interaction inside a worktree by rebasing on the source branch, merging, and deleting branch/worktree if successful:
   - This should be handled by styra, not by asking an agent.
 - Tool execution should run in a sandbox which does not have any knowledge of agent directories, e.g ~/.claude and ~/.codex
