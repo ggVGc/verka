@@ -21,6 +21,7 @@ pub mod driva;
 pub mod event_list;
 pub mod files;
 pub mod footer;
+pub mod fuzzy_list;
 pub mod help;
 pub mod interactions;
 pub mod launcher;
