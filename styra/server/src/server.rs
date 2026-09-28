@@ -1138,6 +1138,11 @@ impl ServerState {
     }
 
     /// Give a Session that launched without one a checkout of its own.
+    ///
+    /// The `W` shortcut takes this path after the Session already has a
+    /// conversation.  Its first prompt is still the description of the work,
+    /// so name the branch with the same errand used when that prompt initially
+    /// asked for a worktree rather than leaving an opaque id-only branch.
     fn create_session_worktree(&self, id: &str) -> Result<()> {
         let session = self.stored_summary(id)?;
         let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
@@ -1152,7 +1157,11 @@ impl ServerState {
         let Some(worktrees) = self.workspace_worktrees(&workspace, true)? else {
             anyhow::bail!("the Workspace is not inside a Git working tree");
         };
-        let checkout = crate::worktree::Checkout::at(worktrees.checkout(id, None)?);
+        let topic =
+            crate::naming::topic_for_prompt(&session.selection, session.first_prompt.as_deref());
+        let checkout = crate::worktree::Checkout::at(
+            worktrees.checkout(id, topic.as_ref().map(Topic::branch))?,
+        );
         journal::store_session_checkout(&session.path, &checkout)?;
         Ok(())
     }
@@ -4305,6 +4314,45 @@ mod tests {
         let session_path = journal.path().parent().unwrap().to_path_buf();
         drop(journal);
         (store, host, state, workspace, id, session_path)
+    }
+
+    /// `W` may be pressed after a Session has already received several turns.
+    /// Its linked checkout is still named for the opening task, just like a
+    /// checkout requested together with that opening prompt.
+    #[test]
+    fn an_existing_sessions_worktree_is_named_for_its_first_prompt() {
+        let (store, host, state, workspace, id, session_path) =
+            stored_session("name-existing-worktree");
+        let mut journal = Journal::open(&session_path).unwrap();
+        journal
+            .record_user_message("Fix the flaky checkout test")
+            .unwrap();
+        journal
+            .record_user_message("Then add a regression test")
+            .unwrap();
+        drop(journal);
+
+        state.create_session_worktree(&id).unwrap();
+
+        let checkout = journal::read_session_checkout(&session_path)
+            .unwrap()
+            .expect("the new checkout is recorded");
+        let expected_suffix = format!("-{id}");
+        let name = checkout.path.file_name().unwrap().to_string_lossy();
+        assert!(name.ends_with(&expected_suffix), "{name}");
+        assert_ne!(name, id, "the first prompt supplies a branch topic");
+        assert_eq!(
+            checkout.branch,
+            format!("styra/{name}"),
+            "the branch and checkout use the same errand-derived name"
+        );
+        assert_eq!(
+            checkout.path.parent(),
+            Some(crate::workspace::worktrees_dir(&store, &workspace.id).as_path())
+        );
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
     }
 
     /// Sealing is only final if nothing starts the Session again, so the
