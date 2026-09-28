@@ -1038,13 +1038,16 @@ impl App {
 
     // --- Markdown-link navigation ------------------------------------------
 
-    /// Select the first link at or below the selected event. The selection is
-    /// kept in timeline coordinates, so it remains correct as messages wrap
-    /// or link destinations are toggled.
+    /// Select the first link at or below the selected event, wrapping to the
+    /// start of the visible conversation when the selection is after its last
+    /// link. The selection is kept in timeline coordinates, so it remains
+    /// correct as messages wrap or link destinations are toggled.
     pub fn highlight_first_link(&mut self) {
         self.view = View::Events;
         let start = self.timeline.selected;
-        self.link_highlight = self.find_link_from(start, 0);
+        self.link_highlight = self
+            .find_link_from(start, 0)
+            .or_else(|| self.find_link_before(start));
         if self.link_highlight.is_none() {
             self.show_action_message("no Markdown links in the visible conversation");
         }
@@ -1099,15 +1102,25 @@ impl App {
     /// editor. Relative destinations are rooted in the current workspace, as
     /// file citations were before link navigation replaced their picker.
     pub fn open_highlighted_link(&mut self) {
-        let Some(highlight) = self.link_highlight else {
-            return;
+        let Some((_, path, _)) = self.highlighted_link_target() else {
+            return self.show_action_message("selected link no longer exists");
         };
+        self.ask(Request::OpenPath(path));
+        self.clear_link_highlight();
+    }
+
+    /// The active Markdown link as written, where it resolves on this host,
+    /// and its optional one-based line number. The preview and opener share
+    /// this so a `path:line` citation never attempts to read a file literally
+    /// named `path:line`.
+    pub fn highlighted_link_target(&self) -> Option<(String, PathBuf, Option<u32>)> {
+        let highlight = self.link_highlight?;
         let destination = self
             .selection
             .provider
             .protocol()
             .presented_detail(
-                &self.timeline.entries[highlight.entry].event,
+                &self.timeline.entries.get(highlight.entry)?.event,
                 styra_protocol::event::PresentationMode::Pretty,
             )
             .into_iter()
@@ -1128,20 +1141,14 @@ impl App {
                 }
             })
             .flatten()
-            .next();
-        let Some(destination) = destination else {
-            return self.show_action_message("selected link no longer exists");
-        };
-        let path = PathBuf::from(destination);
-        let path = if path.is_absolute() {
-            path
-        } else if let Some(root) = self.workspace.root_or_current_directory() {
-            root.join(path)
+            .next()?;
+        let (path, line) = split_link_location(&destination);
+        let resolved = if let Some(root) = self.workspace.root_or_current_directory() {
+            files::resolve(&root, path)
         } else {
-            path
+            PathBuf::from(path)
         };
-        self.ask(Request::OpenPath(path));
-        self.clear_link_highlight();
+        Some((destination, resolved, line))
     }
 
     fn find_link_from(&self, start: usize, first_link: usize) -> Option<LinkHighlight> {
@@ -1152,6 +1159,26 @@ impl App {
             let link = if index == start { first_link } else { 0 };
             if link < self.entry_link_count(index) {
                 return Some(LinkHighlight { entry: index, link });
+            }
+        }
+        None
+    }
+
+    /// Find the last visible link before `end`. This is the wrapped portion
+    /// of the initial `f` search, so it lands on the nearest citation above
+    /// the current selection; next/previous link navigation itself stays
+    /// bounded at the ends so it never unexpectedly loops while reading.
+    fn find_link_before(&self, end: usize) -> Option<LinkHighlight> {
+        for index in (0..end.min(self.timeline.entries.len())).rev() {
+            if !self.timeline.is_visible(index) {
+                continue;
+            }
+            let count = self.entry_link_count(index);
+            if count > 0 {
+                return Some(LinkHighlight {
+                    entry: index,
+                    link: count - 1,
+                });
             }
         }
         None
@@ -1367,6 +1394,27 @@ impl App {
         )
         .then(|| self.requests.pop_front())
         .flatten()
+    }
+}
+
+/// Split a Markdown destination's optional `:line[:column]` suffix without
+/// disturbing drive-letter or colon-bearing paths. The rightmost numeric part
+/// is a line unless another numeric part precedes it, in which case it is a
+/// column and the preceding part is the line.
+fn split_link_location(destination: &str) -> (&str, Option<u32>) {
+    let Some((before_last, last)) = destination.rsplit_once(':') else {
+        return (destination, None);
+    };
+    let Ok(last) = last.parse::<u32>() else {
+        return (destination, None);
+    };
+    if let Some((path, line)) = before_last
+        .rsplit_once(':')
+        .and_then(|(path, line)| line.parse::<u32>().ok().map(|line| (path, line)))
+    {
+        (path, Some(line))
+    } else {
+        (before_last, Some(last))
     }
 }
 
@@ -3304,5 +3352,41 @@ mod tests {
         app.highlight_first_link();
         app.clear_link_highlight();
         assert!(app.link_highlight.is_none());
+    }
+
+    #[test]
+    fn link_highlighting_wraps_when_started_below_the_last_reference() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage {
+            text: "see [first](src/lib.rs:4) then [last](src/main.rs:12)".into(),
+        });
+        app.push_event(AgentEvent::CommandStarted {
+            command: "cargo test".into(),
+        });
+        app.timeline.selected = 1;
+
+        app.highlight_first_link();
+
+        assert_eq!(
+            app.link_highlight,
+            Some(LinkHighlight { entry: 0, link: 1 })
+        );
+    }
+
+    #[test]
+    fn link_locations_separate_a_line_and_optional_column_from_the_path() {
+        assert_eq!(split_link_location("src/main.rs"), ("src/main.rs", None));
+        assert_eq!(
+            split_link_location("src/main.rs:12"),
+            ("src/main.rs", Some(12))
+        );
+        assert_eq!(
+            split_link_location("src/main.rs:12:4"),
+            ("src/main.rs", Some(12))
+        );
+        assert_eq!(
+            split_link_location("C:\\work\\main.rs:9"),
+            ("C:\\work\\main.rs", Some(9))
+        );
     }
 }

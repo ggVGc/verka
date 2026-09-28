@@ -27,8 +27,25 @@ pub struct PreviewView<'a> {
     pub target: PreviewTarget,
     pub links: LinkDisplay,
     pub link_highlight: Option<EntryIndex>,
+    /// The local destination being inspected while Markdown-link navigation is
+    /// active. This supersedes the conversation entry in the preview pane.
+    pub file_target: Option<FileTarget>,
     pub requested_scroll: u16,
     pub fullscreen: bool,
+}
+
+pub struct FileTarget {
+    /// The destination exactly as the link wrote it, including any position.
+    pub location: String,
+    pub content: FileTargetContent,
+    /// A one-based source line from the destination, if one was supplied.
+    pub line: Option<u32>,
+}
+
+pub enum FileTargetContent {
+    Empty,
+    Ready(String),
+    Failed(String),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -38,6 +55,15 @@ pub struct PreviewFeedback {
 }
 
 pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewFeedback {
+    if let Some(target) = &view.file_target {
+        let content = match &target.content {
+            FileTargetContent::Empty => crate::files::FileContent::Empty,
+            FileTargetContent::Ready(content) => crate::files::FileContent::Ready(content),
+            FileTargetContent::Failed(error) => crate::files::FileContent::Failed(error),
+        };
+        crate::files::render_content(frame, Some(&target.location), content, target.line, area);
+        return PreviewFeedback::default();
+    }
     let (content_area, block) = if view.fullscreen {
         (area, None)
     } else {

@@ -286,7 +286,7 @@ fn render_files(
         columns[1]
     };
     files::render_tree(frame, view.files, view.selected, view.scope, left[1]);
-    files::render_content(frame, view.selected_name, view.content, content_area);
+    files::render_content(frame, view.selected_name, view.content, None, content_area);
 }
 
 fn preview_panel(view: &preview::PreviewView<'_>) -> crate::PreviewPanel {

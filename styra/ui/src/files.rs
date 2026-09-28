@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use std::collections::BTreeSet;
+use std::path::Path;
 
 /// Display-ready path structure. Display strings are owned because converting
 /// platform paths may be lossy; file contents remain separate and borrowed.
@@ -124,15 +125,17 @@ pub fn render_content(
     frame: &mut Frame,
     title: Option<&str>,
     content: FileContent<'_>,
+    marked_line: Option<u32>,
     area: Rect,
 ) {
-    let (title, text) = match content {
+    let (title, text, scroll) = match content {
         FileContent::None => (
             " file preview ".into(),
             Text::from(Line::from(Span::styled(
                 "no file selected",
                 Style::default().fg(palette::MUTED_TEXT),
             ))),
+            0,
         ),
         FileContent::Empty => (
             format!(" {} ", title.unwrap_or_default()),
@@ -140,17 +143,66 @@ pub fn render_content(
                 "(empty file)",
                 Style::default().fg(palette::MUTED_TEXT),
             ))),
+            0,
         ),
-        FileContent::Ready(content) => (
-            format!(" {} ", title.unwrap_or_default()),
-            Text::from(content.replace('\t', "    ")),
-        ),
+        FileContent::Ready(content) => {
+            let content = content.replace('\t', "    ");
+            let lines =
+                crate::markdown::syntax_highlighted_code_lines(&content, file_language(title), "")
+                    .unwrap_or_else(|| {
+                        content
+                            .lines()
+                            .map(|line| Line::from(line.to_owned()))
+                            .collect()
+                    });
+            if let Some(marked) = marked_line {
+                let marked_index = usize::try_from(marked.saturating_sub(1)).unwrap_or(usize::MAX);
+                let lines: Vec<_> = lines
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        let selected = index == marked_index;
+                        let style = if selected {
+                            Style::default().bg(palette::SELECTION_BACKGROUND)
+                        } else {
+                            Style::default()
+                        };
+                        let mut spans = vec![Span::styled(
+                            format!("{}{:>5} │ ", if selected { "▶" } else { " " }, index + 1),
+                            style.fg(if selected {
+                                palette::SELECTION_MARKER
+                            } else {
+                                palette::MUTED_TEXT
+                            }),
+                        )];
+                        spans.extend(line.spans);
+                        Line::from(spans).style(line.style.patch(style))
+                    })
+                    .collect();
+                let viewport = usize::from(area.height.saturating_sub(2));
+                let scroll = marked_index
+                    .saturating_sub(viewport / 2)
+                    .min(usize::from(u16::MAX)) as u16;
+                (
+                    format!(" {} ", title.unwrap_or_default()),
+                    Text::from(lines),
+                    scroll,
+                )
+            } else {
+                (
+                    format!(" {} ", title.unwrap_or_default()),
+                    Text::from(lines),
+                    0,
+                )
+            }
+        }
         FileContent::Failed(error) => (
             format!(" {} ", title.unwrap_or_default()),
             Text::from(Line::from(Span::styled(
                 format!("could not read file: {error}"),
                 Style::default().fg(palette::ERROR),
             ))),
+            0,
         ),
     };
     let block = Block::default()
@@ -158,9 +210,55 @@ pub fn render_content(
         .border_style(Style::default().fg(palette::INACTIVE))
         .title(Span::styled(title, Style::default().fg(palette::ACCENT)));
     frame.render_widget(
-        Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
+        Paragraph::new(text)
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
         area,
     );
+}
+
+/// The TextMate grammar name for a previewed filename. Link targets can carry
+/// `:line[:column]`, so peel those numeric suffixes before asking `Path` for
+/// its extension.
+fn file_language(title: Option<&str>) -> Option<&'static str> {
+    let mut path = title?;
+    for _ in 0..2 {
+        let Some((before, suffix)) = path.rsplit_once(':') else {
+            break;
+        };
+        if suffix.parse::<u32>().is_err() {
+            break;
+        }
+        path = before;
+    }
+    match Path::new(path)
+        .extension()?
+        .to_str()?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "rs" => Some("rust"),
+        "py" => Some("python"),
+        "js" | "jsx" => Some("javascript"),
+        "ts" | "tsx" => Some("typescript"),
+        "json" => Some("json"),
+        "toml" => Some("toml"),
+        "yaml" | "yml" => Some("yaml"),
+        "sh" | "bash" | "zsh" => Some("bash"),
+        "c" | "h" => Some("c"),
+        "cc" | "cpp" | "cxx" | "hpp" => Some("cpp"),
+        "go" => Some("go"),
+        "java" => Some("java"),
+        "rb" => Some("ruby"),
+        "php" => Some("php"),
+        "sql" => Some("sql"),
+        "html" | "htm" => Some("html"),
+        "css" => Some("css"),
+        "md" | "mdx" => Some("markdown"),
+        "xml" => Some("xml"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -183,6 +281,7 @@ mod tests {
                     frame,
                     files.first().map(|file| file.reported.as_str()),
                     content,
+                    None,
                     panes[1],
                 );
             })
@@ -214,5 +313,36 @@ mod tests {
         assert!(screen(&[], FileContent::None).contains("no file selected"));
         assert!(screen(&[], FileContent::Empty).contains("(empty file)"));
         assert!(screen(&[], FileContent::Failed("denied")).contains("could not read file: denied"));
+    }
+
+    #[test]
+    fn a_target_line_is_numbered_and_marked() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_content(
+                    frame,
+                    Some("src/main.rs:2"),
+                    FileContent::Ready("first\nsecond\nthird"),
+                    Some(2),
+                    frame.area(),
+                );
+            })
+            .unwrap();
+        let output = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(output.contains("▶    2 │ second"), "{output}");
+    }
+
+    #[test]
+    fn file_extensions_select_the_syntax_grammar_even_with_a_location_suffix() {
+        assert_eq!(file_language(Some("src/main.rs:12")), Some("rust"));
+        assert_eq!(file_language(Some("web/app.tsx:8:3")), Some("typescript"));
+        assert_eq!(file_language(Some("notes.txt")), None);
     }
 }

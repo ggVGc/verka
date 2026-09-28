@@ -5,6 +5,18 @@ use crate::app::App;
 use crate::preview::PreviewTarget;
 
 pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewView<'_> {
+    let file_target = app.highlighted_link_target().map(|(location, path, line)| {
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) if content.is_empty() => styra_ui::preview::FileTargetContent::Empty,
+            Ok(content) => styra_ui::preview::FileTargetContent::Ready(content),
+            Err(error) => styra_ui::preview::FileTargetContent::Failed(error.to_string()),
+        };
+        styra_ui::preview::FileTarget {
+            location,
+            content,
+            line,
+        }
+    });
     let entry = app
         .preview_entry()
         .map(|entry| styra_ui::event_list::EventEntry {
@@ -31,6 +43,7 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
             .link_highlight
             .filter(|highlight| highlight.entry == app.timeline.selected)
             .map(|highlight| highlight.link),
+        file_target,
         requested_scroll: app.preview.scroll.offset,
         fullscreen,
     }
