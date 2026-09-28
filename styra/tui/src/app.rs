@@ -97,6 +97,27 @@ pub enum View {
     Preview,
 }
 
+/// Which page of the details view is visible.
+///
+/// The sandbox account is intentionally separate from the Workspace and
+/// interaction metadata: it is long enough to need the whole panel, while the
+/// policy controls belong with the details they change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DetailsTab {
+    #[default]
+    Details,
+    Sandbox,
+}
+
+impl DetailsTab {
+    pub fn other(self) -> Self {
+        match self {
+            Self::Details => Self::Sandbox,
+            Self::Sandbox => Self::Details,
+        }
+    }
+}
+
 /// What a launch is asked for beyond the agent selection: the sandbox policy
 /// inputs the server resolves into a concrete Driva request.
 ///
@@ -191,6 +212,12 @@ pub struct App {
     pub timeline: Timeline,
     pub focus: Focus,
     pub view: View,
+    /// The open page within the details view.
+    pub details_tab: DetailsTab,
+    /// Scroll position for the Details page's Workspace, interaction, and
+    /// sandbox-summary document. The Sandbox page keeps its own position in
+    /// [`Launch::scroll`].
+    pub details_scroll: Scroll,
     /// The full-screen keyboard reference; see [`Help`].
     pub help: Help,
     /// The message being typed and the ones already sent; see [`Composer`].
@@ -426,6 +453,8 @@ impl App {
             timeline: Timeline::default(),
             focus: Focus::List,
             view: View::Events,
+            details_tab: DetailsTab::default(),
+            details_scroll: Scroll::default(),
             help: Help::default(),
             composer: Composer::default(),
             interactions: LiveInteractions::default(),

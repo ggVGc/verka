@@ -499,8 +499,13 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
                 app.preview.scroll.note_limit(scroll.limit);
             }
             styra_ui::PanelId::Driva { .. } => {
-                app.launch.scroll.offset = scroll.effective_offset;
-                app.launch.scroll.note_limit(scroll.limit);
+                if app.details_tab == crate::app::DetailsTab::Details {
+                    app.details_scroll.offset = scroll.effective_offset;
+                    app.details_scroll.note_limit(scroll.limit);
+                } else {
+                    app.launch.scroll.offset = scroll.effective_offset;
+                    app.launch.scroll.note_limit(scroll.limit);
+                }
             }
             styra_ui::PanelId::EntryLog => {
                 app.entry_log.scroll.offset = scroll.effective_offset;

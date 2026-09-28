@@ -1,6 +1,6 @@
 //! Mapping from launch, workspace, and interaction state to the Driva model.
 
-use crate::app::App;
+use crate::app::{App, DetailsTab};
 use crate::launch::LaunchScope;
 
 pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
@@ -46,6 +46,11 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
     DrivaView {
         chrome: super::panel_chrome(app, Some("details")),
         editable: app.can_edit_launch(),
+        tab: match app.details_tab {
+            DetailsTab::Details => styra_ui::driva::DetailsTab::Details,
+            DetailsTab::Sandbox => styra_ui::driva::DetailsTab::Sandbox,
+        },
+        details_requested_scroll: app.details_scroll.offset,
         launch: DrivaLaunch {
             workspace: &app.launch.workspace,
             interaction: &app.launch.interaction,

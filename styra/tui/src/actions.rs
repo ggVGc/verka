@@ -82,6 +82,7 @@ pub(crate) enum Action {
     PreviewLinks,
     PreviewLinkDestinations,
     PreviewCopy,
+    DrivaTab,
     DrivaScope,
     DrivaNextMount,
     DrivaPrevMount,
@@ -298,6 +299,7 @@ impl Action {
             Self::PreviewLinks => "highlight conversation links",
             Self::PreviewLinkDestinations => "toggle link destinations",
             Self::PreviewCopy => "copy the previewed entry to clipboard",
+            Self::DrivaTab => "switch between Details and Sandbox",
             Self::DrivaScope => "edit the Workspace's policy / this interaction's",
             Self::DrivaNextMount => "next mount",
             Self::DrivaPrevMount => "previous mount",
@@ -310,10 +312,8 @@ impl Action {
             Self::DrivaIgnoreWorkspace => "this interaction adds to / ignores the Workspace policy",
             Self::DrivaPromote => "move this interaction's policy up into the Workspace's",
             Self::DrivaSaveDefault => "save this interaction's policy for new clients",
-            Self::DrivaPageDown => {
-                "scroll the sandbox account down: mounts, floor, environment, private root"
-            }
-            Self::DrivaPageUp => "scroll the sandbox account up",
+            Self::DrivaPageDown => "scroll the current Details or Sandbox page down",
+            Self::DrivaPageUp => "scroll the current Details or Sandbox page up",
             Self::FilesNext => "next file",
             Self::FilesPrev => "previous file",
             Self::FilesNextEntry => "next interaction-log entry",

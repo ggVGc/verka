@@ -350,10 +350,11 @@ pub fn handle_list_key(
         // reaching the transcript or a new session from this view must keep
         // working while the policy is being edited.
         //
-        // Every editing key acts on whichever of the two layers `Tab` has
-        // focused, so there is one set of them to learn rather than one per
+        // Every editing key acts on whichever of the two layers the up/down
+        // arrows focus, so there is one set of them to learn rather than one per
         // layer — and the view says which layer that is.
         View::Driva => match key {
+            k if DRIVA_TAB.matches(k) => app.details_tab = app.details_tab.other(),
             // Git checkout association is Workspace metadata, so it does not
             // depend on which policy pane happens to be focused.
             k if DRIVA_GIT_CHECKOUT.matches(k) => {
@@ -404,12 +405,20 @@ pub fn handle_list_key(
             k if DRIVA_PROMOTE.matches(k) => launch::promote_to_workspace(app),
             k if DRIVA_NEXT_MOUNT.matches(k) => launch::select_next_mount(app),
             k if DRIVA_PREV_MOUNT.matches(k) => launch::select_prev_mount(app),
-            // The sandbox account above the panes is longer than a terminal —
-            // mounts, the backend's floor, the environment, the private root —
-            // and all of it is meant to be readable, so what does not fit is
-            // paged rather than lost. `j`/`k` are the mount cursor's.
-            k if DRIVA_PAGE_DOWN.matches(k) => app.launch.scroll.page_down(),
-            k if DRIVA_PAGE_UP.matches(k) => app.launch.scroll.page_up(),
+            k if DRIVA_PAGE_DOWN.matches(k) => {
+                if app.details_tab == crate::app::DetailsTab::Details {
+                    app.details_scroll.page_down()
+                } else {
+                    app.launch.scroll.page_down()
+                }
+            }
+            k if DRIVA_PAGE_UP.matches(k) => {
+                if app.details_tab == crate::app::DetailsTab::Details {
+                    app.details_scroll.page_up()
+                } else {
+                    app.launch.scroll.page_up()
+                }
+            }
             _ => {}
         },
         // Re-reading is on the capitals so `j` and `k` stay navigation, as

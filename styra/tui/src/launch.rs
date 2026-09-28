@@ -11,7 +11,8 @@
 //! policy applies to every launch there and outlives every interaction in it;
 //! this interaction's own settings are layered over it and go when it does.
 //! [`Launch`] holds both, plus which one the keys are on ([`LaunchScope`]), and
-//! the same key does the same thing to whichever that is.
+//! the same key does the same thing to whichever that is. The details view's
+//! up/down arrows move the focus between those panes.
 //!
 //! The split of responsibility here is deliberate: [`Launch`] holds the data
 //! and makes the decisions that are only about policy (does this mount change
@@ -31,7 +32,7 @@ use styra_protocol::{DrivaOptions, LaunchMount, LaunchPolicy, WorkspaceLaunchCha
 /// The layers were only ever *shown* apart, while every key edited the second —
 /// so changing what a body of work always needs meant tuning one interaction
 /// and promoting it. The view now names one of them as the one being edited,
-/// and `Tab` moves between them.
+/// and the up/down arrows move between them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LaunchScope {
     /// The Workspace's standing policy: every launch here starts from it,

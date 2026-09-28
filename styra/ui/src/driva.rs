@@ -11,9 +11,9 @@
 //! interaction in it, while this interaction's own settings are layered over it
 //! and go when it does. Each gets its own pane, with the same three rows in the
 //! same order, so the difference between them is which pane a grant sits in and
-//! nothing else. `Tab` moves the editing keys between the panes and the focused
-//! one says so; every other key acts on whichever that is, so there is one set
-//! of keys rather than one per layer.
+//! nothing else. The up/down arrows move the editing keys between the panes and
+//! the focused one says so; every other key acts on whichever that is, so there
+//! is one set of keys rather than one per layer.
 //!
 //! Above both is the policy those two resolve to, which is what the agent
 //! actually gets — including the parts neither pane can change: the workspace
@@ -37,6 +37,14 @@ pub enum LaunchScope {
     Workspace,
     #[default]
     Interaction,
+}
+
+/// The current page of the details panel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DetailsTab {
+    #[default]
+    Details,
+    Sandbox,
 }
 
 impl LaunchScope {
@@ -144,6 +152,8 @@ impl DrivaLaunch<'_> {
 pub struct DrivaView<'a> {
     pub chrome: PanelChrome,
     pub editable: bool,
+    pub tab: DetailsTab,
+    pub details_requested_scroll: u16,
     pub launch: DrivaLaunch<'a>,
     pub workspace: DrivaWorkspace,
     pub activity: DrivaActivity,
@@ -186,20 +196,30 @@ const SETTING_LABEL: usize = 10;
 pub fn render(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
     let block = panel_block(&app.chrome);
     let options = app.launch.driva;
+    let mut inner = block.inner(area);
+    frame.render_widget(block, area);
+    let tabs = Rect {
+        height: inner.height.min(1),
+        ..inner
+    };
+    render_tabs(frame, app.tab, tabs);
+    inner.y = inner.y.saturating_add(tabs.height);
+    inner.height = inner.height.saturating_sub(tabs.height);
+
+    if app.tab == DetailsTab::Sandbox {
+        return render_sandbox(frame, app, options, inner);
+    }
 
     // A live interaction's policy is a record: there is nothing to choose, so
     // the panes and their keys are not drawn over it at all.
     if !app.can_edit_launch() {
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        let feedback = render_summary(frame, app, options, inner);
+        let feedback = render_overview(frame, app, inner);
         render_prompt(frame, app, area);
         render_git_repository_prompt(frame, app, area);
         return feedback;
     }
 
-    let mut rest = block.inner(area);
-    frame.render_widget(block, area);
+    let mut rest = inner;
 
     // Carved from the bottom: the panes and the keys for them are the point of
     // this screen while it is editable, and each is given only what is left
@@ -212,7 +232,7 @@ pub fn render(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
     let interaction_area = take_bottom(&mut rest, interaction.len() as u16 + 2, SUMMARY_MIN_HEIGHT);
     let workspace_area = take_bottom(&mut rest, workspace.len() as u16 + 2, SUMMARY_MIN_HEIGHT);
 
-    let feedback = render_summary(frame, app, options, rest);
+    let feedback = render_overview(frame, app, rest);
     render_pane(
         frame,
         app,
@@ -233,6 +253,34 @@ pub fn render(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
     feedback
 }
 
+/// The page switcher remains inside the details panel so changing pages does
+/// not look like opening another view. `Tab` is the page-switching key; the
+/// up/down arrows still move between the editable policy panes.
+fn render_tabs(frame: &mut Frame, selected: DetailsTab, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    let active = Style::default()
+        .fg(palette::ACCENT)
+        .add_modifier(Modifier::BOLD);
+    let inactive = Style::default().fg(palette::ADDITIONAL_INFO);
+    let tab = |name, current| {
+        Span::styled(
+            format!(" {} ", name),
+            if current { active } else { inactive },
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            tab("Details", selected == DetailsTab::Details),
+            Span::styled(" ", inactive),
+            tab("Sandbox", selected == DetailsTab::Sandbox),
+            Span::styled("   Tab switch tabs", inactive),
+        ])),
+        area,
+    );
+}
+
 /// Take `wanted` rows off the bottom of `area`, leaving at least `floor` there,
 /// and shrink `area` by what was taken. A zero-height result is a pane there was
 /// no room for; rendering it draws nothing.
@@ -247,52 +295,122 @@ fn take_bottom(area: &mut Rect, wanted: u16, floor: u16) -> Rect {
     }
 }
 
-/// The policy the two settings panes resolve to: what the sandbox will actually
-/// be, including everything neither pane can change.
-fn render_summary(
-    frame: &mut Frame,
-    app: &DrivaView,
-    options: Option<&DrivaOptions>,
-    area: Rect,
-) -> DrivaFeedback {
+/// The Workspace and current-interaction metadata shown on the Details tab.
+fn render_overview(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
+    if area.height == 0 {
+        return DrivaFeedback::default();
+    }
     let workspace = workspace_lines(app);
     let interaction = interaction_lines(app);
-    let mut sandbox_area = area;
+    let sandbox = sandbox_summary_lines(app);
+
+    // A single-column form is also the scrollable fallback: it retains the
+    // three section headings and their order when the two-column overview no
+    // longer fits on screen.
+    let mut document = workspace.clone();
+    document.push(Line::from(""));
+    document.extend(interaction.clone());
+    document.push(Line::from(""));
+    document.extend(sandbox.clone());
 
     // The two objects are peers in this overview. Columns keep their complete
-    // metadata from pushing the sandbox below the policy editors; narrow
-    // terminals fall back to a readable vertical sequence.
-    if area.width >= 72 {
+    // metadata together; narrow terminals fall back to a readable vertical
+    // sequence. The sandbox summary follows their natural height — it is a
+    // third section of the document, not a footer pinned to the panel edge.
+    let metadata_height = if area.width >= 72 {
         let left_width = area.width / 2;
         let right_width = area.width.saturating_sub(left_width);
         let workspace = Paragraph::new(workspace).wrap(Wrap { trim: false });
         let interaction = Paragraph::new(interaction).wrap(Wrap { trim: false });
         let height = workspace
             .line_count(left_width.max(1))
-            .max(interaction.line_count(right_width.max(1)))
-            .min(usize::from(area.height)) as u16;
-        let overview = Rect { height, ..area };
+            .max(interaction.line_count(right_width.max(1))) as u16;
+        let sandbox_height = Paragraph::new(sandbox.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(area.width.max(1)) as u16;
+        if usize::from(height) + usize::from(sandbox_height) > usize::from(area.height) {
+            return render_scrolled_overview(frame, app, document, area);
+        }
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(overview);
+            .split(Rect { height, ..area });
         frame.render_widget(workspace, columns[0]);
         frame.render_widget(interaction, columns[1]);
-        sandbox_area.y += height;
-        sandbox_area.height = sandbox_area.height.saturating_sub(height);
+        height
     } else {
         let mut overview = workspace;
         overview.push(Line::from(""));
         overview.extend(interaction);
         let overview = Paragraph::new(overview).wrap(Wrap { trim: false });
-        let height = overview
-            .line_count(area.width.max(1))
-            .min(usize::from(area.height)) as u16;
+        let height = overview.line_count(area.width.max(1)) as u16;
+        if usize::from(height) > usize::from(area.height) {
+            return render_scrolled_overview(frame, app, document, area);
+        }
         frame.render_widget(overview, Rect { height, ..area });
-        sandbox_area.y += height;
-        sandbox_area.height = sandbox_area.height.saturating_sub(height);
+        height
+    };
+    let sandbox_area = Rect {
+        y: area.y + metadata_height,
+        height: area.height.saturating_sub(metadata_height),
+        ..area
+    };
+    frame.render_widget(
+        Paragraph::new(sandbox).wrap(Wrap { trim: false }),
+        sandbox_area,
+    );
+    DrivaFeedback::default()
+}
+
+/// Render the Details document in its natural, one-column order when it does
+/// not fit. The Sandbox summary heading carries the paging hint because it is
+/// the final section rather than a panel footer.
+fn render_scrolled_overview(
+    frame: &mut Frame,
+    app: &DrivaView,
+    document: Vec<Line<'static>>,
+    area: Rect,
+) -> DrivaFeedback {
+    // Keep a dedicated final row for the paging cue. It must remain on screen
+    // as the document moves, rather than travelling with the sandbox heading.
+    let content_height = area.height.saturating_sub(1);
+    let total = Paragraph::new(document.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(area.width.max(1));
+    let limit = total.saturating_sub(usize::from(content_height));
+    let limit = limit.min(usize::from(u16::MAX)) as u16;
+    let offset = app.details_requested_scroll.min(limit);
+    frame.render_widget(
+        Paragraph::new(document)
+            .wrap(Wrap { trim: false })
+            .scroll((offset, 0)),
+        Rect {
+            height: content_height,
+            ..area
+        },
+    );
+    let remaining = limit.saturating_sub(offset);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            if remaining > 0 {
+                format!("  ↓ {remaining} more line(s) · PgDn/PgUp")
+            } else {
+                format!("  ↑ {offset} line(s) above · PgUp")
+            },
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ))),
+        Rect {
+            y: area.y + content_height,
+            height: area.height.saturating_sub(content_height),
+            ..area
+        },
+    );
+    DrivaFeedback {
+        scroll_limit: limit,
+        effective_scroll: offset,
     }
-    render_sandbox(frame, app, options, sandbox_area)
 }
 
 /// The sandbox account, in whichever of three shapes fits what there is room
@@ -854,6 +972,65 @@ fn workspace_lines(app: &DrivaView) -> Vec<Line<'static>> {
     lines
 }
 
+/// A standalone, compact account of the policy that shapes the sandbox. The
+/// full Sandbox tab keeps its exhaustive account separate from this overview.
+fn sandbox_summary_lines(app: &DrivaView) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        section_line("sandbox summary"),
+        detail_field_line("templates", &templates_label(app)),
+    ];
+    let Some(options) = app.launch.driva else {
+        let requested = app.launch.effective();
+        lines.push(detail_field_line(
+            "mounts",
+            &format!(
+                "{} requested — awaiting sandbox plan",
+                requested.mounts.len()
+            ),
+        ));
+        return lines;
+    };
+    lines.push(detail_field_line(
+        "mounts",
+        &format!("{} resolved", options.mounts.len()),
+    ));
+    lines.extend(options.mounts.iter().map(|attributed| {
+        detail_field_line(
+            attributed.origin.label(),
+            &details_resolved_mount_label(&attributed.mount),
+        )
+    }));
+    lines
+}
+
+/// One resolved mount in the compact Details-tab summary. The Sandbox tab has
+/// the full, aligned source-to-target account; here an identical source and
+/// target is deliberately only named once.
+fn details_resolved_mount_label(mount: &Mount) -> String {
+    match mount {
+        Mount::Bind {
+            source,
+            destination,
+            access,
+        } => format!(
+            "{} ({})",
+            details_mount_path_label(source, destination),
+            match access {
+                MountAccess::ReadWrite => "rw",
+                MountAccess::ReadOnly => "ro",
+            }
+        ),
+        Mount::Temporary { destination } => format!("{} (tmp)", destination.display()),
+        Mount::Overlay {
+            source,
+            destination,
+        } => format!(
+            "{} (overlay)",
+            details_mount_path_label(source, destination)
+        ),
+    }
+}
+
 /// The current server Interaction projected through the state the client keeps
 /// synchronized from its summary and update stream.
 fn interaction_lines(app: &DrivaView) -> Vec<Line<'static>> {
@@ -1272,7 +1449,7 @@ fn hint_lines(app: &DrivaView) -> Vec<Line<'static>> {
     let muted = Style::default().fg(palette::ADDITIONAL_INFO);
     let mut lines = vec![Line::from(Span::styled(
         format!(
-            "  Tab {} · m mount · x remove · T templates · w network · R workspace ro/rw",
+            "  ↑/↓ {} · m mount · x remove · T templates · w network · R workspace ro/rw",
             app.launch.scope.other().phrase()
         ),
         muted,
@@ -1431,13 +1608,23 @@ fn mount_line(mount: &Mount) -> Line<'static> {
     }
 }
 
+/// A requested mount at the same path inside and outside the sandbox is common
+/// for the Workspace. Repeating it as `path → path` adds no information to the
+/// compact label on the Details tab.
+fn details_mount_path_label(source: &std::path::Path, destination: &std::path::Path) -> String {
+    if source == destination {
+        source.display().to_string()
+    } else {
+        format!("{} → {}", source.display(), destination.display())
+    }
+}
+
 fn launch_mount_label(mount: &LaunchMount) -> String {
     let access = if mount.writable { "rw" } else { "ro" };
     match &mount.destination {
         Some(destination) => format!(
-            "{} → {} ({access})",
-            mount.source.display(),
-            destination.display()
+            "{} ({access})",
+            details_mount_path_label(&mount.source, destination)
         ),
         None => format!("{} ({access})", mount.source.display()),
     }
@@ -1512,5 +1699,44 @@ mod tests {
 
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("not a Git checkout"), "{lines:?}");
+    }
+
+    #[test]
+    fn sandbox_summary_mounts_are_compact_without_losing_their_target() {
+        assert_eq!(
+            details_resolved_mount_label(&Mount::Bind {
+                source: PathBuf::from("/workspace"),
+                destination: PathBuf::from("/workspace"),
+                access: MountAccess::ReadWrite,
+            }),
+            "/workspace (rw)"
+        );
+        assert_eq!(
+            details_resolved_mount_label(&Mount::Bind {
+                source: PathBuf::from("/host/cache"),
+                destination: PathBuf::from("/cache"),
+                access: MountAccess::ReadOnly,
+            }),
+            "/host/cache → /cache (ro)"
+        );
+    }
+
+    #[test]
+    fn main_details_mount_labels_do_not_repeat_a_same_path_destination() {
+        let path = PathBuf::from("/workspace");
+        let line = mount_line(&Mount::Bind {
+            source: path.clone(),
+            destination: path.clone(),
+            access: MountAccess::ReadWrite,
+        });
+        assert_eq!(text(vec![line]), ["    rw /workspace → /workspace"]);
+        assert_eq!(
+            launch_mount_label(&LaunchMount {
+                source: path.clone(),
+                destination: Some(path),
+                writable: true,
+            }),
+            "/workspace (rw)"
+        );
     }
 }

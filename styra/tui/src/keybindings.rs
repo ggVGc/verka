@@ -110,10 +110,11 @@ bindings! { PREVIEW = "Full-screen preview";
 }
 
 bindings! { DRIVA = "Details (Workspace, interaction, and launch policy)";
-    DRIVA_SCOPE: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]
+    DRIVA_TAB: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)] => Action::DrivaTab;
+    DRIVA_SCOPE: [Key::code(KeyCode::Up), Key::code(KeyCode::Down)]
         => Action::DrivaScope;
-    DRIVA_NEXT_MOUNT: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::DrivaNextMount;
-    DRIVA_PREV_MOUNT: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::DrivaPrevMount;
+    DRIVA_NEXT_MOUNT: [Key::ch('j')] => Action::DrivaNextMount;
+    DRIVA_PREV_MOUNT: [Key::ch('k')] => Action::DrivaPrevMount;
     DRIVA_NETWORK: [Key::ch('w')] => Action::DrivaNetwork;
     DRIVA_ACCESS: [Key::ch('R')]
         => Action::DrivaAccess;
