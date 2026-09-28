@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, view: &RawView<'_>, area: Rect) -> RawFeedback 
     } else {
         let panes = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
         (panes[0], Some(panes[1]))
     };

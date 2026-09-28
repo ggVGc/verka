@@ -128,7 +128,7 @@ pub fn render_picker(
     let area = frame.area();
     let panes = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -369,7 +369,7 @@ pub fn render_workspace_picker(
     let area = frame.area();
     let panes = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -911,13 +911,13 @@ mod tests {
     /// Wide enough that the left pane holds a whole row — name, counts,
     /// liveness, age, host path — so an assertion about the row is not really
     /// an assertion about where it was truncated.
-    const WORKSPACE_PICKER_WIDTH: usize = 130;
+    const WORKSPACE_PICKER_WIDTH: usize = 160;
 
-    /// The Workspace list occupies the left 58% of the picker. The preview on
+    /// The Workspace list occupies the left half of the picker. The preview on
     /// the right carries the selected Workspace's name in its own border title,
     /// so a row has to be matched against this pane alone to be the list's.
     fn workspace_rows(screen: &str) -> Vec<String> {
-        let width = WORKSPACE_PICKER_WIDTH * 58 / 100;
+        let width = WORKSPACE_PICKER_WIDTH / 2;
         screen_lines(screen, WORKSPACE_PICKER_WIDTH)
             .into_iter()
             .map(|line| line.chars().take(width).collect())

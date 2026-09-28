@@ -182,7 +182,7 @@ fn render_events(
     let interaction_area = if view.preview.is_some() && view.entry_log.is_some() {
         let panes = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
         let measured = preview::render(frame, view.preview.unwrap(), panes[1]);
         note_scroll(
@@ -229,7 +229,7 @@ fn render_events(
         let list_area = if let Some(preview_view) = view.preview {
             let panes = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(event_area);
             let measured = preview::render(frame, preview_view, panes[1]);
             note_scroll(
@@ -259,7 +259,7 @@ fn render_files(
 ) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
     let left = Layout::default()
         .direction(Direction::Vertical)
