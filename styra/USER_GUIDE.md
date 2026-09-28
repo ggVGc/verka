@@ -102,6 +102,7 @@ live interactions.
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
+| `Ctrl+N` | step to the next interaction that is still running |
 | `Ctrl+L` | choose provider, model, and effort |
 
 Sending a message to a stopped or viewed Session automatically attempts native
