@@ -273,8 +273,8 @@ bindings! { READING = "Raw, log, quota, and transcript";
 }
 
 bindings! { PREVIEW = "Full-screen preview";
-    PREVIEW_SCROLL_DOWN: [Key::ch('j')] => "scroll a line down, or step to the next link";
-    PREVIEW_SCROLL_UP: [Key::ch('k')] => "scroll a line up, or step to the previous link";
+    PREVIEW_SCROLL_DOWN: [Key::ch('j')] => "scroll 10 lines down, or step to the next link";
+    PREVIEW_SCROLL_UP: [Key::ch('k')] => "scroll 10 lines up, or step to the previous link";
     PREVIEW_NEXT_ENTRY: [Key::ch('J'), Key::code(KeyCode::Down)] => "next entry";
     PREVIEW_PREV_ENTRY: [Key::ch('K'), Key::code(KeyCode::Up)] => "previous entry";
     PREVIEW_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => "page down";
@@ -1144,8 +1144,8 @@ pub fn handle_list_key(
             _ => {}
         },
         // Full-screen preview is the one view where the text, not the entry
-        // list, is what the reader is moving through: `j`/`k` scroll it a line
-        // at a time and the shifted pair changes entry.
+        // list, is what the reader is moving through: `j`/`k` scroll it ten
+        // lines at a time and the shifted pair changes entry.
         View::Preview => match key {
             k if PREVIEW_LINKS.matches(k) => app.highlight_first_link(),
             k if PREVIEW_LINK_DESTINATIONS.matches(k) => app.toggle_link_display(),
@@ -1159,8 +1159,8 @@ pub fn handle_list_key(
             k if PREVIEW_SCROLL_UP.matches(k) && app.link_highlight.is_some() => {
                 app.highlight_prev_link()
             }
-            k if PREVIEW_SCROLL_DOWN.matches(k) => app.preview.scroll.line_down(),
-            k if PREVIEW_SCROLL_UP.matches(k) => app.preview.scroll.line_up(),
+            k if PREVIEW_SCROLL_DOWN.matches(k) => app.preview.scroll.page_down(),
+            k if PREVIEW_SCROLL_UP.matches(k) => app.preview.scroll.page_up(),
             k if PREVIEW_NEXT_ENTRY.matches(k) => app.select_next_line(),
             k if PREVIEW_PREV_ENTRY.matches(k) => app.select_prev_line(),
             k if PREVIEW_FIRST.matches(k) => app.select_first(),
