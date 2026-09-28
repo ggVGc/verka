@@ -10,7 +10,8 @@ use crate::activity::Status;
 use crate::app::{App, Focus, LaunchPolicy, Request};
 use crate::audio::AudioInput;
 use crate::config::Configuration;
-use crate::keys;
+use crate::input;
+use crate::keybindings as keys;
 use crate::launch::{self, LaunchScope};
 use crate::launcher;
 use crate::picker;
@@ -593,7 +594,7 @@ pub fn run(
             let feedback = terminal.render_help(
                 window.name(),
                 &rows,
-                &crate::keys::CLOSE_REFERENCE.label(),
+                &crate::keybindings::CLOSE_REFERENCE.label(),
                 app.help.offset(),
             )?;
             if let Some(scroll) = feedback
@@ -707,7 +708,7 @@ pub fn run(
         // The branching choice is modal and can replace the current Session
         // on confirmation, so it owns the key before every underlying view.
         if app.branch_prompt.is_some() {
-            keys::handle_branch_prompt_key(app, client, key);
+            input::handle_branch_prompt_key(app, client, key);
             // Confirming has already branched; open the result on this key
             // rather than leaving the switch queued behind the next one.
             if let Some(Request::OpenSession(id)) = app.take_open_session_request() {
@@ -720,19 +721,19 @@ pub fn run(
         // answered by a bare letter that means something else everywhere else,
         // so it is handled ahead of the reference.
         if app.insert.is_some() {
-            keys::handle_insert_key(app, key);
+            input::handle_insert_key(app, key);
             continue;
         }
         // The Git checkout is Workspace metadata. Its prompt is modal so a
         // path such as `git@host:group/project` is input rather than keys.
         if app.git_repository_prompt.is_some() {
-            keys::handle_git_repository_prompt_key(app, client, key);
+            input::handle_git_repository_prompt_key(app, client, key);
             continue;
         }
         // So is the Driva view's mount prompt: what is typed into it is part
         // of a path, including the characters that are shortcuts elsewhere.
         if app.launch.prompt.is_some() {
-            keys::handle_mount_prompt_key(app, key);
+            input::handle_mount_prompt_key(app, key);
             // Confirming a Workspace mount closes the prompt and emits an
             // effect. It must leave on this key, not sit behind the next one.
             if let Some(Request::ChangeWorkspaceLaunch {
@@ -793,7 +794,7 @@ pub fn run(
         // printable key is part of the term, including the ones bound to
         // commands on the list it is marking.
         if app.search.typing() {
-            keys::handle_search_key(app, key);
+            input::handle_search_key(app, key);
             continue;
         }
         // The embedded interaction list owns navigation while it is open.
@@ -959,7 +960,7 @@ pub fn run(
             launcher::handle_key(app, key, preferences_path);
         } else {
             match app.focus {
-                Focus::List => keys::handle_list_key(
+                Focus::List => input::handle_list_key(
                     app,
                     client,
                     live,
@@ -998,11 +999,11 @@ pub fn run(
                     // synchronous, so the only moment left to say what is
                     // happening is this one: put the notice up and paint it
                     // before handing the key over.
-                    if keys::creates_worktree(app, key) {
+                    if input::creates_worktree(app, key) {
                         app.show_action_message("creating a new Git workspace…");
                         presentation::draw_application(terminal, app)?;
                     }
-                    keys::handle_input_key(app, client, &workspace_id, live, key)
+                    input::handle_input_key(app, client, &workspace_id, live, key)
                 }
             }
         }

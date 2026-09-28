@@ -3,7 +3,7 @@
 //!
 //! Everything launch-specific outside of rendering lives here, so the rest of
 //! the client only has to know that [`App`] carries a [`Launch`], that the
-//! event loop hands keys to [`crate::keys`] which call the free functions
+//! event loop resolves [`crate::keybindings`] and calls the free functions
 //! below, and that [`App::can_edit_launch`] says whether any of it applies.
 //! Rendering is the matching [`crate::presentation::driva`] module.
 //!

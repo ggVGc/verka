@@ -127,14 +127,18 @@ impl Prompt {
             Insert::Grant(host) => {
                 let host = host.clone();
                 match key {
-                    k if crate::keys::EDITOR_MOUNT_READABLE.matches(k) => self.grant(host, false),
-                    k if crate::keys::EDITOR_MOUNT_WRITABLE.matches(k) => self.grant(host, true),
+                    k if crate::keybindings::EDITOR_MOUNT_READABLE.matches(k) => {
+                        self.grant(host, false)
+                    }
+                    k if crate::keybindings::EDITOR_MOUNT_WRITABLE.matches(k) => {
+                        self.grant(host, true)
+                    }
                     // Naming a path the sandbox cannot reach is a legitimate
                     // thing to do — describing where a file *should* end up, or
                     // asking about one the agent is expected to fail on — so
                     // the question has an answer that grants nothing and still
                     // inserts.
-                    k if crate::keys::EDITOR_MOUNT_NEITHER.matches(k) => Outcome::Insert {
+                    k if crate::keybindings::EDITOR_MOUNT_NEITHER.matches(k) => Outcome::Insert {
                         notice: Some(format!(
                             "inserted {} — the sandbox cannot reach it",
                             host.display()

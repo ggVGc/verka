@@ -13,7 +13,7 @@ use styra_protocol::agent::{
 use styra_protocol::LogEntry;
 
 use crate::app::App;
-use crate::keys;
+use crate::keybindings as keys;
 use crate::preferences;
 
 /// Which of the launch picker's three columns has the keys.

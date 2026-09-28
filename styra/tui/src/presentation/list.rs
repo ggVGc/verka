@@ -99,13 +99,13 @@ mod tests {
         });
         app.search.open();
         for character in "que".chars() {
-            crate::keys::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char(character)));
+            crate::input::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char(character)));
         }
 
         assert!(test_support::rendered(&app).contains("/que▌"));
 
         // `q` quits the list; here it is a letter of the term.
-        crate::keys::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char('q')));
+        crate::input::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char('q')));
         assert_eq!(app.search.query(), Some("queq"));
     }
 
