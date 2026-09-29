@@ -10,8 +10,13 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{List, ListItem, Widget};
 use std::time::Instant;
 use styra_protocol::event::{AgentEvent, Protocol};
-use styra_ui::event_list::{entry_item, EntryRender, EntryVersion, EventEntry};
+use styra_ui::chrome::{PanelChrome, StatusTone};
+use styra_ui::event_list::{
+    entry_item, render, ActivityCounts, EntryRender, EntryVersion, EventEntry, EventListStatus,
+    EventListView,
+};
 use styra_ui::markdown::LinkDisplay;
+use styra_ui::search::SearchView;
 
 const WIDTH: usize = 120;
 const VIEWPORT: usize = 40;
@@ -71,8 +76,75 @@ fn time(label: &str, mut run: impl FnMut()) {
     println!("{label:<44} {each:>10.2?} per frame");
 }
 
+/// One whole frame of the real `render`, which is what a keystroke costs.
+///
+/// This is the path that used to build every row of the session to work out
+/// where to scroll it; the window it draws is the same size whether the
+/// session holds fifty messages or five thousand.
+fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: usize) -> usize {
+    let entries: Vec<EventEntry<'_>> = events
+        .iter()
+        .zip(versions)
+        .enumerate()
+        .map(|(index, (event, &version))| EventEntry {
+            event,
+            version,
+            expanded: true,
+            has_detail: true,
+            contract: None,
+            selected: index == selected,
+            link_highlight: None,
+        })
+        .collect();
+    let view = EventListView {
+        chrome: PanelChrome {
+            focused: true,
+            workspace: None,
+            agent: "codex".into(),
+            model: "gpt-5.6-sol".into(),
+            model_reported: true,
+            effort: None,
+            effort_reported: true,
+            status: "running".into(),
+            status_tone: StatusTone::Running,
+            elapsed: None,
+            suffix: None,
+            session: None,
+        },
+        entries,
+        activity: ActivityCounts::default(),
+        conversation_only: false,
+        uncommitted_changes: false,
+        usage: None,
+        can_configure_launch: false,
+        selection_name: "codex".into(),
+        // Anchored where the selection is, as it would be after scrolling there.
+        requested_offset: selected,
+        moved_backward: false,
+        protocol: Protocol::default(),
+        links: LinkDisplay::Compact,
+        search: SearchView {
+            query: None,
+            typing: false,
+        },
+        status: EventListStatus::Idle { reason: None },
+    };
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
+        WIDTH as u16,
+        VIEWPORT as u16,
+    ))
+    .unwrap();
+    let mut offset = 0;
+    terminal
+        .draw(|frame| {
+            offset = render(frame, &view, frame.area()).effective_offset;
+        })
+        .unwrap();
+    offset
+}
+
 fn main() {
-    for messages in [200, 400] {
+    for messages in [200, 400, 2000] {
         let events = conversation(messages);
         let versions: Vec<EntryVersion> = (0..messages as u64)
             .map(|id| EntryVersion { id, revision: 0 })
@@ -96,6 +168,12 @@ fn main() {
                 })
                 .collect();
             frame(&events, &bumped);
+        });
+
+        // The real `render`, scrolled to the end of the session — the common
+        // case, and the one that used to cost the most.
+        time(&format!("{messages} messages, render() one frame"), || {
+            rendered_frame(&events, &versions, messages - 1);
         });
     }
 }

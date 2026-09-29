@@ -337,10 +337,10 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         viewport_height,
         view.moved_backward,
     );
-    // Everything the list will draw, which for now is still everything it
-    // holds: ratatui's `List` applies the offset itself and so takes every
-    // item. Only the offset math has been freed of that.
-    let mut items = items.into_items();
+    // Only what the viewport can show is built, and only that is handed over.
+    // A session of any length therefore costs one screen of rendering per
+    // frame rather than its whole history — see [`LazyItems::into_window`].
+    let mut items = items.into_window(offset, position);
     clip_boundary_entry(
         &mut items,
         &view.entries,
@@ -350,17 +350,22 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         entry_render,
     );
     let list = List::new(items).block(block);
+    // Both indices are rebased onto the window, which begins at `offset`: to
+    // ratatui this is the whole list, seen from the top.
+    //
     // `ListState::select(None)` also resets the offset to zero, and this list
     // renders with nothing selected whenever the selected entry is one the
     // filters hide. Assign the field directly so that a computed offset is
     // never thrown away: the offset this render reports back is persisted, so
     // a zero here would scroll the interaction log to the top and keep it
     // there rather than flickering for one frame.
-    *state.selected_mut() = position;
-    *state.offset_mut() = offset;
+    *state.selected_mut() = position.map(|position| position - offset);
+    *state.offset_mut() = 0;
     frame.render_stateful_widget(list, area, &mut state);
     EventListFeedback {
-        effective_offset: state.offset(),
+        // Back into the caller's numbering. Ratatui only ever moves the offset
+        // forward from where it was put, so this stays within the window.
+        effective_offset: offset + state.offset(),
     }
 }
 
@@ -370,6 +375,8 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
 /// that boundary entry with the actual remaining row budget. When it is the
 /// final entry, retain a row for the status tail whenever there is room for
 /// both its summary and the tail.
+/// `items` is the window beginning at `offset`, so a position in it names the
+/// entry `offset` further along — see [`LazyItems::into_window`].
 fn clip_boundary_entry(
     items: &mut [ListItem<'static>],
     entries: &[EventEntry<'_>],
@@ -379,12 +386,17 @@ fn clip_boundary_entry(
     entry_render: EntryRender<'_>,
 ) {
     let mut remaining = viewport_height;
-    for item_index in offset..items.len() {
-        let height = items[item_index].height();
-        if height <= remaining {
-            remaining -= height;
-            continue;
+    let mut boundary = None;
+    for (position, item) in items.iter().enumerate() {
+        let height = item.height();
+        if height > remaining {
+            boundary = Some(position);
+            break;
         }
+        remaining -= height;
+    }
+    if let Some(position) = boundary {
+        let item_index = offset + position;
         if remaining == 0 || item_index >= entries.len() {
             return;
         }
@@ -396,8 +408,7 @@ fn clip_boundary_entry(
         } else {
             remaining
         };
-        items[item_index] = entry_item_with_max_rows(entry, width, max_rows, entry_render);
-        return;
+        items[position] = entry_item_with_max_rows(entry, width, max_rows, entry_render);
     }
 }
 
@@ -427,12 +438,33 @@ impl LazyItems<'_> {
         })
     }
 
-    /// Every item, building whichever were never asked about.
-    fn into_items(mut self) -> Vec<ListItem<'static>> {
-        for index in 0..self.built.len() {
-            self.item(index);
+    /// The items the list will actually draw, starting at `start`: from there
+    /// until the viewport is full, and never one above it.
+    ///
+    /// Ratatui's `List` applies the offset to the items it is given, so
+    /// handing it only this window means rebasing the offset and the selection
+    /// to it — see [`render`]. It reads nothing outside the window: with no
+    /// `scroll_padding` set its `index_to_display` is the selected index, and
+    /// the offset is never past the selection, so its one backward-walking
+    /// branch cannot fire. Forward it stops as soon as the viewport is full.
+    ///
+    /// The first item that does not fit whole is still included: it is the one
+    /// [`clip_boundary_entry`] rebuilds to the rows actually left for it. So is
+    /// anything up to the selection, which ratatui walks forward to.
+    fn into_window(mut self, start: usize, selected: Option<usize>) -> Vec<ListItem<'static>> {
+        let mut used = 0usize;
+        let mut end = start;
+        while end < Heights::len(&self) {
+            used = used.saturating_add(self.height(end));
+            end += 1;
+            if used > self.viewport_height && selected.is_none_or(|selected| end > selected) {
+                break;
+            }
         }
-        self.built.into_iter().flatten().collect()
+        self.built[start..end]
+            .iter_mut()
+            .map(|item| item.take().expect("every item of the window was built"))
+            .collect()
     }
 }
 
@@ -1665,6 +1697,137 @@ mod tests {
             id: NEXT.fetch_add(1, Ordering::Relaxed),
             revision: 0,
         }
+    }
+
+    /// Draw a list of `events` with `selected` under the cursor, anchored at
+    /// `requested_offset`, and report the screen and the offset the render
+    /// asked to keep.
+    fn scrolled_screen(
+        events: &[AgentEvent],
+        selected: usize,
+        requested_offset: usize,
+    ) -> (Vec<String>, usize) {
+        let entries = events
+            .iter()
+            .enumerate()
+            .map(|(index, event)| EventEntry {
+                event,
+                version: version(),
+                expanded: false,
+                has_detail: false,
+                contract: None,
+                selected: index == selected,
+                link_highlight: None,
+            })
+            .collect();
+        let view = EventListView {
+            chrome: PanelChrome {
+                focused: true,
+                workspace: None,
+                agent: "codex".into(),
+                model: "gpt-5.6-sol".into(),
+                model_reported: true,
+                effort: None,
+                effort_reported: true,
+                status: "running".into(),
+                status_tone: StatusTone::Running,
+                elapsed: None,
+                suffix: None,
+                session: None,
+            },
+            entries,
+            activity: ActivityCounts::default(),
+            conversation_only: false,
+            uncommitted_changes: false,
+            usage: None,
+            can_configure_launch: false,
+            selection_name: "codex".into(),
+            requested_offset,
+            moved_backward: false,
+            protocol: Protocol::default(),
+            links: LinkDisplay::Compact,
+            search: SearchView {
+                query: None,
+                typing: false,
+            },
+            status: EventListStatus::Idle { reason: None },
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+        let mut offset = 0;
+        terminal
+            .draw(|frame| {
+                offset = render(frame, &view, frame.area()).effective_offset;
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        (rows, offset)
+    }
+
+    fn numbered(count: usize) -> Vec<AgentEvent> {
+        (0..count)
+            .map(|n| AgentEvent::AgentMessage {
+                text: format!("message {n}"),
+            })
+            .collect()
+    }
+
+    /// The list hands ratatui only the window it will draw, with the offset
+    /// and the selection rebased onto it — so both have to be translated back
+    /// out. The offset is persisted across frames, so getting this wrong would
+    /// not flicker for a frame: it would move the session and keep it there.
+    #[test]
+    fn a_window_reports_its_offset_in_the_callers_numbering() {
+        let events = numbered(500);
+
+        let (rows, offset) = scrolled_screen(&events, 300, 300);
+
+        assert_eq!(offset, 300, "the offset the caller gave back is its own");
+        assert!(
+            rows.iter().any(|row| row.contains("message 300")),
+            "the selected entry is on screen: {rows:#?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("message 0")),
+            "the top of the session is not: {rows:#?}"
+        );
+    }
+
+    /// Windowing must not change which rows a screen shows. A list short
+    /// enough that every entry fits is the case where the window is the whole
+    /// list, and it has to read exactly as it did.
+    #[test]
+    fn a_list_shorter_than_the_viewport_still_shows_every_entry() {
+        let events = numbered(4);
+
+        let (rows, offset) = scrolled_screen(&events, 0, 0);
+
+        assert_eq!(offset, 0);
+        for n in 0..4 {
+            assert!(
+                rows.iter().any(|row| row.contains(&format!("message {n}"))),
+                "message {n} is missing: {rows:#?}"
+            );
+        }
+    }
+
+    /// Scrolling is continuous: consecutive anchors show consecutive windows,
+    /// with no entry skipped between two frames.
+    #[test]
+    fn consecutive_anchors_show_consecutive_windows() {
+        let events = numbered(200);
+
+        let (first, _) = scrolled_screen(&events, 100, 100);
+        let (second, _) = scrolled_screen(&events, 101, 101);
+
+        assert!(first.iter().any(|row| row.contains("message 101")));
+        assert!(second.iter().any(|row| row.contains("message 101")));
     }
 
     /// One agent message, drawn with `search` typed into the `/` prompt.
