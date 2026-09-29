@@ -316,7 +316,7 @@ mod tests {
         let claude = Errand::new(Provider::Claude, "name this").selection();
         assert_eq!(claude.provider, Provider::Claude);
         // Not Haiku 4.5, which is cheaper but takes no effort setting at all.
-        assert_eq!(claude.model, "claude-sonnet-5");
+        assert_eq!(claude.model, "claude-sonnet-5-5");
         assert_eq!(claude.effort, Effort::Low);
 
         for provider in crate::agent::PROVIDERS {

@@ -34,7 +34,7 @@ pub const PROVIDERS: [Provider; 2] = [Provider::Codex, Provider::Claude];
 /// coding models.
 ///
 /// The Claude ids are every model listed `Active` in Anthropic's model-status
-/// table, read on 2026-09-24, tier by tier, newest first. The `claude-mythos-*`
+/// table, read on 2026-09-29, tier by tier, newest first. The `claude-mythos-*`
 /// tier is knowingly excluded: it is reachable only through Project Glasswing,
 /// so offering it to every operator would suggest an agent most cannot launch.
 /// Full ids rather than the `opus`/`sonnet` aliases, so a journal records the
@@ -57,11 +57,13 @@ pub fn models_for(provider: Provider) -> &'static [&'static str] {
         Provider::Claude => &[
             "claude-fable-5-1",
             "claude-fable-5",
+            "claude-opus-5-5",
             "claude-opus-5",
             "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-opus-4-6",
             "claude-opus-4-5-20251101",
+            "claude-sonnet-5-5",
             "claude-sonnet-5",
             "claude-sonnet-4-6",
             "claude-sonnet-4-5-20250929",
@@ -187,7 +189,7 @@ pub fn cheapest_model_for(provider: Provider) -> &'static str {
     }
     match provider {
         Provider::Codex | Provider::CodexExec => "gpt-5.6-luna",
-        Provider::Claude => "claude-sonnet-5",
+        Provider::Claude => "claude-sonnet-5-5",
     }
 }
 

@@ -251,7 +251,7 @@ afterwards. Each provider therefore declares defaults
 The defaults are declared rather than derived from the front of the catalog, so
 reordering the catalog cannot silently move every unpinned launch to another
 model. Claude Code's differs from its catalog's lead deliberately: the catalog
-starts at `claude-fable-5`, priced above the Opus tier, so an operator who named
+starts at `claude-fable-5-1`, priced above the Opus tier, so an operator who named
 no model gets `claude-opus-5`. Interactive Codex defaults to `medium`; Claude
 Code defaults to `high`. Naming no level therefore applies Styra's declared
 provider default explicitly.
