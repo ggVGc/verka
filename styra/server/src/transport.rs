@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, BufWriter, Read, Write};
 
 /// Maximum encoded request size accepted by the server.
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
@@ -14,11 +14,12 @@ where
     W: Write,
     T: Serialize,
 {
-    serde_json::to_writer(&mut *writer, value).context("encoding the Styra protocol message")?;
-    writer
+    let mut buffered = BufWriter::new(writer);
+    serde_json::to_writer(&mut buffered, value).context("encoding the Styra protocol message")?;
+    buffered
         .write_all(b"\n")
         .context("writing the Styra protocol message")?;
-    writer
+    buffered
         .flush()
         .context("flushing the Styra protocol message")?;
     Ok(())
@@ -64,7 +65,27 @@ fn decode_message<T: DeserializeOwned>(read: usize, bytes: &[u8]) -> Result<T> {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::io::Cursor;
+    use std::io::{Cursor, Write};
+
+    #[derive(Default)]
+    struct CountingWriter {
+        bytes: Vec<u8>,
+        writes: usize,
+        flushes: usize,
+    }
+
+    impl Write for CountingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.writes += 1;
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes += 1;
+            Ok(())
+        }
+    }
 
     #[test]
     fn messages_are_newline_delimited_json() {
@@ -74,6 +95,19 @@ mod tests {
 
         let decoded: serde_json::Value = read_message(&mut Cursor::new(output)).unwrap();
         assert_eq!(decoded, json!({"operation": "health"}));
+    }
+
+    #[test]
+    fn large_messages_use_buffered_writes() {
+        let value: Vec<usize> = (0..10_000).collect();
+        let mut output = CountingWriter::default();
+        write_message(&mut output, &value).unwrap();
+
+        let mut expected = serde_json::to_vec(&value).unwrap();
+        expected.push(b'\n');
+        assert_eq!(output.bytes, expected);
+        assert!(output.writes < 20, "used {} writes", output.writes);
+        assert_eq!(output.flushes, 1);
     }
 
     #[test]
