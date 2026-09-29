@@ -4,9 +4,9 @@
 
 use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
-    LoadedInteraction, PlanSession, QueuedMessage, RenameSession, RenameWorkspace, Request,
-    Response, ResumeSession, SendMessage, SessionInfo, SetSessionTags, ShellInfo, StoredSession,
-    TemplateSummary, Updates, WireResponse, WorkspaceLaunchChange,
+    LoadedInteraction, ModelSummary, PlanSession, QueuedMessage, RenameSession, RenameWorkspace,
+    Request, Response, ResumeSession, SendMessage, SessionInfo, SetSessionTags, ShellInfo,
+    StoredSession, TemplateSummary, Updates, WireResponse, WorkspaceLaunchChange,
 };
 use crate::protocol::{CompletionState, InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -121,6 +121,15 @@ impl Client {
         })? {
             Response::Templates(value) => Ok(value),
             other => unexpected("templates", other),
+        }
+    }
+
+    /// The models a session can be launched on, with the effort rungs each
+    /// accepts, so a client can offer the catalog rather than a copy of it.
+    pub fn list_models(&self) -> Result<Vec<ModelSummary>> {
+        match self.request(Request::ListModels)? {
+            Response::Models(value) => Ok(value),
+            other => unexpected("models", other),
         }
     }
 

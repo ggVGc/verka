@@ -93,6 +93,7 @@ defmodule Styra.Protocol do
             %{name: "workspace_id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "list_models", payload: %{kind: :unit}},
         %{name: "resume_session", payload: %{kind: :newtype, type: %{kind: :ref, name: "ResumeSession"}}},
         %{name: "create_session_worktree", payload: %{
           kind: :struct,
@@ -311,6 +312,7 @@ defmodule Styra.Protocol do
         %{name: "session_created", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionInfo"}}},
         %{name: "session_plan", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}},
         %{name: "templates", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "TemplateSummary"}}}},
+        %{name: "models", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "ModelSummary"}}}},
         %{name: "session_resumed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionInfo"}}},
         %{name: "session_worktree_created", payload: %{kind: :unit}},
         %{name: "worktrees_cleaned", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "CleanedWorktree"}}}},
@@ -649,6 +651,29 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "name", required: true, type: %{kind: :string}},
         %{name: "description", required: false, type: %{kind: :string}}
+      ]
+    },
+
+    # A model a client can offer in a picker, with the reasoning-effort rungs it
+    # actually accepts.
+    #
+    # The catalog is `crate::agent`'s: which providers Styra launches
+    # interactively, which of their models are worth offering, and the per-model
+    # effort ladder. Those tables are read from the agents' own catalogs and move
+    # when the agents do, so a client that re-typed them would offer a rung a
+    # model rejects the first time one changed. Putting them on the wire is what
+    # lets a client outside this crate — an editor plugin, a status line — build
+    # the same picker the TUI's launcher builds without keeping a second copy.
+    #
+    # Advisory rather than closed: a `Selection` still carries a free-form
+    # model id, and the agent is the authority that rejects one it does not know.
+    "ModelSummary" => %{
+      kind: :struct,
+      fields: [
+        %{name: "provider", required: true, type: %{kind: :ref, name: "Provider"}},
+        %{name: "model", required: true, type: %{kind: :string}},
+        %{name: "efforts", required: true, type: %{kind: :list, item: %{kind: :ref, name: "Effort"}}},
+        %{name: "default_effort", required: true, type: %{kind: :ref, name: "Effort"}}
       ]
     },
 
@@ -1540,6 +1565,7 @@ defmodule Styra.Protocol do
     "create_session",
     "plan_session",
     "list_templates",
+    "list_models",
     "resume_session",
     "create_session_worktree",
     "clean_worktrees",
@@ -2176,6 +2202,20 @@ defmodule Styra.Protocol do
     def list_templates!(data), do: Styra.Protocol.build!("list_templates", data)
 
     @doc ~S"""
+    Name the models a session can be launched on, provider by provider and
+    most capable first, each with the reasoning-effort rungs it accepts.
+
+    The same catalog the TUI's launcher is built from, so a client outside
+    this crate can offer exactly what would be accepted instead of keeping
+    its own copy of tables that move whenever the agents' do. Answers from
+    static tables: no Workspace, no session, and no agent is involved.
+    """
+    def list_models, do: Styra.Protocol.build("list_models")
+
+    @doc "`list_models/0`, raising on a request the server would refuse."
+    def list_models!, do: Styra.Protocol.build!("list_models")
+
+    @doc ~S"""
     Fields of `data`:
 
       * `id       `  string
@@ -2647,6 +2687,7 @@ defmodule Styra.Protocol.Response do
     {:session_created, "session_created"},
     {:session_plan, "session_plan"},
     {:templates, "templates"},
+    {:models, "models"},
     {:session_resumed, "session_resumed"},
     {:session_worktree_created, "session_worktree_created"},
     {:worktrees_cleaned, "worktrees_cleaned"},
@@ -2718,6 +2759,8 @@ defmodule Styra.Protocol.Response do
   def session_plan, do: "session_plan"
 
   def templates, do: "templates"
+
+  def models, do: "models"
 
   def session_resumed, do: "session_resumed"
 

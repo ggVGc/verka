@@ -17,8 +17,8 @@ pub use types::{
     BranchHistory, CheckoutState, CleanedWorktree, CompletionState, Contract, Direction,
     DrivaOptions, FileLocation, InteractionActivity, InteractionActivityReason, InteractionEnd,
     InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel,
-    MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary,
-    TemplateSummary, VariableOrigin, WorkspaceSummary, WorktreeCleanup,
+    ModelSummary, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin,
+    SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary, WorktreeCleanup,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -326,6 +326,14 @@ pub enum Request {
     ListTemplates {
         workspace_id: String,
     },
+    /// Name the models a session can be launched on, provider by provider and
+    /// most capable first, each with the reasoning-effort rungs it accepts.
+    ///
+    /// The same catalog the TUI's launcher is built from, so a client outside
+    /// this crate can offer exactly what would be accepted instead of keeping
+    /// its own copy of tables that move whenever the agents' do. Answers from
+    /// static tables: no Workspace, no session, and no agent is involved.
+    ListModels,
     ResumeSession(ResumeSession),
     /// Create and associate a linked Git worktree for an existing Session.
     /// Refused when it already has one; the association is used on its next
@@ -554,6 +562,7 @@ pub enum Response {
     SessionCreated(SessionInfo),
     SessionPlan(DrivaOptions),
     Templates(Vec<TemplateSummary>),
+    Models(Vec<ModelSummary>),
     SessionResumed(SessionInfo),
     SessionWorktreeCreated,
     WorktreesCleaned(Vec<CleanedWorktree>),
@@ -1035,6 +1044,33 @@ mod tests {
             serde_json::to_value(Request::ListTags).unwrap()["operation"],
             "list_tags"
         );
+    }
+
+    /// The model catalog crosses the socket so a client outside this crate
+    /// builds a picker from it rather than from its own copy — which means
+    /// the effort ladder has to survive the trip beside the model it belongs
+    /// to.
+    #[test]
+    fn the_model_catalog_carries_each_models_effort_ladder() {
+        assert_eq!(
+            serde_json::to_value(Request::ListModels).unwrap()["operation"],
+            "list_models"
+        );
+        let response = Response::Models(vec![ModelSummary {
+            provider: crate::agent::Provider::Claude,
+            model: "claude-haiku-4-5-20251001".into(),
+            efforts: Vec::new(),
+            default_effort: Effort::High,
+        }]);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["type"], "models");
+        assert_eq!(json["data"][0]["provider"], "claude");
+        // A model that takes no effort at all still says which value goes in
+        // its Selection, and says it as an empty ladder rather than a short
+        // one.
+        assert_eq!(json["data"][0]["efforts"], serde_json::json!([]));
+        assert_eq!(json["data"][0]["default_effort"], "high");
+        assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
     }
 
     /// The contract rides on the message, not the request, so `send_message`

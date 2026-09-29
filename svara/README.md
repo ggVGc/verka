@@ -109,7 +109,21 @@ not accepted here, deliberately: they mean "this provider's declared defaults",
 those defaults live in the server's Rust and never appear on the wire, and a
 copy of them in this plugin would drift silently the first time one changed. A
 caller holding only a provider takes the model and effort from a session it can
-already see — `interaction.selection`, `summary.selection`.
+already see — `interaction.selection`, `summary.selection` — or asks the
+server for the catalog:
+
+```lua
+for _, summary in ipairs(assert(styra:models())) do
+  print(summary.provider, summary.model, table.concat(summary.efforts, " "))
+end
+```
+
+`styra:models()` is every model a session can be launched on, provider by
+provider and most capable first, each with the reasoning-effort rungs that
+model accepts (`efforts`, lowest first, empty for a model that takes none) and
+the rung a launch takes when nothing names one (`default_effort`). It is the
+catalog the Styra TUI's launcher is built from, asked for rather than copied
+for the same reason the shorthands are refused.
 
 ### Watching a turn
 
@@ -177,6 +191,18 @@ that interaction. `:SvaraNew` starts a new interaction with the rest of its
 line as the first prompt. Both commands use the Workspace covering the viewed
 file, rather than Neovim's working directory.
 
+`:SvaraNew` asks which model to run under before it starts anything, as one
+list: the model it would have used at the top, said with where it came from,
+then every model the server offers, then "another model…" for typing a
+profile name out — a catalog is not a closed set, and an id newer than the
+server's tables is still launchable. Choosing the first entry starts on it and
+stores nothing, leaving the rules below in charge. Anything else asks for a
+reasoning effort next, from the rungs that model accepts, and is remembered in
+`vim.g.svara_selection`, so the question is answered once for a stretch of
+work rather than at every `:SvaraNew`. When there is nothing in use to put at
+the top — no `vim.g.svara_selection` and no Session in the Workspace — the
+reason is shown and the catalog is the whole list.
+
 The prompt goes out with the file and line being viewed in front of it —
 `/path/to/file.lua:42` — because a prompt typed in an editor is nearly always
 about what is on screen and saying so beats typing the path. A buffer with no
@@ -232,7 +258,14 @@ vim.g.svara_selection = "claude:claude-opus-5/xhigh"
 With none set, the new interaction runs under the newest Session in that
 Workspace — a Workspace being worked in has already been launched under
 something. A Workspace with no Session yet and no `vim.g.svara_selection` says
-so rather than guessing, for the reason in [Selections](#selections).
+so rather than guessing, for the reason in [Selections](#selections). From
+Lua the rules are used as they stand — the asking is `:SvaraNew`'s, and
+`start` takes an explicit `selection` when the caller has already chosen. The
+three parts of that question are `svara.core.selection_for_directory`, which
+answers what would be used and where it came from,
+`svara.core.available_models`, which is the server's catalog, and
+`svara.core.remember_selection`, which validates a profile name and stores it
+in `vim.g.svara_selection`.
 
 To send to a session that is already live, name it:
 
@@ -268,4 +301,5 @@ nvim --headless -u NONE -l tests/core_spec.lua   # send_message over a socket
 nvim --headless -u NONE -l tests/api_spec.lua    # the API, on a host of its own
 nvim --headless -u NONE -l tests/nvim_spec.lua   # the Neovim host, for real
 nvim --headless -u NONE -l tests/info_spec.lua   # what :SvaraInfo answers
+nvim --headless -u NONE -l tests/picker_spec.lua # the model list :SvaraNew offers
 ```

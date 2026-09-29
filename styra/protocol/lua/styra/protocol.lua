@@ -83,6 +83,7 @@ M.types.Request = {
         { name = "workspace_id", required = true, type = { kind = "string" } },
       },
     } },
+    { name = "list_models", payload = { kind = "unit" } },
     { name = "resume_session", payload = { kind = "newtype", type = { kind = "ref", name = "ResumeSession" } } },
     { name = "create_session_worktree", payload = {
       kind = "struct",
@@ -301,6 +302,7 @@ M.types.Response = {
     { name = "session_created", payload = { kind = "newtype", type = { kind = "ref", name = "SessionInfo" } } },
     { name = "session_plan", payload = { kind = "newtype", type = { kind = "ref", name = "DrivaOptions" } } },
     { name = "templates", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "TemplateSummary" } } } },
+    { name = "models", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "ModelSummary" } } } },
     { name = "session_resumed", payload = { kind = "newtype", type = { kind = "ref", name = "SessionInfo" } } },
     { name = "session_worktree_created", payload = { kind = "unit" } },
     { name = "worktrees_cleaned", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "CleanedWorktree" } } } },
@@ -639,6 +641,29 @@ M.types.TemplateSummary = {
   fields = {
     { name = "name", required = true, type = { kind = "string" } },
     { name = "description", required = false, type = { kind = "string" } },
+  },
+}
+
+--- A model a client can offer in a picker, with the reasoning-effort rungs it
+--- actually accepts.
+---
+--- The catalog is `crate::agent`'s: which providers Styra launches
+--- interactively, which of their models are worth offering, and the per-model
+--- effort ladder. Those tables are read from the agents' own catalogs and move
+--- when the agents do, so a client that re-typed them would offer a rung a
+--- model rejects the first time one changed. Putting them on the wire is what
+--- lets a client outside this crate — an editor plugin, a status line — build
+--- the same picker the TUI's launcher builds without keeping a second copy.
+---
+--- Advisory rather than closed: a `Selection` still carries a free-form
+--- model id, and the agent is the authority that rejects one it does not know.
+M.types.ModelSummary = {
+  kind = "struct",
+  fields = {
+    { name = "provider", required = true, type = { kind = "ref", name = "Provider" } },
+    { name = "model", required = true, type = { kind = "string" } },
+    { name = "efforts", required = true, type = { kind = "list", item = { kind = "ref", name = "Effort" } } },
+    { name = "default_effort", required = true, type = { kind = "ref", name = "Effort" } },
   },
 }
 
@@ -1509,7 +1534,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "create_session_worktree", "clean_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1523,6 +1548,7 @@ M.Request = {
   CREATE_SESSION = "create_session",
   PLAN_SESSION = "plan_session",
   LIST_TEMPLATES = "list_templates",
+  LIST_MODELS = "list_models",
   RESUME_SESSION = "resume_session",
   CREATE_SESSION_WORKTREE = "create_session_worktree",
   CLEAN_WORKTREES = "clean_worktrees",
@@ -1559,7 +1585,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_worktree_created", "worktrees_cleaned", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
@@ -1573,6 +1599,7 @@ M.Response = {
   SESSION_CREATED = "session_created",
   SESSION_PLAN = "session_plan",
   TEMPLATES = "templates",
+  MODELS = "models",
   SESSION_RESUMED = "session_resumed",
   SESSION_WORKTREE_CREATED = "session_worktree_created",
   WORKTREES_CLEANED = "worktrees_cleaned",
@@ -2288,6 +2315,17 @@ end
 ---   workspace_id  string
 function M.request.list_templates(data)
   return M.build("list_templates", data)
+end
+
+--- Name the models a session can be launched on, provider by provider and
+--- most capable first, each with the reasoning-effort rungs it accepts.
+---
+--- The same catalog the TUI's launcher is built from, so a client outside
+--- this crate can offer exactly what would be accepted instead of keeping
+--- its own copy of tables that move whenever the agents' do. Answers from
+--- static tables: no Workspace, no session, and no agent is involved.
+function M.request.list_models()
+  return M.build("list_models")
 end
 
 --- Fields of `data`:

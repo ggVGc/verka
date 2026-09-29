@@ -55,6 +55,77 @@ local function selection_for(styra, workspace)
   return sessions[1].selection, nil, "the newest Session in the Workspace"
 end
 
+--- The selection a new interaction in `directory` would run under, for a
+--- command that wants to put it to the operator before it is used.
+---
+--- `start` resolves the same thing silently, and for a command that is one
+--- question too few: starting an interaction is the moment the answer stops
+--- being cheap to change. So `:SvaraNew` asks this first, shows the answer
+--- and where it came from, and only then starts.
+---@param directory string
+---@param options? { socket?: string, timeout?: integer, host?: table }
+---@return string|table? selection
+---@return string? source
+---@return string? error
+function M.selection_for_directory(directory, options)
+  options = options or {}
+  local styra, err = require("svara.api").open(options)
+  if not styra then
+    return nil, nil, err
+  end
+  local workspace, workspace_error = styra:workspace_for_path(directory)
+  if not workspace then
+    return nil, nil, workspace_error
+  end
+  local selection, selection_error, source = selection_for(styra, workspace)
+  if not selection then
+    return nil, nil, selection_error
+  end
+  return selection, source
+end
+
+--- Every model a new interaction could run on, most capable first, each with
+--- the reasoning-effort rungs it accepts.
+---
+--- What to offer an operator who did not want the one they were offered. The
+--- catalog is the server's — `list_models`, the same tables the Styra TUI's
+--- launcher is built from — because a list written out here would be the copy
+--- of the agents' catalogs `svara.api.selection` refuses to keep, offering a
+--- rung a model rejects the first time one changed. Each entry is a
+--- `ModelSummary`: `provider`, `model`, `efforts` lowest first, and the
+--- `default_effort` to use when nothing names one.
+---@param options? { socket?: string, timeout?: integer, host?: table }
+---@return table[]? models
+---@return string? error
+function M.available_models(options)
+  local styra, err = require("svara.api").open(options or {})
+  if not styra then
+    return nil, err
+  end
+  return styra:models()
+end
+
+--- Remember a selection as the one new interactions run under.
+---
+--- This is `vim.g.svara_selection`, the first of the two rules above, so a
+--- model chosen once holds for the rest of this Neovim session instead of
+--- being asked for again at every `:SvaraNew`. It is validated before it is
+--- stored, because the alternative is a profile name that reads fine and only
+--- fails at the next start.
+---@param value string|table
+---@return string? profile_name
+---@return string? error
+function M.remember_selection(value)
+  local api = require("svara.api")
+  local picked, err = api.selection(value)
+  if not picked then
+    return nil, err
+  end
+  local name = api.selection_name(picked)
+  vim.g.svara_selection = name
+  return name
+end
+
 --- The interactions in one Workspace that can still be sent a message.
 ---
 --- `list_interactions` also retains stopped interactions so clients can
@@ -253,7 +324,7 @@ end
 ---
 --- `vim.g.svara_selection` is already one, and is shown as set rather than
 --- normalised: an unusable value there is exactly what this is meant to reveal.
-local function selection_said(selection)
+function M.selection_said(selection)
   if type(selection) == "table" then
     return require("svara.api").selection_name(selection)
   end
@@ -305,7 +376,7 @@ function M.info_lines(info)
 
   if info.selection then
     local source = info.selection_source and (", from " .. info.selection_source) or ""
-    rows[#rows + 1] = { "model", selection_said(info.selection) .. source }
+    rows[#rows + 1] = { "model", M.selection_said(info.selection) .. source }
   else
     rows[#rows + 1] = { "model", "unknown: " .. tostring(info.selection_error) }
   end

@@ -102,7 +102,8 @@ end
 --- here. A copy of them in this file would be a second home for them, drifting
 --- silently the first time one changed. So a selection is said in full, and a
 --- caller with only a provider in hand takes the model and effort from a
---- session it can see — `interaction.selection`, `summary.selection`.
+--- session it can see — `interaction.selection`, `summary.selection` — or
+--- from the server's own catalog, `Client:models`.
 function M.selection(value)
   if type(value) == "table" then
     local ok, err = protocol.validate("Selection", value)
@@ -450,6 +451,19 @@ function Client:shell(id)
     return nil, err
   end
   return operate(self, "shell", { id = named }, protocol.Response.SHELL)
+end
+
+--- Every model a Session can be launched on, as `ModelSummary` tables:
+--- `provider`, `model`, the `efforts` it accepts lowest first, and the
+--- `default_effort` a launch takes when nothing names one. Most capable
+--- first, provider by provider, in the order a picker should show them.
+---
+--- Asked for rather than written down here for the reason `M.selection`
+--- gives: the catalog moves when the agents' own catalogs do, and a copy in
+--- this plugin would be offering a rung a model rejects the first time one
+--- changed. This is the same list the Styra TUI's launcher is built from.
+function Client:models()
+  return operate(self, "list_models", nil, protocol.Response.MODELS)
 end
 
 --- Launch a new Session in a Workspace.

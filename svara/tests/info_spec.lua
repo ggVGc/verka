@@ -183,6 +183,86 @@ do
   assert(lines:find("0 interactions can", 1, true), lines)
 end
 
+-- The model `:SvaraNew` offers, and the one it is told instead -----------
+
+do
+  local where = "/home/me/verka/styra/protocol/src"
+  local function resolve(replies)
+    local host = fake_host(replies)
+    local selection, source, err =
+      core.selection_for_directory(where, { socket = "/tmp/test.sock", host = host })
+    return selection, source, err, host
+  end
+
+  vim.g.svara_selection = nil
+  local selection, source, err = resolve({
+    workspace(inner),
+    sessions({
+      { id = "styra-8", selection = { provider = "codex", model = "gpt-5.6-terra", effort = "medium" } },
+    }),
+  })
+  assert(selection, err)
+  assert(core.selection_said(selection) == "codex:gpt-5.6-terra/medium", vim.inspect(selection))
+  assert(source == "the newest Session in the Workspace", tostring(source))
+
+  -- Nothing to offer is a reason to ask for one, so it comes back as a
+  -- sentence rather than as a guess.
+  local missing
+  missing, _, err = resolve({ workspace(inner), sessions({}) })
+  assert(not missing)
+  assert(err:find("set vim.g.svara_selection"), err)
+
+  -- A model chosen in answer is what the next start resolves to, without a
+  -- Session being asked for at all.
+  local name, remember_error = core.remember_selection("claude:claude-opus-5/xhigh")
+  assert(name == "claude:claude-opus-5/xhigh", tostring(remember_error))
+  assert(vim.g.svara_selection == name)
+  local host
+  selection, source, err, host = resolve({ workspace(inner) })
+  assert(selection == name, vim.inspect(selection))
+  assert(source == "vim.g.svara_selection", tostring(source))
+  assert(vim.deep_equal(host.sent, { "workspace_for_path" }), vim.inspect(host.sent))
+
+  -- The models to offer instead: the server's catalog, which the command
+  -- asks for rather than keeping a list of. No Workspace is involved.
+  local host_of_models = fake_host({
+    ok({
+      type = "models",
+      data = {
+        {
+          provider = "claude",
+          model = "claude-opus-5",
+          efforts = { "low", "medium", "high", "xhigh", "max" },
+          default_effort = "high",
+        },
+        {
+          provider = "claude",
+          model = "claude-haiku-4-5-20251001",
+          efforts = {},
+          default_effort = "high",
+        },
+      },
+    }),
+  })
+  local models
+  models, err = core.available_models({ socket = "/tmp/test.sock", host = host_of_models })
+  assert(models, err)
+  assert(vim.deep_equal(host_of_models.sent, { "list_models" }), vim.inspect(host_of_models.sent))
+  assert(#models == 2, vim.inspect(models))
+  assert(models[1].model == "claude-opus-5")
+  assert(#models[1].efforts == 5, vim.inspect(models[1]))
+  -- A model that takes no effort still carries the value its Selection needs.
+  assert(#models[2].efforts == 0, vim.inspect(models[2]))
+  assert(models[2].default_effort == "high")
+
+  -- An unusable answer is refused where it was typed, not at the next start.
+  local bad, bad_error = core.remember_selection("claude")
+  assert(not bad)
+  assert(bad_error:find("reasoning effort"), bad_error)
+  assert(vim.g.svara_selection == name, "a bad answer does not displace a good one")
+  vim.g.svara_selection = nil
+end
+
 -- A directory no Workspace covers ----------------------------------------
 
 do

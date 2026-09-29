@@ -10,8 +10,8 @@ use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
     Answer, CheckoutState, CleanedWorktree, CompletionState, Contract, DrivaOptions,
     InteractionActivity, InteractionActivityReason, InteractionSummary, InteractionUpdate,
-    LaunchMount, LaunchPolicy, LogEntry, QueuedMessage, SendMessage, SessionOrigin, SessionSummary,
-    TemplateSummary, WorktreeCleanup,
+    LaunchMount, LaunchPolicy, LogEntry, ModelSummary, QueuedMessage, SendMessage, SessionOrigin,
+    SessionSummary, TemplateSummary, WorktreeCleanup,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
@@ -1946,6 +1946,29 @@ impl ServerState {
             .collect())
     }
 
+    /// The models a session can be launched on, provider by provider in
+    /// picker order, each with the effort ladder it accepts.
+    ///
+    /// Static: `crate::agent` is the catalog, and no Workspace, session or
+    /// agent is consulted. It is on the wire so that a client outside this
+    /// crate builds its picker from the same tables the TUI's launcher does,
+    /// rather than from a copy of them that stops being true when a model
+    /// gains a rung.
+    fn list_models(&self) -> Vec<ModelSummary> {
+        let mut models = Vec::new();
+        for provider in crate::agent::PROVIDERS {
+            for model in crate::agent::models_for(provider) {
+                models.push(ModelSummary {
+                    provider,
+                    model: (*model).to_owned(),
+                    efforts: crate::agent::efforts_for(provider, model).to_vec(),
+                    default_effort: crate::agent::default_effort_for(provider, model),
+                });
+            }
+        }
+        models
+    }
+
     fn resume_session(&self, request: ResumeSession) -> Result<SessionInfo> {
         if self
             .inner
@@ -3151,6 +3174,7 @@ impl ServerState {
             Request::ListTemplates { workspace_id } => {
                 Ok(Response::Templates(self.list_templates(&workspace_id)?))
             }
+            Request::ListModels => Ok(Response::Models(self.list_models())),
             Request::ResumeSession(request) => {
                 Ok(Response::SessionResumed(self.resume_session(request)?))
             }

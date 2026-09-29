@@ -174,6 +174,7 @@ Operations:
 | `create_session` | Workspace id, provider/model/effort selection, this launch's own policy, optional message | `session_created` |
 | `plan_session` | Workspace id and the same launch inputs, creating nothing | `session_plan` |
 | `list_templates` | Workspace id | `templates` |
+| `list_models` | none | `models` (every model a session can be launched on, provider by provider and most capable first, each with the reasoning-effort rungs it accepts and the one a launch takes by itself) |
 | `resume_session` | Session id and this launch's own policy | `session_resumed` |
 | `convert_session_provider` | Session id | `session_converted` (a new sibling Session, resumable under Styra's other interactive provider; sugar over `branch_session` with no cutoff and the other provider) |
 | `branch_session` | Session id, optional history cutoff (`at_ms`), history choice (`through_selected` or `selected_only`), optional destination provider | `session_branched` (a new sibling Session seeded with the chosen source history; both Sessions gain a `branch` marker event linking to the other) |

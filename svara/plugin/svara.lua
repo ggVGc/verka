@@ -22,6 +22,134 @@ local function interaction_name(interaction)
   return label
 end
 
+--- Put the model a new interaction would run under to the operator, and call
+--- `on_chosen` with what they settled on.
+---
+--- The rules in `svara.core` always have an answer or a reason there is none,
+--- and neither is worth being surprised by once a turn is already running. So
+--- one list is offered: the model that would be used at the top of it, said
+--- with where it came from, and under it every model the server says a
+--- session can be launched on.
+---
+--- One list rather than a yes-or-no and then a list, because the answer to
+--- "start on this?" is a model either way, and a question whose usual answer
+--- is "yes" is a keystroke charged for nothing. Carrying on with what is
+--- already in use stays the first thing under the cursor.
+---
+--- Anything but that first entry asks for a reasoning effort next, since the
+--- catalog is models and the rungs each accepts. Typing
+--- `claude:claude-opus-5/xhigh` out in full is last on the list, because a
+--- catalog is not a closed set — an id newer than the server's tables is
+--- still launchable. A model chosen here is remembered, so it is picked at
+--- the start of a stretch of work and not at every `:SvaraNew` in it.
+local function choose_selection(directory, on_chosen)
+  local core = require("svara.core")
+  local nothing_started = "Svara: nothing started"
+  local typed_out = "another model…"
+
+  local function settle(value)
+    local name, err = core.remember_selection(value)
+    if not name then
+      vim.notify("Svara: " .. err, vim.log.levels.ERROR)
+      return
+    end
+    vim.notify("Svara: new interactions will run on " .. name, vim.log.levels.INFO)
+    on_chosen(name)
+  end
+
+  local function ask_for_one(default)
+    vim.ui.input({ prompt = "Model (provider:model/effort): ", default = default }, function(typed)
+      if not typed or typed:match("^%s*$") then
+        vim.notify(nothing_started, vim.log.levels.INFO)
+        return
+      end
+      settle(vim.trim(typed))
+    end)
+  end
+
+  --- The rungs one model accepts, with the one a launch would take by itself
+  --- marked. A model that accepts none still needs a value in its Selection,
+  --- and then there is nothing to ask.
+  local function pick_effort(summary)
+    local chosen = { provider = summary.provider, model = summary.model }
+    local efforts = summary.efforts or {}
+    if #efforts == 0 then
+      chosen.effort = summary.default_effort
+      settle(chosen)
+      return
+    end
+    vim.ui.select(efforts, {
+      prompt = string.format("Effort for %s:%s", summary.provider, summary.model),
+      format_item = function(effort)
+        return effort == summary.default_effort and (effort .. " (default)") or effort
+      end,
+    }, function(effort)
+      if not effort then
+        vim.notify(nothing_started, vim.log.levels.INFO)
+        return
+      end
+      chosen.effort = effort
+      settle(chosen)
+    end)
+  end
+
+  local selection, source, err = core.selection_for_directory(directory)
+  local said = selection and core.selection_said(selection)
+  if not selection then
+    -- Nothing in use to put at the top: say why once, and let the catalog
+    -- below be the whole answer.
+    vim.notify("Svara: " .. err, vim.log.levels.WARN)
+  end
+
+  local models, models_error = core.available_models()
+  if not models then
+    -- Without the catalog there is still an answer to offer, and typing one
+    -- out for the rest.
+    vim.notify("Svara: " .. models_error, vim.log.levels.WARN)
+    models = {}
+  end
+
+  local in_use = said and { said = said, selection = selection } or nil
+  local choices = {}
+  if in_use then
+    choices[1] = in_use
+  end
+  for _, summary in ipairs(models) do
+    choices[#choices + 1] = summary
+  end
+  if #choices == 0 then
+    -- Nothing in use and no catalog: the list would be the escape hatch
+    -- alone, so it is not a list.
+    ask_for_one(nil)
+    return
+  end
+  choices[#choices + 1] = typed_out
+
+  vim.ui.select(choices, {
+    prompt = "Model for this interaction",
+    format_item = function(choice)
+      if choice == typed_out then
+        return choice
+      end
+      if choice == in_use then
+        return string.format("%s (in use, from %s)", choice.said, source)
+      end
+      return string.format("%s:%s", choice.provider, choice.model)
+    end,
+  }, function(choice)
+    if not choice then
+      vim.notify(nothing_started, vim.log.levels.INFO)
+    elseif choice == typed_out then
+      ask_for_one(said)
+    elseif choice == in_use then
+      -- Already the answer the rules give, so there is nothing to remember.
+      on_chosen(choice.selection)
+    else
+      pick_effort(choice)
+    end
+  end)
+end
+
 vim.api.nvim_create_user_command("Svara", function(command)
   local core = require("svara.core")
   local directory, directory_error = viewed_directory()
@@ -73,17 +201,23 @@ vim.api.nvim_create_user_command("SvaraNew", function(command)
     vim.notify("Svara: " .. directory_error, vim.log.levels.ERROR)
     return
   end
-  local session, err = core.start(core.prompt_from_view(command.args, core.viewing()), {
-    directory = directory,
-  })
-  if not session then
-    vim.notify("Svara: " .. err, vim.log.levels.ERROR)
-    return
-  end
-  vim.notify(
-    "Svara: " .. session.id .. " started on " .. require("svara").selection_name(session.selection),
-    vim.log.levels.INFO
-  )
+  -- Taken before the asking, so the location is where the operator was when
+  -- they typed the prompt rather than wherever the cursor ends up.
+  local prompt = core.prompt_from_view(command.args, core.viewing())
+  choose_selection(directory, function(selection)
+    local session, err = core.start(prompt, { directory = directory, selection = selection })
+    if not session then
+      vim.notify("Svara: " .. err, vim.log.levels.ERROR)
+      return
+    end
+    vim.notify(
+      "Svara: "
+        .. session.id
+        .. " started on "
+        .. require("svara").selection_name(session.selection),
+      vim.log.levels.INFO
+    )
+  end)
 end, {
   nargs = "+",
   desc = "Start a new Styra interaction in the Workspace over the current file",

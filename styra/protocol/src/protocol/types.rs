@@ -589,6 +589,31 @@ pub struct TemplateSummary {
     pub description: String,
 }
 
+/// A model a client can offer in a picker, with the reasoning-effort rungs it
+/// actually accepts.
+///
+/// The catalog is [`crate::agent`]'s: which providers Styra launches
+/// interactively, which of their models are worth offering, and the per-model
+/// effort ladder. Those tables are read from the agents' own catalogs and move
+/// when the agents do, so a client that re-typed them would offer a rung a
+/// model rejects the first time one changed. Putting them on the wire is what
+/// lets a client outside this crate — an editor plugin, a status line — build
+/// the same picker the TUI's launcher builds without keeping a second copy.
+///
+/// Advisory rather than closed: a [`Selection`] still carries a free-form
+/// model id, and the agent is the authority that rejects one it does not know.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelSummary {
+    pub provider: crate::agent::Provider,
+    pub model: String,
+    /// The rungs this model accepts, lowest first. Empty means the model takes
+    /// no reasoning effort at all.
+    pub efforts: Vec<crate::agent::Effort>,
+    /// The rung a launch of this model uses when nothing names one. Present
+    /// even when `efforts` is empty, because a `Selection` still needs a value.
+    pub default_effort: crate::agent::Effort,
+}
+
 /// Where an interaction is in its life: what its agent is doing, or that it is
 /// doing nothing further.
 ///
