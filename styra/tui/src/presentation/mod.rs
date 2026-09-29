@@ -264,7 +264,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
         session_id = %app.session_id,
         view = ?app.view,
         timeline_entries = app.timeline.entries.len(),
-        "rendering application"
+        "started rendering interaction"
     );
     use styra_ui::application::{EventView, FilesView as ApplicationFiles, MainView};
     let result = match app.view {

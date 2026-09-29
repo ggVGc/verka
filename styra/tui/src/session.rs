@@ -501,7 +501,20 @@ pub fn launch_live_session(
 /// updates the server has accumulated for it, so the view matches what the interaction
 /// has done so far and the event loop can continue polling from the cursor.
 pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<(App, Attachment)> {
+    tracing::debug!(
+        target: "styra_tui::interaction_load",
+        interaction_id,
+        "started loading interaction"
+    );
     let loaded = client.load_interaction(interaction_id)?;
+    tracing::debug!(
+        target: "styra_tui::interaction_load",
+        interaction_id,
+        update_count = loaded.updates.updates.len(),
+        next_cursor = loaded.updates.next,
+        queued_count = loaded.queued.len(),
+        "received interaction data"
+    );
     let interaction = loaded.summary;
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
     app.session_name = interaction.name.clone();
