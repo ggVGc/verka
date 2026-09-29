@@ -577,8 +577,17 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment
     // A replayed Session has no live root — nothing is mounted anywhere — but
     // the server can still say where it was working when it stopped, and the
     // footer should name that rather than fall back to wherever this client
-    // happens to have been started.
-    if let Some(directory) = stored.working_directory {
+    // happens to have been started. It says nothing for a Session that worked
+    // at the root of its Workspace, which is not the same as not knowing: the
+    // Workspace directory is the answer, and only a Session whose Workspace
+    // this server no longer lists has none.
+    let directory = stored.working_directory.or_else(|| {
+        client
+            .workspace(app.workspace.id.as_deref()?)
+            .ok()
+            .map(|workspace| workspace.host_path)
+    });
+    if let Some(directory) = directory {
         app.workspace.change_directory(directory);
     }
     replay_into(&mut app, stored.events, stored.raw);

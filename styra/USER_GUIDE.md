@@ -305,6 +305,14 @@ you have open. Resuming the Session comes back to the same checkout with its
 uncommitted work intact, and the details view (`d`) names it as the
 interaction's workspace, beside the Workspace's own host path.
 
+Branching such a Session (`B`) gives the new one a checkout of its own, forked
+from the branch the source is on and carrying the same topic in its name
+(`styra/fix-flaky-checkout-test-<NEW-SESSION-ID>`). The two conversations
+continue apart, so their working trees do too: the branch starts from what the
+source had committed, and anything the source has left uncommitted stays in the
+checkout it is still working in. A Session working in the Workspace directory
+rather than a checkout passes that on instead — its branch works there too.
+
 A linked checkout is always of the whole repository, so a Workspace naming a
 directory below the checkout root gets the root: the agent sees more of the
 tree this way, not less. Merging the branch back afterwards is yours to do, on

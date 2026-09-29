@@ -2500,7 +2500,18 @@ impl ServerState {
 
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
-        let cwd = owning_workspace.host_path;
+        // A branch works where the Session it came from works. A source with a
+        // linked checkout gets its sibling one of its own, forked from its
+        // branch below — the two conversations continue apart, so their working
+        // trees have to as well. A source working in the Workspace directory
+        // passes that on unchanged. Decided here because the directory the
+        // agent will report is written into the native transcript now, and a
+        // transcript naming a directory the launch does not use is a Session
+        // that cannot be resumed where it says it is.
+        let source_checkout = self.session_checkout(&summary.path, &summary.workspace_id, id)?;
+        let worktrees = self.workspace_worktrees(&owning_workspace, source_checkout.is_some())?;
+        let layout = launch_layout(worktrees.as_ref(), &owning_workspace.host_path);
+        let cwd = layout.workspace.clone();
         let new_native_id = uuid::Uuid::new_v4().to_string();
         // What the branch point lands on, when it lands on an operator
         // message: the provider stamps its copy of that message after the
@@ -2538,7 +2549,7 @@ impl ServerState {
         } else {
             Selection::new(to_provider)
         };
-        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&cwd))?;
+        let profile = crate::agent::resolve_profile(&selection, &layout)?;
         let (mut journal, new_id) = Journal::create_in_workspace(
             &self.inner.store_root,
             &summary.workspace_id,
@@ -2546,6 +2557,24 @@ impl ServerState {
             &selection,
             summary.name.clone(),
         )?;
+        let directory = journal
+            .path()
+            .parent()
+            .context("a freshly created session journal has a parent directory")?
+            .to_path_buf();
+        // The checkout the transcript was just written for. Made before any
+        // history is copied, so a branch that cannot be given the working tree
+        // it was promised fails with nothing but an empty Session behind it.
+        // The source's topic comes along: the sibling is about the same work,
+        // and `git branch` should say so.
+        if let (Some(worktrees), Some(source_checkout)) = (&worktrees, &source_checkout) {
+            let topic = source_checkout
+                .path
+                .as_deref()
+                .and_then(|path| crate::worktree::topic_of(path, id));
+            let checkout = worktrees.fork(&new_id, topic.as_deref(), &source_checkout.branch)?;
+            journal::store_session_checkout(&directory, &crate::worktree::Checkout::at(checkout))?;
+        }
         // The marker goes in before the copied history: it is the branch's
         // first line, so reading the new Session from the top starts with
         // where its conversation came from.
@@ -2556,13 +2585,9 @@ impl ServerState {
         )?;
         let source_protocol = journal::read_session_meta(&summary.path)?.protocol;
         journal.copy_branch_from(&summary.path, source_protocol, at_ms, history)?;
-        let directory = journal
-            .path()
-            .parent()
-            .context("a freshly created session journal has a parent directory")?;
-        journal::store_provider_session_id(directory, &new_native_id)?;
+        journal::store_provider_session_id(&directory, &new_native_id)?;
         journal::store_session_origin(
-            directory,
+            &directory,
             SessionOrigin {
                 session_id: id.to_owned(),
                 provider: from_provider,

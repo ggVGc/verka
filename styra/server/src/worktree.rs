@@ -129,6 +129,30 @@ impl Worktrees {
         Ok(path)
     }
 
+    /// The checkout interaction `id` works in, created on a branch of
+    /// `start_point` the first time it is asked for.
+    ///
+    /// [`Self::checkout`] branches from the repository as it stands, which is
+    /// where a Session started from nothing begins. A Session branched from
+    /// another one continues that Session's conversation, so it continues its
+    /// work too: the branch starts where the source Session's branch is, and
+    /// the two diverge from there. Only committed work comes along —
+    /// uncommitted files stay in the checkout that holds them, which is the
+    /// source Session's, still working in it.
+    pub fn fork(&self, id: &str, topic: Option<&str>, start_point: &str) -> Result<PathBuf> {
+        if let Some(existing) = self.existing(id) {
+            return Ok(existing);
+        }
+        let path = self.host_root.join(named(id, topic));
+        self.git.fork_worktree(
+            &self.repository.root,
+            &format!("{BRANCH_PREFIX}/{}", named(id, topic)),
+            &path,
+            start_point,
+        )?;
+        Ok(path)
+    }
+
     /// Check `branch` out again in a checkout of its own, for a Session whose
     /// worktree was cleaned up after it while the branch stayed.
     ///
@@ -215,6 +239,19 @@ pub fn existing_checkout(host_root: &Path, id: &str) -> Option<PathBuf> {
         })
 }
 
+/// The topic in the name of interaction `id`'s checkout at `path` — the
+/// readable half [`named`] wrote in front of the id — or `None` for a checkout
+/// named by id alone.
+///
+/// Read back rather than re-derived: a branched Session is about the same work
+/// as the Session it came from, and the source's topic is already a Git-safe
+/// fragment the operator has seen, so its sibling carries it rather than
+/// paying a model to name the same work twice.
+pub fn topic_of(path: &Path, id: &str) -> Option<String> {
+    let name = path.file_name().and_then(|name| name.to_str())?;
+    Some(name.strip_suffix(&format!("-{id}"))?.to_owned()).filter(|topic| !topic.is_empty())
+}
+
 /// The checkout directory a branch belongs in: the name [`named`] wrote, with
 /// the prefix that marks the branch as Styra's taken back off.
 fn directory_for(branch: &str) -> String {
@@ -280,6 +317,53 @@ mod tests {
         assert!(metadata.writable);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A Session branched from another one gets a checkout of its own, on a
+    /// branch of the source's rather than of the repository's own head — and
+    /// under the source's topic, because it is about the same work.
+    #[test]
+    fn a_branched_interaction_forks_the_checkout_it_came_from() {
+        let (root, git, worktrees) = workspace("fork");
+        let host_root = root.join("state/worktrees");
+        let source = worktrees
+            .checkout("1757000000000-1-0", Some("teach-the-picker-to-filter"))
+            .unwrap();
+        let topic = topic_of(&source, "1757000000000-1-0");
+        assert_eq!(topic.as_deref(), Some("teach-the-picker-to-filter"));
+
+        let forked = worktrees
+            .fork(
+                "1757000000000-1-1",
+                topic.as_deref(),
+                "styra/teach-the-picker-to-filter-1757000000000-1-0",
+            )
+            .unwrap();
+
+        assert_eq!(
+            forked,
+            host_root.join("teach-the-picker-to-filter-1757000000000-1-1")
+        );
+        assert_ne!(forked, source, "a branch works apart from its source");
+        assert_eq!(
+            git.current_branch(&forked).unwrap().as_deref(),
+            Some("styra/teach-the-picker-to-filter-1757000000000-1-1")
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A checkout named by id alone — an interaction that never had a topic —
+    /// passes none on, rather than handing its sibling half an id as a name.
+    #[test]
+    fn a_checkout_named_by_id_alone_has_no_topic() {
+        assert_eq!(
+            topic_of(
+                Path::new("/state/worktrees/1757000000000-1-0"),
+                "1757000000000-1-0"
+            ),
+            None
+        );
     }
 
     /// Resuming an interaction asks for its checkout again. The uncommitted

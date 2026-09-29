@@ -102,8 +102,11 @@ shared Git metadata at its host path, which is what makes the checkout a
 working repository. Nothing else is writable — the directory the operator works
 in is not mounted, so two interactions never share a branch, an index, or an
 uncommitted file, and neither shares one with the operator. Resuming an
-interaction returns to its own checkout, uncommitted work included. A Workspace
-outside Git receives none of this. Turning the setting off affects future
+interaction returns to its own checkout, uncommitted work included. Branching
+one gives the new Session a checkout of its own, forked from the source's
+branch and named after the same topic: the conversation continues from the
+work the source had committed, while its uncommitted files stay with it. A
+Workspace outside Git receives none of this. Turning the setting off affects future
 launches and does not delete existing worktrees.
 
 `styra clean-worktrees` deletes the checkouts of Sessions marked completed

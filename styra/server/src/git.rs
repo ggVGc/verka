@@ -78,6 +78,21 @@ pub trait Git: Send + Sync {
     /// `path`.
     fn create_worktree(&self, repository: &Path, branch: &str, path: &Path) -> Result<()>;
 
+    /// Create `branch` at `start_point` and check it out in a linked worktree
+    /// at `path`.
+    ///
+    /// [`Self::create_worktree`] starts the branch from whatever the
+    /// repository has checked out, which is where work begun from nothing
+    /// belongs. Work that continues another Session's starts where that
+    /// Session's own branch is instead, so the point is named.
+    fn fork_worktree(
+        &self,
+        repository: &Path,
+        branch: &str,
+        path: &Path,
+        start_point: &str,
+    ) -> Result<()>;
+
     /// Check an existing `branch` out in a linked worktree at `path`.
     ///
     /// The counterpart of [`Self::create_worktree`] for a branch that is
@@ -215,6 +230,22 @@ impl Git for SystemGit {
             .arg(branch)
             .arg("--")
             .arg(path)
+            .succeed()
+    }
+
+    fn fork_worktree(
+        &self,
+        repository: &Path,
+        branch: &str,
+        path: &Path,
+        start_point: &str,
+    ) -> Result<()> {
+        Invocation::new(repository, "create the branch and worktree")
+            .args(["worktree", "add", "-b"])
+            .arg(branch)
+            .arg("--")
+            .arg(path)
+            .arg(start_point)
             .succeed()
     }
 
@@ -471,6 +502,21 @@ impl Git for FakeGit {
         self.check_out(repository, branch, path)?;
         self.branches.lock().unwrap().push(branch.to_owned());
         Ok(())
+    }
+
+    fn fork_worktree(
+        &self,
+        repository: &Path,
+        branch: &str,
+        path: &Path,
+        start_point: &str,
+    ) -> Result<()> {
+        if !self.has_branch(start_point) {
+            anyhow::bail!(
+                "git could not create the branch and worktree: invalid reference: {start_point:?}"
+            );
+        }
+        self.create_worktree(repository, branch, path)
     }
 
     fn add_worktree(&self, repository: &Path, branch: &str, path: &Path) -> Result<()> {
