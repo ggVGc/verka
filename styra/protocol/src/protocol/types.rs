@@ -1099,7 +1099,7 @@ impl<'de> Deserialize<'de> for QueuedMessage {
 /// agent's reply back into [`AnswerValue`]. Framing server-side is what keeps
 /// clients honest — every caller asks for a shape the same way, so the parser
 /// only has to understand one phrasing. See [`crate::contract`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Contract {
     /// Prose. The weakest contract, and the one that cannot fail to parse.

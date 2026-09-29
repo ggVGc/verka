@@ -18,3 +18,10 @@ tui-markdown.workspace = true
 unicode-width.workspace = true
 protocol.workspace = true
 serde_json.workspace = true
+
+# Plain `cargo bench`, no harness: this measures one whole frame, which is
+# milliseconds of work, so the sampling a benchmark framework adds would buy
+# nothing a wall clock does not already say.
+[[bench]]
+name = "event_list"
+harness = false

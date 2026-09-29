@@ -23,6 +23,14 @@ use styra_protocol::Contract;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EventId(u64);
 
+impl EventId {
+    /// The bare number, for handing this identity to a renderer that keys
+    /// cached work on it without depending on this crate.
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
 /// Identity of one *state* of an entry: which row, and how many times the
 /// event on it has been replaced since it arrived.
 ///

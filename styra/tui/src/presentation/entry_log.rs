@@ -32,6 +32,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
         .enumerate()
         .map(|(index, entry)| styra_ui::event_list::EventEntry {
             event: entry.event(),
+            version: super::list::ui_version(entry.version()),
             expanded: false,
             has_detail: entry.has_detail(),
             contract: entry.contract.as_ref(),

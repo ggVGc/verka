@@ -9,12 +9,14 @@ use crate::markdown::{
     LinkDisplay,
 };
 use crate::palette;
+use crate::render_cache::{Memo, Weigh};
 use crate::search::{self, SearchView};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
+use std::cell::RefCell;
 use std::time::Duration;
 use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 use styra_protocol::Contract;
@@ -23,8 +25,27 @@ const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
 const RUNNING_INDICATOR: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Which row this is, and which state of it — see the host's event identity
+/// (`tui::timeline::EventVersion`), which this mirrors.
+///
+/// A row is not identified by its position: the filters renumber those every
+/// time they change. Nor by its event alone: a command completing or a task
+/// reporting rewrites a row already on the list rather than appending a new
+/// one. The pair is what stays true, and it is what [`entry_item`] keys its
+/// cached rendering on.
+///
+/// Opaque here on purpose. This crate does not know how the host mints these
+/// and only ever compares them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EntryVersion {
+    pub id: u64,
+    pub revision: u32,
+}
+
 pub struct EventEntry<'a> {
     pub event: &'a AgentEvent,
+    /// Which row, and which state of it. See [`EntryVersion`].
+    pub version: EntryVersion,
     pub expanded: bool,
     pub has_detail: bool,
     pub contract: Option<&'a Contract>,
@@ -555,12 +576,91 @@ pub fn entry_item(
     )
 }
 
+/// Everything that shapes a [`build_entry_rows`] result.
+///
+/// The entry contributes its [`EntryVersion`] rather than its event: the
+/// version is what says whether the event is still the one that was rendered,
+/// and comparing it is a `u64` and a `u32` rather than a hash of the whole
+/// message. `has_detail` and `contract` are derived from the same row, so the
+/// version covers them too — but they are cheap and keying them explicitly
+/// means this does not depend on that staying true.
+///
+/// `selected` is part of the key rather than something applied to a finished
+/// row afterwards. It reaches further into the build than it looks:
+/// [`selected_summary_line`] rewrites the summary's first span *before* the
+/// row is truncated and wrapped, so lifting it out would mean reasoning about
+/// where that span ended up. A cursor move rebuilds the two rows it touches
+/// instead, which is two rows out of a session.
+#[derive(PartialEq, Eq, Hash)]
+struct RowKey {
+    version: EntryVersion,
+    width: usize,
+    max_rows: usize,
+    expanded: bool,
+    has_detail: bool,
+    selected: bool,
+    contract: Option<Contract>,
+    protocol: Protocol,
+    links: LinkDisplay,
+    link_highlight: Option<EntryIndex>,
+    search: Option<String>,
+}
+
+impl Weigh for Vec<Line<'static>> {
+    fn weight(&self) -> usize {
+        // An entry that renders to nothing still occupies a table slot, and
+        // deciding that it does is the work being saved.
+        self.len().max(1)
+    }
+}
+
+thread_local! {
+    /// The rows of the list, finished: parsed, styled, wrapped to width, and
+    /// marked — everything [`crate::markdown`]'s own cache stops short of.
+    ///
+    /// The list rebuilds every row it holds on every frame (see [`render`]),
+    /// and a frame is drawn per keystroke, so without this, composing a
+    /// message re-wraps the whole session once per character. Keyed on the
+    /// row's version rather than its text, so a hit costs a small hash
+    /// instead of one over every byte of the conversation.
+    static ROW_CACHE: RefCell<Memo<RowKey, Vec<Line<'static>>>> = RefCell::new(Memo::default());
+}
+
 fn entry_item_with_max_rows(
     entry: &EventEntry<'_>,
     width: usize,
     max_rows: usize,
     render: EntryRender<'_>,
 ) -> ListItem<'static> {
+    let key = RowKey {
+        version: entry.version,
+        width,
+        max_rows,
+        expanded: entry.expanded,
+        has_detail: entry.has_detail,
+        selected: entry.selected,
+        contract: entry.contract.copied(),
+        protocol: render.protocol,
+        links: render.links,
+        link_highlight: entry.link_highlight,
+        search: render.search.map(str::to_owned),
+    };
+    let rows = ROW_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .get_or_insert_with(key, || build_entry_rows(entry, width, max_rows, render))
+    });
+    ListItem::new(rows)
+}
+
+/// [`entry_item_with_max_rows`] proper, behind its cache: every finished row
+/// of one entry.
+fn build_entry_rows(
+    entry: &EventEntry<'_>,
+    width: usize,
+    max_rows: usize,
+    render: EntryRender<'_>,
+) -> Vec<Line<'static>> {
     let EntryRender {
         protocol,
         links,
@@ -584,11 +684,10 @@ fn entry_item_with_max_rows(
         // Marked after the row is cut to width, so a match is only claimed
         // where the operator can actually see it.
         let row = search::highlight_lines(vec![row], search);
-        return ListItem::new(
-            row.into_iter()
-                .map(|row| with_entry_backdrop(row, entry))
-                .collect::<Vec<_>>(),
-        );
+        return row
+            .into_iter()
+            .map(|row| with_entry_backdrop(row, entry))
+            .collect();
     }
     let mut lines = vec![summary];
     let mut detail =
@@ -644,7 +743,7 @@ fn entry_item_with_max_rows(
     if let Some(first) = wrapped.first_mut() {
         *first = with_entry_backdrop(std::mem::take(first), entry);
     }
-    ListItem::new(wrapped)
+    wrapped
 }
 
 /// Tint operator messages, and mark a selected row, by backing its first row
@@ -1456,6 +1555,23 @@ mod tests {
     use ratatui::style::Style;
     use ratatui::Terminal;
 
+    /// An identity no other entry in this process has.
+    ///
+    /// The row cache is keyed on the version and lives in a thread-local, and
+    /// the test harness is free to run several tests on one thread. Two tests
+    /// that both wrote a literal id would then be asking the same cache the
+    /// same question about different events, and the second would be answered
+    /// with the first one's rows. Minting these the way a host does keeps each
+    /// test's entry its own.
+    fn version() -> EntryVersion {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        EntryVersion {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
+            revision: 0,
+        }
+    }
+
     /// One agent message, drawn with `search` typed into the `/` prompt.
     fn searched_screen(text: &str, search: SearchView<'_>) -> (Vec<String>, Vec<String>) {
         let event = AgentEvent::AgentMessage { text: text.into() };
@@ -1476,6 +1592,7 @@ mod tests {
             },
             entries: vec![EventEntry {
                 event: &event,
+                version: version(),
                 expanded: false,
                 has_detail: false,
                 contract: None,
@@ -1560,6 +1677,7 @@ mod tests {
         };
         let entry = EventEntry {
             event: &event,
+            version: version(),
             expanded: true,
             has_detail: true,
             contract: None,
@@ -1684,5 +1802,131 @@ mod tests {
         let offset = list_offset_with_scrolloff(5, Some(4), &heights, 6, true);
 
         assert_eq!(offset, 2, "two rows of scrolloff above the selection");
+    }
+
+    /// The text of the rows an entry renders to, for comparing one render
+    /// against another.
+    fn rows_of(item: &ListItem<'static>) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 120, 40));
+        ratatui::widgets::Widget::render(List::new(vec![item.clone()]), buffer.area, &mut buffer);
+        for row in 0..item.height() {
+            let mut text = String::new();
+            for column in 0..120 {
+                text.push_str(buffer[(column, row as u16)].symbol());
+            }
+            out.push(text.trim_end().to_owned());
+        }
+        out
+    }
+
+    fn entry_of<'a>(event: &'a AgentEvent, version: EntryVersion) -> EventEntry<'a> {
+        EventEntry {
+            event,
+            version,
+            expanded: true,
+            has_detail: true,
+            contract: None,
+            selected: false,
+            link_highlight: None,
+        }
+    }
+
+    fn render_of() -> EntryRender<'static> {
+        EntryRender {
+            protocol: Protocol::default(),
+            links: LinkDisplay::Compact,
+            search: None,
+        }
+    }
+
+    /// The whole point of keying on the version: a row that has been rewritten
+    /// is a different row, and must not be answered from what the previous
+    /// version rendered to.
+    ///
+    /// This is the failure the cache could actually cause — a tool that has
+    /// finished still drawn as running — so it is worth asserting directly
+    /// rather than trusting the key by inspection.
+    #[test]
+    fn a_rewritten_entry_is_not_answered_with_its_previous_rendering() {
+        let version = version();
+        let started = AgentEvent::ToolStarted {
+            id: "t1".into(),
+            name: "Bash".into(),
+            detail: "{\"command\":\"cargo build\"}".into(),
+        };
+        let before = rows_of(&entry_item(
+            &entry_of(&started, version),
+            120,
+            40,
+            render_of(),
+        ));
+
+        // The same row, one revision later — exactly what `ingest` does when
+        // the tool finishes.
+        let completed = AgentEvent::ToolCompleted {
+            id: "t1".into(),
+            name: "Bash".into(),
+            detail: "{\"command\":\"cargo build\"}".into(),
+            status: "error".into(),
+            output: "could not compile".into(),
+        };
+        let rewritten = EntryVersion {
+            revision: version.revision + 1,
+            ..version
+        };
+        let after = rows_of(&entry_item(
+            &entry_of(&completed, rewritten),
+            120,
+            40,
+            render_of(),
+        ));
+
+        assert_ne!(before, after, "the finished tool must render as finished");
+        assert!(
+            after.iter().any(|row| row.contains("could not compile")),
+            "the rewritten row shows the new event: {after:?}"
+        );
+    }
+
+    /// A hit has to be indistinguishable from a build, or the cache is a
+    /// second renderer that can disagree with the first.
+    #[test]
+    fn a_second_render_of_an_unchanged_entry_matches_the_first() {
+        let version = version();
+        let event = AgentEvent::AgentMessage {
+            text: "a paragraph\n\nand a second one with `code` and a [link](https://e.com)".into(),
+        };
+        let first = rows_of(&entry_item(
+            &entry_of(&event, version),
+            120,
+            40,
+            render_of(),
+        ));
+        let second = rows_of(&entry_item(
+            &entry_of(&event, version),
+            120,
+            40,
+            render_of(),
+        ));
+
+        assert_eq!(first, second);
+    }
+
+    /// Width is in the key because nothing below the cache re-wraps: the rows
+    /// it holds are already wrapped. A narrower pane has to rebuild them.
+    #[test]
+    fn a_narrower_pane_does_not_reuse_rows_wrapped_for_a_wider_one() {
+        let version = version();
+        let event = AgentEvent::AgentMessage {
+            text: "a long enough sentence that it must wrap when the pane is narrow".into(),
+        };
+        let wide = entry_item(&entry_of(&event, version), 120, 40, render_of());
+        let narrow = entry_item(&entry_of(&event, version), 24, 40, render_of());
+
+        assert!(
+            narrow.height() > wide.height(),
+            "wrapping at 24 columns takes more rows than at 120"
+        );
     }
 }

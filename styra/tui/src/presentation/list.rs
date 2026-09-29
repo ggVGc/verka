@@ -2,7 +2,20 @@
 
 use crate::activity::Status;
 use crate::app::App;
+use styra_ui::event_list::EntryVersion;
 use styra_ui::markdown::LinkDisplay;
+
+/// Hand the timeline's event identity to the renderer, which keys its cached
+/// rows on it. Two types rather than one because the direction of the
+/// dependency matters: `styra_ui` renders for any host and must not know what
+/// a `Timeline` is, so it takes the pair opaquely — see
+/// [`styra_ui::event_list::EntryVersion`].
+pub(crate) fn ui_version(value: crate::timeline::EventVersion) -> EntryVersion {
+    EntryVersion {
+        id: value.id.as_u64(),
+        revision: value.revision,
+    }
+}
 
 pub(crate) fn ui_link_display(value: crate::app::LinkDisplay) -> LinkDisplay {
     match value {
@@ -20,6 +33,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         .filter(|(index, _)| app.timeline.is_visible(*index))
         .map(|(index, entry)| styra_ui::event_list::EventEntry {
             event: entry.event(),
+            version: ui_version(entry.version()),
             expanded: app.timeline.entry_expanded(index),
             has_detail: entry.has_detail(),
             contract: entry.contract.as_ref(),
