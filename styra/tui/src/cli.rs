@@ -58,4 +58,15 @@ pub enum CliCommand {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Delete the Git worktrees of completed sessions whose checkouts have
+    /// nothing uncommitted in them, keeping their branches. Each such session
+    /// is left recording its branch alone, and resuming it checks that branch
+    /// out again. A checkout with uncommitted work, or one a live interaction
+    /// is still using, is reported and left alone.
+    CleanWorktrees {
+        /// Clean every Workspace, not only the one covering the current
+        /// directory.
+        #[arg(long)]
+        all: bool,
+    },
 }

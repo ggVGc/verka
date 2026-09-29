@@ -78,6 +78,23 @@ pub trait Git: Send + Sync {
     /// `path`.
     fn create_worktree(&self, repository: &Path, branch: &str, path: &Path) -> Result<()>;
 
+    /// Check an existing `branch` out in a linked worktree at `path`.
+    ///
+    /// The counterpart of [`Self::create_worktree`] for a branch that is
+    /// already there: a Session whose worktree was cleaned up keeps its
+    /// branch, so returning to it is a checkout of that branch rather than the
+    /// creation of another one.
+    fn add_worktree(&self, repository: &Path, branch: &str, path: &Path) -> Result<()>;
+
+    /// Remove the linked worktree at `path`, leaving the branch it had checked
+    /// out in the repository.
+    ///
+    /// Git refuses a worktree with modified or untracked files, which is a
+    /// second floor under the caller's own check rather than a substitute for
+    /// it: the answer a cleanup pass reports has to be decided before anything
+    /// is deleted.
+    fn remove_worktree(&self, repository: &Path, path: &Path) -> Result<()>;
+
     /// The branch checked out in `checkout`, or `None` when its head is
     /// detached.
     fn current_branch(&self, checkout: &Path) -> Result<Option<String>>;
@@ -201,6 +218,21 @@ impl Git for SystemGit {
             .succeed()
     }
 
+    fn add_worktree(&self, repository: &Path, branch: &str, path: &Path) -> Result<()> {
+        Invocation::new(repository, "check the branch out in a worktree")
+            .args(["worktree", "add", "--"])
+            .arg(path)
+            .arg(branch)
+            .succeed()
+    }
+
+    fn remove_worktree(&self, repository: &Path, path: &Path) -> Result<()> {
+        Invocation::new(repository, "remove the worktree")
+            .args(["worktree", "remove"])
+            .arg(path)
+            .succeed()
+    }
+
     fn current_branch(&self, checkout: &Path) -> Result<Option<String>> {
         let branch = Invocation::new(checkout, "read the current branch")
             .args(["branch", "--show-current"])
@@ -260,6 +292,12 @@ fn push_mount(mounts: &mut Vec<MountSpec>, path: PathBuf, writable: bool) {
 #[derive(Default)]
 pub struct FakeGit {
     checkouts: Mutex<Vec<Checkout>>,
+    /// Every branch the repository has, whether or not a checkout has it out.
+    /// Kept apart from [`Self::checkouts`] because that is exactly what
+    /// removing a worktree separates: the checkout goes and the branch stays,
+    /// so a fake that read branches off its checkouts would let a cleaned-up
+    /// Session's branch be created a second time.
+    branches: Mutex<Vec<String>>,
     /// Roots a test has declared to have uncommitted work. A fake with no
     /// history cannot derive this, and the callers only ever ask the
     /// question, so it is simply stated.
@@ -307,7 +345,14 @@ impl FakeGit {
             },
             branch: Some("main".to_owned()),
         });
+        self.branches.lock().unwrap().push("main".to_owned());
         repository
+    }
+
+    /// Whether the repository has `branch`, whether or not it is checked out
+    /// anywhere. What `git branch --list` would answer.
+    pub fn has_branch(&self, branch: &str) -> bool {
+        self.branches.lock().unwrap().iter().any(|it| it == branch)
     }
 
     /// Point an already-registered checkout at a `git_dir` outside its common
@@ -335,6 +380,54 @@ impl FakeGit {
             }
             _ => {}
         }
+    }
+
+    /// The checkout `repository` names, which every worktree operation is run
+    /// from.
+    fn main_checkout(&self, repository: &Path) -> Result<Checkout> {
+        self.containing(
+            &repository
+                .canonicalize()
+                .with_context(|| format!("repository {} must exist", repository.display()))?,
+        )
+        .with_context(|| format!("{} is not inside a Git repository", repository.display()))
+    }
+
+    /// Lay `branch` out as a linked worktree at `path`, without deciding
+    /// whether the branch may be checked out there — that is the caller's,
+    /// and it is the only thing `git worktree add` does differently with and
+    /// without `-b`.
+    fn check_out(&self, repository: &Path, branch: &str, path: &Path) -> Result<()> {
+        let main = self.main_checkout(repository)?;
+
+        // The layout `git worktree add` leaves behind, so that the readers
+        // which parse it rather than ask us see what they would really see.
+        let name = path
+            .file_name()
+            .context("a worktree path must name a directory")?;
+        let git_dir = main.directories.common_dir.join("worktrees").join(name);
+        std::fs::create_dir_all(&git_dir).context("creating the fake worktree metadata")?;
+        std::fs::create_dir_all(path).context("creating the fake worktree checkout")?;
+        std::fs::write(
+            path.join(".git"),
+            format!("gitdir: {}\n", git_dir.display()),
+        )
+        .context("writing the fake worktree pointer")?;
+        std::fs::write(git_dir.join("commondir"), "../..\n")
+            .context("writing the fake worktree commondir")?;
+
+        let root = path
+            .canonicalize()
+            .context("canonicalising the fake worktree")?;
+        self.checkouts.lock().unwrap().push(Checkout {
+            root,
+            directories: Directories {
+                git_dir,
+                common_dir: main.directories.common_dir,
+            },
+            branch: Some(branch.to_owned()),
+        });
+        Ok(())
     }
 
     /// The checkout whose root is `path` or an ancestor of it, longest root
@@ -370,13 +463,20 @@ impl Git for FakeGit {
     }
 
     fn create_worktree(&self, repository: &Path, branch: &str, path: &Path) -> Result<()> {
-        let main = self
-            .containing(
-                &repository
-                    .canonicalize()
-                    .with_context(|| format!("repository {} must exist", repository.display()))?,
-            )
-            .with_context(|| format!("{} is not inside a Git repository", repository.display()))?;
+        if self.has_branch(branch) {
+            anyhow::bail!(
+                "git could not create the branch and worktree: branch {branch:?} already exists"
+            );
+        }
+        self.check_out(repository, branch, path)?;
+        self.branches.lock().unwrap().push(branch.to_owned());
+        Ok(())
+    }
+
+    fn add_worktree(&self, repository: &Path, branch: &str, path: &Path) -> Result<()> {
+        if !self.has_branch(branch) {
+            anyhow::bail!("git could not check the branch out: branch {branch:?} does not exist");
+        }
         if self
             .checkouts
             .lock()
@@ -385,37 +485,40 @@ impl Git for FakeGit {
             .any(|checkout| checkout.branch.as_deref() == Some(branch))
         {
             anyhow::bail!(
-                "git could not create the branch and worktree: branch {branch:?} already exists"
+                "git could not check the branch out: branch {branch:?} is already checked out"
             );
         }
+        self.check_out(repository, branch, path)
+    }
 
-        // The layout `git worktree add` leaves behind, so that the readers
-        // which parse it rather than ask us see what they would really see.
-        let name = path
-            .file_name()
-            .context("a worktree path must name a directory")?;
-        let git_dir = main.directories.common_dir.join("worktrees").join(name);
-        std::fs::create_dir_all(&git_dir).context("creating the fake worktree metadata")?;
-        std::fs::create_dir_all(path).context("creating the fake worktree checkout")?;
-        std::fs::write(
-            path.join(".git"),
-            format!("gitdir: {}\n", git_dir.display()),
-        )
-        .context("writing the fake worktree pointer")?;
-        std::fs::write(git_dir.join("commondir"), "../..\n")
-            .context("writing the fake worktree commondir")?;
-
-        let root = path
+    fn remove_worktree(&self, repository: &Path, path: &Path) -> Result<()> {
+        let path = path
             .canonicalize()
-            .context("canonicalising the fake worktree")?;
-        self.checkouts.lock().unwrap().push(Checkout {
-            root,
-            directories: Directories {
-                git_dir,
-                common_dir: main.directories.common_dir,
-            },
-            branch: Some(branch.to_owned()),
-        });
+            .with_context(|| format!("worktree {} must exist", path.display()))?;
+        let main = self.main_checkout(repository)?;
+        anyhow::ensure!(
+            path != main.root,
+            "git could not remove the worktree: {} is a main working tree",
+            path.display()
+        );
+        if self.has_uncommitted_changes(&path)? {
+            anyhow::bail!(
+                "git could not remove the worktree: {} contains modified or untracked files",
+                path.display()
+            );
+        }
+        let mut checkouts = self.checkouts.lock().unwrap();
+        let index = checkouts
+            .iter()
+            .position(|checkout| checkout.root == path)
+            .with_context(|| format!("{} is not a working tree", path.display()))?;
+        // The branch deliberately stays in `branches`: removing a worktree
+        // takes the checkout away and leaves the branch behind.
+        let removed = checkouts.remove(index);
+        drop(checkouts);
+        std::fs::remove_dir_all(&path).context("removing the fake worktree checkout")?;
+        std::fs::remove_dir_all(&removed.directories.git_dir)
+            .context("removing the fake worktree metadata")?;
         Ok(())
     }
 
@@ -972,6 +1075,110 @@ mod conformance {
         assert_eq!(SystemGit.discover(&root).unwrap(), None);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Removing a worktree is the half of the cleanup that has to be exactly
+    /// Git's: the directory goes, the branch stays, and the branch can be
+    /// checked out again where it was. A fake that let the branch go with the
+    /// checkout would make every cleanup test pass while the real thing
+    /// refused to create the branch a second time.
+    #[test]
+    #[ignore = "requires a real git binary"]
+    fn real_git_keeps_the_branch_when_the_worktree_goes_as_the_fake_does() {
+        if !fixture::git_available() {
+            eprintln!("skipping: no usable git");
+            return;
+        }
+        let base = temporary_directory("conformance-remove");
+        let checkout = base.join("checkout");
+        std::fs::create_dir_all(&checkout).unwrap();
+        fixture::init(&checkout);
+        fixture::commit_empty(&checkout, "initial");
+        let real_linked = base.join("real");
+        SystemGit
+            .create_worktree(&checkout, "styra/removed", &real_linked)
+            .unwrap();
+
+        let fake = FakeGit::new();
+        let fake_checkout = base.join("fake-checkout");
+        fake.init(&fake_checkout);
+        let fake_linked = base.join("fake");
+        fake.create_worktree(&fake_checkout, "styra/removed", &fake_linked)
+            .unwrap();
+
+        SystemGit.remove_worktree(&checkout, &real_linked).unwrap();
+        fake.remove_worktree(&fake_checkout, &fake_linked).unwrap();
+
+        // The directory is gone in both.
+        assert!(!real_linked.exists());
+        assert!(!fake_linked.exists());
+        // The branch is not.
+        let listed = Invocation::new(&checkout, "list the branches")
+            .args(["branch", "--list", "styra/removed"])
+            .output()
+            .unwrap();
+        assert!(!listed.is_empty(), "the branch went with the worktree");
+        assert!(fake.has_branch("styra/removed"));
+        // And creating it again is refused in both, because it is still there.
+        assert!(SystemGit
+            .create_worktree(&checkout, "styra/removed", &real_linked)
+            .is_err());
+        assert!(fake
+            .create_worktree(&fake_checkout, "styra/removed", &fake_linked)
+            .is_err());
+        // Checking it out again is how a cleaned-up Session comes back, and
+        // the work it committed comes back with it.
+        SystemGit
+            .add_worktree(&checkout, "styra/removed", &real_linked)
+            .unwrap();
+        fake.add_worktree(&fake_checkout, "styra/removed", &fake_linked)
+            .unwrap();
+        assert_eq!(
+            SystemGit.current_branch(&real_linked).unwrap().as_deref(),
+            Some("styra/removed")
+        );
+        assert_eq!(
+            fake.current_branch(&fake_linked).unwrap().as_deref(),
+            Some("styra/removed")
+        );
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// A worktree with work in it is not something either implementation
+    /// deletes, whatever the caller thought it knew.
+    #[test]
+    #[ignore = "requires a real git binary"]
+    fn real_git_refuses_to_remove_a_dirty_worktree_as_the_fake_does() {
+        if !fixture::git_available() {
+            eprintln!("skipping: no usable git");
+            return;
+        }
+        let base = temporary_directory("conformance-remove-dirty");
+        let checkout = base.join("checkout");
+        std::fs::create_dir_all(&checkout).unwrap();
+        fixture::init(&checkout);
+        fixture::commit_empty(&checkout, "initial");
+        let real_linked = base.join("real");
+        SystemGit
+            .create_worktree(&checkout, "styra/dirty", &real_linked)
+            .unwrap();
+        std::fs::write(real_linked.join("left-behind.txt"), "half-done").unwrap();
+
+        let fake = FakeGit::new();
+        let fake_checkout = base.join("fake-checkout");
+        fake.init(&fake_checkout);
+        let fake_linked = base.join("fake");
+        fake.create_worktree(&fake_checkout, "styra/dirty", &fake_linked)
+            .unwrap();
+        fake.set_uncommitted_changes(&fake_linked, true);
+
+        assert!(SystemGit.remove_worktree(&checkout, &real_linked).is_err());
+        assert!(fake.remove_worktree(&fake_checkout, &fake_linked).is_err());
+        assert!(real_linked.join("left-behind.txt").exists());
+        assert!(fake_linked.exists());
+
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     /// The shape [`FakeGit::create_worktree`] writes is the shape `git

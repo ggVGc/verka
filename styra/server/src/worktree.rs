@@ -35,8 +35,12 @@ const BRANCH_PREFIX: &str = "styra";
 /// happens to still imply.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Checkout {
-    /// Where the Session works, on the host.
-    pub path: PathBuf,
+    /// Where the Session works, on the host. `None` once the checkout has been
+    /// cleaned up — see [`Worktrees::remove`] — which leaves the Session with
+    /// its branch and no directory: the work is committed on the branch, and
+    /// the next launch checks it out again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
     /// The branch checked out there, as `git branch` shows it.
     pub branch: String,
 }
@@ -56,7 +60,25 @@ impl Checkout {
             .unwrap_or_default();
         Self {
             branch: format!("{BRANCH_PREFIX}/{name}"),
-            path,
+            path: Some(path),
+        }
+    }
+
+    /// The same checkout with its directory gone: what a Session records once
+    /// its worktree has been cleaned up.
+    pub fn without_worktree(&self) -> Self {
+        Self {
+            path: None,
+            branch: self.branch.clone(),
+        }
+    }
+
+    /// How this checkout reads in a message: the directory it works in, or the
+    /// branch alone once there is no directory left to name.
+    pub fn describe(&self) -> String {
+        match &self.path {
+            Some(path) => path.display().to_string(),
+            None => format!("branch {}", self.branch),
         }
     }
 }
@@ -105,6 +127,37 @@ impl Worktrees {
             &path,
         )?;
         Ok(path)
+    }
+
+    /// Check `branch` out again in a checkout of its own, for a Session whose
+    /// worktree was cleaned up after it while the branch stayed.
+    ///
+    /// The directory is named from the branch rather than from the id, because
+    /// the two were written from one string when the checkout was made: a
+    /// restored Session lands where it was, under the name the operator has
+    /// already seen. A branch from somewhere else — one the agent switched to
+    /// — is checked out under its own last segment, which is the only name
+    /// there is to give it.
+    pub fn restore(&self, branch: &str) -> Result<PathBuf> {
+        let path = self.path_for_branch(branch);
+        if path.is_dir() {
+            return Ok(path);
+        }
+        self.git
+            .add_worktree(&self.repository.root, branch, &path)?;
+        Ok(path)
+    }
+
+    /// Where [`Self::restore`] would check `branch` out, without creating
+    /// anything — what a plan has to be able to say about a Session that
+    /// currently has a branch and no directory.
+    pub fn path_for_branch(&self, branch: &str) -> PathBuf {
+        self.host_root.join(directory_for(branch))
+    }
+
+    /// Remove the linked checkout at `path`, leaving its branch behind.
+    pub fn remove(&self, path: &Path) -> Result<()> {
+        self.git.remove_worktree(&self.repository.root, path)
     }
 
     /// Where interaction `id` would work, without creating anything. Planning
@@ -160,6 +213,15 @@ pub fn existing_checkout(host_root: &Path, id: &str) -> Option<PathBuf> {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.ends_with(&suffix))
         })
+}
+
+/// The checkout directory a branch belongs in: the name [`named`] wrote, with
+/// the prefix that marks the branch as Styra's taken back off.
+fn directory_for(branch: &str) -> String {
+    branch
+        .strip_prefix(&format!("{BRANCH_PREFIX}/"))
+        .unwrap_or(branch)
+        .replace('/', "-")
 }
 
 /// What the branch and the checkout are both called: the topic, then the
@@ -288,6 +350,48 @@ mod tests {
         // And the Session finds it again from the id alone, which is all a
         // resume or a plan has.
         assert_eq!(worktrees.path("1757000000000-1-4"), checkout);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Cleaning up after a finished interaction takes the directory and
+    /// leaves the branch, and returning to it is the branch being checked out
+    /// where it was — under the name the operator has already seen in their
+    /// worktree directory and in `git branch`.
+    #[test]
+    fn a_removed_checkout_comes_back_on_the_branch_it_left_behind() {
+        let (root, git, worktrees) = workspace("restore");
+
+        let checkout = worktrees
+            .checkout("1757000000000-1-6", Some("tidy-the-worktrees"))
+            .unwrap();
+        let branch = git.current_branch(&checkout).unwrap().unwrap();
+        worktrees.remove(&checkout).unwrap();
+
+        assert!(!checkout.exists());
+        assert!(git.has_branch(&branch), "the branch went with the checkout");
+        assert_eq!(worktrees.path_for_branch(&branch), checkout);
+
+        let restored = worktrees.restore(&branch).unwrap();
+
+        assert_eq!(restored, checkout);
+        assert_eq!(git.current_branch(&restored).unwrap(), Some(branch));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Asking for a checkout that is already there is what a second cleanup
+    /// pass, or a resume racing one, has to be safe to do.
+    #[test]
+    fn restoring_a_checkout_that_is_still_there_returns_it() {
+        let (root, git, worktrees) = workspace("restore-existing");
+
+        let checkout = worktrees.checkout("1757000000000-1-7", None).unwrap();
+        let branch = git.current_branch(&checkout).unwrap().unwrap();
+        std::fs::write(checkout.join("in-progress.txt"), "half-done").unwrap();
+
+        assert_eq!(worktrees.restore(&branch).unwrap(), checkout);
+        assert!(checkout.join("in-progress.txt").exists());
 
         std::fs::remove_dir_all(root).unwrap();
     }

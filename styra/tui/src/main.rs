@@ -50,7 +50,7 @@ use cli::{Cli, CliCommand};
 use config::Defaults;
 use event_loop::RunOutcome;
 use session::Attachment;
-use styra_protocol::{LogEntry, WorkspaceSummary};
+use styra_protocol::{LogEntry, WorkspaceSummary, WorktreeCleanup};
 use styra_server::Client;
 use styra_ui::{RatatuiUi, Ui};
 
@@ -242,11 +242,17 @@ fn main() -> Result<()> {
         styra_server::ensure_server(&socket)
             .with_context(|| format!("Styra server is unavailable at {}", socket.display()))?
     };
-    if let Some(CliCommand::Shell { session }) = &cli.command {
-        return match session {
-            Some(session) => attach_shell(&client, session),
-            None => browse_shells(&client),
-        };
+    match &cli.command {
+        Some(CliCommand::Shell { session }) => {
+            return match session {
+                Some(session) => attach_shell(&client, session),
+                None => browse_shells(&client),
+            }
+        }
+        Some(CliCommand::CleanWorktrees { all }) => {
+            return clean_worktrees(&client, cli.workspace.as_deref(), *all)
+        }
+        None => {}
     }
     let preferences_path = preferences::default_path()?;
 
@@ -536,6 +542,68 @@ fn attach_shell(client: &Client, session: &str) -> Result<()> {
             shell.tmux.display()
         )
     })
+}
+
+/// Delete the worktrees of completed sessions that have nothing uncommitted,
+/// and say what happened to each one.
+///
+/// Scoped to the Workspace covering the working directory — the same one an
+/// ordinary launch would enter — unless `all` widens it to every Workspace the
+/// server knows. A directory that belongs to no Workspace has no sessions to
+/// clean and is not made into one: creating a Workspace is what starting a
+/// session does, not what tidying up after one does.
+fn clean_worktrees(client: &Client, workspace: Option<&Path>, all: bool) -> Result<()> {
+    let scope = if all {
+        None
+    } else {
+        let directory = session::resolve_workspace(workspace)?;
+        let Some(workspace) =
+            session::find_workspace_for_host(&client.list_workspaces()?, &directory)
+        else {
+            println!(
+                "{} is not inside a Styra Workspace; pass --all to clean every Workspace",
+                directory.display()
+            );
+            return Ok(());
+        };
+        Some(workspace.id)
+    };
+    let cleaned = client.clean_worktrees(scope.as_deref())?;
+    if cleaned.is_empty() {
+        println!("No completed session has a worktree to clean up");
+        return Ok(());
+    }
+    let mut removed = 0;
+    for session in &cleaned {
+        let name = session.name.as_deref().unwrap_or(&session.session_id);
+        let outcome = match &session.outcome {
+            WorktreeCleanup::Removed => {
+                removed += 1;
+                format!("removed {}", session.worktree.display())
+            }
+            WorktreeCleanup::AlreadyGone => {
+                removed += 1;
+                format!("{} was already gone", session.worktree.display())
+            }
+            WorktreeCleanup::Uncommitted => {
+                format!(
+                    "kept: uncommitted changes in {}",
+                    session.worktree.display()
+                )
+            }
+            WorktreeCleanup::Live => "kept: an interaction is still live in it".to_owned(),
+            WorktreeCleanup::Shared { session_id } => {
+                format!("kept: session {session_id} is still working in it")
+            }
+            WorktreeCleanup::Failed { message } => format!("failed: {message}"),
+        };
+        println!("{name} [{}] {outcome}", session.branch);
+    }
+    println!(
+        "{removed} of {} worktree(s) cleaned up; every branch was kept",
+        cleaned.len()
+    );
+    Ok(())
 }
 
 fn browse_shells(client: &Client) -> Result<()> {

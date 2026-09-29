@@ -14,11 +14,11 @@ mod types;
 
 pub use types::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
-    BranchHistory, CheckoutState, CompletionState, Contract, Direction, DrivaOptions, FileLocation,
-    InteractionActivity, InteractionActivityReason, InteractionEnd, InteractionSummary,
-    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage,
-    QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
-    VariableOrigin, WorkspaceSummary,
+    BranchHistory, CheckoutState, CleanedWorktree, CompletionState, Contract, Direction,
+    DrivaOptions, FileLocation, InteractionActivity, InteractionActivityReason, InteractionEnd,
+    InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel,
+    MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary,
+    TemplateSummary, VariableOrigin, WorkspaceSummary, WorktreeCleanup,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -333,6 +333,23 @@ pub enum Request {
     CreateSessionWorktree {
         id: String,
     },
+    /// Remove the linked Git worktrees of Sessions the operator has finished
+    /// with and whose checkouts have nothing uncommitted in them, and record
+    /// each such Session as working on its branch alone.
+    ///
+    /// The branch is never touched: the work an agent committed stays exactly
+    /// where the operator expects to find it in `git branch`, and resuming the
+    /// Session checks that branch out again. What goes is the directory, which
+    /// after a completed Session is a copy of the repository per conversation
+    /// and nothing else.
+    ///
+    /// Scoped to one Workspace, or to every one when no id is given. Answers
+    /// with a [`CleanedWorktree`] per Session considered, including those left
+    /// alone and why.
+    CleanWorktrees {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_id: Option<String>,
+    },
     /// Convert a stored Session's native provider transcript (Codex rollout or
     /// Claude project JSONL) to the other interactive provider's format,
     /// using Genta's session conversion. The source Session and its native
@@ -539,6 +556,7 @@ pub enum Response {
     Templates(Vec<TemplateSummary>),
     SessionResumed(SessionInfo),
     SessionWorktreeCreated,
+    WorktreesCleaned(Vec<CleanedWorktree>),
     SessionConverted(SessionSummary),
     SessionBranched(SessionSummary),
     SessionRenamed(SessionSummary),
@@ -630,6 +648,40 @@ mod tests {
         assert_eq!(json["data"]["id"], "workspace-1");
         assert_eq!(json["data"]["name"], "payments");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    /// The scope is optional on the wire, so a client asking about every
+    /// Workspace sends the operation and nothing else.
+    #[test]
+    fn cleaning_worktrees_names_a_workspace_or_none() {
+        let scoped = Request::CleanWorktrees {
+            workspace_id: Some("workspace-1".into()),
+        };
+        let json = serde_json::to_value(&scoped).unwrap();
+        assert_eq!(json["operation"], "clean_worktrees");
+        assert_eq!(json["data"]["workspace_id"], "workspace-1");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), scoped);
+
+        let every = Request::CleanWorktrees { workspace_id: None };
+        assert_eq!(
+            serde_json::from_str::<Request>(r#"{"operation":"clean_worktrees","data":{}}"#)
+                .unwrap(),
+            every
+        );
+
+        let response = Response::WorktreesCleaned(vec![CleanedWorktree {
+            session_id: "s-1".into(),
+            name: None,
+            workspace_id: "workspace-1".into(),
+            branch: "styra/tidy-up-s-1".into(),
+            worktree: PathBuf::from("/state/worktrees/tidy-up-s-1"),
+            outcome: WorktreeCleanup::Uncommitted,
+        }]);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["type"], "worktrees_cleaned");
+        assert_eq!(json["data"][0]["branch"], "styra/tidy-up-s-1");
+        assert_eq!(json["data"][0]["outcome"]["outcome"], "uncommitted");
+        assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
     }
 
     #[test]

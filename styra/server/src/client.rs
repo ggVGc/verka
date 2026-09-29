@@ -139,6 +139,21 @@ impl Client {
         }
     }
 
+    /// Remove the worktrees of completed Sessions with nothing uncommitted in
+    /// them, in one Workspace or in every one, keeping each Session's branch.
+    /// Answers with what happened to every Session considered.
+    pub fn clean_worktrees(
+        &self,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<crate::protocol::CleanedWorktree>> {
+        match self.request(Request::CleanWorktrees {
+            workspace_id: workspace_id.map(str::to_owned),
+        })? {
+            Response::WorktreesCleaned(value) => Ok(value),
+            other => unexpected("worktrees_cleaned", other),
+        }
+    }
+
     /// Convert a stored Session's native transcript to the other interactive
     /// provider's format and return the new sibling Session it was written
     /// to. The source Session's history is untouched, but it is sealed: the

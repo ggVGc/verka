@@ -19,6 +19,8 @@ styra --stop                  # stop the daemon and its live interactions
 styra --standalone            # run the server in this process, with no daemon
 styra shell                   # choose and attach to a live sandbox shell
 styra shell --session ID      # attach to that live session's shell
+styra clean-worktrees         # delete the worktrees of completed, committed sessions
+styra clean-worktrees --all   # the same, across every Workspace
 ```
 
 The client starts the daemon automatically if needed. `--socket PATH` selects
@@ -306,8 +308,30 @@ interaction's workspace, beside the Workspace's own host path.
 A linked checkout is always of the whole repository, so a Workspace naming a
 directory below the checkout root gets the root: the agent sees more of the
 tree this way, not less. Merging the branch back afterwards is yours to do, on
-the host, with ordinary Git — Styra never merges, deletes, or prunes these
-checkouts.
+the host, with ordinary Git — Styra never merges or deletes a branch.
+
+### Cleaning up the checkouts you are done with
+
+A worktree is a whole copy of the repository per conversation, and they add up.
+`styra clean-worktrees` deletes the ones that have nothing left in them:
+
+```sh
+styra clean-worktrees         # the Workspace covering the current directory
+styra clean-worktrees --all   # every Workspace the server knows
+```
+
+A checkout is deleted only when you have marked its Session complete (`C` in
+the Session list, or sealed it) *and* `git status` in it is clean. The
+branch is never touched: the commits stay exactly where you expect to find
+them in `git branch`, and the Session goes on recording that branch with no
+directory beside it. Resuming such a Session checks the branch out again, in
+the same place and under the same name, so cleaning up costs you nothing but
+the disk space.
+
+Everything the pass considered is printed, including what it left alone and
+why — a checkout with uncommitted changes, or one a live interaction is still
+working in, is reported and kept. Nothing else prunes these checkouts; they go
+when you say so.
 
 `n` in a Session that has a checkout starts the next one **in that same
 checkout**, on its branch and among its uncommitted work, rather than back in

@@ -579,14 +579,51 @@ pub fn store_session_checkout(path: &Path, checkout: &Checkout) -> Result<()> {
     let mut stored = read_stored_session_meta(&directory)?;
     match &stored.checkout {
         Some(existing) if existing == checkout => return Ok(()),
+        // A Session whose worktree was cleaned up kept its branch and lost its
+        // directory. Checking that same branch out again completes the record
+        // rather than replacing one checkout with another, so it is allowed
+        // where any other change is not.
+        Some(existing) if existing.path.is_none() && existing.branch == checkout.branch => {
+            stored.checkout = Some(checkout.clone())
+        }
         Some(existing) => anyhow::bail!(
             "session already works in {}, not {}",
-            existing.path.display(),
-            checkout.path.display()
+            existing.describe(),
+            checkout.describe()
         ),
         None => stored.checkout = Some(checkout.clone()),
     }
     write_stored_session_meta(&directory, &stored)
+}
+
+/// Record that a Session's checkout has been removed, keeping the branch it
+/// worked on.
+///
+/// The one edit [`store_session_checkout`] refuses to make itself, and the
+/// reason it refuses: a Session must not be pointed at a *different*
+/// directory, because its uncommitted work would be left in the old one. This
+/// is the opposite case — the directory is gone precisely because nothing was
+/// left in it — and the branch, which is where the work actually is, stays
+/// exactly as it was.
+///
+/// Returns the checkout as it now stands, or `None` for a Session that had no
+/// checkout to begin with.
+pub fn clear_session_worktree(path: &Path) -> Result<Option<Checkout>> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    let Some(checkout) = stored.checkout.as_ref().map(Checkout::without_worktree) else {
+        return Ok(None);
+    };
+    if stored.checkout.as_ref() == Some(&checkout) {
+        return Ok(Some(checkout));
+    }
+    stored.checkout = Some(checkout.clone());
+    write_stored_session_meta(&directory, &stored)?;
+    Ok(Some(checkout))
 }
 
 /// Read the contract a Session's most recent typed turn was sent under.

@@ -33,6 +33,7 @@ Then start the TUI in another terminal:
 ```sh
 styra [OPTIONS] [-- PROMPT]
 styra shell [--session <ID>]
+styra clean-worktrees [--all]
 
   --socket <PATH>      Server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
   --standalone         Run the server in this process; no socket, no daemon
@@ -102,6 +103,13 @@ uncommitted file, and neither shares one with the operator. Resuming an
 interaction returns to its own checkout, uncommitted work included. A Workspace
 outside Git receives none of this. Turning the setting off affects future
 launches and does not delete existing worktrees.
+
+`styra clean-worktrees` deletes the checkouts of Sessions marked completed
+whose working trees are clean, and records each such Session as working on its
+branch alone; the branch itself is never touched, and resuming the Session
+checks it out again in the same place. A checkout holding uncommitted work, or
+one a live interaction is still using, is reported and kept. Without `--all`
+the pass is scoped to the Workspace covering the current directory.
 
 `workspace.json` also holds the Workspace's standing launch policy: the Driva
 templates, extra mounts, network permission, and workspace mount access every

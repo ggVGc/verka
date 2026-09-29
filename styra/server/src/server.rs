@@ -8,9 +8,10 @@ use crate::journal::{self, Journal};
 use crate::naming::Topic;
 use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
-    Answer, CheckoutState, CompletionState, Contract, DrivaOptions, InteractionActivity,
-    InteractionActivityReason, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy,
-    LogEntry, QueuedMessage, SendMessage, SessionOrigin, SessionSummary, TemplateSummary,
+    Answer, CheckoutState, CleanedWorktree, CompletionState, Contract, DrivaOptions,
+    InteractionActivity, InteractionActivityReason, InteractionSummary, InteractionUpdate,
+    LaunchMount, LaunchPolicy, LogEntry, QueuedMessage, SendMessage, SessionOrigin, SessionSummary,
+    TemplateSummary, WorktreeCleanup,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
@@ -1165,6 +1166,161 @@ impl ServerState {
         journal::store_session_checkout(&session.path, &checkout)?;
         Ok(())
     }
+
+    /// Take back the checkouts of Sessions the operator has finished with and
+    /// left nothing uncommitted in.
+    ///
+    /// A worktree is a whole copy of the repository per conversation, and
+    /// after a completed Session it holds nothing the branch does not already
+    /// have — so the directory goes and the branch stays. The Session keeps
+    /// recording that branch, which is what makes this reversible: resuming it
+    /// checks the branch out again, in the same place and under the same name.
+    ///
+    /// Nothing is removed on a guess. A checkout with uncommitted work is
+    /// left exactly where it is, as is one an interaction is still live in,
+    /// and both are reported as such rather than silently skipped: the pass
+    /// answers what happened to every Session it considered.
+    fn clean_worktrees(&self, workspace_id: Option<&str>) -> Result<Vec<CleanedWorktree>> {
+        let workspaces = match workspace_id {
+            Some(id) => vec![crate::workspace::get(&self.inner.store_root, id)?],
+            None => crate::workspace::list(&self.inner.store_root)?,
+        };
+        let mut cleaned = Vec::new();
+        for workspace in workspaces {
+            // Prepared on the first Session that turns out to have a checkout,
+            // so that a pass over Workspaces which never made worktrees does
+            // not create the directory they would have used.
+            let mut worktrees = None;
+            let sessions = journal::list_workspace_sessions(&self.inner.store_root, &workspace.id)?;
+            let retained = self.checkouts_in_use(&sessions, &workspace.id)?;
+            for session in sessions {
+                if session.completed == CompletionState::Active {
+                    continue;
+                }
+                let Some(checkout) =
+                    self.session_checkout(&session.path, &workspace.id, &session.id)?
+                else {
+                    continue;
+                };
+                // Already without a directory: an earlier pass, or a Session
+                // that never had one. Nothing to report and nothing to do.
+                let Some(path) = checkout.path.clone() else {
+                    continue;
+                };
+                let worktrees = match &worktrees {
+                    Some(prepared) => prepared,
+                    None => worktrees.insert(
+                        self.workspace_worktrees(&workspace, true)?.with_context(|| {
+                            format!(
+                                "Workspace {} is not inside a Git working tree, but Session {} records a checkout",
+                                workspace.id, session.id
+                            )
+                        })?,
+                    ),
+                };
+                // A checkout another Session is still working in goes when
+                // that Session is done with it, not when this one is.
+                let outcome = match retained
+                    .iter()
+                    .find(|(id, held)| *id != session.id && *held == path)
+                {
+                    Some((holder, _)) => WorktreeCleanup::Shared {
+                        session_id: holder.clone(),
+                    },
+                    None => self.clean_worktree(worktrees, &session, &path)?,
+                };
+                cleaned.push(CleanedWorktree {
+                    session_id: session.id,
+                    name: session.name,
+                    workspace_id: workspace.id.clone(),
+                    branch: checkout.branch,
+                    worktree: path,
+                    outcome,
+                });
+            }
+        }
+        Ok(cleaned)
+    }
+
+    /// The checkouts of this Workspace's Sessions that are still being worked
+    /// in: the ones the operator has not finished with, and the ones with a
+    /// live interaction.
+    ///
+    /// Sessions can be launched from one another's checkout, so removing a
+    /// directory is not a question about one Session alone. Whoever still
+    /// holds it keeps it.
+    fn checkouts_in_use(
+        &self,
+        sessions: &[SessionSummary],
+        workspace_id: &str,
+    ) -> Result<Vec<(String, PathBuf)>> {
+        let mut in_use = Vec::new();
+        for session in sessions {
+            if session.completed != CompletionState::Active && !self.live_in_checkout(&session.id) {
+                continue;
+            }
+            if let Some(path) = self
+                .session_checkout(&session.path, workspace_id, &session.id)?
+                .and_then(|checkout| checkout.path)
+            {
+                in_use.push((session.id.clone(), path));
+            }
+        }
+        Ok(in_use)
+    }
+
+    /// One Session's checkout, decided and then acted on. Separated from the
+    /// walk above so that the order of the questions — is it in use, is it
+    /// still there, does it hold uncommitted work — reads as the single
+    /// decision it is.
+    fn clean_worktree(
+        &self,
+        worktrees: &crate::worktree::Worktrees,
+        session: &SessionSummary,
+        path: &Path,
+    ) -> Result<WorktreeCleanup> {
+        if self.live_in_checkout(&session.id) {
+            return Ok(WorktreeCleanup::Live);
+        }
+        if !path.exists() {
+            journal::clear_session_worktree(&session.path)?;
+            return Ok(WorktreeCleanup::AlreadyGone);
+        }
+        match self.inner.git.has_uncommitted_changes(path) {
+            Ok(true) => return Ok(WorktreeCleanup::Uncommitted),
+            Ok(false) => {}
+            Err(error) => {
+                return Ok(WorktreeCleanup::Failed {
+                    message: format!("{error:#}"),
+                })
+            }
+        }
+        if let Err(error) = worktrees.remove(path) {
+            return Ok(WorktreeCleanup::Failed {
+                message: format!("{error:#}"),
+            });
+        }
+        // Only now: a record cleared before the removal succeeded would leave
+        // the Session unable to name the directory its work is still in.
+        journal::clear_session_worktree(&session.path)?;
+        Ok(WorktreeCleanup::Removed)
+    }
+
+    /// Whether an agent may still be working in this Session's checkout.
+    ///
+    /// Completion is the operator saying they are done with the Session, and
+    /// setting it stops the interaction — but a Session can be completed and
+    /// started again, and a row this run never stopped is one whose files are
+    /// still being written.
+    fn live_in_checkout(&self, id: &str) -> bool {
+        self.inner
+            .interactions
+            .lock()
+            .expect("server interaction lock poisoned")
+            .get(id)
+            .is_some_and(|managed| managed.summary().activity.accepting())
+    }
+
     pub fn new(store_root: PathBuf, socket: PathBuf) -> Self {
         Self::with_socket(
             crate::git::SystemGit::shared(),
@@ -1322,9 +1478,26 @@ impl ServerState {
             // answers for the directory it works in on its own rather than
             // through the Session it was started from — which may be closed,
             // renamed, or given a checkout of its own later.
-            (Some(inherited), _) => {
-                journal::store_session_checkout(&journal_path, inherited)?;
-                inherited.path.clone()
+            // A source whose own worktree was cleaned up has the branch and no
+            // directory, and sharing it means checking that branch out again —
+            // both Sessions then work in the one checkout, as sharing means.
+            (Some(inherited), worktrees) => {
+                let path = match (&inherited.path, worktrees) {
+                    (Some(path), _) => path.clone(),
+                    (None, Some(worktrees)) => worktrees.restore(&inherited.branch)?,
+                    (None, None) => anyhow::bail!(
+                        "the Session to share a checkout with works on branch {}, whose checkout was removed, and this Workspace is not inside a Git working tree",
+                        inherited.branch
+                    ),
+                };
+                journal::store_session_checkout(
+                    &journal_path,
+                    &crate::worktree::Checkout {
+                        path: Some(path.clone()),
+                        branch: inherited.branch.clone(),
+                    },
+                )?;
+                path
             }
             (None, Some(worktrees)) => {
                 let made = crate::worktree::Checkout::at(
@@ -1334,7 +1507,7 @@ impl ServerState {
                 // first-hand, rather than left to be recognised later from
                 // the shape of a directory name.
                 journal::store_session_checkout(&journal_path, &made)?;
-                made.path
+                made.path.expect("a checkout just made has its directory")
             }
             (None, None) => workspace.clone(),
         };
@@ -1703,8 +1876,18 @@ impl ServerState {
         let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
         let layout = launch_layout(worktrees.as_ref(), &workspace);
-        let checkout = match (&inherited_checkout, &worktrees) {
-            (Some(checkout), _) => checkout.path.clone(),
+        // A source Session whose worktree has been cleaned up has a branch and
+        // no directory, and the launch this plan describes would check that
+        // branch out where it used to be — which is the path the branch names.
+        let inherited_path = inherited_checkout.as_ref().and_then(|checkout| {
+            checkout.path.clone().or_else(|| {
+                worktrees
+                    .as_ref()
+                    .map(|worktrees| worktrees.path_for_branch(&checkout.branch))
+            })
+        });
+        let checkout = match (inherited_path, &worktrees) {
+            (Some(path), _) => path,
             (None, Some(worktrees)) => worktrees.path(PENDING_SESSION_ID),
             (None, None) => workspace.clone(),
         };
@@ -1840,9 +2023,25 @@ impl ServerState {
         // and nothing here re-derives it from the id its directory ends with.
         // Only a record pointing at a directory that is no longer there falls
         // through to making one, which is also the path a Session opted in
-        // after it last ran takes.
+        // after it last ran takes. A Session whose worktree was cleaned up
+        // records the branch and no directory, and is the one case that is
+        // neither: its branch is checked out again rather than another one
+        // created, so the committed work it was finished with is there.
         let checkout = match (&worktrees, &stored_checkout) {
-            (Some(_), Some(stored)) if stored.path.is_dir() => stored.path.clone(),
+            (Some(_), Some(stored)) if stored.path.as_deref().is_some_and(Path::is_dir) => {
+                stored.path.clone().expect("the directory was just read")
+            }
+            (Some(worktrees), Some(stored)) if stored.path.is_none() => {
+                let restored = worktrees.restore(&stored.branch)?;
+                journal::store_session_checkout(
+                    &summary.path,
+                    &crate::worktree::Checkout {
+                        path: Some(restored.clone()),
+                        branch: stored.branch.clone(),
+                    },
+                )?;
+                restored
+            }
             (Some(worktrees), _) => worktrees.checkout(&request.id, None)?,
             (None, _) => workspace.clone(),
         };
@@ -2497,7 +2696,7 @@ impl ServerState {
                     journal::read_session_checkout(&session_path)
                         .ok()
                         .flatten()
-                        .map(|checkout| checkout.path)
+                        .and_then(|checkout| checkout.path)
                 })
                 .unwrap_or_else(|| summary.workspace.clone());
             summary.checkout = checkout_state(self.inner.git.as_ref(), &directory);
@@ -2827,8 +3026,12 @@ impl ServerState {
     /// its own host path — applied to stored state rather than to worktrees this
     /// Session may no longer have.
     fn stored_workspace_mount(&self, summary: &SessionSummary) -> Result<(PathBuf, PathBuf)> {
+        // A Session whose checkout was cleaned up after it has no directory to
+        // name, and its journal's paths are the ones inside the checkout it
+        // had, so the fixed layout still describes the run that is over.
         if let Some(checkout) = journal::read_session_checkout(&summary.path)? {
-            return Ok((checkout.path, SandboxLayout::default().workspace));
+            let layout = SandboxLayout::default().workspace;
+            return Ok((checkout.path.unwrap_or_else(|| layout.clone()), layout));
         }
         let workspace = crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
         Ok((
@@ -2955,6 +3158,9 @@ impl ServerState {
                 self.create_session_worktree(&id)?;
                 Ok(Response::SessionWorktreeCreated)
             }
+            Request::CleanWorktrees { workspace_id } => Ok(Response::WorktreesCleaned(
+                self.clean_worktrees(workspace_id.as_deref())?,
+            )),
             Request::ConvertSessionProvider { id } => Ok(Response::SessionConverted(
                 self.convert_session_provider(&id)?,
             )),
@@ -4350,7 +4556,10 @@ mod tests {
             .unwrap()
             .expect("the new checkout is recorded");
         let expected_suffix = format!("-{id}");
-        let name = checkout.path.file_name().unwrap().to_string_lossy();
+        let path = checkout
+            .path
+            .expect("a checkout just made has its directory");
+        let name = path.file_name().unwrap().to_string_lossy();
         assert!(name.ends_with(&expected_suffix), "{name}");
         assert_ne!(name, id, "the first prompt supplies a branch topic");
         assert_eq!(
@@ -4359,9 +4568,121 @@ mod tests {
             "the branch and checkout use the same errand-derived name"
         );
         assert_eq!(
-            checkout.path.parent(),
+            path.parent(),
             Some(crate::workspace::worktrees_dir(&store, &workspace.id).as_path())
         );
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// A cleanup pass takes back the checkouts of the Sessions the operator
+    /// is done with and has committed, and nothing else: work that is still
+    /// uncommitted stays exactly where the agent left it, and a Session that
+    /// is still open keeps the directory it is working in.
+    ///
+    /// What every one of them keeps is the branch — that is the whole bargain
+    /// the pass makes, so it is asserted for the Session whose directory was
+    /// actually deleted.
+    #[test]
+    fn cleaning_up_takes_the_finished_checkouts_and_leaves_every_branch() {
+        let store = temp_path("clean-worktrees-store");
+        let host = temp_path("clean-worktrees-host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let state = ServerState::with_git(git.clone(), store.clone());
+        let workspace = crate::workspace::create(&store, &host, None).unwrap();
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
+        // One Session per outcome, each with a checkout of its own.
+        let session = |completed: CompletionState| {
+            let (journal, id) =
+                Journal::create_in_workspace(&store, &workspace.id, &profile, &selection, None)
+                    .unwrap();
+            let path = journal.path().parent().unwrap().to_path_buf();
+            drop(journal);
+            state.create_session_worktree(&id).unwrap();
+            journal::store_session_completed(&path, completed).unwrap();
+            let checkout = journal::read_session_checkout(&path).unwrap().unwrap();
+            (id, path, checkout)
+        };
+        let (finished, finished_path, finished_checkout) = session(CompletionState::Completed);
+        let (sealed, sealed_path, sealed_checkout) = session(CompletionState::Sealed);
+        let (dirty, dirty_path, dirty_checkout) = session(CompletionState::Completed);
+        let (open, open_path, open_checkout) = session(CompletionState::Active);
+        // A fifth, finished and clean, but recording the open Session's
+        // checkout the way a Session launched from another one does.
+        let (journal, shared) =
+            Journal::create_in_workspace(&store, &workspace.id, &profile, &selection, None)
+                .unwrap();
+        let shared_path = journal.path().parent().unwrap().to_path_buf();
+        drop(journal);
+        journal::store_session_checkout(&shared_path, &open_checkout).unwrap();
+        journal::store_session_completed(&shared_path, CompletionState::Completed).unwrap();
+        let directory = |checkout: &crate::worktree::Checkout| {
+            checkout.path.clone().expect("the checkout was just made")
+        };
+        git.set_uncommitted_changes(&directory(&dirty_checkout), true);
+
+        let cleaned = state.clean_worktrees(None).unwrap();
+
+        let outcome = |id: &str| {
+            cleaned
+                .iter()
+                .find(|entry| entry.session_id == id)
+                .map(|entry| entry.outcome.clone())
+        };
+        assert_eq!(outcome(&finished), Some(WorktreeCleanup::Removed));
+        assert_eq!(outcome(&sealed), Some(WorktreeCleanup::Removed));
+        assert_eq!(outcome(&dirty), Some(WorktreeCleanup::Uncommitted));
+        assert_eq!(
+            outcome(&open),
+            None,
+            "a Session the operator has not finished with is not considered"
+        );
+        assert_eq!(
+            outcome(&shared),
+            Some(WorktreeCleanup::Shared {
+                session_id: open.clone()
+            }),
+            "a checkout another Session is still working in is not taken"
+        );
+
+        // The two finished checkouts are gone, and the Sessions now record
+        // their branches alone — which are still branches.
+        for (path, checkout) in [
+            (&finished_path, &finished_checkout),
+            (&sealed_path, &sealed_checkout),
+        ] {
+            assert!(!directory(checkout).exists());
+            assert_eq!(
+                journal::read_session_checkout(path).unwrap(),
+                Some(checkout.without_worktree())
+            );
+            assert!(git.has_branch(&checkout.branch));
+        }
+        // The other two are untouched, record included.
+        for (path, checkout) in [(&dirty_path, &dirty_checkout), (&open_path, &open_checkout)] {
+            assert!(directory(checkout).is_dir());
+            assert_eq!(
+                journal::read_session_checkout(path).unwrap(),
+                Some(checkout.clone())
+            );
+        }
+
+        // And a second pass has nothing left to say about the ones it took.
+        let again = state.clean_worktrees(None).unwrap();
+        let mut said_about = again
+            .iter()
+            .map(|entry| entry.session_id.clone())
+            .collect::<Vec<_>>();
+        said_about.sort();
+        let mut kept = vec![dirty, shared];
+        kept.sort();
+        assert_eq!(said_about, kept);
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
@@ -4762,13 +5083,14 @@ mod tests {
                 .unwrap(),
         );
         journal::store_session_checkout(&session_path, &made).unwrap();
+        let made_path = made.path.clone().expect("the checkout was just made");
 
         // Both halves are the Session's own record now, branch included —
         // nothing has to reconstruct either from a path.
         let stored = journal::read_session_checkout(&session_path).unwrap();
         assert_eq!(stored, Some(made.clone()));
         assert_eq!(
-            made.path.file_name().unwrap(),
+            made_path.file_name().unwrap(),
             format!("teach-the-picker-to-filter-{id}").as_str()
         );
         assert_eq!(
@@ -4785,8 +5107,8 @@ mod tests {
         // And the record, not the name, is what answers: a checkout renamed to
         // something the id-suffix scan cannot find is still reported as this
         // Session's.
-        let renamed = made.path.with_file_name("renamed-by-the-operator");
-        std::fs::rename(&made.path, &renamed).unwrap();
+        let renamed = made_path.with_file_name("renamed-by-the-operator");
+        std::fs::rename(&made_path, &renamed).unwrap();
         assert_eq!(
             crate::worktree::existing_checkout(
                 &crate::workspace::worktrees_dir(&store, &workspace.id),
@@ -4837,7 +5159,7 @@ mod tests {
         assert!(plan.mounts.iter().any(|attributed| matches!(
             &attributed.mount,
             Mount::Bind { source, destination, access: MountAccess::ReadWrite }
-                if source == &checkout.path && destination == &sandbox
+                if Some(source) == checkout.path.as_ref() && destination == &sandbox
         )));
 
         std::fs::remove_dir_all(store).ok();

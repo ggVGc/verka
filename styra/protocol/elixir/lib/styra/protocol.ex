@@ -101,6 +101,13 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "clean_worktrees", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "workspace_id", required: false, type: %{kind: :optional, inner: %{kind: :string}}}
+          ]
+        }},
         %{name: "convert_session_provider", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -306,6 +313,7 @@ defmodule Styra.Protocol do
         %{name: "templates", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "TemplateSummary"}}}},
         %{name: "session_resumed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionInfo"}}},
         %{name: "session_worktree_created", payload: %{kind: :unit}},
+        %{name: "worktrees_cleaned", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "CleanedWorktree"}}}},
         %{name: "session_converted", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_branched", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_renamed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
@@ -644,6 +652,25 @@ defmodule Styra.Protocol do
       ]
     },
 
+    # What a worktree cleanup pass did about one Session's checkout — see
+    # `crate::protocol::Request::CleanWorktrees`.
+    #
+    # Every Session the pass considered is reported, including the ones it left
+    # alone: an operator running a cleanup is asking what happened to the work
+    # their agents left behind, and "this one still has uncommitted changes" is
+    # the most important answer it can give them.
+    "CleanedWorktree" => %{
+      kind: :struct,
+      fields: [
+        %{name: "session_id", required: true, type: %{kind: :string}},
+        %{name: "name", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "workspace_id", required: true, type: %{kind: :string}},
+        %{name: "branch", required: true, type: %{kind: :string}},
+        %{name: "worktree", required: true, type: %{kind: :string, path: true}},
+        %{name: "outcome", required: true, type: %{kind: :ref, name: "WorktreeCleanup"}}
+      ]
+    },
+
     # A stored session, enough to display and select it from a list — see
     # `crate::journal::list_sessions`.
     "SessionSummary" => %{
@@ -893,6 +920,30 @@ defmodule Styra.Protocol do
       variants: [
         %{name: "direct", payload: %{kind: :unit}},
         %{name: "overlay", payload: %{kind: :unit}}
+      ]
+    },
+
+    # The outcome half of `CleanedWorktree`.
+    "WorktreeCleanup" => %{
+      kind: :enum,
+      tagging: %{style: :adjacent, tag: "outcome", content: "data"},
+      variants: [
+        %{name: "removed", payload: %{kind: :unit}},
+        %{name: "already_gone", payload: %{kind: :unit}},
+        %{name: "uncommitted", payload: %{kind: :unit}},
+        %{name: "live", payload: %{kind: :unit}},
+        %{name: "shared", payload: %{
+          kind: :struct,
+          fields: [
+            %{name: "session_id", required: true, type: %{kind: :string}}
+          ]
+        }},
+        %{name: "failed", payload: %{
+          kind: :struct,
+          fields: [
+            %{name: "message", required: true, type: %{kind: :string}}
+          ]
+        }}
       ]
     },
 
@@ -1491,6 +1542,7 @@ defmodule Styra.Protocol do
     "list_templates",
     "resume_session",
     "create_session_worktree",
+    "clean_worktrees",
     "convert_session_provider",
     "branch_session",
     "rename_session",
@@ -2150,6 +2202,30 @@ defmodule Styra.Protocol do
     def create_session_worktree!(data), do: Styra.Protocol.build!("create_session_worktree", data)
 
     @doc ~S"""
+    Remove the linked Git worktrees of Sessions the operator has finished
+    with and whose checkouts have nothing uncommitted in them, and record
+    each such Session as working on its branch alone.
+
+    The branch is never touched: the work an agent committed stays exactly
+    where the operator expects to find it in `git branch`, and resuming the
+    Session checks that branch out again. What goes is the directory, which
+    after a completed Session is a copy of the repository per conversation
+    and nothing else.
+
+    Scoped to one Workspace, or to every one when no id is given. Answers
+    with a `CleanedWorktree` per Session considered, including those left
+    alone and why.
+
+    Fields of `data`:
+
+      * `workspace_id`  string|null  (optional)
+    """
+    def clean_worktrees(data), do: Styra.Protocol.build("clean_worktrees", data)
+
+    @doc "`clean_worktrees/1`, raising on a request the server would refuse."
+    def clean_worktrees!(data), do: Styra.Protocol.build!("clean_worktrees", data)
+
+    @doc ~S"""
     Convert a stored Session's native provider transcript (Codex rollout or
     Claude project JSONL) to the other interactive provider's format,
     using Genta's session conversion. The source Session and its native
@@ -2573,6 +2649,7 @@ defmodule Styra.Protocol.Response do
     {:templates, "templates"},
     {:session_resumed, "session_resumed"},
     {:session_worktree_created, "session_worktree_created"},
+    {:worktrees_cleaned, "worktrees_cleaned"},
     {:session_converted, "session_converted"},
     {:session_branched, "session_branched"},
     {:session_renamed, "session_renamed"},
@@ -2645,6 +2722,8 @@ defmodule Styra.Protocol.Response do
   def session_resumed, do: "session_resumed"
 
   def session_worktree_created, do: "session_worktree_created"
+
+  def worktrees_cleaned, do: "worktrees_cleaned"
 
   def session_converted, do: "session_converted"
 
@@ -3090,6 +3169,82 @@ defmodule Styra.Protocol.WritableMountMode do
   def direct, do: "direct"
 
   def overlay, do: "overlay"
+end
+
+defmodule Styra.Protocol.WorktreeCleanup do
+  @moduledoc ~S"""
+  Wire spellings of `WorktreeCleanup`.
+
+  The outcome half of `CleanedWorktree`.
+  """
+
+  @spellings [
+    {:removed, "removed"},
+    {:already_gone, "already_gone"},
+    {:uncommitted, "uncommitted"},
+    {:live, "live"},
+    {:shared, "shared"},
+    {:failed, "failed"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  @doc ~S"""
+  The checkout was removed and the Session now records its branch alone.
+  """
+  def removed, do: "removed"
+
+  @doc ~S"""
+  The directory was already gone — removed by hand, or by an earlier pass
+  that could not finish recording it. Only the Session's record was
+  brought up to date.
+  """
+  def already_gone, do: "already_gone"
+
+  @doc ~S"""
+  Left alone: the checkout has work that is not committed. The whole
+  point of the pass is that it never throws that away.
+  """
+  def uncommitted, do: "uncommitted"
+
+  @doc ~S"""
+  Left alone: an interaction is live in this checkout. Completion is a
+  property of the Session, so a completed one can still be running when
+  the operator has not stopped it.
+  """
+  def live, do: "live"
+
+  @doc ~S"""
+  Left alone: another Session shares this checkout and is not finished
+  with it. Sessions can be started from one another's checkout, and the
+  last one still working there is the one that decides when it goes.
+  """
+  def shared, do: "shared"
+
+  @doc ~S"""
+  Git refused to remove it, and the Session's record is unchanged.
+  """
+  def failed, do: "failed"
 end
 
 defmodule Styra.Protocol.InteractionActivity do

@@ -749,6 +749,66 @@ impl CheckoutState {
     }
 }
 
+/// What a worktree cleanup pass did about one Session's checkout — see
+/// [`crate::protocol::Request::CleanWorktrees`].
+///
+/// Every Session the pass considered is reported, including the ones it left
+/// alone: an operator running a cleanup is asking what happened to the work
+/// their agents left behind, and "this one still has uncommitted changes" is
+/// the most important answer it can give them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CleanedWorktree {
+    /// The Session the checkout belonged to.
+    pub session_id: String,
+    /// Its operator-facing name, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The Workspace the Session belongs to.
+    pub workspace_id: String,
+    /// The branch the checkout had out, which survives the cleanup in every
+    /// outcome below: the Session keeps it, and `git branch` still lists it.
+    pub branch: String,
+    /// Where the checkout was on the host.
+    pub worktree: PathBuf,
+    /// What became of it.
+    pub outcome: WorktreeCleanup,
+}
+
+/// The outcome half of [`CleanedWorktree`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", content = "data", rename_all = "snake_case")]
+pub enum WorktreeCleanup {
+    /// The checkout was removed and the Session now records its branch alone.
+    Removed,
+    /// The directory was already gone — removed by hand, or by an earlier pass
+    /// that could not finish recording it. Only the Session's record was
+    /// brought up to date.
+    AlreadyGone,
+    /// Left alone: the checkout has work that is not committed. The whole
+    /// point of the pass is that it never throws that away.
+    Uncommitted,
+    /// Left alone: an interaction is live in this checkout. Completion is a
+    /// property of the Session, so a completed one can still be running when
+    /// the operator has not stopped it.
+    Live,
+    /// Left alone: another Session shares this checkout and is not finished
+    /// with it. Sessions can be started from one another's checkout, and the
+    /// last one still working there is the one that decides when it goes.
+    Shared {
+        /// The Session still working there.
+        session_id: String,
+    },
+    /// Git refused to remove it, and the Session's record is unchanged.
+    Failed { message: String },
+}
+
+impl WorktreeCleanup {
+    /// Whether the Session no longer has a worktree because of this pass.
+    pub fn cleaned(&self) -> bool {
+        matches!(self, Self::Removed | Self::AlreadyGone)
+    }
+}
+
 /// An interaction the server is currently running (this process's live sessions),
 /// enough to list it and to reattach a client to it. Distinct from
 /// [`SessionSummary`], which describes a session persisted in the store

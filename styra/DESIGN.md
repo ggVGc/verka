@@ -485,9 +485,22 @@ question of whether the agent used it: an interaction in an enabled Workspace
 is in its own checkout whether or not it knows what a worktree is, and the
 operator's own tree is never mounted writable for it to wander into.
 
-Styra does not merge, delete, or prune these checkouts. What an interaction
-committed outlives it on a branch, which is the point; reclaiming the space is
-an operator's decision, taken with Git.
+Styra does not merge, delete, or rename a branch. What an interaction committed
+outlives it on one, which is the point.
+
+The checkout is another matter, because a checkout is a whole copy of the
+repository per conversation. `styra clean-worktrees` reclaims the ones that
+have nothing left in them: for each Session in scope whose completion state is
+not `Active` and whose checkout is clean, `git worktree remove` takes the
+directory and the branch stays. The Session's recorded checkout keeps that
+branch and loses its path, which is what makes the operation reversible —
+resuming such a Session runs `git worktree add <path> <branch>`, deriving the
+path from the branch name the two were written from, so the Session comes back
+where it was under the name the operator has already seen. Nothing is removed
+on a guess: an uncommitted working tree and a still-live interaction are each
+reported and left alone, and the pass answers with what happened to every
+Session it considered. Reclaiming the space stays an operator's decision — the
+pass runs only when they ask for it.
 
 ### Errands: what Styra asks an agent for itself
 
@@ -1369,6 +1382,10 @@ styra [OPTIONS] [-- PROMPT]
   --view <SESSION>     Open a captured journal read-only instead of launching
   -d, --daemon         Start the background daemon and exit (no interface)
   --stop               Stop the daemon on the socket and exit
+
+styra clean-worktrees [--all]
+
+  --all                Every Workspace, not only the one covering the cwd
 ```
 
 The `styra` TUI is a client of `styra-server`, but it need not be started
