@@ -103,7 +103,7 @@ live interactions.
 | --- | --- |
 | `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send first prompt in a new Git workspace and branch / insert editor newline |
 | `Ctrl+R` (message editor) | start/stop recording and insert its transcript |
-| `W` (existing session) | create and associate a linked workspace and branch; reports when one already exists |
+| `W` (existing session) | create and associate a linked workspace and branch, then restart the interaction in it; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `s` / `S` | interrupt the active turn / stop its interaction |
 | `n` / `N` | go to a newly idle interaction, or the next running one / start a new session in the current Session's checkout when it has one |

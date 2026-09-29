@@ -1220,13 +1220,32 @@ pub fn run(
                 make_interaction_current(app, live, client, standing_launch, next);
             }
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
+            // Naming the branch asks the model for a topic and the checkout
+            // copies the repository out, which together take long enough to
+            // look like a hang. The call is synchronous, so the notice goes up
+            // and is painted before it is made — and again before the restart,
+            // which stops the agent and waits for it to go.
             Some(Request::CreateSessionWorktree) => {
-                match client.create_session_worktree(&app.session_id) {
-                    Ok(()) => app.show_action_message(
-                        "created and associated a linked workspace; it will be used when this Session next launches",
-                    ),
-                    Err(error) => app.show_action_message(format!(
+                let session_id = app.session_id.clone();
+                app.show_action_message("creating a linked workspace…");
+                presentation::draw_application(terminal, app)?;
+                if let Err(error) = client.create_session_worktree(&session_id) {
+                    app.show_action_message(format!(
                         "could not create a linked workspace: {error}"
+                    ));
+                    continue;
+                }
+                // The checkout is read when the agent launches, so the
+                // interaction is restarted into it rather than left running in
+                // the directory it started in. Reopening the Session afterwards
+                // is what puts the checkout on screen: the view then reads its
+                // directory from the revived interaction.
+                app.show_action_message("restarting the interaction in it…");
+                presentation::draw_application(terminal, app)?;
+                match session::restart(app, client, live) {
+                    Ok(_) => return Ok(RunOutcome::OpenSession(session_id)),
+                    Err(error) => app.show_action_message(format!(
+                        "created the linked workspace, but could not restart in it ({error}); it will be used when this Session next launches"
                     )),
                 }
             }
