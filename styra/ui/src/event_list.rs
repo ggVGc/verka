@@ -9,12 +9,14 @@ use crate::markdown::{
     LinkDisplay,
 };
 use crate::palette;
+use crate::render_cache::{Memo, Weigh};
 use crate::search::{self, SearchView};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
+use std::cell::RefCell;
 use std::time::Duration;
 use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 use styra_protocol::Contract;
@@ -23,8 +25,27 @@ const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
 const RUNNING_INDICATOR: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Which row this is, and which state of it — see the host's event identity
+/// (`tui::timeline::EventVersion`), which this mirrors.
+///
+/// A row is not identified by its position: the filters renumber those every
+/// time they change. Nor by its event alone: a command completing or a task
+/// reporting rewrites a row already on the list rather than appending a new
+/// one. The pair is what stays true, and it is what [`entry_item`] keys its
+/// cached rendering on.
+///
+/// Opaque here on purpose. This crate does not know how the host mints these
+/// and only ever compares them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EntryVersion {
+    pub id: u64,
+    pub revision: u32,
+}
+
 pub struct EventEntry<'a> {
     pub event: &'a AgentEvent,
+    /// Which row, and which state of it. See [`EntryVersion`].
+    pub version: EntryVersion,
     pub expanded: bool,
     pub has_detail: bool,
     pub contract: Option<&'a Contract>,
@@ -287,16 +308,21 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         links: view.links,
         search: view.search.term(),
     };
-    let mut items: Vec<ListItem> = view
-        .entries
-        .iter()
-        .map(|entry| entry_item(entry, width, viewport_height, entry_render))
-        .collect();
-    items.push(ListItem::new(status_tail(&view.status)));
-    // Include the status tail when deciding whether scrolling would reveal
-    // useful content. Otherwise moving past a tall entry can look attractive
-    // merely because the algorithm cannot see the row waiting below it.
-    let item_heights: Vec<usize> = items.iter().map(ListItem::height).collect();
+    // Built on demand: the offset math below asks about a window of items, not
+    // all of them. See [`LazyItems`] and [`Heights`].
+    //
+    // The status tail is one of them. Including it is what lets the scroll
+    // decision see the row waiting below the last entry — otherwise moving
+    // past a tall entry can look attractive merely because the algorithm
+    // cannot see what is under it.
+    let mut items = LazyItems {
+        entries: &view.entries,
+        tail: ListItem::new(status_tail(&view.status)),
+        built: (0..=view.entries.len()).map(|_| None).collect(),
+        width,
+        viewport_height,
+        render: entry_render,
+    };
     // No `highlight_style`: it applies to the whole selected row as one
     // unit, so an expanded entry's detail body would be filled — and forced
     // bold — right along with its summary line, with no way to exempt it.
@@ -307,10 +333,14 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     let offset = list_offset_with_scrolloff(
         view.requested_offset,
         position,
-        &item_heights,
+        &mut items,
         viewport_height,
         view.moved_backward,
     );
+    // Only what the viewport can show is built, and only that is handed over.
+    // A session of any length therefore costs one screen of rendering per
+    // frame rather than its whole history — see [`LazyItems::into_window`].
+    let mut items = items.into_window(offset, position);
     clip_boundary_entry(
         &mut items,
         &view.entries,
@@ -320,17 +350,22 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         entry_render,
     );
     let list = List::new(items).block(block);
+    // Both indices are rebased onto the window, which begins at `offset`: to
+    // ratatui this is the whole list, seen from the top.
+    //
     // `ListState::select(None)` also resets the offset to zero, and this list
     // renders with nothing selected whenever the selected entry is one the
     // filters hide. Assign the field directly so that a computed offset is
     // never thrown away: the offset this render reports back is persisted, so
     // a zero here would scroll the interaction log to the top and keep it
     // there rather than flickering for one frame.
-    *state.selected_mut() = position;
-    *state.offset_mut() = offset;
+    *state.selected_mut() = position.map(|position| position - offset);
+    *state.offset_mut() = 0;
     frame.render_stateful_widget(list, area, &mut state);
     EventListFeedback {
-        effective_offset: state.offset(),
+        // Back into the caller's numbering. Ratatui only ever moves the offset
+        // forward from where it was put, so this stays within the window.
+        effective_offset: offset + state.offset(),
     }
 }
 
@@ -340,6 +375,8 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
 /// that boundary entry with the actual remaining row budget. When it is the
 /// final entry, retain a row for the status tail whenever there is room for
 /// both its summary and the tail.
+/// `items` is the window beginning at `offset`, so a position in it names the
+/// entry `offset` further along — see [`LazyItems::into_window`].
 fn clip_boundary_entry(
     items: &mut [ListItem<'static>],
     entries: &[EventEntry<'_>],
@@ -349,12 +386,17 @@ fn clip_boundary_entry(
     entry_render: EntryRender<'_>,
 ) {
     let mut remaining = viewport_height;
-    for item_index in offset..items.len() {
-        let height = items[item_index].height();
-        if height <= remaining {
-            remaining -= height;
-            continue;
+    let mut boundary = None;
+    for (position, item) in items.iter().enumerate() {
+        let height = item.height();
+        if height > remaining {
+            boundary = Some(position);
+            break;
         }
+        remaining -= height;
+    }
+    if let Some(position) = boundary {
+        let item_index = offset + position;
         if remaining == 0 || item_index >= entries.len() {
             return;
         }
@@ -366,8 +408,109 @@ fn clip_boundary_entry(
         } else {
             remaining
         };
-        items[item_index] = entry_item_with_max_rows(entry, width, max_rows, entry_render);
-        return;
+        items[position] = entry_item_with_max_rows(entry, width, max_rows, entry_render);
+    }
+}
+
+/// The list's items, each built the first time it is asked for.
+///
+/// Indexed like the list it stands for, with the status tail last — so index
+/// `entries.len()` is the tail, and [`Heights::len`] counts it.
+///
+/// Building an item is how its height is discovered: a row's height is the
+/// number of rows it wraps to, which is only known once it is rendered. So the
+/// result is kept, and [`Self::into_items`] hands back what was built without
+/// building it twice.
+struct LazyItems<'a> {
+    entries: &'a [EventEntry<'a>],
+    tail: ListItem<'static>,
+    built: Vec<Option<ListItem<'static>>>,
+    width: usize,
+    viewport_height: usize,
+    render: EntryRender<'a>,
+}
+
+impl LazyItems<'_> {
+    fn item(&mut self, index: usize) -> &ListItem<'static> {
+        self.built[index].get_or_insert_with(|| match self.entries.get(index) {
+            Some(entry) => entry_item(entry, self.width, self.viewport_height, self.render),
+            None => self.tail.clone(),
+        })
+    }
+
+    /// The items the list will actually draw, starting at `start`: from there
+    /// until the viewport is full, and never one above it.
+    ///
+    /// Ratatui's `List` applies the offset to the items it is given, so
+    /// handing it only this window means rebasing the offset and the selection
+    /// to it — see [`render`]. It reads nothing outside the window: with no
+    /// `scroll_padding` set its `index_to_display` is the selected index, and
+    /// the offset is never past the selection, so its one backward-walking
+    /// branch cannot fire. Forward it stops as soon as the viewport is full.
+    ///
+    /// The first item that does not fit whole is still included: it is the one
+    /// [`clip_boundary_entry`] rebuilds to the rows actually left for it. So is
+    /// anything up to the selection, which ratatui walks forward to.
+    fn into_window(mut self, start: usize, selected: Option<usize>) -> Vec<ListItem<'static>> {
+        let mut used = 0usize;
+        let mut end = start;
+        while end < Heights::len(&self) {
+            used = used.saturating_add(self.height(end));
+            end += 1;
+            if used > self.viewport_height && selected.is_none_or(|selected| end > selected) {
+                break;
+            }
+        }
+        self.built[start..end]
+            .iter_mut()
+            .map(|item| item.take().expect("every item of the window was built"))
+            .collect()
+    }
+}
+
+impl Heights for LazyItems<'_> {
+    fn len(&self) -> usize {
+        self.built.len()
+    }
+
+    fn height(&mut self, index: usize) -> usize {
+        self.item(index).height()
+    }
+}
+
+/// How tall each item of the list is, asked one item at a time.
+///
+/// The offset math used to take every height as a slice, which meant the
+/// caller had to render the whole session to compute a scroll position — and
+/// that is the reason the list was rebuilt in full on every frame, not
+/// anything ratatui needs. Nothing below actually reads more than a window:
+/// the walks start at the offset and stop as soon as the viewport is full,
+/// and the backward walk is bounded by `margin`. Asking one at a time makes
+/// that demand explicit, so a provider can build only what is asked for.
+///
+/// `&mut self`, because the interesting implementation renders an item to
+/// find out how tall it is and keeps the result.
+pub(crate) trait Heights {
+    /// How many items there are. Known up front — it is the length of the
+    /// list, not of anything rendered.
+    fn len(&self) -> usize;
+
+    /// The height of one item, in rendered rows.
+    fn height(&mut self, index: usize) -> usize;
+
+    /// Total height of `range`, which must lie within [`Self::len`].
+    fn total(&mut self, range: std::ops::Range<usize>) -> usize {
+        range.map(|index| self.height(index)).sum()
+    }
+}
+
+impl Heights for &[usize] {
+    fn len(&self) -> usize {
+        <[usize]>::len(self)
+    }
+
+    fn height(&mut self, index: usize) -> usize {
+        self[index]
     }
 }
 
@@ -375,10 +518,12 @@ fn clip_boundary_entry(
 /// vim's `scrolloff`, without throwing away visible content just to preserve
 /// that margin. Heights are rendered rows rather than item counts so wrapped
 /// summaries and expanded details do not break the calculation.
+///
+/// Only asks [`Heights`] about the items around the viewport — see there.
 fn list_offset_with_scrolloff(
     current: usize,
     selected: Option<usize>,
-    heights: &[usize],
+    heights: &mut impl Heights,
     viewport_height: usize,
     moved_backward: bool,
 ) -> usize {
@@ -396,9 +541,9 @@ fn list_offset_with_scrolloff(
     // visible. In particular, use the whole viewport here rather than
     // reserving the preferred margin: a tall preceding message and a short
     // selected entry may fit perfectly together.
-    let mut rows_through_selection = heights[offset..=selected].iter().sum::<usize>();
+    let mut rows_through_selection = heights.total(offset..selected + 1);
     while offset < selected && rows_through_selection > viewport_height {
-        rows_through_selection = rows_through_selection.saturating_sub(heights[offset]);
+        rows_through_selection = rows_through_selection.saturating_sub(heights.height(offset));
         offset += 1;
     }
 
@@ -408,7 +553,7 @@ fn list_offset_with_scrolloff(
     while moved_backward && offset > 0 && rows_before_selection(offset, selected, heights) < margin
     {
         let candidate = offset - 1;
-        if heights[candidate..=selected].iter().sum::<usize>() > viewport_height
+        if heights.total(candidate..selected + 1) > viewport_height
             || visible_rows(candidate, heights, viewport_height)
                 < visible_rows(offset, heights, viewport_height)
         {
@@ -437,39 +582,42 @@ fn list_offset_with_scrolloff(
     offset
 }
 
-fn visible_rows(offset: usize, heights: &[usize], viewport_height: usize) -> usize {
-    heights
-        .iter()
-        .skip(offset)
-        .scan(0usize, |used, height| {
-            if used.saturating_add(*height) > viewport_height {
-                return None;
-            }
-            *used += *height;
-            Some(*height)
-        })
-        .sum()
+/// Rows the viewport actually shows starting at `offset`. Stops at the first
+/// item that would not fit whole, so it never looks past the viewport.
+fn visible_rows(offset: usize, heights: &mut impl Heights, viewport_height: usize) -> usize {
+    let mut used = 0usize;
+    for index in offset..heights.len() {
+        let height = heights.height(index);
+        if used.saturating_add(height) > viewport_height {
+            break;
+        }
+        used += height;
+    }
+    used
 }
 
-fn rows_before_selection(offset: usize, selected: usize, heights: &[usize]) -> usize {
-    heights[offset..selected].iter().sum()
+fn rows_before_selection(offset: usize, selected: usize, heights: &mut impl Heights) -> usize {
+    heights.total(offset..selected)
 }
 
+/// Rows below the selection that the viewport shows. Stops with the viewport,
+/// as [`visible_rows`] does.
 fn rows_after_selection(
     offset: usize,
     selected: usize,
-    heights: &[usize],
+    heights: &mut impl Heights,
     viewport_height: usize,
 ) -> usize {
     let mut used = 0usize;
     let mut after = 0usize;
-    for (index, height) in heights.iter().enumerate().skip(offset) {
-        if used.saturating_add(*height) > viewport_height {
+    for index in offset..heights.len() {
+        let height = heights.height(index);
+        if used.saturating_add(height) > viewport_height {
             break;
         }
-        used += *height;
+        used += height;
         if index > selected {
-            after += *height;
+            after += height;
         }
     }
     after
@@ -555,12 +703,91 @@ pub fn entry_item(
     )
 }
 
+/// Everything that shapes a [`build_entry_rows`] result.
+///
+/// The entry contributes its [`EntryVersion`] rather than its event: the
+/// version is what says whether the event is still the one that was rendered,
+/// and comparing it is a `u64` and a `u32` rather than a hash of the whole
+/// message. `has_detail` and `contract` are derived from the same row, so the
+/// version covers them too — but they are cheap and keying them explicitly
+/// means this does not depend on that staying true.
+///
+/// `selected` is part of the key rather than something applied to a finished
+/// row afterwards. It reaches further into the build than it looks:
+/// [`selected_summary_line`] rewrites the summary's first span *before* the
+/// row is truncated and wrapped, so lifting it out would mean reasoning about
+/// where that span ended up. A cursor move rebuilds the two rows it touches
+/// instead, which is two rows out of a session.
+#[derive(PartialEq, Eq, Hash)]
+struct RowKey {
+    version: EntryVersion,
+    width: usize,
+    max_rows: usize,
+    expanded: bool,
+    has_detail: bool,
+    selected: bool,
+    contract: Option<Contract>,
+    protocol: Protocol,
+    links: LinkDisplay,
+    link_highlight: Option<EntryIndex>,
+    search: Option<String>,
+}
+
+impl Weigh for Vec<Line<'static>> {
+    fn weight(&self) -> usize {
+        // An entry that renders to nothing still occupies a table slot, and
+        // deciding that it does is the work being saved.
+        self.len().max(1)
+    }
+}
+
+thread_local! {
+    /// The rows of the list, finished: parsed, styled, wrapped to width, and
+    /// marked — everything [`crate::markdown`]'s own cache stops short of.
+    ///
+    /// The list rebuilds every row it holds on every frame (see [`render`]),
+    /// and a frame is drawn per keystroke, so without this, composing a
+    /// message re-wraps the whole session once per character. Keyed on the
+    /// row's version rather than its text, so a hit costs a small hash
+    /// instead of one over every byte of the conversation.
+    static ROW_CACHE: RefCell<Memo<RowKey, Vec<Line<'static>>>> = RefCell::new(Memo::default());
+}
+
 fn entry_item_with_max_rows(
     entry: &EventEntry<'_>,
     width: usize,
     max_rows: usize,
     render: EntryRender<'_>,
 ) -> ListItem<'static> {
+    let key = RowKey {
+        version: entry.version,
+        width,
+        max_rows,
+        expanded: entry.expanded,
+        has_detail: entry.has_detail,
+        selected: entry.selected,
+        contract: entry.contract.copied(),
+        protocol: render.protocol,
+        links: render.links,
+        link_highlight: entry.link_highlight,
+        search: render.search.map(str::to_owned),
+    };
+    let rows = ROW_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .get_or_insert_with(key, || build_entry_rows(entry, width, max_rows, render))
+    });
+    ListItem::new(rows)
+}
+
+/// [`entry_item_with_max_rows`] proper, behind its cache: every finished row
+/// of one entry.
+fn build_entry_rows(
+    entry: &EventEntry<'_>,
+    width: usize,
+    max_rows: usize,
+    render: EntryRender<'_>,
+) -> Vec<Line<'static>> {
     let EntryRender {
         protocol,
         links,
@@ -584,11 +811,10 @@ fn entry_item_with_max_rows(
         // Marked after the row is cut to width, so a match is only claimed
         // where the operator can actually see it.
         let row = search::highlight_lines(vec![row], search);
-        return ListItem::new(
-            row.into_iter()
-                .map(|row| with_entry_backdrop(row, entry))
-                .collect::<Vec<_>>(),
-        );
+        return row
+            .into_iter()
+            .map(|row| with_entry_backdrop(row, entry))
+            .collect();
     }
     let mut lines = vec![summary];
     let mut detail =
@@ -644,7 +870,7 @@ fn entry_item_with_max_rows(
     if let Some(first) = wrapped.first_mut() {
         *first = with_entry_backdrop(std::mem::take(first), entry);
     }
-    ListItem::new(wrapped)
+    wrapped
 }
 
 /// Tint operator messages, and mark a selected row, by backing its first row
@@ -1456,6 +1682,154 @@ mod tests {
     use ratatui::style::Style;
     use ratatui::Terminal;
 
+    /// An identity no other entry in this process has.
+    ///
+    /// The row cache is keyed on the version and lives in a thread-local, and
+    /// the test harness is free to run several tests on one thread. Two tests
+    /// that both wrote a literal id would then be asking the same cache the
+    /// same question about different events, and the second would be answered
+    /// with the first one's rows. Minting these the way a host does keeps each
+    /// test's entry its own.
+    fn version() -> EntryVersion {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        EntryVersion {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
+            revision: 0,
+        }
+    }
+
+    /// Draw a list of `events` with `selected` under the cursor, anchored at
+    /// `requested_offset`, and report the screen and the offset the render
+    /// asked to keep.
+    fn scrolled_screen(
+        events: &[AgentEvent],
+        selected: usize,
+        requested_offset: usize,
+    ) -> (Vec<String>, usize) {
+        let entries = events
+            .iter()
+            .enumerate()
+            .map(|(index, event)| EventEntry {
+                event,
+                version: version(),
+                expanded: false,
+                has_detail: false,
+                contract: None,
+                selected: index == selected,
+                link_highlight: None,
+            })
+            .collect();
+        let view = EventListView {
+            chrome: PanelChrome {
+                focused: true,
+                workspace: None,
+                agent: "codex".into(),
+                model: "gpt-5.6-sol".into(),
+                model_reported: true,
+                effort: None,
+                effort_reported: true,
+                status: "running".into(),
+                status_tone: StatusTone::Running,
+                elapsed: None,
+                suffix: None,
+                session: None,
+            },
+            entries,
+            activity: ActivityCounts::default(),
+            conversation_only: false,
+            uncommitted_changes: false,
+            usage: None,
+            can_configure_launch: false,
+            selection_name: "codex".into(),
+            requested_offset,
+            moved_backward: false,
+            protocol: Protocol::default(),
+            links: LinkDisplay::Compact,
+            search: SearchView {
+                query: None,
+                typing: false,
+            },
+            status: EventListStatus::Idle { reason: None },
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+        let mut offset = 0;
+        terminal
+            .draw(|frame| {
+                offset = render(frame, &view, frame.area()).effective_offset;
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        (rows, offset)
+    }
+
+    fn numbered(count: usize) -> Vec<AgentEvent> {
+        (0..count)
+            .map(|n| AgentEvent::AgentMessage {
+                text: format!("message {n}"),
+            })
+            .collect()
+    }
+
+    /// The list hands ratatui only the window it will draw, with the offset
+    /// and the selection rebased onto it — so both have to be translated back
+    /// out. The offset is persisted across frames, so getting this wrong would
+    /// not flicker for a frame: it would move the session and keep it there.
+    #[test]
+    fn a_window_reports_its_offset_in_the_callers_numbering() {
+        let events = numbered(500);
+
+        let (rows, offset) = scrolled_screen(&events, 300, 300);
+
+        assert_eq!(offset, 300, "the offset the caller gave back is its own");
+        assert!(
+            rows.iter().any(|row| row.contains("message 300")),
+            "the selected entry is on screen: {rows:#?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("message 0")),
+            "the top of the session is not: {rows:#?}"
+        );
+    }
+
+    /// Windowing must not change which rows a screen shows. A list short
+    /// enough that every entry fits is the case where the window is the whole
+    /// list, and it has to read exactly as it did.
+    #[test]
+    fn a_list_shorter_than_the_viewport_still_shows_every_entry() {
+        let events = numbered(4);
+
+        let (rows, offset) = scrolled_screen(&events, 0, 0);
+
+        assert_eq!(offset, 0);
+        for n in 0..4 {
+            assert!(
+                rows.iter().any(|row| row.contains(&format!("message {n}"))),
+                "message {n} is missing: {rows:#?}"
+            );
+        }
+    }
+
+    /// Scrolling is continuous: consecutive anchors show consecutive windows,
+    /// with no entry skipped between two frames.
+    #[test]
+    fn consecutive_anchors_show_consecutive_windows() {
+        let events = numbered(200);
+
+        let (first, _) = scrolled_screen(&events, 100, 100);
+        let (second, _) = scrolled_screen(&events, 101, 101);
+
+        assert!(first.iter().any(|row| row.contains("message 101")));
+        assert!(second.iter().any(|row| row.contains("message 101")));
+    }
+
     /// One agent message, drawn with `search` typed into the `/` prompt.
     fn searched_screen(text: &str, search: SearchView<'_>) -> (Vec<String>, Vec<String>) {
         let event = AgentEvent::AgentMessage { text: text.into() };
@@ -1476,6 +1850,7 @@ mod tests {
             },
             entries: vec![EventEntry {
                 event: &event,
+                version: version(),
                 expanded: false,
                 has_detail: false,
                 contract: None,
@@ -1560,6 +1935,7 @@ mod tests {
         };
         let entry = EventEntry {
             event: &event,
+            version: version(),
             expanded: true,
             has_detail: true,
             contract: None,
@@ -1666,23 +2042,230 @@ mod tests {
         // tail after it, following the live row legitimately advances the
         // viewport to item 5.
         let tall_live_row = [1, 1, 1, 1, 1, 5, 1];
-        let anchored =
-            list_offset_with_scrolloff(0, selected, &tall_live_row, viewport_height, false);
+        let anchored = list_offset_with_scrolloff(
+            0,
+            selected,
+            &mut &tall_live_row[..],
+            viewport_height,
+            false,
+        );
         assert_eq!(anchored, 5);
 
         // The same selected row is replaced by a one-line update. No
         // navigation occurred, so its item anchor should not change.
         let short_live_row = [1, 1, 1, 1, 1, 1, 1];
-        let after_update =
-            list_offset_with_scrolloff(anchored, selected, &short_live_row, viewport_height, false);
+        let after_update = list_offset_with_scrolloff(
+            anchored,
+            selected,
+            &mut &short_live_row[..],
+            viewport_height,
+            false,
+        );
         assert_eq!(after_update, anchored);
     }
 
     #[test]
     fn backward_navigation_still_restores_scrolloff_above_the_selection() {
         let heights = [1, 1, 1, 1, 1, 1, 1];
-        let offset = list_offset_with_scrolloff(5, Some(4), &heights, 6, true);
+        let offset = list_offset_with_scrolloff(5, Some(4), &mut &heights[..], 6, true);
 
         assert_eq!(offset, 2, "two rows of scrolloff above the selection");
+    }
+
+    /// Counts which items the offset math asked about, so laziness can be
+    /// asserted rather than assumed.
+    struct Counting {
+        heights: Vec<usize>,
+        asked: std::collections::BTreeSet<usize>,
+    }
+
+    impl Heights for Counting {
+        fn len(&self) -> usize {
+            self.heights.len()
+        }
+
+        fn height(&mut self, index: usize) -> usize {
+            self.asked.insert(index);
+            self.heights[index]
+        }
+    }
+
+    /// The whole point of asking one height at a time: a thousand-row session
+    /// must not have to be rendered to decide where to scroll it.
+    ///
+    /// The math reads a window around the viewport — forward from the offset
+    /// until the viewport is full, and at most `margin` rows back from it —
+    /// so what it touches is bounded by the viewport, not by the session.
+    #[test]
+    fn the_offset_math_only_asks_about_items_near_the_viewport() {
+        let mut heights = Counting {
+            heights: vec![1; 1000],
+            asked: Default::default(),
+        };
+        let viewport_height = 20;
+
+        let offset =
+            list_offset_with_scrolloff(500, Some(504), &mut heights, viewport_height, true);
+
+        assert!(
+            heights
+                .asked
+                .iter()
+                .all(|&index| (480..540).contains(&index)),
+            "asked about items far from the viewport: {:?}",
+            heights.asked,
+        );
+        assert!(
+            heights.asked.len() < 100,
+            "asked about {} of 1000 items",
+            heights.asked.len(),
+        );
+        // Still the same answer the eager version gave for a flat list.
+        let flat = vec![1usize; 1000];
+        assert_eq!(
+            offset,
+            list_offset_with_scrolloff(500, Some(504), &mut &flat[..], viewport_height, true),
+        );
+    }
+
+    /// A list with no selection is the one case that needs a count rather than
+    /// any height at all, and it must not start rendering to get one.
+    #[test]
+    fn an_unselected_list_asks_about_no_items_at_all() {
+        let mut heights = Counting {
+            heights: vec![1; 1000],
+            asked: Default::default(),
+        };
+
+        let offset = list_offset_with_scrolloff(400, None, &mut heights, 20, false);
+
+        assert_eq!(offset, 400);
+        assert!(heights.asked.is_empty(), "{:?}", heights.asked);
+    }
+
+    /// The text of the rows an entry renders to, for comparing one render
+    /// against another.
+    fn rows_of(item: &ListItem<'static>) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 120, 40));
+        ratatui::widgets::Widget::render(List::new(vec![item.clone()]), buffer.area, &mut buffer);
+        for row in 0..item.height() {
+            let mut text = String::new();
+            for column in 0..120 {
+                text.push_str(buffer[(column, row as u16)].symbol());
+            }
+            out.push(text.trim_end().to_owned());
+        }
+        out
+    }
+
+    fn entry_of<'a>(event: &'a AgentEvent, version: EntryVersion) -> EventEntry<'a> {
+        EventEntry {
+            event,
+            version,
+            expanded: true,
+            has_detail: true,
+            contract: None,
+            selected: false,
+            link_highlight: None,
+        }
+    }
+
+    fn render_of() -> EntryRender<'static> {
+        EntryRender {
+            protocol: Protocol::default(),
+            links: LinkDisplay::Compact,
+            search: None,
+        }
+    }
+
+    /// The whole point of keying on the version: a row that has been rewritten
+    /// is a different row, and must not be answered from what the previous
+    /// version rendered to.
+    ///
+    /// This is the failure the cache could actually cause — a tool that has
+    /// finished still drawn as running — so it is worth asserting directly
+    /// rather than trusting the key by inspection.
+    #[test]
+    fn a_rewritten_entry_is_not_answered_with_its_previous_rendering() {
+        let version = version();
+        let started = AgentEvent::ToolStarted {
+            id: "t1".into(),
+            name: "Bash".into(),
+            detail: "{\"command\":\"cargo build\"}".into(),
+        };
+        let before = rows_of(&entry_item(
+            &entry_of(&started, version),
+            120,
+            40,
+            render_of(),
+        ));
+
+        // The same row, one revision later — exactly what `ingest` does when
+        // the tool finishes.
+        let completed = AgentEvent::ToolCompleted {
+            id: "t1".into(),
+            name: "Bash".into(),
+            detail: "{\"command\":\"cargo build\"}".into(),
+            status: "error".into(),
+            output: "could not compile".into(),
+        };
+        let rewritten = EntryVersion {
+            revision: version.revision + 1,
+            ..version
+        };
+        let after = rows_of(&entry_item(
+            &entry_of(&completed, rewritten),
+            120,
+            40,
+            render_of(),
+        ));
+
+        assert_ne!(before, after, "the finished tool must render as finished");
+        assert!(
+            after.iter().any(|row| row.contains("could not compile")),
+            "the rewritten row shows the new event: {after:?}"
+        );
+    }
+
+    /// A hit has to be indistinguishable from a build, or the cache is a
+    /// second renderer that can disagree with the first.
+    #[test]
+    fn a_second_render_of_an_unchanged_entry_matches_the_first() {
+        let version = version();
+        let event = AgentEvent::AgentMessage {
+            text: "a paragraph\n\nand a second one with `code` and a [link](https://e.com)".into(),
+        };
+        let first = rows_of(&entry_item(
+            &entry_of(&event, version),
+            120,
+            40,
+            render_of(),
+        ));
+        let second = rows_of(&entry_item(
+            &entry_of(&event, version),
+            120,
+            40,
+            render_of(),
+        ));
+
+        assert_eq!(first, second);
+    }
+
+    /// Width is in the key because nothing below the cache re-wraps: the rows
+    /// it holds are already wrapped. A narrower pane has to rebuild them.
+    #[test]
+    fn a_narrower_pane_does_not_reuse_rows_wrapped_for_a_wider_one() {
+        let version = version();
+        let event = AgentEvent::AgentMessage {
+            text: "a long enough sentence that it must wrap when the pane is narrow".into(),
+        };
+        let wide = entry_item(&entry_of(&event, version), 120, 40, render_of());
+        let narrow = entry_item(&entry_of(&event, version), 24, 40, render_of());
+
+        assert!(
+            narrow.height() > wide.height(),
+            "wrapping at 24 columns takes more rows than at 120"
+        );
     }
 }

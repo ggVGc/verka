@@ -207,7 +207,10 @@ mod tests {
             !tail.restock(vec![0, 1, 2, 3, 4]),
             "the same readings, fetched again"
         );
-        assert!(tail.restock(vec![0, 1, 2, 3, 4, 5]), "a new reading arrived");
+        assert!(
+            tail.restock(vec![0, 1, 2, 3, 4, 5]),
+            "a new reading arrived"
+        );
     }
 
     #[test]

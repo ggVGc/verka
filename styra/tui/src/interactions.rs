@@ -1345,7 +1345,10 @@ mod tests {
     #[test]
     fn a_snapshot_identical_to_the_last_one_is_not_a_change() {
         let mut live = LiveInteractions::default();
-        live.open(vec![interaction("one", InteractionActivity::Running)], vec![]);
+        live.open(
+            vec![interaction("one", InteractionActivity::Running)],
+            vec![],
+        );
 
         assert!(
             !live.refresh(vec![interaction("one", InteractionActivity::Running)]),

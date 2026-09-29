@@ -691,7 +691,11 @@ pub fn run(
             } else if let Some(picker) = &app.template_picker {
                 match &picker.templates {
                     Some(templates) => {
-                        terminal.render_template_picker(templates, &picker.chosen, picker.cursor)?;
+                        terminal.render_template_picker(
+                            templates,
+                            &picker.chosen,
+                            picker.cursor,
+                        )?;
                     }
                     None => {
                         terminal.render_template_picker_loading()?;

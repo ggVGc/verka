@@ -846,7 +846,7 @@ pub fn follow_branch(app: &mut App) {
         .timeline
         .entries
         .get(app.timeline.selected)
-        .and_then(|entry| entry.event.branch_target())
+        .and_then(|entry| entry.event().branch_target())
         .map(str::to_owned)
     else {
         return app.show_action_message("the selected entry is not a branch marker");
@@ -910,7 +910,7 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
             if user_wire {
                 if let Some(entry) = app.timeline.entries.last_mut() {
                     if matches!(
-                        entry.event,
+                        entry.event(),
                         styra_protocol::event::AgentEvent::UserMessage { .. }
                     ) {
                         entry.raw_index = app.raw.last_index();
@@ -1137,7 +1137,7 @@ mod tests {
             app.timeline
                 .entries
                 .iter()
-                .map(|entry| entry.event.clone())
+                .map(|entry| entry.event().clone())
                 .collect::<Vec<_>>(),
             vec![
                 AgentEvent::Branched {

@@ -275,7 +275,7 @@ pub fn handle_list_key(
                 && app
                     .timeline
                     .selected_entry()
-                    .is_some_and(|entry| entry.event.branch_target().is_some()) =>
+                    .is_some_and(|entry| entry.event().branch_target().is_some()) =>
             {
                 session::follow_branch(app)
             }

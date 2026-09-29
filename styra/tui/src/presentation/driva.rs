@@ -22,10 +22,10 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
     };
     let last_message = app.timeline.entries.iter().rev().find_map(|entry| {
         matches!(
-            entry.event,
+            entry.event(),
             styra_protocol::event::AgentEvent::AgentMessage { .. }
         )
-        .then(|| entry.event.summary())
+        .then(|| entry.event().summary())
     });
     // Current-directory fallback is resolved before presentation so the UI
     // implementation never performs filesystem access.

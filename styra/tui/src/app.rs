@@ -824,7 +824,7 @@ impl App {
         let show_minor = self.timeline.show_minor;
         self.timeline
             .conversation_span()
-            .filter(|&idx| show_minor || !self.timeline.entries[idx].event.is_minor())
+            .filter(|&idx| show_minor || !self.timeline.entries[idx].event().is_minor())
             .collect()
     }
 
@@ -1149,7 +1149,7 @@ impl App {
             .provider
             .protocol()
             .presented_detail(
-                &self.timeline.entries.get(highlight.entry)?.event,
+                self.timeline.entries.get(highlight.entry)?.event(),
                 styra_protocol::event::PresentationMode::Pretty,
             )
             .into_iter()
@@ -1218,7 +1218,7 @@ impl App {
             .provider
             .protocol()
             .presented_detail(
-                &self.timeline.entries[index].event,
+                self.timeline.entries[index].event(),
                 styra_protocol::event::PresentationMode::Pretty,
             )
             .into_iter()
@@ -1300,7 +1300,7 @@ impl App {
                 let entry = self.preview_entry()?;
                 let protocol = self.selection.provider.protocol();
                 let mut text = String::new();
-                for block in protocol.presented_detail(&entry.event, self.preview.mode()) {
+                for block in protocol.presented_detail(entry.event(), self.preview.mode()) {
                     if !text.is_empty() {
                         text.push('\n');
                     }
@@ -1311,7 +1311,7 @@ impl App {
                     }
                 }
                 if text.is_empty() {
-                    text = protocol.presented_summary(&entry.event, self.preview.mode());
+                    text = protocol.presented_summary(entry.event(), self.preview.mode());
                 }
                 Some(text)
             }
@@ -1352,7 +1352,7 @@ impl App {
     /// `None` when the session has said nothing yet, so `Y` reports that
     /// instead of copying a blank.
     pub fn conversation_text(&self) -> Option<String> {
-        let text = self.render_entries(|_, _, entry| entry.event.is_conversation());
+        let text = self.render_entries(|_, _, entry| entry.event().is_conversation());
         (!text.trim().is_empty()).then_some(text)
     }
 
@@ -1365,7 +1365,7 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(idx, entry)| keep(self, *idx, entry))
-            .map(|(_, entry)| entry.event.clone())
+            .map(|(_, entry)| entry.event().clone())
             .collect::<Vec<_>>();
         styra_protocol::render::render_events(&events, false, self.timeline.show_minor)
     }
@@ -1633,7 +1633,7 @@ mod tests {
         // report — a number that only goes up while the agent thinks.
         assert_eq!(app.timeline.entries.len(), 2);
         assert_eq!(
-            app.timeline.entries[1].event,
+            *app.timeline.entries[1].event(),
             AgentEvent::Thinking {
                 text: "weigh the options".into(),
                 tokens: Some(576),
@@ -1678,7 +1678,7 @@ mod tests {
         }
         assert_eq!(app.timeline.entries.len(), 3);
         assert_eq!(
-            app.timeline.entries[1].event,
+            *app.timeline.entries[1].event(),
             AgentEvent::TaskProgress {
                 id: "t-1".into(),
                 description: "Running Read".into(),
@@ -1704,7 +1704,7 @@ mod tests {
         });
         assert_eq!(app.timeline.entries.len(), 3);
         assert_eq!(
-            app.timeline.entries[1].event,
+            *app.timeline.entries[1].event(),
             AgentEvent::TaskCompleted {
                 id: "t-1".into(),
                 status: "failed".into(),
@@ -1723,7 +1723,7 @@ mod tests {
             tokens: Some(20_000),
         });
         assert!(matches!(
-            app.timeline.entries[1].event,
+            *app.timeline.entries[1].event(),
             AgentEvent::TaskCompleted { .. }
         ));
         assert_eq!(app.timeline.entries.len(), 3);
@@ -1787,7 +1787,7 @@ mod tests {
         assert!(
             (0..app.timeline.entries.len()).any(|idx| app.timeline.is_visible(idx)
                 && matches!(
-                    &app.timeline.entries[idx].event,
+                    app.timeline.entries[idx].event(),
                     AgentEvent::TurnCompleted {
                         outcome: TurnOutcome::Failed { .. },
                         ..
@@ -1832,7 +1832,7 @@ mod tests {
         });
         let entry = app.timeline.entries.last().expect("the message was pushed");
         assert_eq!(
-            entry.event,
+            *entry.event(),
             AgentEvent::UserMessage {
                 text: "which files handle auth?".into()
             }
@@ -1848,7 +1848,10 @@ mod tests {
         let text = "explain the <styra:answer> convention";
         app.push_event(AgentEvent::UserMessage { text: text.into() });
         let entry = app.timeline.entries.last().expect("the message was pushed");
-        assert_eq!(entry.event, AgentEvent::UserMessage { text: text.into() });
+        assert_eq!(
+            *entry.event(),
+            AgentEvent::UserMessage { text: text.into() }
+        );
         assert_eq!(entry.contract, None);
     }
 
@@ -2010,7 +2013,7 @@ mod tests {
 
         assert_eq!(app.timeline.entries.len(), 1);
         assert_eq!(
-            app.timeline.entries[0].event,
+            *app.timeline.entries[0].event(),
             AgentEvent::ToolCompleted {
                 id: "toolu_1".into(),
                 name: "Bash".into(),
@@ -2045,7 +2048,7 @@ mod tests {
 
         assert_eq!(app.timeline.entries.len(), 1);
         assert!(matches!(
-            app.timeline.entries[0].event,
+            *app.timeline.entries[0].event(),
             AgentEvent::FileChanged { .. }
         ));
     }
@@ -2070,7 +2073,7 @@ mod tests {
 
         assert_eq!(app.timeline.entries.len(), 1);
         assert_eq!(
-            app.timeline.entries[0].event,
+            *app.timeline.entries[0].event(),
             AgentEvent::Error {
                 message: "src/lib.rs: old_string not found".into(),
             }
@@ -2937,7 +2940,7 @@ mod tests {
         assert!(app.timeline.is_visible(0));
         assert!(app.timeline.is_visible(1));
         assert_eq!(
-            app.timeline.entries[1].event.summary(),
+            app.timeline.entries[1].event().summary(),
             "model → claude-opus-5 (same effort)"
         );
     }
@@ -2969,7 +2972,7 @@ mod tests {
 
         app.select_first();
         assert_eq!(
-            app.timeline.entries[app.timeline.selected].event,
+            *app.timeline.entries[app.timeline.selected].event(),
             AgentEvent::AgentMessage {
                 text: "a\nmore a".into()
             }
@@ -2977,7 +2980,7 @@ mod tests {
 
         app.select_next();
         assert_eq!(
-            app.timeline.entries[app.timeline.selected].event,
+            *app.timeline.entries[app.timeline.selected].event(),
             AgentEvent::AgentMessage {
                 text: "b\nmore b".into()
             }
@@ -2986,7 +2989,7 @@ mod tests {
         // No more visible entries after "b"; select_next is a no-op.
         app.select_next();
         assert_eq!(
-            app.timeline.entries[app.timeline.selected].event,
+            *app.timeline.entries[app.timeline.selected].event(),
             AgentEvent::AgentMessage {
                 text: "b\nmore b".into()
             }
@@ -2994,7 +2997,7 @@ mod tests {
 
         app.select_prev();
         assert_eq!(
-            app.timeline.entries[app.timeline.selected].event,
+            *app.timeline.entries[app.timeline.selected].event(),
             AgentEvent::AgentMessage {
                 text: "a\nmore a".into()
             }
@@ -3124,7 +3127,7 @@ mod tests {
         assert!(!app.timeline.show_minor);
         assert!(app.timeline.is_visible(app.timeline.selected));
         assert_eq!(
-            app.timeline.entries[app.timeline.selected].event,
+            *app.timeline.entries[app.timeline.selected].event(),
             AgentEvent::AgentMessage { text: "a".into() }
         );
     }
@@ -3396,5 +3399,68 @@ mod tests {
             split_link_location("C:\\work\\main.rs:9"),
             ("C:\\work\\main.rs", Some(9))
         );
+    }
+
+    /// The replacement paths in `ingest` are why an entry needs a revision at
+    /// all: each of them rewrites a row that is already on the list rather
+    /// than appending a second one. A rewrite that did not advance the
+    /// version would leave anything holding work for that row showing the
+    /// command as still running.
+    #[test]
+    fn a_command_finishing_rewrites_its_row_as_a_new_version() {
+        let mut app = app();
+        app.push_event(AgentEvent::CommandStarted {
+            command: "cargo test".into(),
+        });
+        let running = app.timeline.entries[0].version();
+
+        app.push_event(AgentEvent::CommandCompleted {
+            command: "cargo test".into(),
+            status: "ok".into(),
+            exit_code: Some(0),
+            output: String::new(),
+        });
+
+        assert_eq!(app.timeline.entries.len(), 1, "one row, not two");
+        let finished = app.timeline.entries[0].version();
+        assert_eq!(finished.id, running.id);
+        assert_ne!(finished, running);
+    }
+
+    /// A task's reports all refresh one row, so each of them is a new version
+    /// of it — except the one `ingest` deliberately ignores. A progress report
+    /// that arrives after the ending changes nothing, and must not claim to.
+    #[test]
+    fn a_task_report_that_changes_nothing_leaves_the_version_alone() {
+        let mut app = app();
+        app.push_event(AgentEvent::TaskStarted {
+            id: "t1".into(),
+            description: "search".into(),
+            kind: "local_agent".into(),
+            agent: None,
+        });
+        let started = app.timeline.entries[0].version();
+
+        app.push_event(AgentEvent::TaskCompleted {
+            id: "t1".into(),
+            status: "completed".into(),
+            summary: "found it".into(),
+            error: None,
+        });
+        let ended = app.timeline.entries[0].version();
+        assert_eq!(ended.id, started.id);
+        assert_ne!(ended, started, "an ending is a new version of the row");
+
+        // Late, and about a task that has already finished: dropped by
+        // `refresh_task`, so the row is untouched.
+        app.push_event(AgentEvent::TaskProgress {
+            id: "t1".into(),
+            description: "still searching".into(),
+            agent: None,
+            tool: None,
+            tokens: None,
+        });
+        assert_eq!(app.timeline.entries.len(), 1);
+        assert_eq!(app.timeline.entries[0].version(), ended);
     }
 }
