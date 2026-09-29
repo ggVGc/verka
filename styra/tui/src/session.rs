@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::activity::{Status, StopReason};
 use crate::app::{App, LaunchPolicy};
@@ -501,6 +502,7 @@ pub fn launch_live_session(
 /// updates the server has accumulated for it, so the view matches what the interaction
 /// has done so far and the event loop can continue polling from the cursor.
 pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<(App, Attachment)> {
+    let started = Instant::now();
     tracing::debug!(
         target: "styra_tui::interaction_load",
         interaction_id,
@@ -555,6 +557,12 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
             interaction.activity_since_ms,
         );
     }
+    tracing::debug!(
+        target: "styra_tui::interaction_load",
+        interaction_id,
+        elapsed = ?started.elapsed(),
+        "loaded interaction for display"
+    );
     Ok((app, live))
 }
 
