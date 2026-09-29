@@ -308,16 +308,21 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         links: view.links,
         search: view.search.term(),
     };
-    let mut items: Vec<ListItem> = view
-        .entries
-        .iter()
-        .map(|entry| entry_item(entry, width, viewport_height, entry_render))
-        .collect();
-    items.push(ListItem::new(status_tail(&view.status)));
-    // Include the status tail when deciding whether scrolling would reveal
-    // useful content. Otherwise moving past a tall entry can look attractive
-    // merely because the algorithm cannot see the row waiting below it.
-    let item_heights: Vec<usize> = items.iter().map(ListItem::height).collect();
+    // Built on demand: the offset math below asks about a window of items, not
+    // all of them. See [`LazyItems`] and [`Heights`].
+    //
+    // The status tail is one of them. Including it is what lets the scroll
+    // decision see the row waiting below the last entry — otherwise moving
+    // past a tall entry can look attractive merely because the algorithm
+    // cannot see what is under it.
+    let mut items = LazyItems {
+        entries: &view.entries,
+        tail: ListItem::new(status_tail(&view.status)),
+        built: (0..=view.entries.len()).map(|_| None).collect(),
+        width,
+        viewport_height,
+        render: entry_render,
+    };
     // No `highlight_style`: it applies to the whole selected row as one
     // unit, so an expanded entry's detail body would be filled — and forced
     // bold — right along with its summary line, with no way to exempt it.
@@ -328,10 +333,14 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     let offset = list_offset_with_scrolloff(
         view.requested_offset,
         position,
-        &item_heights,
+        &mut items,
         viewport_height,
         view.moved_backward,
     );
+    // Everything the list will draw, which for now is still everything it
+    // holds: ratatui's `List` applies the offset itself and so takes every
+    // item. Only the offset math has been freed of that.
+    let mut items = items.into_items();
     clip_boundary_entry(
         &mut items,
         &view.entries,
@@ -392,14 +401,97 @@ fn clip_boundary_entry(
     }
 }
 
+/// The list's items, each built the first time it is asked for.
+///
+/// Indexed like the list it stands for, with the status tail last — so index
+/// `entries.len()` is the tail, and [`Heights::len`] counts it.
+///
+/// Building an item is how its height is discovered: a row's height is the
+/// number of rows it wraps to, which is only known once it is rendered. So the
+/// result is kept, and [`Self::into_items`] hands back what was built without
+/// building it twice.
+struct LazyItems<'a> {
+    entries: &'a [EventEntry<'a>],
+    tail: ListItem<'static>,
+    built: Vec<Option<ListItem<'static>>>,
+    width: usize,
+    viewport_height: usize,
+    render: EntryRender<'a>,
+}
+
+impl LazyItems<'_> {
+    fn item(&mut self, index: usize) -> &ListItem<'static> {
+        self.built[index].get_or_insert_with(|| match self.entries.get(index) {
+            Some(entry) => entry_item(entry, self.width, self.viewport_height, self.render),
+            None => self.tail.clone(),
+        })
+    }
+
+    /// Every item, building whichever were never asked about.
+    fn into_items(mut self) -> Vec<ListItem<'static>> {
+        for index in 0..self.built.len() {
+            self.item(index);
+        }
+        self.built.into_iter().flatten().collect()
+    }
+}
+
+impl Heights for LazyItems<'_> {
+    fn len(&self) -> usize {
+        self.built.len()
+    }
+
+    fn height(&mut self, index: usize) -> usize {
+        self.item(index).height()
+    }
+}
+
+/// How tall each item of the list is, asked one item at a time.
+///
+/// The offset math used to take every height as a slice, which meant the
+/// caller had to render the whole session to compute a scroll position — and
+/// that is the reason the list was rebuilt in full on every frame, not
+/// anything ratatui needs. Nothing below actually reads more than a window:
+/// the walks start at the offset and stop as soon as the viewport is full,
+/// and the backward walk is bounded by `margin`. Asking one at a time makes
+/// that demand explicit, so a provider can build only what is asked for.
+///
+/// `&mut self`, because the interesting implementation renders an item to
+/// find out how tall it is and keeps the result.
+pub(crate) trait Heights {
+    /// How many items there are. Known up front — it is the length of the
+    /// list, not of anything rendered.
+    fn len(&self) -> usize;
+
+    /// The height of one item, in rendered rows.
+    fn height(&mut self, index: usize) -> usize;
+
+    /// Total height of `range`, which must lie within [`Self::len`].
+    fn total(&mut self, range: std::ops::Range<usize>) -> usize {
+        range.map(|index| self.height(index)).sum()
+    }
+}
+
+impl Heights for &[usize] {
+    fn len(&self) -> usize {
+        <[usize]>::len(self)
+    }
+
+    fn height(&mut self, index: usize) -> usize {
+        self[index]
+    }
+}
+
 /// Keep the selected item within a small margin of the viewport edges, like
 /// vim's `scrolloff`, without throwing away visible content just to preserve
 /// that margin. Heights are rendered rows rather than item counts so wrapped
 /// summaries and expanded details do not break the calculation.
+///
+/// Only asks [`Heights`] about the items around the viewport — see there.
 fn list_offset_with_scrolloff(
     current: usize,
     selected: Option<usize>,
-    heights: &[usize],
+    heights: &mut impl Heights,
     viewport_height: usize,
     moved_backward: bool,
 ) -> usize {
@@ -417,9 +509,9 @@ fn list_offset_with_scrolloff(
     // visible. In particular, use the whole viewport here rather than
     // reserving the preferred margin: a tall preceding message and a short
     // selected entry may fit perfectly together.
-    let mut rows_through_selection = heights[offset..=selected].iter().sum::<usize>();
+    let mut rows_through_selection = heights.total(offset..selected + 1);
     while offset < selected && rows_through_selection > viewport_height {
-        rows_through_selection = rows_through_selection.saturating_sub(heights[offset]);
+        rows_through_selection = rows_through_selection.saturating_sub(heights.height(offset));
         offset += 1;
     }
 
@@ -429,7 +521,7 @@ fn list_offset_with_scrolloff(
     while moved_backward && offset > 0 && rows_before_selection(offset, selected, heights) < margin
     {
         let candidate = offset - 1;
-        if heights[candidate..=selected].iter().sum::<usize>() > viewport_height
+        if heights.total(candidate..selected + 1) > viewport_height
             || visible_rows(candidate, heights, viewport_height)
                 < visible_rows(offset, heights, viewport_height)
         {
@@ -458,39 +550,42 @@ fn list_offset_with_scrolloff(
     offset
 }
 
-fn visible_rows(offset: usize, heights: &[usize], viewport_height: usize) -> usize {
-    heights
-        .iter()
-        .skip(offset)
-        .scan(0usize, |used, height| {
-            if used.saturating_add(*height) > viewport_height {
-                return None;
-            }
-            *used += *height;
-            Some(*height)
-        })
-        .sum()
+/// Rows the viewport actually shows starting at `offset`. Stops at the first
+/// item that would not fit whole, so it never looks past the viewport.
+fn visible_rows(offset: usize, heights: &mut impl Heights, viewport_height: usize) -> usize {
+    let mut used = 0usize;
+    for index in offset..heights.len() {
+        let height = heights.height(index);
+        if used.saturating_add(height) > viewport_height {
+            break;
+        }
+        used += height;
+    }
+    used
 }
 
-fn rows_before_selection(offset: usize, selected: usize, heights: &[usize]) -> usize {
-    heights[offset..selected].iter().sum()
+fn rows_before_selection(offset: usize, selected: usize, heights: &mut impl Heights) -> usize {
+    heights.total(offset..selected)
 }
 
+/// Rows below the selection that the viewport shows. Stops with the viewport,
+/// as [`visible_rows`] does.
 fn rows_after_selection(
     offset: usize,
     selected: usize,
-    heights: &[usize],
+    heights: &mut impl Heights,
     viewport_height: usize,
 ) -> usize {
     let mut used = 0usize;
     let mut after = 0usize;
-    for (index, height) in heights.iter().enumerate().skip(offset) {
-        if used.saturating_add(*height) > viewport_height {
+    for index in offset..heights.len() {
+        let height = heights.height(index);
+        if used.saturating_add(height) > viewport_height {
             break;
         }
-        used += *height;
+        used += height;
         if index > selected {
-            after += *height;
+            after += height;
         }
     }
     after
@@ -1784,24 +1879,105 @@ mod tests {
         // tail after it, following the live row legitimately advances the
         // viewport to item 5.
         let tall_live_row = [1, 1, 1, 1, 1, 5, 1];
-        let anchored =
-            list_offset_with_scrolloff(0, selected, &tall_live_row, viewport_height, false);
+        let anchored = list_offset_with_scrolloff(
+            0,
+            selected,
+            &mut &tall_live_row[..],
+            viewport_height,
+            false,
+        );
         assert_eq!(anchored, 5);
 
         // The same selected row is replaced by a one-line update. No
         // navigation occurred, so its item anchor should not change.
         let short_live_row = [1, 1, 1, 1, 1, 1, 1];
-        let after_update =
-            list_offset_with_scrolloff(anchored, selected, &short_live_row, viewport_height, false);
+        let after_update = list_offset_with_scrolloff(
+            anchored,
+            selected,
+            &mut &short_live_row[..],
+            viewport_height,
+            false,
+        );
         assert_eq!(after_update, anchored);
     }
 
     #[test]
     fn backward_navigation_still_restores_scrolloff_above_the_selection() {
         let heights = [1, 1, 1, 1, 1, 1, 1];
-        let offset = list_offset_with_scrolloff(5, Some(4), &heights, 6, true);
+        let offset = list_offset_with_scrolloff(5, Some(4), &mut &heights[..], 6, true);
 
         assert_eq!(offset, 2, "two rows of scrolloff above the selection");
+    }
+
+    /// Counts which items the offset math asked about, so laziness can be
+    /// asserted rather than assumed.
+    struct Counting {
+        heights: Vec<usize>,
+        asked: std::collections::BTreeSet<usize>,
+    }
+
+    impl Heights for Counting {
+        fn len(&self) -> usize {
+            self.heights.len()
+        }
+
+        fn height(&mut self, index: usize) -> usize {
+            self.asked.insert(index);
+            self.heights[index]
+        }
+    }
+
+    /// The whole point of asking one height at a time: a thousand-row session
+    /// must not have to be rendered to decide where to scroll it.
+    ///
+    /// The math reads a window around the viewport — forward from the offset
+    /// until the viewport is full, and at most `margin` rows back from it —
+    /// so what it touches is bounded by the viewport, not by the session.
+    #[test]
+    fn the_offset_math_only_asks_about_items_near_the_viewport() {
+        let mut heights = Counting {
+            heights: vec![1; 1000],
+            asked: Default::default(),
+        };
+        let viewport_height = 20;
+
+        let offset =
+            list_offset_with_scrolloff(500, Some(504), &mut heights, viewport_height, true);
+
+        assert!(
+            heights
+                .asked
+                .iter()
+                .all(|&index| (480..540).contains(&index)),
+            "asked about items far from the viewport: {:?}",
+            heights.asked,
+        );
+        assert!(
+            heights.asked.len() < 100,
+            "asked about {} of 1000 items",
+            heights.asked.len(),
+        );
+        // Still the same answer the eager version gave for a flat list.
+        let flat = vec![1usize; 1000];
+        assert_eq!(
+            offset,
+            list_offset_with_scrolloff(500, Some(504), &mut &flat[..], viewport_height, true),
+        );
+    }
+
+    /// A list with no selection is the one case that needs a count rather than
+    /// any height at all, and it must not start rendering to get one.
+    #[test]
+    fn an_unselected_list_asks_about_no_items_at_all() {
+        let mut heights = Counting {
+            heights: vec![1; 1000],
+            asked: Default::default(),
+        };
+
+        let offset = list_offset_with_scrolloff(400, None, &mut heights, 20, false);
+
+        assert_eq!(offset, 400);
+        assert!(heights.asked.is_empty(), "{:?}", heights.asked);
     }
 
     /// The text of the rows an entry renders to, for comparing one render
