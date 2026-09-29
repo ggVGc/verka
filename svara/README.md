@@ -10,7 +10,7 @@ the command-line program are both written against it.
 | `lua/svara/api.lua` | **The API.** One function per interaction with the server. Mentions Neovim nowhere. |
 | `lua/svara/nvim.lua` | Neovim, as the six fields the API asks a *host* for. |
 | `lua/svara/protocol.lua` | Where the generated `styra.protocol` is found. |
-| `lua/svara/core.lua` | What the commands do: sending to a selected interaction, and `start` behind `:SvaraNew`. |
+| `lua/svara/core.lua` | What the commands do: sending to a selected interaction, `start` behind `:SvaraNew`, and `info` behind `:SvaraInfo`. |
 | `../styra/protocol/lua/styra/protocol.lua` | **The vocabulary**, generated, living where it is generated from. |
 
 ## The vocabulary, which is not here
@@ -182,6 +182,38 @@ The prompt goes out with the file and line being viewed in front of it —
 about what is on screen and saying so beats typing the path. A buffer with no
 file behind it cannot select, send, or start an interaction.
 
+`:SvaraInfo` says what the other commands would do here, which they otherwise
+decide silently:
+
+```
+directory  /home/me/verka/styra/protocol/src
+server     styra-server at /run/user/1000/styra/styra.sock
+workspace  inner — /home/me/verka/styra/protocol (1790683094903-5393-1)
+git        /home/me/verka
+sessions   2 stored
+model      claude:claude-opus-5/high, from the newest Session in the Workspace
+selected   styra-7 (running)
+live       1 interaction can take a message
+```
+
+Each line is filled in as far as the one above it allows: without a server
+there is no Workspace to find, and without a Workspace no interactions and no
+model, so an unanswerable question says why in place of its value rather than
+taking the whole command down with it. The Workspace shown is the one covering
+the viewed file — the innermost one, when Workspaces nest — so this is also
+the answer to "why did that go somewhere I did not expect". Unlike the other
+commands, a buffer with no file behind it is not refused: `:SvaraInfo` answers
+for Neovim's working directory and says that is what it did.
+
+The same thing from Lua, where `info` is the table the lines are made of —
+`workspace`, `selection`, `selection_source`, `selected_interaction`,
+`interactions`, and an `*_error` beside anything missing:
+
+```lua
+local info = assert(require("svara").info({ directory = vim.fn.expand("%:p:h") }))
+print(table.concat(require("svara").info_lines(info), "\n"))
+```
+
 The same thing from Lua, where the directory, the name and the answer's
 contract can all be said, and the prompt is sent as written:
 
@@ -235,4 +267,5 @@ is required.
 nvim --headless -u NONE -l tests/core_spec.lua   # send_message over a socket
 nvim --headless -u NONE -l tests/api_spec.lua    # the API, on a host of its own
 nvim --headless -u NONE -l tests/nvim_spec.lua   # the Neovim host, for real
+nvim --headless -u NONE -l tests/info_spec.lua   # what :SvaraInfo answers
 ```

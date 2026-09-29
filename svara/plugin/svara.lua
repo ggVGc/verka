@@ -89,6 +89,33 @@ end, {
   desc = "Start a new Styra interaction in the Workspace over the current file",
 })
 
+vim.api.nvim_create_user_command("SvaraInfo", function()
+  local core = require("svara.core")
+  -- The other commands refuse a buffer with no file behind it, because they
+  -- would have nowhere to send to. This one is most wanted exactly when
+  -- something is unclear, so it answers for Neovim's working directory instead
+  -- and says that is what it did.
+  local directory = viewed_directory()
+  local note
+  if not directory then
+    directory = vim.fn.getcwd()
+    note = "Neovim's working directory; this buffer has no file"
+  end
+
+  local info, err = core.info({ directory = directory })
+  if not info then
+    vim.notify("Svara: " .. err, vim.log.levels.ERROR)
+    return
+  end
+  local lines = core.info_lines(info)
+  if note then
+    lines[1] = lines[1] .. "  (" .. note .. ")"
+  end
+  vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
+end, {
+  desc = "Show the Workspace, model and interaction Svara would use here",
+})
+
 vim.api.nvim_create_user_command("SvaraSend", function(command)
   local session_id = command.fargs[1]
   local message = table.concat(command.fargs, " ", 2)

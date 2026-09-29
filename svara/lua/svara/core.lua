@@ -27,10 +27,17 @@ local accepting_activity = { pending = true, running = true, background = true }
 --- answer, and deliberately are not one — they live in the server's Rust,
 --- never appear on the wire, and a copy here would drift the first time one
 --- changed.
+---
+--- Where the answer came from comes back with it, because that is half of what
+--- `:SvaraInfo` is asking: a model an operator did not expect is a question
+--- about which of the two rules above produced it.
+---@return string|table? selection
+---@return string? error
+---@return string? source
 local function selection_for(styra, workspace)
   local configured = vim.g.svara_selection
   if configured and configured ~= "" then
-    return configured
+    return configured, nil, "vim.g.svara_selection"
   end
   local sessions, err = styra:sessions(workspace.id)
   if not sessions then
@@ -45,7 +52,25 @@ local function selection_for(styra, workspace)
         named
       )
   end
-  return sessions[1].selection
+  return sessions[1].selection, nil, "the newest Session in the Workspace"
+end
+
+--- The interactions in one Workspace that can still be sent a message.
+---
+--- `list_interactions` also retains stopped interactions so clients can
+--- inspect their history. A Svara choice must be something it can send to.
+local function live_interactions(styra, workspace)
+  local all, err = styra:interactions()
+  if not all then
+    return nil, err
+  end
+  local interactions = {}
+  for _, interaction in ipairs(all) do
+    if interaction.workspace_id == workspace.id and accepting_activity[interaction.activity] then
+      interactions[#interactions + 1] = interaction
+    end
+  end
+  return interactions
 end
 
 --- Start a new interaction, in the Workspace the directory belongs to.
@@ -106,17 +131,9 @@ function M.interactions_for_directory(directory, options)
   if not workspace then
     return nil, nil, workspace_error
   end
-  local all, interactions_error = styra:interactions()
-  if not all then
+  local interactions, interactions_error = live_interactions(styra, workspace)
+  if not interactions then
     return nil, nil, interactions_error
-  end
-  local interactions = {}
-  for _, interaction in ipairs(all) do
-    -- `list_interactions` also retains stopped interactions so clients can
-    -- inspect their history. A Svara choice must be something it can send to.
-    if interaction.workspace_id == workspace.id and accepting_activity[interaction.activity] then
-      interactions[#interactions + 1] = interaction
-    end
   end
   return interactions, workspace
 end
@@ -166,6 +183,155 @@ function M.send_to_selected(message, options)
     return nil, string.format("no interaction selected for Workspace %q; run :Svara first", named)
   end
   return styra:send_message(interaction_id, message)
+end
+
+--- What Svara would do if a command ran in `directory`, as one table.
+---
+--- Every command here answers the same three questions silently — which
+--- server, which Workspace, which interaction and model — and an operator only
+--- finds out what they were answered when the result surprises them. This asks
+--- them out loud, and is what `:SvaraInfo` shows.
+---
+--- Each field is filled in as far as the one above it allows: without a server
+--- there is no Workspace to find, and without a Workspace no interactions and
+--- no model. A question that could not be answered leaves its `*_error` beside
+--- the empty field rather than failing the whole call, because "the Workspace
+--- is X and the model is unknown because Y" is the answer worth showing.
+---@param options? { directory?: string, socket?: string, timeout?: integer, host?: table }
+---@return table? info
+---@return string? error
+function M.info(options)
+  options = options or {}
+  local styra, err = require("svara.api").open(options)
+  if not styra then
+    return nil, err
+  end
+  local info = {
+    directory = options.directory or (vim.uv or vim.loop).cwd(),
+    socket = styra.socket,
+  }
+
+  info.health, info.health_error = styra:health()
+  if not info.health then
+    return info
+  end
+
+  info.workspace, info.workspace_error = styra:workspace_for_path(info.directory)
+  if not info.workspace then
+    return info
+  end
+
+  info.interactions, info.interactions_error = live_interactions(styra, info.workspace)
+  info.selected_interaction_id = selected_interactions[info.workspace.id]
+  for _, interaction in ipairs(info.interactions or {}) do
+    if interaction.id == info.selected_interaction_id then
+      -- Absent while the id is set means the remembered interaction has
+      -- stopped since it was chosen, which is worth saying out loud.
+      info.selected_interaction = interaction
+    end
+  end
+
+  info.selection, info.selection_error, info.selection_source =
+    selection_for(styra, info.workspace)
+  return info
+end
+
+--- Label-value pairs as aligned lines.
+local function rows_as_lines(rows)
+  local width = 0
+  for _, row in ipairs(rows) do
+    width = math.max(width, #row[1])
+  end
+  local lines = {}
+  for _, row in ipairs(rows) do
+    lines[#lines + 1] = string.format("%-" .. width .. "s  %s", row[1], row[2])
+  end
+  return lines
+end
+
+--- Say a selection the way an operator wrote it: a profile name.
+---
+--- `vim.g.svara_selection` is already one, and is shown as set rather than
+--- normalised: an unusable value there is exactly what this is meant to reveal.
+local function selection_said(selection)
+  if type(selection) == "table" then
+    return require("svara.api").selection_name(selection)
+  end
+  return tostring(selection)
+end
+
+local function interaction_said(interaction)
+  local api = require("svara.api")
+  local said = api.given(interaction.name) or interaction.id
+  local activity = api.given(interaction.activity)
+  if activity then
+    said = string.format("%s (%s)", said, activity)
+  end
+  if api.given(interaction.name) then
+    said = said .. " — " .. interaction.id
+  end
+  return said
+end
+
+--- `M.info` as lines to show, label first. The command is only the notify.
+---@param info table
+---@return string[] lines
+function M.info_lines(info)
+  local api = require("svara.api")
+  local rows = { { "directory", info.directory } }
+
+  if info.health then
+    rows[#rows + 1] = { "server", string.format("%s at %s", info.health.service, info.socket) }
+  else
+    rows[#rows + 1] = {
+      "server",
+      string.format("unreachable at %s: %s", info.socket, info.health_error),
+    }
+    return rows_as_lines(rows)
+  end
+
+  local workspace = info.workspace
+  if not workspace then
+    rows[#rows + 1] = { "workspace", info.workspace_error }
+    return rows_as_lines(rows)
+  end
+  local named = api.given(workspace.name) or vim.fn.fnamemodify(workspace.host_path, ":t")
+  rows[#rows + 1] = {
+    "workspace",
+    string.format("%s — %s (%s)", named, workspace.host_path, workspace.id),
+  }
+  rows[#rows + 1] = { "git", api.given(workspace.git_repository) or "no checkout associated" }
+  rows[#rows + 1] = { "sessions", string.format("%d stored", workspace.session_count) }
+
+  if info.selection then
+    local source = info.selection_source and (", from " .. info.selection_source) or ""
+    rows[#rows + 1] = { "model", selection_said(info.selection) .. source }
+  else
+    rows[#rows + 1] = { "model", "unknown: " .. tostring(info.selection_error) }
+  end
+
+  if info.selected_interaction then
+    rows[#rows + 1] = { "selected", interaction_said(info.selected_interaction) }
+  elseif info.selected_interaction_id then
+    rows[#rows + 1] = {
+      "selected",
+      info.selected_interaction_id .. " — no longer live; :Svara chooses again",
+    }
+  else
+    rows[#rows + 1] = { "selected", "nothing yet; :Svara chooses" }
+  end
+
+  if info.interactions then
+    local count = #info.interactions
+    rows[#rows + 1] = {
+      "live",
+      string.format("%d interaction%s can take a message", count, count == 1 and "" or "s"),
+    }
+  else
+    rows[#rows + 1] = { "live", "unknown: " .. tostring(info.interactions_error) }
+  end
+
+  return rows_as_lines(rows)
 end
 
 --- Where the operator is looking, as `path:line`, or nil.
