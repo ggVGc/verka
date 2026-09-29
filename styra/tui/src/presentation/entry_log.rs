@@ -31,7 +31,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
         .map(|&idx| &app.timeline.entries[idx])
         .enumerate()
         .map(|(index, entry)| styra_ui::event_list::EventEntry {
-            event: &entry.event,
+            event: entry.event(),
             expanded: false,
             has_detail: entry.has_detail(),
             contract: entry.contract.as_ref(),
@@ -155,7 +155,7 @@ mod tests {
         assert_eq!(app.entry_log_index(), Some(0));
         app.entry_log_select_next();
         assert_eq!(
-            app.entry_log_entry().map(|entry| entry.event.tag()),
+            app.entry_log_entry().map(|entry| entry.event().tag()),
             Some("shell"),
             "the thinking entry is not on screen to stop at"
         );
@@ -239,14 +239,14 @@ mod tests {
         // — and that is what the preview shows, before any key is pressed.
         assert_eq!(app.entry_log_index(), Some(1));
         assert_eq!(
-            app.preview_entry().map(|entry| entry.event.tag()),
+            app.preview_entry().map(|entry| entry.event().tag()),
             Some("shell")
         );
 
         app.toggle_entry_log_focus();
         assert!(app.entry_log.focused());
         assert_eq!(
-            app.preview_entry().map(|entry| entry.event.tag()),
+            app.preview_entry().map(|entry| entry.event().tag()),
             Some("shell"),
             "taking the keys leaves the preview on the entry it was showing"
         );
@@ -259,7 +259,7 @@ mod tests {
         );
         assert!(test_support::rendered(&app).contains("cargo test backoff"));
         assert_eq!(
-            app.preview_entry().map(|entry| entry.event.tag()),
+            app.preview_entry().map(|entry| entry.event().tag()),
             Some("user"),
             "the preview shows the entry the pane's cursor is on"
         );
@@ -270,7 +270,7 @@ mod tests {
         assert!(!app.entry_log.focused());
         assert_eq!(app.entry_log_index(), Some(0));
         assert_eq!(
-            app.preview_entry().map(|entry| entry.event.tag()),
+            app.preview_entry().map(|entry| entry.event().tag()),
             Some("user")
         );
     }
@@ -288,7 +288,7 @@ mod tests {
         app.toggle_entry_log();
         assert_eq!(app.entry_log_index(), None);
         assert_eq!(
-            app.preview_entry().map(|entry| entry.event.tag()),
+            app.preview_entry().map(|entry| entry.event().tag()),
             Some("user")
         );
     }
@@ -310,7 +310,7 @@ mod tests {
             "the pane's cursor is on the newly selected message"
         );
         assert_eq!(
-            app.preview_entry().map(|entry| entry.event.tag()),
+            app.preview_entry().map(|entry| entry.event().tag()),
             Some("agent")
         );
     }

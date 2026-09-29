@@ -14,10 +14,50 @@
 use styra_protocol::event::{AgentEvent, DetailBlock};
 use styra_protocol::Contract;
 
+/// A stable handle to one row of the list.
+///
+/// Minted when the entry is appended and never reused within a session, so it
+/// keeps naming the same row as entries arrive above and below it — unlike a
+/// position, which every filter change reinterprets. A renderer can therefore
+/// hold one across frames and know what it refers to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EventId(u64);
+
+/// Identity of one *state* of an entry: which row, and how many times the
+/// event on it has been replaced since it arrived.
+///
+/// A row is not immutable. A command completing, a tool finishing, a task
+/// reporting progress, and a run of thinking ticking over all rewrite a row
+/// that is already on the list rather than adding a second one — see
+/// [`crate::ingest`]. The id alone would therefore go stale; paired with
+/// [`Entry::revision`] it identifies exactly one version of one row, which is
+/// what anything caching per-entry work has to key on to stay correct.
+///
+/// No renderer keys on this yet — the event list still rebuilds every row on
+/// every frame, and `styra_ui`'s cache works on block text instead (see
+/// `styra_ui::render_cache`). The identity comes first because it is the part
+/// that has to be right: a cache built on a version that a rewrite can slip
+/// past would show a finished command as still running, and the bug would
+/// surface as a rare visual glitch rather than a test failure.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EventVersion {
+    pub id: EventId,
+    pub revision: u32,
+}
+
 /// One event in the list, with its fold state.
+///
+/// `event` is private because replacing it has to bump [`Self::revision`]:
+/// identity that a mutation can slip past is worse than none, since a stale
+/// version reads as a valid one. [`Self::event`] hands out the read access
+/// that nearly every caller wants; [`Self::set_event`] and
+/// [`Self::update_event`] are the only ways to change it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
-    pub event: AgentEvent,
+    id: EventId,
+    revision: u32,
+    event: AgentEvent,
     pub expanded: bool,
     /// The index into [`crate::app::App::raw`] of the wire line this entry was
     /// decoded from, if known — lets the raw view jump straight to the line
@@ -35,6 +75,44 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// What this row shows.
+    pub fn event(&self) -> &AgentEvent {
+        &self.event
+    }
+
+    /// This row's stable handle, which outlives every rewrite of its event.
+    #[allow(dead_code)]
+    pub fn id(&self) -> EventId {
+        self.id
+    }
+
+    /// This row together with how many times it has been rewritten — the
+    /// thing to key cached rendering on. See [`EventVersion`], which also says
+    /// why this has no caller outside the tests yet.
+    #[allow(dead_code)]
+    pub fn version(&self) -> EventVersion {
+        EventVersion {
+            id: self.id,
+            revision: self.revision,
+        }
+    }
+
+    /// Replace what this row shows, marking it as a new version.
+    pub fn set_event(&mut self, event: AgentEvent) {
+        self.event = event;
+        self.revision = self.revision.saturating_add(1);
+    }
+
+    /// Edit what this row shows in place, marking it as a new version.
+    ///
+    /// For the updates that merge into the event already there rather than
+    /// replacing it wholesale — a task ending keeps the summary an earlier
+    /// report gave it, a thinking line accumulates its token count.
+    pub fn update_event(&mut self, edit: impl FnOnce(&mut AgentEvent)) {
+        edit(&mut self.event);
+        self.revision = self.revision.saturating_add(1);
+    }
+
     /// Whether this entry has anything to show beyond its one-line summary —
     /// the same test that decides whether the list shows a fold arrow next
     /// to it. `crate::presentation`'s detail rendering always drops the body's first
@@ -93,6 +171,10 @@ pub struct Timeline {
     /// `selected` distinguishes deliberate upward navigation from a live row
     /// merely changing height between frames.
     pub rendered_selection: Option<usize>,
+    /// The next [`EventId`] to hand out. Monotonic and never rewound, so an
+    /// id is unique for the life of the list even though entries are only
+    /// ever appended.
+    next_id: u64,
 }
 
 impl Default for Timeline {
@@ -106,11 +188,36 @@ impl Default for Timeline {
             conversation_only: true,
             list_offset: 0,
             rendered_selection: None,
+            next_id: 0,
         }
     }
 }
 
 impl Timeline {
+    /// Append a row, giving it an identity no other row in this list has or
+    /// will have.
+    ///
+    /// The only way to build an [`Entry`]: ids come from here, so an entry
+    /// cannot exist without one.
+    pub fn push(
+        &mut self,
+        event: AgentEvent,
+        expanded: bool,
+        raw_index: Option<usize>,
+        contract: Option<Contract>,
+    ) {
+        let id = EventId(self.next_id);
+        self.next_id += 1;
+        self.entries.push(Entry {
+            id,
+            revision: 0,
+            event,
+            expanded,
+            raw_index,
+            contract,
+        });
+    }
+
     // --- Filters -------------------------------------------------------------
 
     pub(crate) fn event_is_visible(&self, event: &AgentEvent) -> bool {
@@ -120,7 +227,7 @@ impl Timeline {
 
     /// Whether an entry is shown in the list under the current filters.
     pub fn is_visible(&self, idx: usize) -> bool {
-        self.event_is_visible(&self.entries[idx].event)
+        self.event_is_visible(self.entries[idx].event())
     }
 
     /// Whether an entry is one `j`/`k` should land on: visible, and carrying
@@ -130,7 +237,7 @@ impl Timeline {
     fn is_navigable(&self, idx: usize) -> bool {
         self.is_visible(idx)
             && (self.entries[idx].has_detail()
-                || matches!(self.entries[idx].event, AgentEvent::FileChanged { .. }))
+                || matches!(*self.entries[idx].event(), AgentEvent::FileChanged { .. }))
     }
 
     fn reaches(&self, idx: usize, step: Step) -> bool {
@@ -315,10 +422,10 @@ impl Timeline {
         let selected = self.selected.min(self.entries.len() - 1);
         let start = (0..=selected)
             .rev()
-            .find(|&idx| self.entries[idx].event.is_conversation())
+            .find(|&idx| self.entries[idx].event().is_conversation())
             .unwrap_or(0);
         let end = (start + 1..self.entries.len())
-            .find(|&idx| self.entries[idx].event.is_conversation())
+            .find(|&idx| self.entries[idx].event().is_conversation())
             .unwrap_or(self.entries.len());
         start..end
     }
@@ -329,7 +436,7 @@ impl Timeline {
         self.entries
             .iter()
             .rev()
-            .find(|entry| entry.event.tag() == "shell")
+            .find(|entry| entry.event().tag() == "shell")
     }
 }
 
@@ -338,24 +445,71 @@ mod tests {
     use super::*;
 
     fn timeline(events: Vec<AgentEvent>) -> Timeline {
-        Timeline {
-            entries: events
-                .into_iter()
-                .map(|event| Entry {
-                    event,
-                    expanded: false,
-                    raw_index: None,
-                    contract: None,
-                })
-                .collect(),
-            ..Timeline::default()
+        let mut timeline = Timeline::default();
+        for event in events {
+            timeline.push(event, false, None, None);
         }
+        timeline
     }
 
     fn message(text: &str) -> AgentEvent {
         AgentEvent::AgentMessage {
             text: text.to_owned(),
         }
+    }
+
+    /// The point of an id: it names a row, not a position. Everything a
+    /// renderer might key on it survives entries arriving around it.
+    #[test]
+    fn an_id_names_one_row_for_the_life_of_the_list() {
+        let mut list = timeline(vec![message("first"), message("second")]);
+        let ids: Vec<EventId> = list.entries.iter().map(Entry::id).collect();
+        assert_ne!(ids[0], ids[1], "two rows must not share an id");
+
+        list.push(message("third"), false, None, None);
+        let after: Vec<EventId> = list.entries.iter().map(Entry::id).collect();
+        assert_eq!(&after[..2], &ids[..], "appending must not renumber rows");
+        assert!(
+            !ids.contains(&after[2]),
+            "a new row must not reuse an id already handed out"
+        );
+    }
+
+    /// The revision is what keeps the id honest: a row that is rewritten in
+    /// place is the same row showing something else, and anything holding
+    /// rendered work for it has to be able to tell.
+    #[test]
+    fn rewriting_a_row_keeps_its_id_and_advances_its_revision() {
+        let mut list = timeline(vec![message("thinking")]);
+        let before = list.entries[0].version();
+
+        list.entries[0].set_event(message("done"));
+        let after = list.entries[0].version();
+
+        assert_eq!(after.id, before.id, "a rewrite is the same row");
+        assert_ne!(after, before, "a rewrite is a different version of it");
+
+        list.entries[0].update_event(|event| {
+            if let AgentEvent::AgentMessage { text } = event {
+                text.push('!');
+            }
+        });
+        assert_ne!(
+            list.entries[0].version(),
+            after,
+            "an in-place edit is a rewrite too"
+        );
+    }
+
+    /// Folding is the operator's view of a row, not a change to what it
+    /// shows — and the two are keyed separately, so a fold must not spend a
+    /// revision.
+    #[test]
+    fn folding_a_row_does_not_make_it_a_new_version() {
+        let mut list = timeline(vec![message("first")]);
+        let before = list.entries[0].version();
+        list.toggle_expand();
+        assert_eq!(list.entries[0].version(), before);
     }
 
     /// The caller resets the preview scroll on a move, so a key that could not

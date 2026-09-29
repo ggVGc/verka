@@ -19,7 +19,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         .enumerate()
         .filter(|(index, _)| app.timeline.is_visible(*index))
         .map(|(index, entry)| styra_ui::event_list::EventEntry {
-            event: &entry.event,
+            event: entry.event(),
             expanded: app.timeline.entry_expanded(index),
             has_detail: entry.has_detail(),
             contract: entry.contract.as_ref(),

@@ -149,7 +149,7 @@ pub fn items(root: &Path, reported: Vec<String>) -> Vec<FileItem> {
 pub fn mentioned<'a>(entries: impl Iterator<Item = &'a Entry>, root: Option<&Path>) -> Vec<String> {
     let mut paths = Vec::new();
     for entry in entries {
-        if let AgentEvent::FileChanged { paths: changed, .. } = &entry.event {
+        if let AgentEvent::FileChanged { paths: changed, .. } = entry.event() {
             paths.extend(changed.iter().cloned());
         }
         for candidate in candidates(&entry_text(entry)) {
@@ -182,8 +182,8 @@ pub fn mentioned<'a>(entries: impl Iterator<Item = &'a Entry>, root: Option<&Pat
 /// `path:line` references read an entry through here, so neither can look at
 /// less of it than the other.
 pub fn entry_text(entry: &Entry) -> String {
-    let mut text = entry.event.summary();
-    for block in entry.event.detail() {
+    let mut text = entry.event().summary();
+    for block in entry.event().detail() {
         text.push('\n');
         match block {
             DetailBlock::Text(part) | DetailBlock::Code { text: part, .. } => text.push_str(&part),

@@ -8,7 +8,7 @@
 
 use crate::activity::{EndReason, Status, StopReason};
 use crate::app::App;
-use crate::timeline::{Entry, Step};
+use crate::timeline::Step;
 use styra_protocol::agent::{efforts_for, Effort};
 use styra_protocol::contract;
 use styra_protocol::event::{AgentEvent, TurnOutcome};
@@ -32,9 +32,9 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
     // running to its result.
     if let AgentEvent::CommandCompleted { command, .. } = &event {
         if let Some(entry) = app.timeline.entries.iter_mut().rev().find(|entry| {
-            matches!(&entry.event, AgentEvent::CommandStarted { command: started } if started == command)
+            matches!(entry.event(), AgentEvent::CommandStarted { command: started } if started == command)
         }) {
-            entry.event = event;
+            entry.set_event(event);
             follow_visible_tail(app);
             return;
         }
@@ -51,22 +51,26 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
     } = &event
     {
         if let Some(entry) = app.timeline.entries.iter_mut().rev().find(|entry| {
-            matches!(&entry.event, AgentEvent::ToolStarted { id: started, .. } if started == id)
+            matches!(entry.event(), AgentEvent::ToolStarted { id: started, .. } if started == id)
         }) {
             let finishes_background = matches!(
-                &entry.event,
+                entry.event(),
                 AgentEvent::ToolStarted { name, .. }
                     if matches!(name.as_str(), "TaskOutput" | "TaskGet" | "task_output" | "task_get")
                         && event.finishes_background_task()
             );
-            if let AgentEvent::ToolStarted { id, name, detail } = &entry.event {
-                entry.event = AgentEvent::ToolCompleted {
+            let completed = match entry.event() {
+                AgentEvent::ToolStarted { id, name, detail } => Some(AgentEvent::ToolCompleted {
                     id: id.clone(),
                     name: name.clone(),
                     detail: detail.clone(),
                     status: status.clone(),
                     output: output.clone(),
-                };
+                }),
+                _ => None,
+            };
+            if let Some(completed) = completed {
+                entry.set_event(completed);
             }
             if finishes_background {
                 app.activity.note_background_finished();
@@ -83,13 +87,17 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
         // one replaces the row with a visible error, since the diff shown
         // there may not have actually landed.
         if let Some(entry) = app.timeline.entries.iter_mut().rev().find(|entry| {
-            matches!(&entry.event, AgentEvent::FileChanged { id: changed, .. } if changed == id)
+            matches!(entry.event(), AgentEvent::FileChanged { id: changed, .. } if changed == id)
         }) {
             if status == "error" {
-                if let AgentEvent::FileChanged { paths, .. } = &entry.event {
-                    entry.event = AgentEvent::Error {
+                let failed = match entry.event() {
+                    AgentEvent::FileChanged { paths, .. } => Some(AgentEvent::Error {
                         message: format!("{}: {output}", paths.join(", ")),
-                    };
+                    }),
+                    _ => None,
+                };
+                if let Some(failed) = failed {
+                    entry.set_event(failed);
                 }
             }
             follow_visible_tail(app);
@@ -223,12 +231,8 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
         app.timeline.entries[app.timeline.selected].expanded = false;
     }
     let raw_index = app.raw.last_index();
-    app.timeline.entries.push(Entry {
-        event,
-        expanded: transfer_expansion,
-        raw_index,
-        contract,
-    });
+    app.timeline
+        .push(event, transfer_expansion, raw_index, contract);
     // Follow the tail of what is actually rendered. Hidden minor events
     // must not move the selection (and therefore the list viewport).
     follow_visible_tail(app);
@@ -263,40 +267,52 @@ fn refresh_task(app: &mut App, event: &AgentEvent) -> bool {
         .entries
         .iter_mut()
         .rev()
-        .find(|entry| entry.event.task_id() == id)
+        .find(|entry| entry.event().task_id() == id)
     else {
         return false;
     };
-    match (event, &mut entry.event) {
-        // Both of Claude's endings are partial: the notification names what
-        // the task was and the patch says why it failed. Keep whichever
-        // details have arrived rather than letting the later one blank them.
+    // A task that has already ended is finished; a progress report that
+    // arrives after its ending must not put it back to running. Tested here
+    // rather than as an arm below so the row is left at the version it
+    // already had: nothing about it changed, and saying otherwise would
+    // discard cached work for no reason.
+    let stale_progress = matches!(
+        (event, entry.event()),
         (
-            AgentEvent::TaskCompleted {
-                status,
-                summary,
-                error,
-                ..
-            },
-            AgentEvent::TaskCompleted {
-                status: shown,
-                summary: named,
-                error: reason,
-                ..
-            },
-        ) => {
-            *shown = status.clone();
-            if !summary.is_empty() {
-                *named = summary.clone();
+            AgentEvent::TaskProgress { .. },
+            AgentEvent::TaskCompleted { .. }
+        )
+    );
+    if !stale_progress {
+        entry.update_event(|shown| match (event, shown) {
+            // Both of Claude's endings are partial: the notification names
+            // what the task was and the patch says why it failed. Keep
+            // whichever details have arrived rather than letting the later
+            // one blank them.
+            (
+                AgentEvent::TaskCompleted {
+                    status,
+                    summary,
+                    error,
+                    ..
+                },
+                AgentEvent::TaskCompleted {
+                    status: shown,
+                    summary: named,
+                    error: reason,
+                    ..
+                },
+            ) => {
+                *shown = status.clone();
+                if !summary.is_empty() {
+                    *named = summary.clone();
+                }
+                if error.is_some() {
+                    *reason = error.clone();
+                }
             }
-            if error.is_some() {
-                *reason = error.clone();
-            }
-        }
-        // A task that has already ended is finished; a progress report that
-        // arrives after its ending must not put it back to running.
-        (AgentEvent::TaskProgress { .. }, AgentEvent::TaskCompleted { .. }) => {}
-        _ => entry.event = event.clone(),
+            (event, shown) => *shown = event.clone(),
+        });
     }
     entry.raw_index = raw_index;
     if app.activity.status.is_active() {
@@ -315,26 +331,31 @@ fn refresh_thinking(app: &mut App, event: &AgentEvent) -> bool {
     let Some(entry) = app.timeline.entries.last_mut() else {
         return false;
     };
-    if !entry.event.updates_thinking() {
+    if !entry.event().updates_thinking() {
         return false;
     }
-    if let (
-        AgentEvent::Thinking { text, tokens },
-        AgentEvent::Thinking {
-            text: shown,
-            tokens: counted,
-        },
-    ) = (event, &mut entry.event)
-    {
-        if !text.is_empty() {
-            *shown = text.clone();
-        }
-        // Each update reports only what it spent, and Claude's own count
-        // restarts at every block of reasoning, so the line adds them up:
-        // one number for the run, going up while the agent thinks.
-        if let Some(tokens) = tokens {
-            *counted = Some(counted.unwrap_or_default() + tokens);
-        }
+    // The row is `Thinking` by the test above, so this is also exactly when
+    // the merge below has anything to do — and therefore when the row becomes
+    // a new version. An update that matches nothing leaves it as it was.
+    if let AgentEvent::Thinking { text, tokens } = event {
+        entry.update_event(|shown| {
+            if let AgentEvent::Thinking {
+                text: shown,
+                tokens: counted,
+            } = shown
+            {
+                if !text.is_empty() {
+                    *shown = text.clone();
+                }
+                // Each update reports only what it spent, and Claude's own
+                // count restarts at every block of reasoning, so the line adds
+                // them up: one number for the run, going up while the agent
+                // thinks.
+                if let Some(tokens) = tokens {
+                    *counted = Some(counted.unwrap_or_default() + tokens);
+                }
+            }
+        });
     }
     // The refreshed line stands for the newest wire message.
     entry.raw_index = raw_index;

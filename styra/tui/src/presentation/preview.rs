@@ -20,7 +20,7 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
     let entry = app
         .preview_entry()
         .map(|entry| styra_ui::event_list::EventEntry {
-            event: &entry.event,
+            event: entry.event(),
             expanded: entry.expanded,
             has_detail: entry.has_detail(),
             contract: entry.contract.as_ref(),

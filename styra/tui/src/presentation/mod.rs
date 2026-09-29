@@ -91,7 +91,11 @@ pub(crate) fn clock_reading(app: &App) -> Option<String> {
     Some(format!(
         "{}{}",
         elapsed.unwrap_or_default(),
-        if reset_pending { " quota-reset-due" } else { "" }
+        if reset_pending {
+            " quota-reset-due"
+        } else {
+            ""
+        }
     ))
 }
 
