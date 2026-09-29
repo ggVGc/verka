@@ -41,7 +41,8 @@ pub struct LiveInteractions {
     settle_from: Option<Instant>,
 }
 
-/// The footer's tally of listed Interactions by activity.
+/// The event list's tally of listed Interactions by activity, rendered on the
+/// pane's bottom border.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ActivityCounts {
     pub running: usize,
@@ -83,12 +84,21 @@ impl LiveInteractions {
     }
 
     /// How the listed Interactions divide between running, idle and stopped:
-    /// the footer's standing tally of the whole fleet, not just the unseen
-    /// ones [`Self::idle_notification_count`] counts. `Background` is work in
+    /// the standing tally of the whole fleet, not just the unseen ones
+    /// [`Self::idle_notification_count`] counts. `Background` is work in
     /// flight, so it counts as running.
+    ///
+    /// Completed Interactions are left out entirely. Completion is the reason
+    /// the server stopped them, so counting them would fold work the operator
+    /// has already signed off on into the stopped number — which is there to
+    /// show what stopped without being finished.
     pub fn activity_counts(&self) -> ActivityCounts {
         let mut counts = ActivityCounts::default();
-        for interaction in &self.items {
+        for interaction in self
+            .items
+            .iter()
+            .filter(|interaction| !interaction.completed.is_done())
+        {
             match interaction.activity {
                 styra_protocol::InteractionActivity::Pending => counts.idle += 1,
                 styra_protocol::InteractionActivity::Running
@@ -724,9 +734,9 @@ mod tests {
         assert_eq!(live.idle_notification_count(), 1);
     }
 
-    /// The footer's tally is of everything listed, seen or not, and counts
-    /// background work as running: it answers "what is the fleet doing", not
-    /// "what is waiting for me".
+    /// The tally is of everything listed, seen or not, and counts background
+    /// work as running: it answers "what is the fleet doing", not "what is
+    /// waiting for me".
     #[test]
     fn the_activity_tally_covers_every_listed_interaction() {
         let mut live = LiveInteractions::default();
@@ -746,6 +756,30 @@ mod tests {
                 running: 2,
                 idle: 1,
                 stopped: 2,
+            }
+        );
+    }
+
+    /// Completion is the reason the server stopped these, so without the
+    /// exclusion every interaction the operator ever signed off on would keep
+    /// inflating the stopped number for the rest of the session.
+    #[test]
+    fn the_activity_tally_leaves_out_completed_interactions() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("working", InteractionActivity::Running),
+                interaction("abandoned", InteractionActivity::Stopped),
+                completed("signed-off"),
+            ],
+            Vec::new(),
+        );
+        assert_eq!(
+            live.activity_counts(),
+            ActivityCounts {
+                running: 1,
+                idle: 0,
+                stopped: 1,
             }
         );
     }

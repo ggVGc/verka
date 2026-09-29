@@ -60,6 +60,14 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
     styra_ui::event_list::EventListView {
         chrome: super::panel_chrome(app, None),
         entries,
+        activity: {
+            let counts = app.interactions.activity_counts();
+            styra_ui::event_list::ActivityCounts {
+                running: counts.running,
+                idle: counts.idle,
+                stopped: counts.stopped,
+            }
+        },
         conversation_only: app.timeline.conversation_only,
         uncommitted_changes: super::uncommitted_changes(app),
         usage,

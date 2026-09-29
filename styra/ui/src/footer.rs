@@ -22,27 +22,14 @@ pub struct Segment {
     pub bold: bool,
 }
 
-/// Listed Interactions by activity, shown as a tight `running/idle/stopped`
-/// tally: one glance at the fleet without opening the navigator.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ActivityCounts {
-    pub running: usize,
-    pub idle: usize,
-    pub stopped: usize,
-}
-
 pub struct FooterView<'a> {
-    pub help_key: &'a str,
     pub working_directory: &'a str,
     pub idle_interactions: usize,
-    pub activity: ActivityCounts,
     pub quota: &'a [Segment],
     pub auto_retry: bool,
 }
 
 pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
-    let keybinds = format!(" {} keybinds", view.help_key);
-    let keybinds_width = keybinds.width().min(area.width as usize) as u16;
     let idle = (view.idle_interactions > 0).then(|| {
         format!(
             " ^a {} interaction{} idle ",
@@ -55,12 +42,6 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         .map(UnicodeWidthStr::width)
         .unwrap_or_default()
         .min(area.width as usize) as u16;
-    let activity = activity_spans(view.activity);
-    let activity_width = activity
-        .iter()
-        .map(|span| span.content.width())
-        .sum::<usize>()
-        .min(area.width as usize) as u16;
     let quota_width = view
         .quota
         .iter()
@@ -72,14 +53,6 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         .map(UnicodeWidthStr::width)
         .unwrap_or_default()
         .min(area.width.saturating_sub(quota_width) as usize) as u16;
-    let directory_width = view.working_directory.width().min(
-        area.width
-            .saturating_sub(keybinds_width)
-            .saturating_sub(idle_width)
-            .saturating_sub(activity_width)
-            .saturating_sub(retry_width)
-            .saturating_sub(quota_width) as usize,
-    ) as u16;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -87,14 +60,12 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             Constraint::Length(quota_width),
             Constraint::Length(retry_width),
             Constraint::Length(idle_width),
-            Constraint::Length(activity_width),
-            Constraint::Length(directory_width),
         ])
         .split(area);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            keybinds,
-            Style::default().fg(palette::MUTED_TEXT),
+            view.working_directory.to_owned(),
+            Style::default().fg(palette::ADDITIONAL_INFO),
         ))),
         chunks[0],
     );
@@ -138,40 +109,6 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             chunks[3],
         );
     }
-    if !activity.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(activity)).right_aligned(),
-            chunks[4],
-        );
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            view.working_directory.to_owned(),
-            Style::default().fg(palette::ADDITIONAL_INFO),
-        )))
-        .right_aligned(),
-        chunks[5],
-    );
-}
-
-/// `running/idle/stopped`, each number in its own colour and nothing else:
-/// the counts are the label.
-fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
-    if counts == ActivityCounts::default() {
-        return Vec::new();
-    }
-    let separator = || Span::styled("/", Style::default().fg(palette::MUTED_TEXT));
-    let count =
-        |value: usize, color: Color| Span::styled(value.to_string(), Style::default().fg(color));
-    vec![
-        Span::raw(" "),
-        count(counts.running, palette::SUCCESS),
-        separator(),
-        count(counts.idle, palette::WARNING),
-        separator(),
-        count(counts.stopped, palette::MUTED_TEXT),
-        Span::raw(" "),
-    ]
 }
 
 pub fn tag_color(tag: &str) -> Color {
@@ -223,42 +160,19 @@ mod tests {
         let output = screen(
             120,
             &FooterView {
-                help_key: "?",
                 working_directory: "/workspace",
                 idle_interactions: 2,
-                activity: ActivityCounts {
-                    running: 3,
-                    idle: 2,
-                    stopped: 1,
-                },
                 quota: &quota,
                 auto_retry: true,
             },
         );
         for expected in [
-            "? keybinds",
             "codex: 80%",
             "rate-limit retry: on",
             "2 interactions idle",
-            "3/2/1",
             "/workspace",
         ] {
             assert!(output.contains(expected), "missing {expected}: {output}");
         }
-    }
-    #[test]
-    fn keybind_hint_survives_a_narrow_terminal() {
-        let output = screen(
-            30,
-            &FooterView {
-                help_key: "?",
-                working_directory: "/a/very/long/directory",
-                idle_interactions: 0,
-                activity: ActivityCounts::default(),
-                quota: &[],
-                auto_retry: false,
-            },
-        );
-        assert!(output.contains("? keybinds"), "{output}");
     }
 }

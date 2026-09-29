@@ -1,4 +1,4 @@
-//! The one-line footer with the keyboard shortcut reference and workspace.
+//! The one-line footer with the workspace and standing fleet state.
 
 #[cfg(test)]
 mod tests {
@@ -39,11 +39,10 @@ mod tests {
     }
 
     #[test]
-    fn footer_shows_keybinds_and_working_directory() {
+    fn footer_shows_the_working_directory() {
         let mut app = test_support::app("s1");
         app.workspace.enter("/tmp/styra/workspace".into());
         let screen = rendered(&app);
-        assert!(screen.contains("? keybinds"));
         assert!(screen.contains("/tmp/styra/workspace"));
         assert!(!screen.contains("j/k next/prev"));
     }
@@ -115,11 +114,26 @@ mod tests {
         );
     }
 
+    /// The fleet tally rides the panel's bottom border rather than the footer
+    /// row below it, so the footer can give its whole left edge to the path.
     #[test]
-    fn working_directory_is_aligned_to_the_bottom_right() {
+    fn panel_border_opens_with_the_fleet_tally() {
+        let mut app = test_support::app("current");
+        app.interactions.refresh(vec![
+            interaction("current", InteractionActivity::Running),
+            interaction("other", InteractionActivity::Pending),
+            interaction("done", InteractionActivity::Stopped),
+        ]);
+
+        let bottom_border = test_support::screen(&app).row(18);
+        assert!(bottom_border.starts_with("└ 1/1/1 "), "{bottom_border}");
+    }
+
+    #[test]
+    fn working_directory_opens_the_bottom_row() {
         let mut app = test_support::app("s1");
         app.workspace.enter("/workspace".into());
         let bottom_row = test_support::screen_sized(&app, 40, 10).row(9);
-        assert!(bottom_row.ends_with("/workspace"));
+        assert!(bottom_row.starts_with("/workspace"), "{bottom_row}");
     }
 }

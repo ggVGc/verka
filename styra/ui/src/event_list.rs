@@ -11,7 +11,7 @@ use crate::markdown::{
 use crate::palette;
 use crate::search::{self, SearchView};
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
@@ -56,9 +56,21 @@ pub enum EventListStatus {
     Ended,
 }
 
+/// Listed Interactions by activity, shown as a tight `running/idle/stopped`
+/// tally: one glance at the fleet without opening the navigator.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ActivityCounts {
+    pub running: usize,
+    pub idle: usize,
+    pub stopped: usize,
+}
+
 pub struct EventListView<'a> {
     pub chrome: PanelChrome,
     pub entries: Vec<EventEntry<'a>>,
+    /// The whole fleet's tally, on this pane's bottom border — see
+    /// [`ActivityCounts`].
+    pub activity: ActivityCounts,
     pub conversation_only: bool,
     /// The interaction being shown has stopped working and left uncommitted
     /// changes in its repository — see [`crate::chrome::uncommitted_title`].
@@ -221,6 +233,10 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         })
         .unwrap_or_default();
     let mut block = panel_block(&view.chrome).title_bottom(Line::from(usage).right_aligned());
+    let activity = activity_spans(view.activity);
+    if !activity.is_empty() {
+        block = block.title_bottom(Line::from(activity));
+    }
     if view.conversation_only {
         block = conversation_only_title(block);
     }
@@ -1366,15 +1382,38 @@ fn search_title(search: &SearchView<'_>) -> Option<Line<'static>> {
     )))
 }
 
+/// `running/idle/stopped`, each number in its own colour and nothing else:
+/// the counts are the label.
+fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
+    if counts == ActivityCounts::default() {
+        return Vec::new();
+    }
+    let separator = || Span::styled("/", Style::default().fg(palette::MUTED_TEXT));
+    let count =
+        |value: usize, color: Color| Span::styled(value.to_string(), Style::default().fg(color));
+    vec![
+        Span::raw(" "),
+        count(counts.running, palette::WARNING),
+        separator(),
+        count(counts.idle, palette::SUCCESS),
+        separator(),
+        count(counts.stopped, palette::MUTED_TEXT),
+        Span::raw(" "),
+    ]
+}
+
 fn conversation_only_title(
     block: ratatui::widgets::Block<'static>,
 ) -> ratatui::widgets::Block<'static> {
-    block.title_bottom(Line::from(Span::styled(
-        " conversation only ",
-        Style::default()
-            .fg(palette::ACCENT)
-            .add_modifier(Modifier::BOLD),
-    )))
+    block.title_bottom(
+        Line::from(Span::styled(
+            " conversation only ",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .right_aligned(),
+    )
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -1443,6 +1482,7 @@ mod tests {
                 selected: true,
                 link_highlight: None,
             }],
+            activity: ActivityCounts::default(),
             conversation_only: false,
             uncommitted_changes: false,
             usage: None,

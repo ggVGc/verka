@@ -410,19 +410,9 @@ fn draw_main(
         .map(|path| path.display().to_string())
         .unwrap_or_default();
     let quota_alert = quota::alert(app);
-    let help_key = crate::keybindings::HELP.label();
     let footer = styra_ui::footer::FooterView {
-        help_key: &help_key,
         working_directory: &working_directory,
         idle_interactions: app.interactions.idle_notification_count(),
-        activity: {
-            let counts = app.interactions.activity_counts();
-            styra_ui::footer::ActivityCounts {
-                running: counts.running,
-                idle: counts.idle,
-                stopped: counts.stopped,
-            }
-        },
         quota: &quota_alert,
         auto_retry: app.auto_retry,
     };
