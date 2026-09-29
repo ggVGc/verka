@@ -3244,8 +3244,11 @@ fn replayed_session_updates(
     protocol: crate::event::Protocol,
     workspace: WorkspaceMount<'_>,
 ) -> Result<Vec<SequencedUpdate>> {
-    let events = journal::replay(path, protocol)?;
-    let raw = journal::replay_raw(path)?;
+    let journal::ReplayedJournal {
+        events,
+        raw,
+        last_reported_cwd,
+    } = journal::replay_restored(path, protocol)?;
     let mut updates = Vec::with_capacity(events.len() + raw.len());
     for event in events {
         // App-server control traffic is carried by the raw view but omitted
@@ -3260,7 +3263,9 @@ fn replayed_session_updates(
     // Last, because it is not a moment in the history but the state the history
     // leaves the Session in: a client that applies these in order ends up
     // standing where the Session was working, not where it was launched.
-    if let Some(directory) = replayed_working_directory(path, protocol, workspace) {
+    if let Some(directory) =
+        replayed_host_working_directory(last_reported_cwd.as_deref(), workspace)
+    {
         push_sequenced(
             &mut updates,
             InteractionUpdate::WorkingDirectoryChanged(directory),
@@ -3314,9 +3319,16 @@ fn replayed_working_directory(
     protocol: crate::event::Protocol,
     workspace: WorkspaceMount<'_>,
 ) -> Option<PathBuf> {
-    let reported = journal::last_reported_cwd(path, protocol).ok().flatten()?;
+    let reported = journal::last_reported_cwd(path, protocol).ok().flatten();
+    replayed_host_working_directory(reported.as_deref(), workspace)
+}
+
+fn replayed_host_working_directory(
+    reported: Option<&str>,
+    workspace: WorkspaceMount<'_>,
+) -> Option<PathBuf> {
     let host =
-        crate::interaction::host_working_directory(&reported, workspace.sandbox, workspace.host)?;
+        crate::interaction::host_working_directory(reported?, workspace.sandbox, workspace.host)?;
     (host != workspace.host).then_some(host)
 }
 

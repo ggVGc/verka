@@ -772,6 +772,21 @@ fn read_stored_session_meta(path: &Path) -> Result<StoredSessionMeta> {
 /// events through `protocol` and operator turns as [`AgentEvent::UserMessage`].
 /// A journal directory or its file may be passed.
 pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
+    Ok(replay_records(path, protocol, false)?.events)
+}
+
+pub(crate) struct ReplayedJournal {
+    pub events: Vec<AgentEvent>,
+    pub raw: Vec<RawLine>,
+    pub last_reported_cwd: Option<String>,
+}
+
+/// Replay everything a restored interaction needs from one journal read.
+pub(crate) fn replay_restored(path: &Path, protocol: Protocol) -> Result<ReplayedJournal> {
+    replay_records(path, protocol, true)
+}
+
+fn replay_records(path: &Path, protocol: Protocol, include_raw: bool) -> Result<ReplayedJournal> {
     let file_path = if path.is_dir() {
         path.join(JOURNAL_FILE)
     } else {
@@ -780,6 +795,8 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
     let file = File::open(&file_path)
         .with_context(|| format!("opening journal {}", file_path.display()))?;
     let mut events = Vec::new();
+    let mut raw_lines = Vec::new();
+    let mut last_reported_cwd = None;
     for line in BufReader::new(file).lines() {
         let line = line.context("reading journal line")?;
         if line.trim().is_empty() {
@@ -788,10 +805,35 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
         match serde_json::from_str::<Record>(&line) {
             Ok(Record::Agent {
                 raw,
+                at_ms,
                 protocol: record_protocol,
-                ..
-            }) => events.push(decode_line(record_protocol.unwrap_or(protocol), &raw)),
-            Ok(Record::User { text, .. }) => events.push(AgentEvent::UserMessage { text }),
+            }) => {
+                let record_protocol = record_protocol.unwrap_or(protocol);
+                let event = decode_line(record_protocol, &raw);
+                if include_raw {
+                    if raw.contains("cwd") {
+                        if let Some(reported) = crate::event::reported_cwd(record_protocol, &raw) {
+                            last_reported_cwd = Some(reported);
+                        }
+                    }
+                    raw_lines.push(RawLine {
+                        direction: Direction::FromAgent,
+                        text: raw,
+                        at_ms,
+                    });
+                }
+                events.push(event);
+            }
+            Ok(Record::User { text, at_ms }) => {
+                if include_raw {
+                    raw_lines.push(RawLine {
+                        direction: Direction::ToAgent,
+                        text: text.clone(),
+                        at_ms,
+                    });
+                }
+                events.push(AgentEvent::UserMessage { text });
+            }
             Ok(Record::Branch {
                 direction,
                 session,
@@ -805,12 +847,25 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
             Ok(Record::ModelChange { model, effort, .. }) => {
                 events.push(AgentEvent::ModelChanged { model, effort })
             }
-            Err(error) => events.push(AgentEvent::Malformed {
-                error: format!("unreadable journal record: {error}"),
-            }),
+            Err(error) => {
+                events.push(AgentEvent::Malformed {
+                    error: format!("unreadable journal record: {error}"),
+                });
+                if include_raw {
+                    raw_lines.push(RawLine {
+                        direction: Direction::FromAgent,
+                        text: line,
+                        at_ms: 0,
+                    });
+                }
+            }
         }
     }
-    Ok(events)
+    Ok(ReplayedJournal {
+        events,
+        raw: raw_lines,
+        last_reported_cwd,
+    })
 }
 
 /// Reconstruct the raw interaction from a stored journal: each agent record is
@@ -1164,6 +1219,55 @@ mod tests {
 
         std::fs::remove_dir_all(&source).ok();
         std::fs::remove_dir_all(&branch).ok();
+    }
+
+    #[test]
+    fn restored_replay_matches_separate_views_with_malformed_and_converted_history() {
+        let source = temp_dir("restored-source");
+        {
+            let mut journal = Journal::create(&source).unwrap();
+            journal
+                .record_agent_line(
+                    r#"{"type":"session_meta","payload":{"cwd":"/workspace/crates/ui"}}"#,
+                )
+                .unwrap();
+        }
+        let branch = temp_dir("restored-branch");
+        {
+            let mut journal = Journal::create(&branch).unwrap();
+            journal
+                .copy_branch_from(
+                    &source,
+                    Protocol::CodexJsonl,
+                    None,
+                    crate::protocol::BranchHistory::ThroughSelected,
+                )
+                .unwrap();
+            journal.record_user_message("continue").unwrap();
+            journal
+                .record_model_change(Some("new-model"), None)
+                .unwrap();
+        }
+        OpenOptions::new()
+            .append(true)
+            .open(branch.join(JOURNAL_FILE))
+            .unwrap()
+            .write_all(b"broken journal record\n")
+            .unwrap();
+
+        let restored = replay_restored(&branch, Protocol::ClaudeJsonl).unwrap();
+        assert_eq!(
+            restored.events,
+            replay(&branch, Protocol::ClaudeJsonl).unwrap()
+        );
+        assert_eq!(restored.raw, replay_raw(&branch).unwrap());
+        assert_eq!(
+            restored.last_reported_cwd,
+            last_reported_cwd(&branch, Protocol::ClaudeJsonl).unwrap()
+        );
+
+        std::fs::remove_dir_all(source).ok();
+        std::fs::remove_dir_all(branch).ok();
     }
 
     #[test]
