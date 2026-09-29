@@ -55,6 +55,14 @@ const KEY_POLL: Duration = Duration::from_millis(100);
 /// them.
 const METER_FRAME: Duration = Duration::from_millis(25);
 
+/// How often a frame whose text is read off the clock is repainted for that
+/// reason alone — see [`presentation::ticking`](crate::presentation::ticking).
+///
+/// One second, because that is the resolution those figures are written at:
+/// an elapsed count in whole seconds gains nothing from being repainted twice
+/// within one, and loses a beat if it is repainted less often than that.
+const REDRAW_TICK: Duration = Duration::from_secs(1);
+
 /// Quota readings change on the scale of whole interactions, not keystrokes,
 /// so this is slow enough to cost the server nothing and quick enough that the
 /// footer's warning is never meaningfully behind the account.
@@ -166,7 +174,11 @@ impl LaunchEffects {
         request_id
     }
 
-    fn apply_ready(&self, app: &mut App, workspace_id: &str) {
+    /// Reports whether it applied anything, so a round in which the worker
+    /// answered nothing this client is still waiting for does not count as a
+    /// change to the screen.
+    fn apply_ready(&self, app: &mut App, workspace_id: &str) -> bool {
+        let mut applied = false;
         while let Ok(response) = self.receive.try_recv() {
             match response {
                 LaunchEffectResult::Templates {
@@ -182,6 +194,7 @@ impl LaunchEffects {
                     if !current_picker {
                         continue;
                     }
+                    applied = true;
                     match result {
                         Ok(templates) if templates.is_empty() => {
                             app.template_picker = None;
@@ -208,6 +221,7 @@ impl LaunchEffects {
                     if workspace_id != answered_for {
                         continue;
                     }
+                    applied = true;
                     app.workspace_launch_pending = app.workspace_launch_pending.saturating_sub(1);
                     match result {
                         Ok(policy) if clear_interaction => {
@@ -230,6 +244,7 @@ impl LaunchEffects {
                 }
             }
         }
+        applied
     }
 }
 
@@ -442,9 +457,14 @@ pub fn refresh_quota(app: &mut App, client: &Client) {
 ///
 /// Silent on failure, unlike [`refresh_quota`]: a server that cannot answer
 /// would otherwise log the same line every few seconds.
-fn poll_quota(app: &mut App, client: &Client) {
-    if let Ok(readings) = client.quota_log() {
-        app.quota.restock(readings);
+///
+/// Reports whether the readings actually moved. They change on the scale of
+/// whole interactions, so most of these polls bring back exactly what the
+/// footer is already showing.
+fn poll_quota(app: &mut App, client: &Client) -> bool {
+    match client.quota_log() {
+        Ok(readings) => app.quota.restock(readings),
+        Err(_) => false,
     }
 }
 
@@ -510,25 +530,41 @@ pub fn run(
     let mut pending_fold = false;
     let mut interactions_refreshed = Instant::now();
     let mut quota_refreshed = Instant::now();
+    let mut ticked = Instant::now();
+    // What the clock read on the frame currently on screen, so that a reading
+    // which has not changed since cannot ask for another one.
+    let mut clock = presentation::clock_reading(app);
+    // Whether anything has happened since the last frame was painted. The
+    // round is a poll, not an event: it comes back every `KEY_POLL` whether or
+    // not the server, the terminal or the operator had anything to say, and
+    // almost always they did not. Every step below that can change what is on
+    // screen reports whether it did, and the frame is painted only if one of
+    // them did — so a Styra nobody is using stops drawing rather than
+    // repainting the same screen ten times a second.
+    //
+    // It starts set: the first round has a blank terminal to fill.
+    let mut dirty = true;
     loop {
         let workspace_id = app.workspace.id.clone().unwrap_or_default();
-        app.notices.expire();
-        launch_effects.apply_ready(app, &workspace_id);
-        audio.apply_ready(app, client);
+        dirty |= app.notices.expire();
+        dirty |= launch_effects.apply_ready(app, &workspace_id);
+        dirty |= audio.apply_ready(app, client);
         // Workspace launch policy is a server-owned read model. Refresh it
         // independently of input so edits from another Styra client flow into
         // this Driva view and invalidate its planned options.
         if let Ok(policy) = client.workspace_launch(&workspace_id) {
             if policy != app.launch.workspace {
                 app.launch.sync_workspace(policy);
+                dirty = true;
             }
         }
-        session::ensure_driva_plan(app, client, &workspace_id);
+        dirty |= session::ensure_driva_plan(app, client, &workspace_id);
         let mut disconnected = false;
         if let Attachment::Attached { cursor } = live {
             match client.updates(&app.session_id, *cursor) {
                 Ok(batch) => {
                     *cursor = batch.next;
+                    dirty |= !batch.updates.is_empty();
                     for sequenced in batch.updates {
                         session::apply_update(app, sequenced.update);
                     }
@@ -552,6 +588,7 @@ pub fn run(
         }
         if disconnected {
             *live = Attachment::Detached;
+            dirty = true;
         }
 
         // Keep this snapshot fresh even with the navigator closed: it is what
@@ -560,13 +597,13 @@ pub fn run(
         if interactions_refreshed.elapsed() >= INTERACTIONS_REFRESH {
             interactions_refreshed = Instant::now();
             if let Ok(interactions) = client.list_interactions() {
-                app.interactions.refresh(interactions);
+                dirty |= app.interactions.refresh(interactions);
             }
         }
 
         if quota_refreshed.elapsed() >= QUOTA_REFRESH {
             quota_refreshed = Instant::now();
-            poll_quota(app, client);
+            dirty |= poll_quota(app, client);
         }
 
         // A cursor that has come to rest loads the interaction under it. Until
@@ -574,10 +611,12 @@ pub fn run(
         // still the interaction it was.
         if app.interactions.due(&app.session_id).is_some() {
             load_cursored_interaction(app, live, client, standing_launch);
+            dirty = true;
         }
 
         if let Attachment::Attached { .. } = live {
             if app.activity.status.is_idle() && app.outbox.queued_count() > 0 {
+                dirty = true;
                 match client.send_queued_message(&app.session_id) {
                     Ok((Some(_), queued)) => {
                         app.outbox.replace_queued(queued);
@@ -597,39 +636,72 @@ pub fn run(
             }
         }
 
-        app.activity.note_progress();
-        if app.help.is_open() {
-            // The reference is for the window underneath it, which cannot
-            // change while it is open, so it is read from the app rather than
-            // remembered when `?` was pressed.
-            let window = presentation::current_window(app);
-            let rows = presentation::help_rows(window);
-            let feedback = terminal.render_help(
-                window.name(),
-                &rows,
-                &crate::keybindings::CLOSE_REFERENCE.label(),
-                app.help.offset(),
-            )?;
-            if let Some(scroll) = feedback
-                .scroll
-                .iter()
-                .find(|scroll| scroll.panel == styra_ui::PanelId::Help)
-            {
-                app.help
-                    .apply_feedback(scroll.limit, scroll.effective_offset);
+        dirty |= app.activity.note_progress();
+
+        // The parts of a frame that are read off the clock have nothing to
+        // announce them, so they are read on their own second rather than on
+        // every round — and the frame is repainted only where that reading
+        // differs from the one already on screen. A clock that has not moved
+        // since the last frame is not a reason to paint another one, however
+        // often it is consulted: see `presentation::clock_reading`.
+        if ticked.elapsed() >= REDRAW_TICK {
+            ticked = Instant::now();
+            let reading = presentation::clock_reading(app);
+            if reading != clock {
+                // A frame repainted for nothing but the clock is the one kind
+                // the trace cannot otherwise account for, and "why is it still
+                // rendering" is exactly what this log gets read to answer. The
+                // reading itself is logged, so consecutive lines show what
+                // moved.
+                tracing::debug!(
+                    target: "styra_tui::render",
+                    pid = std::process::id(),
+                    session_id = %app.session_id,
+                    moving = ?reading,
+                    "repainting for the clock"
+                );
+                clock = reading;
+                dirty = true;
             }
-        } else if let Some(picker) = &app.template_picker {
-            match &picker.templates {
-                Some(templates) => {
-                    terminal.render_template_picker(templates, &picker.chosen, picker.cursor)?;
+        }
+
+        // A capture paints its own frames at the meter's rate, so the round's
+        // own frame would be one more painting of what is already there.
+        if dirty && !audio.is_recording() {
+            if app.help.is_open() {
+                // The reference is for the window underneath it, which cannot
+                // change while it is open, so it is read from the app rather than
+                // remembered when `?` was pressed.
+                let window = presentation::current_window(app);
+                let rows = presentation::help_rows(window);
+                let feedback = terminal.render_help(
+                    window.name(),
+                    &rows,
+                    &crate::keybindings::CLOSE_REFERENCE.label(),
+                    app.help.offset(),
+                )?;
+                if let Some(scroll) = feedback
+                    .scroll
+                    .iter()
+                    .find(|scroll| scroll.panel == styra_ui::PanelId::Help)
+                {
+                    app.help
+                        .apply_feedback(scroll.limit, scroll.effective_offset);
                 }
-                None => {
-                    terminal.render_template_picker_loading()?;
+            } else if let Some(picker) = &app.template_picker {
+                match &picker.templates {
+                    Some(templates) => {
+                        terminal.render_template_picker(templates, &picker.chosen, picker.cursor)?;
+                    }
+                    None => {
+                        terminal.render_template_picker_loading()?;
+                    }
                 }
+            } else {
+                let feedback = presentation::draw_application(terminal, app)?;
+                presentation::apply_feedback(app, &feedback);
             }
-        } else {
-            let feedback = presentation::draw_application(terminal, app)?;
-            presentation::apply_feedback(app, &feedback);
+            dirty = false;
         }
 
         let waited = if audio.is_recording() {
@@ -637,12 +709,24 @@ pub fn run(
         } else {
             terminal.poll_event(KEY_POLL)?
         };
+        // A terminal that changed size has to be repainted, and nothing about
+        // the application changed to say so. This used to be carried by the
+        // unconditional frame at the top of every round, which is exactly what
+        // is no longer there.
+        if let Some(Event::Resize(..)) = &waited {
+            dirty = true;
+        }
         let Some(Event::Key(key)) = waited else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
             continue;
         }
+        // Every key is answered on screen — by what it does, or by the notice
+        // saying why it did nothing — and the handlers below are spread across
+        // a dozen modal windows. Marking the frame here, once, is what keeps
+        // that from being a promise each of them has to remember to keep.
+        dirty = true;
 
         // While the reference is open it is modal, so none of the commands
         // described by it can accidentally act on the window underneath. It

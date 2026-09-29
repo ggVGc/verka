@@ -565,10 +565,15 @@ impl AudioInput {
 
     /// Insert every finished transcript at the message cursor (the composer is
     /// append-only today) and surface failures in the normal interaction log.
-    pub fn apply_ready(&mut self, app: &mut App, client: &Client) {
-        self.check_capture(app, client);
+    /// Reports whether anything arrived. The meter's own motion is not counted:
+    /// while a capture runs the meter has its own frames — see `event_loop` —
+    /// and it is the transcripts and failures landing here that the rest of the
+    /// screen has to be redrawn for.
+    pub fn apply_ready(&mut self, app: &mut App, client: &Client) -> bool {
+        let mut applied = self.check_capture(app, client);
         self.note_level(app);
         while let Ok(result) = self.receive.try_recv() {
+            applied = true;
             match result {
                 Completed::Transcript(transcript) => {
                     app.composer.insert(transcript.trim());
@@ -590,6 +595,7 @@ impl AudioInput {
                 Completed::Noted(message) => app.push_log(LogEntry::warn(message)),
             }
         }
+        applied
     }
 
     /// Move the meter on: take what the device has been hearing since the last
@@ -625,12 +631,14 @@ impl AudioInput {
     ///
     /// The device thread says nothing until something goes wrong, and it says
     /// it once before going: anything on `trouble` is the microphone gone.
-    fn check_capture(&mut self, app: &mut App, client: &Client) {
+    /// Reports whether the capture had in fact failed, which is the only thing
+    /// this can change.
+    fn check_capture(&mut self, app: &mut App, client: &Client) -> bool {
         let Some(mic) = self.mic.as_ref() else {
-            return;
+            return false;
         };
         let failure = match mic.trouble.try_recv() {
-            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Empty) => return false,
             Ok(failure) => failure,
             Err(mpsc::TryRecvError::Disconnected) => {
                 "the audio capture ended on its own".to_owned()
@@ -645,7 +653,7 @@ impl AudioInput {
             // the next press of the record key will fail too, and this is the
             // reason it will.
             app.push_log(LogEntry::warn(format!("the audio input closed: {failure}")));
-            return;
+            return true;
         };
         drop(recording);
         app.recording = None;
@@ -654,6 +662,7 @@ impl AudioInput {
         let _ = client.audio_recording_stopped();
         app.push_log(LogEntry::error(message.clone()));
         app.show_action_message(first_line(&message).to_owned());
+        true
     }
 }
 

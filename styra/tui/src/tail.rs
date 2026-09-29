@@ -50,7 +50,16 @@ impl<T> Tail<T> {
     ///
     /// For a list refilled on a timer rather than on request, where
     /// [`replace`](Self::replace)'s jump to the tail would fight the operator.
-    pub fn restock(&mut self, items: Vec<T>) {
+    ///
+    /// Reports whether the reading differed from the one it replaced. A timer
+    /// that refills a list with what it already held has changed nothing, and
+    /// the loop that called it needs to be able to tell that from a refill
+    /// that brought something new.
+    pub fn restock(&mut self, items: Vec<T>) -> bool
+    where
+        T: PartialEq,
+    {
+        let changed = self.items != items;
         let grown = items.len().saturating_sub(self.items.len()) as u16;
         self.items = items;
         let max = self.items.len().saturating_sub(1) as u16;
@@ -58,6 +67,7 @@ impl<T> Tail<T> {
             self.scroll_back = self.scroll_back.saturating_add(grown);
         }
         self.scroll_back = self.scroll_back.min(max);
+        changed
     }
 
     #[cfg(test)]
@@ -186,6 +196,20 @@ mod tests {
 
     /// A shorter reading than the last one — the server trimmed its log —
     /// cannot leave the view pointing past the first entry.
+    /// The quota timer refills this list every few seconds with, almost
+    /// always, the readings it already held. The event loop paints only on a
+    /// change, so an identical refill must report itself as one.
+    #[test]
+    fn restocking_reports_only_a_reading_that_moved() {
+        let mut tail = tail(5);
+
+        assert!(
+            !tail.restock(vec![0, 1, 2, 3, 4]),
+            "the same readings, fetched again"
+        );
+        assert!(tail.restock(vec![0, 1, 2, 3, 4, 5]), "a new reading arrived");
+    }
+
     #[test]
     fn restocking_a_shorter_list_clamps_the_view() {
         let mut tail = tail(5);

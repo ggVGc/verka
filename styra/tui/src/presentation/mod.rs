@@ -54,6 +54,47 @@ fn status_elapsed(app: &App) -> Option<String> {
     }
 }
 
+/// What the clock currently reads on this frame: everything on screen derived
+/// from the time rather than from state, as the text it is actually drawn as.
+/// `None` when the frame holds no such thing at all.
+///
+/// The loop draws when something changed, and this is the exception it has to
+/// allow for — these go stale with nothing happening to mark it. But asking
+/// only whether a clock is present is the wrong question, because a clock is
+/// not the same as a clock that has moved. `format_duration` writes an hour or
+/// more as `1h04m`, so a session stopped this morning shows the same six
+/// characters for a minute at a time; asked the presence question, the loop
+/// repaints that sixty times and paints identical pixels fifty-nine of them.
+///
+/// So this returns the reading rather than a verdict, and the loop repaints
+/// when the reading differs from the one already on screen. What is on the
+/// frame and what is repainted for then cannot drift apart: a figure that is
+/// still is left alone however often it is consulted.
+///
+/// Idle is not here at all. Nothing an idle session shows is timed: the title
+/// drops its elapsed figure, the list's idle line carries none by design, and
+/// the spinner steps with the events that arrive rather than with the clock.
+pub(crate) fn clock_reading(app: &App) -> Option<String> {
+    // The elapsed figure in the title, and for a running turn the list tail's
+    // matching one. Compared as the string, so it counts as having moved
+    // exactly when the operator would see it move.
+    let elapsed = status_elapsed(app);
+    // A boolean rather than a reading: the quota footer's figures never move
+    // on their own — a utilization figure stands until a new reading replaces
+    // it, and a reset is quoted as the moment it falls at rather than counted
+    // down to. The one thing the clock changes is whether a refusal is still
+    // waiting on its moment, and that flips once, when the moment lands.
+    let reset_pending = quota::ticking(app);
+    if elapsed.is_none() && !reset_pending {
+        return None;
+    }
+    Some(format!(
+        "{}{}",
+        elapsed.unwrap_or_default(),
+        if reset_pending { " quota-reset-due" } else { "" }
+    ))
+}
+
 /// The chrome every full-region view wears: a border that brightens when the
 /// list has focus, the session's status title (opening with the Workspace
 /// name), and the Session name at the top right. `suffix` names the view in
@@ -512,6 +553,123 @@ mod tests {
     use super::test_support::{self, rendered};
     use super::*;
     use styra_protocol::event::{AgentEvent, TurnOutcome, TurnUsage};
+
+    /// What lets the event loop stop drawing an idle Styra: an idle frame has
+    /// nothing on it read off the clock, so leaving it up is leaving it right.
+    /// A running one counts seconds and has to keep being repainted.
+    #[test]
+    fn only_a_frame_with_a_clock_on_it_needs_repainting_on_its_own() {
+        let mut app = test_support::app("s1");
+
+        app.activity.status = Status::Idle(crate::activity::IdleReason::TurnComplete);
+        assert_eq!(clock_reading(&app), None, "an idle screen is a still one");
+
+        app.activity.status = Status::Running;
+        assert!(
+            clock_reading(&app).is_some(),
+            "a running turn counts seconds"
+        );
+
+        app.activity.status = Status::Background;
+        assert!(clock_reading(&app).is_some(), "so does background work");
+    }
+
+    /// The reading is the text, so a figure that is drawn the same is the same
+    /// reading, and the loop leaves the frame alone. `format_duration` writes
+    /// an hour or more as `1h04m`: a session stopped this morning holds those
+    /// six characters for a minute at a time, and repainting it each second
+    /// paints identical pixels fifty-nine times out of sixty.
+    #[test]
+    fn an_elapsed_figure_too_coarse_to_have_moved_reads_the_same() {
+        // Dated from the server's moment, which is how a client attaching to
+        // an interaction that stopped a while ago gets the age in the first
+        // place — rather than by reaching into the clock behind it.
+        let stopped_for = |seconds: u64| {
+            let mut app = test_support::app("s1");
+            app.activity.adopt_server_status(
+                crate::activity::Status::Stopped(crate::activity::StopReason::Completed),
+                quota::now_ms() - seconds * 1_000,
+            );
+            clock_reading(&app)
+        };
+
+        let hour = stopped_for(3_600 + 4 * 60);
+        assert_eq!(
+            hour,
+            stopped_for(3_600 + 4 * 60 + 30),
+            "half a minute later is the same `1h04m` on screen"
+        );
+        assert_ne!(hour, stopped_for(3_600 + 5 * 60), "a minute later is not");
+
+        // Under the hour the figure carries seconds, so it does move each one.
+        assert_ne!(stopped_for(74), stopped_for(75));
+    }
+
+    fn quota(
+        status: styra_protocol::QuotaStatus,
+        resets_at_ms: Option<u64>,
+    ) -> styra_protocol::QuotaEvent {
+        styra_protocol::QuotaEvent {
+            at_ms: 1_000,
+            session_id: "s1".into(),
+            provider: styra_protocol::agent::Provider::Codex,
+            window: "5h".into(),
+            status,
+            utilization: Some(0.91),
+            resets_at_ms,
+            detail: None,
+        }
+    }
+
+    /// The whole point of the narrow reading of "ticking". A utilization figure
+    /// in the footer is a figure taken at a moment: it stands until the next
+    /// reading replaces it, and repainting it changes nothing. Counting it as
+    /// a clock left an otherwise idle Styra repainting once a second forever,
+    /// which is what this exists to stop.
+    #[test]
+    fn a_standing_quota_figure_does_not_keep_an_idle_screen_repainting() {
+        use styra_protocol::QuotaStatus;
+        let mut app = test_support::app("s1");
+        app.activity.status = Status::Idle(crate::activity::IdleReason::TurnComplete);
+
+        app.note_quota(quota(QuotaStatus::Warning, None));
+
+        assert!(
+            !quota::alert(&app).is_empty(),
+            "the footer is showing the figure",
+        );
+        assert_eq!(
+            clock_reading(&app),
+            None,
+            "but the figure is not going to move"
+        );
+    }
+
+    /// A refusal quotes the moment work will be taken again, and stops quoting
+    /// it once that moment lands — with no new reading to mark the change. So
+    /// it ticks until it falls due, and is still again afterwards.
+    #[test]
+    fn a_refusal_ticks_only_until_the_moment_it_names() {
+        use styra_protocol::QuotaStatus;
+        let mut ahead = test_support::app("s1");
+        ahead.activity.status = Status::Idle(crate::activity::IdleReason::TurnComplete);
+        ahead.note_quota(quota(QuotaStatus::Exhausted, Some(u64::MAX)));
+
+        assert!(
+            clock_reading(&ahead).is_some(),
+            "the moment is still ahead of us"
+        );
+
+        let mut passed = test_support::app("s1");
+        passed.activity.status = Status::Idle(crate::activity::IdleReason::TurnComplete);
+        passed.note_quota(quota(QuotaStatus::Exhausted, Some(1_000)));
+
+        assert_eq!(
+            clock_reading(&passed),
+            None,
+            "and that one has already landed"
+        );
+    }
 
     #[test]
     fn header_shows_selection_and_status() {

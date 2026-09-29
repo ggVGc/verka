@@ -46,8 +46,12 @@ impl Notices {
 
     /// Remove notices whose own five-second window has elapsed. Called once
     /// per event-loop iteration, just before rendering.
-    pub fn expire(&mut self) {
+    ///
+    /// Reports whether it removed any, because a notice leaving the screen is
+    /// a change to what is on it and nothing else in the round would say so.
+    pub fn expire(&mut self) -> bool {
         let now = Instant::now();
+        let before = self.shown.len();
         while self
             .shown
             .front()
@@ -55,6 +59,7 @@ impl Notices {
         {
             self.shown.pop_front();
         }
+        self.shown.len() != before
     }
 
     #[cfg(test)]
@@ -108,6 +113,23 @@ mod tests {
         notices.expire();
 
         assert_eq!(texts(&notices), vec!["new action"]);
+    }
+
+    /// The event loop paints a frame only when something changed, and a notice
+    /// leaving the screen is the only thing in its round that would know one
+    /// had. A round where none expired must not read as one where some did.
+    #[test]
+    fn expiry_reports_only_a_notice_that_actually_left() {
+        let mut live = Notices::default();
+        live.show("still up");
+
+        assert!(!live.expire(), "nothing has run out yet");
+
+        let mut stale = Notices::default();
+        stale.show_since("long gone", Duration::from_secs(6));
+
+        assert!(stale.expire(), "one left the screen");
+        assert!(!stale.expire(), "and does not leave a second time");
     }
 
     /// Expiry walks from the front and stops at the first notice still within

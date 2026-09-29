@@ -419,14 +419,18 @@ pub fn create_session(
 /// decided: ask the server what an interaction started under the current
 /// selection and policy would run in, so the Driva view answers "what will this
 /// agent be able to touch" rather than waiting for the next message.
-pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str) {
+///
+/// Reports whether it planned. Most rounds it does not: the plan is keyed on
+/// the selection and policy that produced it, so it is asked for once per edit
+/// rather than once per round.
+pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str) -> bool {
     // Not just the blank screen: a stopped or ended Session is resumed under
     // whatever the policy says when the next message is sent, so it is planned
     // the same way. Gated on the policy being editable rather than on `live`,
     // so the two questions ("can this be changed" and "is what is shown still
     // true") cannot drift apart.
     if !launch::wants_plan(app) {
-        return;
+        return false;
     }
     let selection = app.selection.clone();
     // Sent as this interaction's own half alone, but remembered as the merge:
@@ -456,6 +460,7 @@ pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str) {
             )));
         }
     }
+    true
 }
 
 /// Spawn a session and wrap it in a fresh `App`. Used for the CLI's trailing

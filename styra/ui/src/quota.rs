@@ -188,6 +188,26 @@ fn line(reading: &QuotaEvent, now_ms: u64) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Whether the footer these readings produce will say something different
+/// later on with no new reading to make it so.
+///
+/// Almost none of it will. The percentages are figures taken at a moment and
+/// stand until the next reading replaces them, and a reset is quoted as the
+/// wall-clock moment it falls at rather than counted down to — so the text is
+/// the same text a minute later. The exception is the moment itself passing:
+/// both the Codex and the Claude halves stop quoting a reset once it is in the
+/// past, and the reading that named it does not change when it does.
+///
+/// So this is true only while a refusal names a moment still ahead of us, and
+/// goes false once that moment lands. The caller is the event loop, which
+/// repaints on it; see `presentation::ticking`.
+pub fn footer_ticks(readings: &[&QuotaEvent], now_ms: u64) -> bool {
+    newest_per_window(readings).iter().any(|reading| {
+        reading.status == QuotaStatus::Exhausted
+            && reading.resets_at_ms.is_some_and(|reset| reset > now_ms)
+    })
+}
+
 /// Time is supplied by the adapter so fixtures and mocks stay deterministic.
 pub fn footer_segments(readings: &[&QuotaEvent], now_ms: u64) -> Vec<Segment> {
     let newest = newest_per_window(readings);
@@ -591,6 +611,51 @@ mod tests {
         assert_eq!(segments[1].tone, Tone::Error);
         // The reset replaces the figures rather than crowding in beside them.
         assert!(!text(&segments).contains('%'), "{segments:?}");
+    }
+
+    /// The event loop repaints an otherwise still screen on this, so a reading
+    /// that is merely present must not answer yes: a standing figure is a
+    /// measurement, and repainting it forever paints the same pixels.
+    #[test]
+    fn only_a_refusal_still_waiting_on_its_moment_moves_the_footer() {
+        let figure = reading(Provider::Codex, "5h", QuotaStatus::Warning, Some(0.91));
+        assert!(
+            !footer_ticks(&[&figure], 1_000),
+            "a utilization figure stands until a new reading replaces it"
+        );
+
+        let mut refused = reading(Provider::Codex, "5h", QuotaStatus::Exhausted, Some(1.0));
+        refused.resets_at_ms = Some(9_000);
+        assert!(footer_ticks(&[&refused], 1_000), "the moment is still ahead");
+        assert!(
+            !footer_ticks(&[&refused], 9_001),
+            "and the footer has stopped quoting it"
+        );
+
+        let mut refused_without_a_moment =
+            reading(Provider::Codex, "5h", QuotaStatus::Exhausted, None);
+        refused_without_a_moment.resets_at_ms = None;
+        assert!(
+            !footer_ticks(&[&refused_without_a_moment], 1_000),
+            "`spent` names no moment, so no moment can pass"
+        );
+    }
+
+    /// A refusal that a later reading has overtaken is not on the footer, and
+    /// so cannot be what the footer is waiting for. Reading the whole log
+    /// rather than the newest per window would leave a long-past refusal
+    /// repainting the screen for as long as its stated reset stayed ahead.
+    #[test]
+    fn a_refusal_a_later_reading_has_overtaken_stops_moving_the_footer() {
+        let mut refused = reading(Provider::Codex, "5h", QuotaStatus::Exhausted, Some(1.0));
+        refused.resets_at_ms = Some(9_000);
+        let mut serving = reading(Provider::Codex, "5h", QuotaStatus::Allowed, Some(0.1));
+        serving.at_ms = refused.at_ms + 1;
+
+        assert!(
+            !footer_ticks(&[&refused, &serving], 1_000),
+            "the provider is taking work again"
+        );
     }
 
     /// An account out of credits comes back when somebody pays, not when a

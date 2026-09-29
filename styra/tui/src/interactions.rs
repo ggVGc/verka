@@ -60,8 +60,13 @@ impl LiveInteractions {
 
     /// Incorporate a periodic server snapshot. Idle acknowledgement belongs to
     /// the server: listing a row cannot accidentally count as seeing it.
-    pub fn refresh(&mut self, mut items: Vec<InteractionSummary>) {
+    ///
+    /// Reports whether the snapshot differed from the one it replaced. The
+    /// fleet is listed several times a second and is usually exactly as it
+    /// was, so this is what keeps the poll from counting as news.
+    pub fn refresh(&mut self, mut items: Vec<InteractionSummary>) -> bool {
         sort_interactions(&mut items);
+        let changed = self.items != items;
         self.items = items;
         // An entry another client closed cannot be loaded, and a cursor left
         // pointing at one would keep asking for it every frame.
@@ -72,6 +77,7 @@ impl LiveInteractions {
         {
             self.rest();
         }
+        changed
     }
 
     /// Number of idle interactions that have not actually been focused since
@@ -1330,5 +1336,31 @@ mod tests {
         assert_eq!(next.id, "other");
         assert!(!live.only_current_workspace);
         assert!(live.open);
+    }
+
+    /// The fleet is listed several times a second and is usually exactly as it
+    /// was. The event loop paints a frame only when something changed, so a
+    /// snapshot identical to the last one must not read as news — otherwise
+    /// the poll alone would keep the screen repainting forever.
+    #[test]
+    fn a_snapshot_identical_to_the_last_one_is_not_a_change() {
+        let mut live = LiveInteractions::default();
+        live.open(vec![interaction("one", InteractionActivity::Running)], vec![]);
+
+        assert!(
+            !live.refresh(vec![interaction("one", InteractionActivity::Running)]),
+            "the same fleet, listed again"
+        );
+        assert!(
+            live.refresh(vec![interaction("one", InteractionActivity::Stopped)]),
+            "that interaction stopped"
+        );
+        assert!(
+            live.refresh(vec![
+                interaction("one", InteractionActivity::Stopped),
+                interaction("two", InteractionActivity::Running),
+            ]),
+            "another interaction joined the fleet"
+        );
     }
 }

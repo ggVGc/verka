@@ -480,11 +480,18 @@ impl Activity {
     /// Notice a status change made since the last frame, so [`Self::progress`]
     /// can report how long the session has been in its current state. Called
     /// once per event-loop iteration, just before rendering.
-    pub fn note_progress(&mut self) {
+    ///
+    /// Reports whether the status had in fact changed. The loop draws only
+    /// when something did, and a status written from one of the several places
+    /// that write it is exactly such a something — this is already the one
+    /// place that notices, so it is also the one place that can say so.
+    pub fn note_progress(&mut self) -> bool {
         if self.noted != self.status {
             self.noted = self.status.clone();
             self.since = Instant::now();
+            return true;
         }
+        false
     }
 
     /// Adopt the server's account of what a live interaction is doing and

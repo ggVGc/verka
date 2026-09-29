@@ -12,6 +12,13 @@ pub(crate) fn alert(app: &App) -> Vec<styra_ui::footer::Segment> {
     styra_ui::quota::footer_segments(&readings(app), now_ms())
 }
 
+/// Whether the quota footer is waiting on a moment rather than on a reading.
+/// See [`styra_ui::quota::footer_ticks`]; the caller is
+/// [`super::ticking`](super::ticking).
+pub(crate) fn ticking(app: &App) -> bool {
+    styra_ui::quota::footer_ticks(&readings(app), now_ms())
+}
+
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
