@@ -31,7 +31,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_RAW: [Key::ch('r')] => Action::GlobalRaw;
     GLOBAL_LOG: [Key::ctrl('l')] => Action::GlobalLog;
     GLOBAL_TRANSCRIPT: [Key::ch('t')] => Action::GlobalTranscript;
-    GLOBAL_DETAILS: [Key::ch('d')] => Action::GlobalDetails;
+    GLOBAL_DETAILS: [Key::ctrl('o')] => Action::GlobalDetails;
     GLOBAL_ENTRY_LOG: [Key::ch('e')] => Action::GlobalEntryLog;
     GLOBAL_ENTRY_LOG_FOCUS: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]
         => Action::GlobalEntryLogFocus;
