@@ -63,8 +63,10 @@ mod tests {
         assert!(rendered(&app).contains("R rate-limit retry: on"));
     }
 
+    /// Beside the fleet's tally on the panel's bottom border, not in the
+    /// footer: the count reads as part of that tally.
     #[test]
-    fn footer_reports_interactions_that_became_idle_while_unseen() {
+    fn panel_border_reports_interactions_that_became_idle_while_unseen() {
         let mut app = test_support::app("current");
         app.interactions.open(
             vec![
@@ -81,7 +83,11 @@ mod tests {
             other,
         ]);
 
-        assert!(rendered(&app).contains("^a 1 interaction idle"));
+        let screen = test_support::screen(&app);
+        // 20 rows tall: the footer is the last, the panel's bottom border the
+        // one above it.
+        assert!(screen.row(18).contains("1/1/0 ^a 1 interaction idle"));
+        assert!(!screen.row(19).contains("interaction idle"));
     }
 
     /// The attached interaction's own checkout, not any other idle one's: the

@@ -84,6 +84,9 @@ pub struct ActivityCounts {
     pub running: usize,
     pub idle: usize,
     pub stopped: usize,
+    /// Interactions that went idle unseen and have not been focused since,
+    /// announced beside the tally until they are.
+    pub newly_idle: usize,
 }
 
 pub struct EventListView<'a> {
@@ -1609,7 +1612,8 @@ fn search_title(search: &SearchView<'_>) -> Option<Line<'static>> {
 }
 
 /// `running/idle/stopped`, each number in its own colour and nothing else:
-/// the counts are the label.
+/// the counts are the label. Newly idle interactions follow, with the key that
+/// goes to them.
 fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
     if counts == ActivityCounts::default() {
         return Vec::new();
@@ -1617,7 +1621,7 @@ fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
     let separator = || Span::styled("/", Style::default().fg(palette::MUTED_TEXT));
     let count =
         |value: usize, color: Color| Span::styled(value.to_string(), Style::default().fg(color));
-    vec![
+    let mut spans = vec![
         Span::raw(" "),
         count(counts.running, palette::WARNING),
         separator(),
@@ -1625,7 +1629,18 @@ fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
         separator(),
         count(counts.stopped, palette::MUTED_TEXT),
         Span::raw(" "),
-    ]
+    ];
+    if counts.newly_idle > 0 {
+        spans.push(Span::styled(
+            format!(
+                "^a {} interaction{} idle ",
+                counts.newly_idle,
+                if counts.newly_idle == 1 { "" } else { "s" }
+            ),
+            Style::default().fg(palette::SUCCESS),
+        ));
+    }
+    spans
 }
 
 fn conversation_only_title(

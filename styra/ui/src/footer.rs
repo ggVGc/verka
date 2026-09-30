@@ -24,24 +24,11 @@ pub struct Segment {
 
 pub struct FooterView<'a> {
     pub working_directory: &'a str,
-    pub idle_interactions: usize,
     pub quota: &'a [Segment],
     pub auto_retry: bool,
 }
 
 pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
-    let idle = (view.idle_interactions > 0).then(|| {
-        format!(
-            " ^a {} interaction{} idle ",
-            view.idle_interactions,
-            if view.idle_interactions == 1 { "" } else { "s" }
-        )
-    });
-    let idle_width = idle
-        .as_deref()
-        .map(UnicodeWidthStr::width)
-        .unwrap_or_default()
-        .min(area.width as usize) as u16;
     let quota_width = view
         .quota
         .iter()
@@ -59,7 +46,6 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             Constraint::Min(0),
             Constraint::Length(quota_width),
             Constraint::Length(retry_width),
-            Constraint::Length(idle_width),
         ])
         .split(area);
     frame.render_widget(
@@ -97,16 +83,6 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             )))
             .right_aligned(),
             chunks[2],
-        );
-    }
-    if let Some(idle) = idle {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                idle,
-                Style::default().fg(palette::SUCCESS),
-            )))
-            .right_aligned(),
-            chunks[3],
         );
     }
 }
@@ -161,7 +137,6 @@ mod tests {
             120,
             &FooterView {
                 working_directory: "/workspace",
-                idle_interactions: 2,
                 quota: &quota,
                 auto_retry: true,
             },
@@ -169,7 +144,6 @@ mod tests {
         for expected in [
             "codex: 80%",
             "rate-limit retry: on",
-            "2 interactions idle",
             "/workspace",
         ] {
             assert!(output.contains(expected), "missing {expected}: {output}");

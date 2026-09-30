@@ -457,7 +457,6 @@ fn draw_main(
     let quota_alert = quota::alert(app);
     let footer = styra_ui::footer::FooterView {
         working_directory: &working_directory,
-        idle_interactions: app.interactions.idle_notification_count(),
         quota: &quota_alert,
         auto_retry: app.auto_retry,
     };

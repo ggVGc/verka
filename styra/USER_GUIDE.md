@@ -129,7 +129,8 @@ on it as soon as it arrives. When an interaction is associated with a Git
 checkout, its row also names the checked-out branch (or says `detached head`).
 An interaction that went idle away from every
 client's screen, and has not been focused since, is marked `NEWLY IDLE`; the
-footer counts those rows until they are focused. Finishing a turn while a client
+event list's bottom border counts those rows, beside the `running/idle/stopped`
+tally, until they are focused. Finishing a turn while a client
 is showing it is not one of them — you watched it happen.
 
 An interaction that stops with uncommitted changes in its Git checkout — edits

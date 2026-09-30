@@ -80,6 +80,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
                 running: counts.running,
                 idle: counts.idle,
                 stopped: counts.stopped,
+                newly_idle: app.interactions.idle_notification_count(),
             }
         },
         conversation_only: app.timeline.conversation_only,
