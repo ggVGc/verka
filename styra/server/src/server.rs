@@ -5923,6 +5923,83 @@ mod tests {
         std::fs::remove_dir_all(host).ok();
     }
 
+    /// A client attaching to a restored or resumed interaction applies its
+    /// seeded stream in order and links each event to the newest wire line
+    /// received before it — or, for an operator message, to the outgoing line
+    /// that follows it (see the TUI's `apply_update`). That link carries the
+    /// `at_ms` a branch is taken at, so every replayed entry has to land on its
+    /// own line; an entry left without one cannot be branched from.
+    #[test]
+    fn a_replayed_stream_links_every_entry_to_its_own_wire_line() {
+        let directory = std::env::temp_dir().join(format!(
+            "styra-server-replay-links-test-{}",
+            std::process::id()
+        ));
+        std::fs::remove_dir_all(&directory).ok();
+        std::fs::create_dir_all(&directory).unwrap();
+        let answer = |text: &str| {
+            serde_json::json!({
+                "method": "item/completed",
+                "params": {"item": {"type": "agentMessage", "id": text, "text": text}}
+            })
+            .to_string()
+        };
+        let journal = [
+            serde_json::json!({"source": "user", "at_ms": 10, "text": "first question"}),
+            serde_json::json!({"source": "agent", "at_ms": 20, "raw": answer("first answer")}),
+            serde_json::json!({"source": "user", "at_ms": 30, "text": "second question"}),
+            serde_json::json!({"source": "agent", "at_ms": 40, "raw": answer("second answer")}),
+        ]
+        .iter()
+        .map(|record| format!("{record}\n"))
+        .collect::<String>();
+        std::fs::write(directory.join("journal.jsonl"), journal).unwrap();
+
+        let replayed = replayed_session_updates(
+            &directory,
+            crate::event::Protocol::CodexAppServer,
+            WorkspaceMount {
+                host: &directory,
+                sandbox: &directory,
+            },
+        )
+        .unwrap();
+
+        // The client's linking rule, applied to the stream as it arrives.
+        let mut raw: Vec<&crate::protocol::RawLine> = Vec::new();
+        let mut entries: Vec<(&crate::event::AgentEvent, Option<usize>)> = Vec::new();
+        for update in &replayed {
+            match &update.update {
+                InteractionUpdate::Event(event) => {
+                    entries.push((event, raw.len().checked_sub(1)));
+                }
+                InteractionUpdate::Raw(line) => {
+                    raw.push(line);
+                    if line.direction == crate::protocol::Direction::ToAgent {
+                        if let Some((crate::event::AgentEvent::UserMessage { .. }, link)) =
+                            entries.last_mut()
+                        {
+                            *link = Some(raw.len() - 1);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let branch_points = entries
+            .iter()
+            .map(|(_, link)| link.map(|index| raw[index].at_ms))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            branch_points,
+            vec![Some(10), Some(20), Some(30), Some(40)],
+            "each replayed entry should be linked to its own wire line"
+        );
+
+        std::fs::remove_dir_all(directory).ok();
+    }
+
     #[test]
     fn native_session_lookup_detects_removal() {
         let root = std::env::temp_dir().join(format!("styra-native-test-{}", std::process::id()));
