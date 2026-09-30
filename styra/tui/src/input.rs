@@ -222,7 +222,6 @@ pub fn handle_list_key(
             k if EVENTS_LINK_DESTINATIONS.matches(k) => app.toggle_link_display(),
             k if EVENTS_FOLLOW_BRANCH.matches(k) => session::follow_branch(app),
             k if EVENTS_CONVERSATION_ONLY.matches(k) => app.toggle_conversation_only(),
-            k if EVENTS_PREVIEW_MODE.matches(k) && app.preview.open => app.preview.toggle_mode(),
             k if EVENTS_PREVIEW_TARGET.matches(k) && app.preview.open => {
                 app.preview.toggle_target()
             }
@@ -492,7 +491,6 @@ pub fn handle_list_key(
         View::Preview => match key {
             k if PREVIEW_LINKS.matches(k) => app.highlight_first_link(),
             k if PREVIEW_LINK_DESTINATIONS.matches(k) => app.toggle_link_display(),
-            k if PREVIEW_MODE.matches(k) => app.preview.toggle_mode(),
             k if PREVIEW_TARGET.matches(k) => app.preview.toggle_target(),
             k if PREVIEW_PAGE_DOWN.matches(k) => app.preview.scroll.half_page_down(),
             k if PREVIEW_PAGE_UP.matches(k) => app.preview.scroll.half_page_up(),

@@ -392,7 +392,7 @@ mod tests {
         let (width, height) = (120, 30);
         let split = width / 2;
         let screen = test_support::screen_sized(&app, width, height);
-        let (preview_x, preview_y) = screen.find("preview · pretty");
+        let (preview_x, preview_y) = screen.find("preview · C: command");
         let (entry_log_x, entry_log_y) = screen.find("entry log · follows selection");
         let (_, conversation_bottom) = screen.find("conversation only");
 

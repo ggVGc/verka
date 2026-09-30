@@ -37,17 +37,21 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
         });
     styra_ui::preview::PreviewView {
         entry,
-        changes: app.preview_changes().map(|changes| {
-            changes
-                .into_iter()
-                .filter_map(|event| change_view(app, event))
-                .collect()
-        }),
+        // The side panel shows a message's turn diff beside the list that
+        // already shows the message; `P` is for reading the entry itself.
+        changes: (!fullscreen)
+            .then(|| app.preview_changes())
+            .flatten()
+            .map(|changes| {
+                changes
+                    .into_iter()
+                    .filter_map(|event| change_view(app, event))
+                    .collect()
+            }),
         entry_change: app
             .preview_entry()
             .and_then(|entry| change_view(app, entry.event())),
         protocol: app.selection.provider.protocol(),
-        mode: app.preview.mode(),
         target: match app.preview.target() {
             PreviewTarget::Selection => styra_ui::preview::PreviewTarget::Selection,
             PreviewTarget::Command => styra_ui::preview::PreviewTarget::Command,
@@ -142,7 +146,7 @@ mod tests {
     fn a_selected_message_previews_the_diff_of_its_turn() {
         let app = app_with_two_turns();
         let screen = test_support::screen_sized(&app, 120, 30);
-        let (preview_x, _) = screen.find("turn diff · pretty");
+        let (preview_x, _) = screen.find("turn diff · C: command");
         let (diff_x, _) = screen.find("delay * 2");
         assert!(diff_x > preview_x, "the diff is in the preview pane");
         assert!(screen.all().contains("src/retry.rs"));
@@ -227,6 +231,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// `P` is for reading the selected entry at full size, so a message there
+    /// is its own text rather than its turn's diff.
+    #[test]
+    fn the_full_screen_preview_shows_a_message_itself() {
+        let mut app = app_with_two_turns();
+        app.view = crate::app::View::Preview;
+        let screen = test_support::rendered(&app);
+        assert!(screen.contains("fix the retry backoff"), "{screen}");
+        assert!(!screen.contains("delay * 2"));
+        assert!(!screen.contains("no file changes during this turn"));
+    }
+
     /// Any other entry is its own content, as before.
     #[test]
     fn a_work_entry_still_previews_as_itself() {
@@ -238,6 +254,6 @@ mod tests {
             Some("shell")
         );
         assert!(app.preview_changes().is_none());
-        assert!(test_support::rendered(&app).contains("preview · pretty"));
+        assert!(test_support::rendered(&app).contains("preview · C: command"));
     }
 }

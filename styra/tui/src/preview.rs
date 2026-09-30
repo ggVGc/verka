@@ -1,8 +1,8 @@
-//! The panel that shows one entry's full content, and the three choices that
-//! decide what it shows and how.
+//! The panel that shows one entry's full content, and the choices that
+//! decide what it shows.
 //!
-//! Held apart from [`App`](crate::app::App) because the three move together:
-//! changing the presentation or the target changes what is on screen, so the
+//! Held apart from [`App`](crate::app::App) because they move together:
+//! changing the target changes what is on screen, so the
 //! scroll offset taken against the old content no longer means anything and
 //! has to go back to the top. That reset was previously the caller's to
 //! remember at each of the two places that could change either, with the
@@ -11,8 +11,6 @@
 //! Which entry the panel is *pointed at* is not here: that is a question about
 //! the timeline, and only [`App`](crate::app::App) has both.
 //! [`crate::presentation::preview`] renders it.
-
-use styra_protocol::event::PresentationMode;
 
 use crate::app::Scroll;
 
@@ -37,7 +35,6 @@ pub enum PreviewTarget {
 #[derive(Clone, Copy, Default)]
 pub struct Choices {
     open: bool,
-    mode: PresentationMode,
     target: PreviewTarget,
 }
 
@@ -50,15 +47,10 @@ pub struct Preview {
     pub open: bool,
     /// How far the previewed entry is scrolled.
     pub scroll: Scroll,
-    mode: PresentationMode,
     target: PreviewTarget,
 }
 
 impl Preview {
-    pub fn mode(&self) -> PresentationMode {
-        self.mode
-    }
-
     pub fn target(&self) -> PreviewTarget {
         self.target
     }
@@ -78,17 +70,6 @@ impl Preview {
         self.open = true;
     }
 
-    /// Switch between the concise presentation and the complete decoded one.
-    /// The content changes, so the offset taken against the old one is
-    /// meaningless and the panel returns to the top.
-    pub fn toggle_mode(&mut self) {
-        self.mode = match self.mode {
-            PresentationMode::Pretty => PresentationMode::Raw,
-            PresentationMode::Raw => PresentationMode::Pretty,
-        };
-        self.scroll.reset();
-    }
-
     /// Switch between following the list selection and following the newest
     /// command. A different entry, so again from the top.
     pub fn toggle_target(&mut self) {
@@ -103,7 +84,6 @@ impl Preview {
     pub fn choices(&self) -> Choices {
         Choices {
             open: self.open,
-            mode: self.mode,
             target: self.target,
         }
     }
@@ -113,7 +93,6 @@ impl Preview {
     /// [`crate::app::OperatorState`].
     pub fn adopt(&mut self, choices: Choices) {
         self.open = choices.open;
-        self.mode = choices.mode;
         self.target = choices.target;
         self.scroll.reset();
     }
@@ -133,51 +112,21 @@ mod tests {
         preview.scroll.page_down();
         assert!(preview.scroll.offset > 0);
 
-        preview.toggle_mode();
-        assert_eq!(preview.scroll.offset, 0);
-
-        preview.scroll.page_down();
-        assert!(preview.scroll.offset > 0);
-
         preview.toggle_target();
         assert_eq!(preview.scroll.offset, 0);
-    }
-
-    #[test]
-    fn the_presentation_and_the_target_toggle_independently() {
-        let mut preview = Preview::default();
-        assert_eq!(preview.mode(), PresentationMode::Pretty);
-        assert_eq!(preview.target(), PreviewTarget::Selection);
-
-        preview.toggle_mode();
-
-        assert_eq!(preview.mode(), PresentationMode::Raw);
-        assert_eq!(
-            preview.target(),
-            PreviewTarget::Selection,
-            "the target is a separate choice"
-        );
-
-        preview.toggle_target();
-        preview.toggle_mode();
-
-        assert_eq!(preview.mode(), PresentationMode::Pretty);
-        assert!(preview.follows_command());
     }
 
     /// Opening and closing the panel does not change what it would show, so an
     /// operator who closes it and opens it again gets what they had.
     #[test]
-    fn opening_the_panel_leaves_the_presentation_choices_alone() {
+    fn opening_the_panel_leaves_the_target_alone() {
         let mut preview = Preview::default();
-        preview.toggle_mode();
         preview.toggle_target();
 
         preview.toggle();
         preview.toggle();
 
         assert!(!preview.open);
-        assert_eq!(preview.mode(), PresentationMode::Raw);
         assert!(preview.follows_command());
     }
 
@@ -189,12 +138,10 @@ mod tests {
 
         let mut chosen = Preview::default();
         chosen.show();
-        chosen.toggle_mode();
         chosen.toggle_target();
         preview.adopt(chosen.choices());
 
         assert!(preview.open);
-        assert_eq!(preview.mode(), PresentationMode::Raw);
         assert!(preview.follows_command());
         assert_eq!(preview.scroll.offset, 0, "a different screen's content");
     }

@@ -16,7 +16,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use styra_protocol::agent::{Provider, Selection};
-use styra_protocol::event::{AgentEvent, DetailBlock};
+use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode};
 use styra_protocol::Contract;
 use styra_protocol::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 
@@ -1343,7 +1343,7 @@ impl App {
                 let entry = self.preview_entry()?;
                 let protocol = self.selection.provider.protocol();
                 let mut text = String::new();
-                for block in protocol.presented_detail(entry.event(), self.preview.mode()) {
+                for block in protocol.presented_detail(entry.event(), PresentationMode::Pretty) {
                     if !text.is_empty() {
                         text.push('\n');
                     }
@@ -1354,7 +1354,7 @@ impl App {
                     }
                 }
                 if text.is_empty() {
-                    text = protocol.presented_summary(entry.event(), self.preview.mode());
+                    text = protocol.presented_summary(entry.event(), PresentationMode::Pretty);
                 }
                 Some(text)
             }
