@@ -438,6 +438,31 @@ impl Timeline {
         start..end
     }
 
+    /// The file changes made during the selected message's stretch — the
+    /// entries [`Self::conversation_span`] scopes it to, so the same work the
+    /// entry-log pane lists. This is what the preview shows for a message: its
+    /// text is already on the list, and what the agent changed under it is not.
+    ///
+    /// Codex follows each file-change item with a snapshot of the whole turn's
+    /// diff so far. Where the stretch has one, the newest stands for them all:
+    /// showing the items as well would repeat every change, and an item's own
+    /// diff is best-effort where the snapshot is not.
+    pub fn conversation_changes(&self) -> Vec<&AgentEvent> {
+        let events = self.entries[self.conversation_span()]
+            .iter()
+            .map(Entry::event);
+        if let Some(snapshot) = events
+            .clone()
+            .rev()
+            .find(|event| matches!(event, AgentEvent::DiffUpdated { .. }))
+        {
+            return vec![snapshot];
+        }
+        events
+            .filter(|event| matches!(event, AgentEvent::FileChanged { .. }))
+            .collect()
+    }
+
     /// The newest entry standing for a shell command, which is what the
     /// preview panel follows in [`crate::app::PreviewTarget::Command`].
     pub fn newest_command(&self) -> Option<&Entry> {

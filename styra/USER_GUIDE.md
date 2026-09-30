@@ -190,7 +190,9 @@ In the event list: `j`/`k` moves by line, `J`/`K` (or arrows) moves by event,
 interaction (from either side of a branch). Otherwise, `Space`/`Enter`/`o`
 folds the selected event; `O` expands only it, `z R` expands all, `z M`
 collapses all, and `m` hides/shows minor events. `PgUp`/`PgDn` scrolls a
-preview. Raw, log, quota, and transcript
+preview. On a conversation line (a message, an error, a model change or a
+branch marker), the preview shows the file changes the agent made during that
+entry's turn — the same stretch `e` lists — rather than the line itself. Raw, log, quota, and transcript
 use `j`/`k` plus `g`/`G` to navigate. In the raw view, `v` switches between
 Styra's captured app-server wire traffic and the provider's native persisted
 session JSONL (when the provider still has it).

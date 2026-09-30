@@ -22,6 +22,10 @@ pub enum PreviewTarget {
 
 pub struct PreviewView<'a> {
     pub entry: Option<EventEntry<'a>>,
+    /// The file changes made during a conversation entry's turn, shown under
+    /// its summary in place of its own content. `None` for an entry that
+    /// previews as itself; empty for a turn that changed no files.
+    pub changes: Option<Vec<&'a AgentEvent>>,
     pub protocol: Protocol,
     pub mode: PresentationMode,
     pub target: PreviewTarget,
@@ -67,20 +71,20 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
     let (content_area, block) = if view.fullscreen {
         (area, None)
     } else {
-        let title = match (view.mode, view.target) {
-            (PresentationMode::Pretty, PreviewTarget::Selection) => {
-                " preview · pretty · v: raw · C: command "
-            }
-            (PresentationMode::Raw, PreviewTarget::Selection) => {
-                " preview · raw · v: pretty · C: command "
-            }
-            (PresentationMode::Pretty, PreviewTarget::Command) => {
-                " command · pretty · v: raw · C: selection "
-            }
-            (PresentationMode::Raw, PreviewTarget::Command) => {
-                " command · raw · v: pretty · C: selection "
-            }
+        let (shown, other_target) = match view.target {
+            PreviewTarget::Selection => ("preview", "command"),
+            PreviewTarget::Command => ("command", "selection"),
         };
+        let shown = if view.changes.is_some() {
+            "turn diff"
+        } else {
+            shown
+        };
+        let (mode, other_mode) = match view.mode {
+            PresentationMode::Pretty => ("pretty", "raw"),
+            PresentationMode::Raw => ("raw", "pretty"),
+        };
+        let title = format!(" {shown} · {mode} · v: {other_mode} · C: {other_target} ");
         (
             Rect::new(
                 area.x + 1,
@@ -133,34 +137,57 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         false,
         view.protocol,
     )];
+    if let Some(changes) = &view.changes {
+        if changes.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("{DETAIL_INDENT}no file changes during this turn"),
+                Style::default().fg(palette::MUTED_TEXT),
+            )));
+        }
+        for event in changes {
+            lines.push(Line::from(""));
+            lines.extend(detail_lines(event, view, false, None));
+        }
+        return lines;
+    }
     let suspicious = view.mode == PresentationMode::Pretty && suspicious_shell_success(entry.event);
-    let mut blocks = view
-        .protocol
-        .presented_detail(entry.event, view.mode)
-        .into_iter();
+    lines.extend(detail_lines(
+        entry.event,
+        view,
+        suspicious,
+        view.link_highlight,
+    ));
+    lines
+}
+
+/// One event's presented detail blocks, a blank line between each.
+fn detail_lines(
+    event: &AgentEvent,
+    view: &PreviewView<'_>,
+    suspicious: bool,
+    highlight: Option<EntryIndex>,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
     let mut entries_before = 0;
-    if let Some(first) = blocks.next() {
+    for (index, block) in view
+        .protocol
+        .presented_detail(event, view.mode)
+        .into_iter()
+        .enumerate()
+    {
+        if index > 0 {
+            lines.push(Line::from(""));
+        }
         lines.extend(presented_block_lines(
-            first,
-            message_text_color(entry.event.tag()),
+            block,
+            message_text_color(event.tag()),
             view.mode,
             suspicious,
             view.links,
-            view.link_highlight,
+            highlight,
             &mut entries_before,
         ));
-        for block in blocks {
-            lines.push(Line::from(""));
-            lines.extend(presented_block_lines(
-                block,
-                message_text_color(entry.event.tag()),
-                view.mode,
-                suspicious,
-                view.links,
-                view.link_highlight,
-                &mut entries_before,
-            ));
-        }
     }
     lines
 }

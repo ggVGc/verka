@@ -33,6 +33,7 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
         });
     styra_ui::preview::PreviewView {
         entry,
+        changes: app.preview_changes(),
         protocol: app.selection.provider.protocol(),
         mode: app.preview.mode(),
         target: match app.preview.target() {
@@ -47,5 +48,120 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
         file_target,
         requested_scroll: app.preview.scroll.offset,
         fullscreen,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support;
+    use crate::app::App;
+
+    use styra_protocol::event::AgentEvent;
+
+    fn changed(path: &str, old: &str, new: &str) -> AgentEvent {
+        AgentEvent::FileChanged {
+            id: String::new(),
+            paths: vec![path.into()],
+            diff: Some(format!("@@ edit @@\n-{old}\n+{new}")),
+            checkpoint: None,
+            checkpoint_error: None,
+        }
+    }
+
+    /// Two turns, each a request and the work done for it, with the preview
+    /// open over the conversation-only list.
+    fn app_with_two_turns() -> App {
+        let mut app = test_support::app("s1");
+        app.timeline.conversation_only = true;
+        app.push_event(AgentEvent::UserMessage {
+            text: "fix the retry backoff".into(),
+        });
+        app.push_event(AgentEvent::CommandStarted {
+            command: "cargo test backoff".into(),
+        });
+        app.push_event(changed("src/retry.rs", "delay * 3", "delay * 2"));
+        app.push_event(AgentEvent::UserMessage {
+            text: "and rename the helper".into(),
+        });
+        app.push_event(changed("src/helper.rs", "fn old_name", "fn new_name"));
+        app.select_first();
+        app.preview.show();
+        app
+    }
+
+    /// A conversation line's text is already on the list; what the preview
+    /// adds is the work done for it, which the list is hiding.
+    #[test]
+    fn a_selected_message_previews_the_diff_of_its_turn() {
+        let app = app_with_two_turns();
+        let screen = test_support::screen_sized(&app, 120, 30);
+        let (preview_x, _) = screen.find("turn diff · pretty");
+        let (diff_x, _) = screen.find("delay * 2");
+        assert!(diff_x > preview_x, "the diff is in the preview pane");
+        assert!(screen.all().contains("src/retry.rs"));
+        // The next message's work belongs to its own turn.
+        assert!(!screen.all().contains("new_name"));
+    }
+
+    #[test]
+    fn the_preview_moves_to_the_next_turns_diff_with_the_selection() {
+        let mut app = app_with_two_turns();
+        app.select_next_line();
+        let screen = test_support::rendered(&app);
+        assert!(screen.contains("new_name"));
+        assert!(!screen.contains("delay * 2"));
+    }
+
+    #[test]
+    fn a_turn_without_file_changes_says_so() {
+        let mut app = test_support::app("s1");
+        app.push_event(AgentEvent::UserMessage {
+            text: "what does this do".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "it retries".into(),
+        });
+        app.select_first();
+        app.preview.show();
+        assert!(test_support::rendered(&app).contains("no file changes during this turn"));
+    }
+
+    /// Codex follows every file-change item with the turn's whole diff so
+    /// far; the newest snapshot covers the items, so they are not repeated.
+    #[test]
+    fn a_turn_diff_snapshot_stands_for_the_file_changes_before_it() {
+        let mut app = test_support::app("s1");
+        app.push_event(AgentEvent::UserMessage {
+            text: "fix it".into(),
+        });
+        app.push_event(changed("src/a.rs", "item-old", "item-new"));
+        app.push_event(AgentEvent::DiffUpdated {
+            diff: "diff --git a/src/a.rs b/src/a.rs\n@@\n-first-old\n+first-new\n".into(),
+        });
+        app.push_event(AgentEvent::DiffUpdated {
+            diff: "diff --git a/src/a.rs b/src/a.rs\n@@\n-latest-old\n+latest-new\n".into(),
+        });
+        app.select_first();
+        app.preview.show();
+        let changes = app.preview_changes().unwrap();
+        assert_eq!(changes.len(), 1);
+        let screen = test_support::rendered(&app);
+        assert!(screen.contains("latest-new"));
+        assert!(!screen.contains("item-new"));
+        assert!(!screen.contains("first-new"));
+    }
+
+    /// Any other entry is its own content, as before.
+    #[test]
+    fn a_work_entry_still_previews_as_itself() {
+        let mut app = app_with_two_turns();
+        app.timeline.conversation_only = false;
+        app.select_next_line();
+        assert_eq!(
+            app.preview_entry().map(|entry| entry.event().tag()),
+            Some("shell")
+        );
+        assert!(app.preview_changes().is_none());
+        assert!(test_support::rendered(&app).contains("preview · pretty"));
     }
 }

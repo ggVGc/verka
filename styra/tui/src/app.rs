@@ -1263,6 +1263,22 @@ impl App {
         self.timeline.selected_entry()
     }
 
+    /// What the preview shows in place of [`Self::preview_entry`]'s content
+    /// when that entry is a conversation line: the file changes made during
+    /// its stretch ([`Timeline::conversation_changes`]). The message itself is
+    /// already readable on the list; the work done for it is what the list
+    /// does not show. `None` for any other entry, which previews as itself.
+    ///
+    /// A conversation entry the preview can land on is always the start of the
+    /// selected stretch: the entry-log pane's cursor stays inside that stretch,
+    /// whose only conversation entry is its first, and the command target
+    /// only falls back to the selection itself.
+    pub(crate) fn preview_changes(&self) -> Option<Vec<&AgentEvent>> {
+        self.preview_entry()
+            .filter(|entry| entry.event().is_conversation())
+            .map(|_| self.timeline.conversation_changes())
+    }
+
     /// Whether the launch policy can still be edited; see [`launch::editable`].
     pub fn can_edit_launch(&self) -> bool {
         launch::editable(&self.activity.status)
