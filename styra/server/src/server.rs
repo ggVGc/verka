@@ -3494,6 +3494,15 @@ impl ServerState {
     }
 }
 
+/// A stored Session's journal as the update stream a live interaction would
+/// have produced.
+///
+/// Events and wire lines are interleaved in the order live traffic has them,
+/// because a client links each entry to the wire line it came from by arrival
+/// order, and that link is the moment a branch is taken at. An agent line
+/// arrives before the event decoded from it; an operator message is announced
+/// before the line that carries it to the agent. Sent as two separate runs
+/// instead, every replayed entry would arrive with no line to link to.
 fn replayed_session_updates(
     path: &Path,
     protocol: crate::event::Protocol,
@@ -3505,14 +3514,30 @@ fn replayed_session_updates(
         last_reported_cwd,
     } = journal::replay_restored(path, protocol)?;
     let mut updates = Vec::with_capacity(events.len() + raw.len());
+    let mut lines = raw.into_iter();
     for event in events {
+        let line = if is_wire_backed(&event) {
+            lines.next()
+        } else {
+            None
+        };
+        let (before, after) = match event {
+            crate::event::AgentEvent::UserMessage { .. } => (None, line),
+            _ => (line, None),
+        };
+        if let Some(line) = before {
+            push_sequenced(&mut updates, InteractionUpdate::Raw(line));
+        }
         // App-server control traffic is carried by the raw view but omitted
         // from the live event list, matching normal Interaction behavior.
         if !matches!(event, crate::event::AgentEvent::Unknown { .. }) {
             push_sequenced(&mut updates, InteractionUpdate::Event(event));
         }
+        if let Some(line) = after {
+            push_sequenced(&mut updates, InteractionUpdate::Raw(line));
+        }
     }
-    for line in raw {
+    for line in lines {
         push_sequenced(&mut updates, InteractionUpdate::Raw(line));
     }
     // Last, because it is not a moment in the history but the state the history
@@ -3634,6 +3659,17 @@ fn replayed_selection(updates: &[SequencedUpdate], stored: &Selection) -> Select
 fn push_sequenced(updates: &mut Vec<SequencedUpdate>, update: InteractionUpdate) {
     let sequence = updates.len() as u64 + 1;
     updates.push(SequencedUpdate { sequence, update });
+}
+
+/// Whether a replayed event stands for a line that crossed the wire, and so
+/// has one of the journal's raw lines behind it. A branch marker and a model
+/// change are the records the host writes in its own right; no provider puts
+/// either on the wire.
+fn is_wire_backed(event: &crate::event::AgentEvent) -> bool {
+    !matches!(
+        event,
+        crate::event::AgentEvent::Branched { .. } | crate::event::AgentEvent::ModelChanged { .. }
+    )
 }
 
 /// Fail before launching a sandbox when the provider has already discarded
@@ -5844,6 +5880,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2, 3, 4]
         );
+        // In live order: the operator's message and then the line carrying it,
+        // the agent's line and then what was decoded from it.
         assert!(matches!(
             &replayed[0].update,
             InteractionUpdate::Event(
@@ -5852,13 +5890,18 @@ mod tests {
         ));
         assert!(matches!(
             &replayed[1].update,
+            InteractionUpdate::Raw(line) if line.at_ms == 1
+        ));
+        assert!(matches!(
+            &replayed[2].update,
+            InteractionUpdate::Raw(line) if line.at_ms == 2
+        ));
+        assert!(matches!(
+            &replayed[3].update,
             InteractionUpdate::Event(
                 crate::event::AgentEvent::AgentMessage { text }
             ) if text == "old answer"
         ));
-        assert!(replayed[2..]
-            .iter()
-            .all(|update| matches!(update.update, InteractionUpdate::Raw(_))));
         let error = state
             .resume_session(ResumeSession {
                 id: "0000000000001-1-1".into(),
