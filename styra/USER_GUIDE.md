@@ -181,18 +181,26 @@ resumed.
 | `f` | highlight links in the conversation (`j`/`k` moves between them) |
 | `X` | typed answer from the last turn |
 | `p` / `P` | toggle side preview / full-screen preview |
-| `v` / `C` | pretty versus diff preview / preview newest command |
+| `C` | preview the newest command |
 | `y` | copy the selected item to the clipboard |
 | `c` | show conversation events only (events and transcript) |
 
-In the event list: `j`/`k` moves by line, `J`/`K` (or arrows) moves by event,
+In the event list: `j`/`k` moves by line, `J`/`K` (or the arrows, while no
+preview is open) moves by event,
 `g`/`G` jumps first/last, and `Enter` on a `branch` marker opens the linked
 interaction (from either side of a branch). Otherwise, `Space`/`Enter`/`o`
 folds the selected event; `O` expands only it, `z R` expands all, `z M`
-collapses all, and `m` hides/shows minor events. `PgUp`/`PgDn` scrolls a
-preview. On a conversation line (a message, an error, a model change or a
-branch marker), the preview shows the file changes the agent made during that
-entry's turn — the same stretch `e` lists — rather than the line itself. Raw, log, quota, and transcript
+collapses all, and `m` hides/shows minor events. With a preview open, side or
+full-screen, `↑`/`↓` scroll it ten lines and `PgUp`/`PgDn` half its height;
+in the full-screen preview `j`/`k` scroll too. On a conversation line (a message, an error, a model change or a
+branch marker), the side preview shows the file changes the agent made during
+that entry's turn — the same stretch `e` lists — rather than the line itself;
+the full-screen preview (`P`) still shows the entry.
+Diffs mark additions and removals with a green `+` and a red `-` and highlight
+the code in the language of each file's extension, with each line's number in
+the file beside it; only the changed lines are shown. Claude's edits carry no line numbers, so they are found in
+the file as it is now: an edit that has since been changed again is shown
+unnumbered. Raw, log, quota, and transcript
 use `j`/`k` plus `g`/`G` to navigate. In the raw view, `v` switches between
 Styra's captured app-server wire traffic and the provider's native persisted
 session JSONL (when the provider still has it).

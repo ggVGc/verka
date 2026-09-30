@@ -1,6 +1,9 @@
 //! Side-panel and full-screen previews for one timeline entry.
 
+use std::borrow::Cow;
+
 use crate::code::code_block_lines;
+use crate::diff::diff_block_lines;
 use crate::event_list::{summary_line, suspicious_shell_success, wrap_rendered, EventEntry};
 use crate::footer::message_text_color;
 use crate::markdown::{markdown_block_render, EntryIndex, LinkDisplay};
@@ -25,9 +28,11 @@ pub struct PreviewView<'a> {
     /// The file changes made during a conversation entry's turn, shown under
     /// its summary in place of its own content. `None` for an entry that
     /// previews as itself; empty for a turn that changed no files.
-    pub changes: Option<Vec<&'a AgentEvent>>,
+    pub changes: Option<Vec<ChangeView<'a>>>,
+    /// The entry itself, when it is a file change: drawn as one, from a diff
+    /// the host may have placed in its file (see [`ChangeView::diff`]).
+    pub entry_change: Option<ChangeView<'a>>,
     pub protocol: Protocol,
-    pub mode: PresentationMode,
     pub target: PreviewTarget,
     pub links: LinkDisplay,
     pub link_highlight: Option<EntryIndex>,
@@ -36,6 +41,17 @@ pub struct PreviewView<'a> {
     pub file_target: Option<FileTarget>,
     pub requested_scroll: u16,
     pub fullscreen: bool,
+}
+
+/// One file change as the preview draws it.
+pub struct ChangeView<'a> {
+    /// The files it touched. Empty for a diff that names its own files in its
+    /// headers, as a whole-turn snapshot does.
+    pub paths: &'a [String],
+    /// The diff to draw, or `None` when the provider reported none. It may
+    /// differ from what the provider sent: a snippet that gave no position
+    /// can have had one found for it, so its lines can be numbered.
+    pub diff: Option<Cow<'a, str>>,
 }
 
 pub struct FileTarget {
@@ -56,6 +72,8 @@ pub enum FileTargetContent {
 pub struct PreviewFeedback {
     pub limit: u16,
     pub effective_scroll: u16,
+    /// How many lines the preview shows at once.
+    pub viewport: u16,
 }
 
 pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewFeedback {
@@ -80,11 +98,7 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
         } else {
             shown
         };
-        let (mode, other_mode) = match view.mode {
-            PresentationMode::Pretty => ("pretty", "raw"),
-            PresentationMode::Raw => ("raw", "pretty"),
-        };
-        let title = format!(" {shown} · {mode} · v: {other_mode} · C: {other_target} ");
+        let title = format!(" {shown} · C: {other_target} ");
         (
             Rect::new(
                 area.x + 1,
@@ -120,6 +134,7 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
     PreviewFeedback {
         limit,
         effective_scroll: effective,
+        viewport: content_area.height,
     }
 }
 
@@ -145,19 +160,60 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
                 Style::default().fg(palette::MUTED_TEXT),
             )));
         }
-        for event in changes {
+        for change in changes {
             lines.push(Line::from(""));
-            lines.extend(detail_lines(event, view, false, None));
+            lines.extend(change_lines(change));
         }
         return lines;
     }
-    let suspicious = view.mode == PresentationMode::Pretty && suspicious_shell_success(entry.event);
+    if let Some(change) = &view.entry_change {
+        lines.extend(change_lines(change));
+        return lines;
+    }
+    let suspicious = suspicious_shell_success(entry.event);
     lines.extend(detail_lines(
         entry.event,
         view,
         suspicious,
         view.link_highlight,
     ));
+    lines
+}
+
+/// A file change's paths and its diff, drawn by [`diff_block_lines`] so each
+/// file's code is highlighted in its own language and numbered. Unchanged
+/// context and file metadata are left out: the preview is for seeing what
+/// changed.
+fn change_lines(change: &ChangeView<'_>) -> Vec<Line<'static>> {
+    let color = message_text_color("files");
+    let mut lines: Vec<Line<'static>> = change
+        .paths
+        .iter()
+        .map(|path| {
+            Line::from(Span::styled(
+                format!("{DETAIL_INDENT}{path}"),
+                Style::default().fg(color),
+            ))
+        })
+        .collect();
+    match change.diff.as_deref().filter(|diff| !diff.is_empty()) {
+        Some(diff) => {
+            // A diff for several files names each in its headers; a single
+            // file's may not, so the path says what it is.
+            let path = match change.paths {
+                [path] => Some(path.as_str()),
+                _ => None,
+            };
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            lines.extend(diff_block_lines(diff, path, true, DETAIL_INDENT));
+        }
+        None => lines.push(Line::from(Span::styled(
+            format!("{DETAIL_INDENT}no diff reported"),
+            Style::default().fg(palette::MUTED_TEXT),
+        ))),
+    }
     lines
 }
 
@@ -172,7 +228,7 @@ fn detail_lines(
     let mut entries_before = 0;
     for (index, block) in view
         .protocol
-        .presented_detail(event, view.mode)
+        .presented_detail(event, PresentationMode::Pretty)
         .into_iter()
         .enumerate()
     {
@@ -182,7 +238,6 @@ fn detail_lines(
         lines.extend(presented_block_lines(
             block,
             message_text_color(event.tag()),
-            view.mode,
             suspicious,
             view.links,
             highlight,
@@ -195,24 +250,21 @@ fn detail_lines(
 fn presented_block_lines(
     block: DetailBlock,
     color: Color,
-    mode: PresentationMode,
     suspicious: bool,
     links: LinkDisplay,
     highlight: Option<EntryIndex>,
     entries_before: &mut EntryIndex,
 ) -> Vec<Line<'static>> {
-    if mode == PresentationMode::Pretty {
-        if let DetailBlock::Text(text) = &block {
-            let rendered = markdown_block_render(
-                text,
-                Style::default().fg(color),
-                DETAIL_INDENT,
-                links,
-                highlight.and_then(|index| index.checked_sub(*entries_before)),
-            );
-            *entries_before += rendered.entries;
-            return rendered.lines;
-        }
+    if let DetailBlock::Text(text) = &block {
+        let rendered = markdown_block_render(
+            text,
+            Style::default().fg(color),
+            DETAIL_INDENT,
+            links,
+            highlight.and_then(|index| index.checked_sub(*entries_before)),
+        );
+        *entries_before += rendered.entries;
+        return rendered.lines;
     }
     let (text, language) = match block {
         DetailBlock::Text(text) => (text, None),

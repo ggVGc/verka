@@ -203,8 +203,8 @@ work rather than at every `:SvaraNew`. When there is nothing in use to put at
 the top — no `vim.g.svara_selection` and no Session in the Workspace — the
 reason is shown and the catalog is the whole list.
 
-The prompt goes out with the file and line being viewed in front of it —
-`/path/to/file.lua:42` — because a prompt typed in an editor is nearly always
+The prompt goes out with the file and line being viewed after it —
+`Source: /path/to/file.lua:42` — because a prompt typed in an editor is nearly always
 about what is on screen and saying so beats typing the path. A buffer with no
 file behind it cannot select, send, or start an interaction.
 

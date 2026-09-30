@@ -1,5 +1,9 @@
 //! Mapping from application preview state to its presentation model.
 
+use std::borrow::Cow;
+
+use styra_protocol::event::AgentEvent;
+
 use super::list::ui_link_display;
 use crate::app::App;
 use crate::preview::PreviewTarget;
@@ -33,9 +37,21 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
         });
     styra_ui::preview::PreviewView {
         entry,
-        changes: app.preview_changes(),
+        // The side panel shows a message's turn diff beside the list that
+        // already shows the message; `P` is for reading the entry itself.
+        changes: (!fullscreen)
+            .then(|| app.preview_changes())
+            .flatten()
+            .map(|changes| {
+                changes
+                    .into_iter()
+                    .filter_map(|event| change_view(app, event))
+                    .collect()
+            }),
+        entry_change: app
+            .preview_entry()
+            .and_then(|entry| change_view(app, entry.event())),
         protocol: app.selection.provider.protocol(),
-        mode: app.preview.mode(),
         target: match app.preview.target() {
             PreviewTarget::Selection => styra_ui::preview::PreviewTarget::Selection,
             PreviewTarget::Command => styra_ui::preview::PreviewTarget::Command,
@@ -49,6 +65,41 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
         requested_scroll: app.preview.scroll.offset,
         fullscreen,
     }
+}
+
+/// A file-change event as the preview draws it, or `None` for any other
+/// event. A Claude edit snippet is given its position in the file, if it can
+/// still be found there, so its lines can be numbered; see
+/// [`crate::snippet`].
+fn change_view<'a>(app: &App, event: &'a AgentEvent) -> Option<styra_ui::preview::ChangeView<'a>> {
+    match event {
+        AgentEvent::FileChanged { paths, diff, .. } => Some(styra_ui::preview::ChangeView {
+            paths,
+            diff: diff.as_deref().map(|diff| placed(app, diff, paths)),
+        }),
+        AgentEvent::DiffUpdated { diff } => Some(styra_ui::preview::ChangeView {
+            paths: &[],
+            diff: Some(Cow::Borrowed(diff)),
+        }),
+        _ => None,
+    }
+}
+
+fn placed<'a>(app: &App, diff: &'a str, paths: &[String]) -> Cow<'a, str> {
+    let [path] = paths else {
+        return Cow::Borrowed(diff);
+    };
+    if !crate::snippet::has_snippets(diff) {
+        return Cow::Borrowed(diff);
+    }
+    let path = match app.workspace.root_or_current_directory() {
+        Some(root) => crate::files::resolve(&root, path),
+        None => path.into(),
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|file| crate::snippet::place(diff, &file))
+        .map_or(Cow::Borrowed(diff), Cow::Owned)
 }
 
 #[cfg(test)]
@@ -95,7 +146,7 @@ mod tests {
     fn a_selected_message_previews_the_diff_of_its_turn() {
         let app = app_with_two_turns();
         let screen = test_support::screen_sized(&app, 120, 30);
-        let (preview_x, _) = screen.find("turn diff · pretty");
+        let (preview_x, _) = screen.find("turn diff · C: command");
         let (diff_x, _) = screen.find("delay * 2");
         assert!(diff_x > preview_x, "the diff is in the preview pane");
         assert!(screen.all().contains("src/retry.rs"));
@@ -151,6 +202,47 @@ mod tests {
         assert!(!screen.contains("first-new"));
     }
 
+    /// Claude's edit snippets say what changed but not where; the file still
+    /// holds the new text, so the preview finds it there and numbers it.
+    #[test]
+    fn a_claude_edit_is_numbered_from_where_it_sits_in_the_file() {
+        let dir = std::env::temp_dir().join(format!("styra-snippet-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("retry.rs");
+        std::fs::write(&file, "fn a() {}\nfn b() {}\nlet delay = base * 2;\n").unwrap();
+
+        let mut app = test_support::app("s1");
+        app.push_event(AgentEvent::UserMessage {
+            text: "fix the retry backoff".into(),
+        });
+        app.push_event(AgentEvent::FileChanged {
+            id: String::new(),
+            paths: vec![file.display().to_string()],
+            diff: Some("@@ edit @@\n-let delay = base * 3;\n+let delay = base * 2;".into()),
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.select_first();
+        app.preview.show();
+
+        let screen = test_support::screen_sized(&app, 160, 30).all();
+        assert!(screen.contains("3 +let delay = base * 2;"), "{screen}");
+        assert!(screen.contains("3 -let delay = base * 3;"), "{screen}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `P` is for reading the selected entry at full size, so a message there
+    /// is its own text rather than its turn's diff.
+    #[test]
+    fn the_full_screen_preview_shows_a_message_itself() {
+        let mut app = app_with_two_turns();
+        app.view = crate::app::View::Preview;
+        let screen = test_support::rendered(&app);
+        assert!(screen.contains("fix the retry backoff"), "{screen}");
+        assert!(!screen.contains("delay * 2"));
+        assert!(!screen.contains("no file changes during this turn"));
+    }
+
     /// Any other entry is its own content, as before.
     #[test]
     fn a_work_entry_still_previews_as_itself() {
@@ -162,6 +254,6 @@ mod tests {
             Some("shell")
         );
         assert!(app.preview_changes().is_none());
-        assert!(test_support::rendered(&app).contains("preview · pretty"));
+        assert!(test_support::rendered(&app).contains("preview · C: command"));
     }
 }

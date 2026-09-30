@@ -16,7 +16,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use styra_protocol::agent::{Provider, Selection};
-use styra_protocol::event::{AgentEvent, DetailBlock};
+use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode};
 use styra_protocol::Contract;
 use styra_protocol::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 
@@ -163,6 +163,8 @@ pub struct Scroll {
     /// [`Scroll::clamped`], so it may sit past what currently fits.
     pub offset: u16,
     limit: u16,
+    /// How many lines the renderer last showed at once; zero until it says.
+    viewport: u16,
 }
 
 /// Lines moved by one PageUp/PageDown press.
@@ -177,6 +179,12 @@ impl Scroll {
     /// Record the furthest the renderer can actually scroll at this width.
     pub fn note_limit(&mut self, limit: u16) {
         self.limit = limit;
+    }
+
+    /// Record how many lines the renderer shows at once, which is what a
+    /// half-page step is half of.
+    pub fn note_viewport(&mut self, viewport: u16) {
+        self.viewport = viewport;
     }
 
     pub fn reset(&mut self) {
@@ -195,6 +203,25 @@ impl Scroll {
 
     pub fn page_up(&mut self) {
         self.offset = self.clamped().saturating_sub(SCROLL_PAGE);
+    }
+
+    /// Scroll by half of what is on screen, so the lines read last stay in
+    /// view. Before the renderer has said how tall that is, by a page.
+    pub fn half_page_down(&mut self) {
+        let step = self.half_page();
+        self.offset = self.clamped().saturating_add(step).min(self.limit);
+    }
+
+    pub fn half_page_up(&mut self) {
+        let step = self.half_page();
+        self.offset = self.clamped().saturating_sub(step);
+    }
+
+    fn half_page(&self) -> u16 {
+        match self.viewport {
+            0 => SCROLL_PAGE,
+            viewport => (viewport / 2).max(1),
+        }
     }
 
     pub fn line_down(&mut self) {
@@ -1316,7 +1343,7 @@ impl App {
                 let entry = self.preview_entry()?;
                 let protocol = self.selection.provider.protocol();
                 let mut text = String::new();
-                for block in protocol.presented_detail(entry.event(), self.preview.mode()) {
+                for block in protocol.presented_detail(entry.event(), PresentationMode::Pretty) {
                     if !text.is_empty() {
                         text.push('\n');
                     }
@@ -1327,7 +1354,7 @@ impl App {
                     }
                 }
                 if text.is_empty() {
-                    text = protocol.presented_summary(entry.event(), self.preview.mode());
+                    text = protocol.presented_summary(entry.event(), PresentationMode::Pretty);
                 }
                 Some(text)
             }
@@ -3093,6 +3120,26 @@ mod tests {
         assert_eq!(app.timeline.selected, 1);
         app.select_next();
         assert_eq!(app.timeline.selected, 1);
+    }
+
+    /// Half a page is half of what the renderer last showed, and a page
+    /// until it has said how much that is.
+    #[test]
+    fn half_a_page_is_half_the_viewport() {
+        let mut scroll = Scroll::default();
+        scroll.note_limit(100);
+        scroll.half_page_down();
+        assert_eq!(scroll.offset, SCROLL_PAGE, "no viewport reported yet");
+
+        scroll.note_viewport(9);
+        scroll.half_page_down();
+        assert_eq!(scroll.offset, SCROLL_PAGE + 4);
+        scroll.half_page_up();
+        assert_eq!(scroll.offset, SCROLL_PAGE);
+
+        scroll.note_viewport(1);
+        scroll.half_page_down();
+        assert_eq!(scroll.offset, SCROLL_PAGE + 1, "always at least a line");
     }
 
     #[test]

@@ -37,7 +37,7 @@ pub fn code_block_lines(
 /// The gutter is the same on every row rather than capped with corners: an
 /// inline block can be truncated to a line cap mid-way, and a block that had
 /// lost its closing corner would read as unfinished code.
-fn with_gutter(line: Line<'static>, indent: &str) -> Line<'static> {
+pub(crate) fn with_gutter(line: Line<'static>, indent: &str) -> Line<'static> {
     let line_style = line.style;
     let mut spans = vec![Span::styled(
         format!("{indent}{GUTTER}"),
@@ -54,6 +54,9 @@ fn body_lines(
     text_color: Color,
     suspicious_shell: bool,
 ) -> Vec<Line<'static>> {
+    if language == Some("diff") {
+        return crate::diff::diff_body_lines(text, None, false);
+    }
     // Agent-message fences become `DetailBlock::Code` before they reach the
     // UI. Feed recognized languages back through the shared TextMate renderer
     // so they receive the same theme as fenced Markdown elsewhere.

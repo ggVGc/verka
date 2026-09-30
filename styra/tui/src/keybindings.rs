@@ -46,6 +46,10 @@ bindings! { GLOBAL = "Global";
 }
 
 bindings! { EVENTS = "Events and previews";
+    EVENTS_PREVIEW_SCROLL_DOWN: [Key::code(KeyCode::Down)] ("preview open")
+        => Action::EventsPreviewScrollDown;
+    EVENTS_PREVIEW_SCROLL_UP: [Key::code(KeyCode::Up)] ("preview open")
+        => Action::EventsPreviewScrollUp;
     EVENTS_NEXT_ENTRY: [Key::ch('J'), Key::code(KeyCode::Down)] => Action::EventsNextEntry;
     EVENTS_PREV_ENTRY: [Key::ch('K'), Key::code(KeyCode::Up)] => Action::EventsPrevEntry;
     EVENTS_NEXT_LINE: [Key::ch('j')] => Action::EventsNextLine;
@@ -62,7 +66,6 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_MINOR: [Key::ch('m')] => Action::EventsMinor;
     EVENTS_PREVIEW_PANEL: [Key::ch('p')] => Action::EventsPreviewPanel;
     EVENTS_CONVERSATION_ONLY: [Key::ch('c')] => Action::EventsConversationOnly;
-    EVENTS_PREVIEW_MODE: [Key::ch('v')] ("preview open") => Action::EventsPreviewMode;
     EVENTS_PREVIEW_TARGET: [Key::ch('C')] ("preview open") => Action::EventsPreviewTarget;
     EVENTS_COMPLETE: [Key::ch('C')] ("preview closed")
         => Action::EventsComplete;
@@ -95,15 +98,14 @@ bindings! { READING = "Raw, log, quota, and transcript";
 }
 
 bindings! { PREVIEW = "Full-screen preview";
-    PREVIEW_SCROLL_DOWN: [Key::ch('j')] => Action::PreviewScrollDown;
-    PREVIEW_SCROLL_UP: [Key::ch('k')] => Action::PreviewScrollUp;
-    PREVIEW_NEXT_ENTRY: [Key::ch('J'), Key::code(KeyCode::Down)] => Action::PreviewNextEntry;
-    PREVIEW_PREV_ENTRY: [Key::ch('K'), Key::code(KeyCode::Up)] => Action::PreviewPrevEntry;
+    PREVIEW_SCROLL_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::PreviewScrollDown;
+    PREVIEW_SCROLL_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::PreviewScrollUp;
+    PREVIEW_NEXT_ENTRY: [Key::ch('J')] => Action::PreviewNextEntry;
+    PREVIEW_PREV_ENTRY: [Key::ch('K')] => Action::PreviewPrevEntry;
     PREVIEW_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::PreviewPageDown;
     PREVIEW_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::PreviewPageUp;
     PREVIEW_FIRST: [Key::ch('g')] => Action::PreviewFirst;
     PREVIEW_LAST: [Key::ch('G')] => Action::PreviewLast;
-    PREVIEW_MODE: [Key::ch('v')] => Action::PreviewMode;
     PREVIEW_TARGET: [Key::ch('C')] => Action::PreviewTarget;
     PREVIEW_LINKS: [Key::ch('f')] => Action::PreviewLinks;
     PREVIEW_LINK_DESTINATIONS: [Key::ch('u')] => Action::PreviewLinkDestinations;
