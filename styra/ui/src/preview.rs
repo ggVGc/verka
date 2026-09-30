@@ -1,5 +1,7 @@
 //! Side-panel and full-screen previews for one timeline entry.
 
+use std::borrow::Cow;
+
 use crate::code::code_block_lines;
 use crate::diff::diff_block_lines;
 use crate::event_list::{summary_line, suspicious_shell_success, wrap_rendered, EventEntry};
@@ -26,7 +28,10 @@ pub struct PreviewView<'a> {
     /// The file changes made during a conversation entry's turn, shown under
     /// its summary in place of its own content. `None` for an entry that
     /// previews as itself; empty for a turn that changed no files.
-    pub changes: Option<Vec<&'a AgentEvent>>,
+    pub changes: Option<Vec<ChangeView<'a>>>,
+    /// The entry itself, when it is a file change: drawn as one, from a diff
+    /// the host may have placed in its file (see [`ChangeView::diff`]).
+    pub entry_change: Option<ChangeView<'a>>,
     pub protocol: Protocol,
     pub mode: PresentationMode,
     pub target: PreviewTarget,
@@ -37,6 +42,17 @@ pub struct PreviewView<'a> {
     pub file_target: Option<FileTarget>,
     pub requested_scroll: u16,
     pub fullscreen: bool,
+}
+
+/// One file change as the preview draws it.
+pub struct ChangeView<'a> {
+    /// The files it touched. Empty for a diff that names its own files in its
+    /// headers, as a whole-turn snapshot does.
+    pub paths: &'a [String],
+    /// The diff to draw, or `None` when the provider reported none. It may
+    /// differ from what the provider sent: a snippet that gave no position
+    /// can have had one found for it, so its lines can be numbered.
+    pub diff: Option<Cow<'a, str>>,
 }
 
 pub struct FileTarget {
@@ -149,17 +165,14 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
                 Style::default().fg(palette::MUTED_TEXT),
             )));
         }
-        for event in changes {
+        for change in changes {
             lines.push(Line::from(""));
-            lines.extend(
-                change_lines(event, view.mode)
-                    .unwrap_or_else(|| detail_lines(event, view, false, None)),
-            );
+            lines.extend(change_lines(change, view.mode));
         }
         return lines;
     }
-    if let Some(change) = change_lines(entry.event, view.mode) {
-        lines.extend(change);
+    if let Some(change) = &view.entry_change {
+        lines.extend(change_lines(change, view.mode));
         return lines;
     }
     let suspicious = view.mode == PresentationMode::Pretty && suspicious_shell_success(entry.event);
@@ -173,48 +186,42 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
 }
 
 /// A file change's paths and its diff, drawn by [`diff_block_lines`] so each
-/// file's code is highlighted in its own language. `None` for any other
-/// event.
+/// file's code is highlighted in its own language and numbered.
 ///
 /// The pretty presentation leaves out unchanged context and file metadata;
-/// raw shows the diff as the provider reported it.
-fn change_lines(event: &AgentEvent, mode: PresentationMode) -> Option<Vec<Line<'static>>> {
+/// raw shows every line of the diff.
+fn change_lines(change: &ChangeView<'_>, mode: PresentationMode) -> Vec<Line<'static>> {
     let compact = mode == PresentationMode::Pretty;
-    let color = message_text_color(event.tag());
-    match event {
-        AgentEvent::FileChanged { paths, diff, .. } => {
-            let mut lines: Vec<Line<'static>> = paths
-                .iter()
-                .map(|path| {
-                    Line::from(Span::styled(
-                        format!("{DETAIL_INDENT}{path}"),
-                        Style::default().fg(color),
-                    ))
-                })
-                .collect();
-            match diff.as_deref().filter(|diff| !diff.is_empty()) {
-                Some(diff) => {
-                    // A diff for several files names each in its headers; a
-                    // single file's may not, so the path says what it is.
-                    let path = match paths.as_slice() {
-                        [path] => Some(path.as_str()),
-                        _ => None,
-                    };
-                    lines.push(Line::from(""));
-                    lines.extend(diff_block_lines(diff, path, compact, DETAIL_INDENT));
-                }
-                None => lines.push(Line::from(Span::styled(
-                    format!("{DETAIL_INDENT}no diff reported"),
-                    Style::default().fg(palette::MUTED_TEXT),
-                ))),
+    let color = message_text_color("files");
+    let mut lines: Vec<Line<'static>> = change
+        .paths
+        .iter()
+        .map(|path| {
+            Line::from(Span::styled(
+                format!("{DETAIL_INDENT}{path}"),
+                Style::default().fg(color),
+            ))
+        })
+        .collect();
+    match change.diff.as_deref().filter(|diff| !diff.is_empty()) {
+        Some(diff) => {
+            // A diff for several files names each in its headers; a single
+            // file's may not, so the path says what it is.
+            let path = match change.paths {
+                [path] => Some(path.as_str()),
+                _ => None,
+            };
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
             }
-            Some(lines)
+            lines.extend(diff_block_lines(diff, path, compact, DETAIL_INDENT));
         }
-        AgentEvent::DiffUpdated { diff } => {
-            Some(diff_block_lines(diff, None, compact, DETAIL_INDENT))
-        }
-        _ => None,
+        None => lines.push(Line::from(Span::styled(
+            format!("{DETAIL_INDENT}no diff reported"),
+            Style::default().fg(palette::MUTED_TEXT),
+        ))),
     }
+    lines
 }
 
 /// One event's presented detail blocks, a blank line between each.

@@ -196,8 +196,11 @@ in the full-screen preview `j`/`k` scroll too. On a conversation line (a message
 branch marker), the preview shows the file changes the agent made during that
 entry's turn — the same stretch `e` lists — rather than the line itself.
 Diffs mark additions and removals with a green `+` and a red `-` and highlight
-the code in the language of each file's extension; `v` switches between only
-the changed lines and the whole diff as reported. Raw, log, quota, and transcript
+the code in the language of each file's extension, with each line's number in
+the file beside it; `v` switches between only the changed lines and the whole
+diff as reported. Claude's edits carry no line numbers, so they are found in
+the file as it is now: an edit that has since been changed again is shown
+unnumbered. Raw, log, quota, and transcript
 use `j`/`k` plus `g`/`G` to navigate. In the raw view, `v` switches between
 Styra's captured app-server wire traffic and the provider's native persisted
 session JSONL (when the provider still has it).

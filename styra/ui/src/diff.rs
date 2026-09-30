@@ -11,6 +11,11 @@
 //!
 //! Code in a language the highlighter does not know keeps the plain
 //! rendering: the whole line green or red.
+//!
+//! Each code line is numbered from its hunk header (`@@ -12,3 +12,4 @@`): a
+//! removal with the line it had in the old file, anything else with its line
+//! in the new one. A hunk whose header gives no position — Claude's snippets,
+//! where the host could not place them — leaves the column blank.
 
 use crate::code::with_gutter;
 use crate::markdown::syntax_highlighted_code_lines;
@@ -41,12 +46,20 @@ pub fn diff_block_lines(
 pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut language = path.and_then(language_of);
-    let mut hunk: Vec<&str> = Vec::new();
+    let mut hunk: Vec<(&str, Option<u32>)> = Vec::new();
     let mut in_hunk = false;
+    let width = number_width(text);
+    // The next old and new line numbers, while inside a hunk that gave them.
+    let mut next: Option<(u32, u32)> = None;
+    let flush =
+        |lines: &mut Vec<Line<'static>>,
+         hunk: &mut Vec<(&str, Option<u32>)>,
+         language: &Option<String>| { flush(lines, hunk, language.as_deref(), width) };
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("diff --git ") {
-            flush(&mut lines, &mut hunk, language.as_deref());
+            flush(&mut lines, &mut hunk, &language);
             in_hunk = false;
+            next = None;
             let named = rest
                 .rsplit_once(" b/")
                 .map(|(_, path)| path)
@@ -54,8 +67,9 @@ pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> 
             language = language_of(named).or(language);
             lines.push(header(if compact { named } else { line }, palette::ACCENT));
         } else if line.starts_with("@@") {
-            flush(&mut lines, &mut hunk, language.as_deref());
+            flush(&mut lines, &mut hunk, &language);
             in_hunk = true;
+            next = hunk_range(line).map(|(old, _, new, _)| (old, new));
             lines.push(header(line, palette::ACCENT));
         } else if !in_hunk || is_file_marker(line) {
             // Everything between a file header and its first hunk describes
@@ -66,19 +80,62 @@ pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> 
                 language = language_of(named).or(language);
             }
             if is_code(line) && !is_file_marker(line) {
-                hunk.push(line);
+                hunk.push((line, None));
             } else if !compact {
-                flush(&mut lines, &mut hunk, language.as_deref());
+                flush(&mut lines, &mut hunk, &language);
                 lines.push(header(line, palette::TEXT));
             }
-        } else if compact && !is_change(line) {
-            // Unchanged context, and `\ No newline at end of file`.
+        } else if !is_code(line) {
+            // `\ No newline at end of file`, which is no line of either file.
+            if !compact {
+                hunk.push((line, None));
+            }
         } else {
-            hunk.push(line);
+            let number = next.as_mut().map(|(old, new)| {
+                let number = if line.starts_with('-') { *old } else { *new };
+                if !line.starts_with('+') {
+                    *old += 1;
+                }
+                if !line.starts_with('-') {
+                    *new += 1;
+                }
+                number
+            });
+            // Context still counts toward the numbers even where it is not
+            // shown.
+            if !compact || is_change(line) {
+                hunk.push((line, number));
+            }
         }
     }
-    flush(&mut lines, &mut hunk, language.as_deref());
+    flush(&mut lines, &mut hunk, &language);
     lines
+}
+
+/// A hunk header's old start and length and new start and length. A length
+/// left out is one, as git writes it.
+fn hunk_range(line: &str) -> Option<(u32, u32, u32, u32)> {
+    let mut parts = line.strip_prefix("@@ ")?.split_whitespace();
+    let side = |part: Option<&str>, sign: char| -> Option<(u32, u32)> {
+        let range = part?.strip_prefix(sign)?;
+        match range.split_once(',') {
+            Some((start, len)) => Some((start.parse().ok()?, len.parse().ok()?)),
+            None => Some((range.parse().ok()?, 1)),
+        }
+    };
+    let (old, old_len) = side(parts.next(), '-')?;
+    let (new, new_len) = side(parts.next(), '+')?;
+    Some((old, old_len, new, new_len))
+}
+
+/// Digits in the largest line number any hunk reaches, so the column lines
+/// up; zero when no hunk gives a position and there is no column at all.
+fn number_width(text: &str) -> usize {
+    text.lines()
+        .filter_map(hunk_range)
+        .map(|(old, old_len, new, new_len)| (old + old_len).max(new + new_len))
+        .max()
+        .map_or(0, |last| last.to_string().len())
 }
 
 /// The `---`/`+++` lines naming a file's two sides. A removed line whose code
@@ -120,13 +177,27 @@ fn language_of(path: &str) -> Option<String> {
 }
 
 /// Render the collected run of code lines and empty it.
-fn flush(lines: &mut Vec<Line<'static>>, hunk: &mut Vec<&str>, language: Option<&str>) {
+fn flush(
+    lines: &mut Vec<Line<'static>>,
+    hunk: &mut Vec<(&str, Option<u32>)>,
+    language: Option<&str>,
+    width: usize,
+) {
     if hunk.is_empty() {
         return;
     }
+    let number = |number: Option<u32>| -> Option<Span<'static>> {
+        (width > 0).then(|| {
+            let text = match number {
+                Some(number) => format!("{number:>width$} "),
+                None => " ".repeat(width + 1),
+            };
+            Span::styled(text, Style::default().fg(palette::INACTIVE))
+        })
+    };
     let code: Vec<String> = hunk
         .iter()
-        .map(|line| line.get(1..).unwrap_or_default().replace('\t', "    "))
+        .map(|(line, _)| line.get(1..).unwrap_or_default().replace('\t', "    "))
         .collect();
     let highlighted = language
         .and_then(|language| syntax_highlighted_code_lines(&code.join("\n"), Some(language), ""))
@@ -135,8 +206,9 @@ fn flush(lines: &mut Vec<Line<'static>>, hunk: &mut Vec<&str>, language: Option<
         .filter(|highlighted| highlighted.len() == hunk.len());
     match highlighted {
         Some(highlighted) => {
-            for (line, code) in hunk.iter().zip(highlighted) {
-                let mut spans = vec![sign(line)];
+            for (&(line, at), code) in hunk.iter().zip(highlighted) {
+                let mut spans: Vec<Span<'static>> = number(at).into_iter().collect();
+                spans.push(sign(line));
                 spans.extend(
                     code.spans
                         .into_iter()
@@ -146,16 +218,16 @@ fn flush(lines: &mut Vec<Line<'static>>, hunk: &mut Vec<&str>, language: Option<
             }
         }
         None => {
-            for (line, code) in hunk.iter().zip(code) {
+            for (&(line, at), code) in hunk.iter().zip(code) {
                 let color = match line.chars().next() {
                     Some('+') => palette::SUCCESS,
                     Some('-') => palette::ERROR,
                     _ => palette::TEXT,
                 };
-                lines.push(Line::from(vec![
-                    sign(line),
-                    Span::styled(code, Style::default().fg(color)),
-                ]));
+                let mut spans: Vec<Span<'static>> = number(at).into_iter().collect();
+                spans.push(sign(line));
+                spans.push(Span::styled(code, Style::default().fg(color)));
+                lines.push(Line::from(spans));
             }
         }
     }
@@ -251,8 +323,48 @@ mod tests {
         let compact: Vec<String> = diff_body_lines(diff, None, true).iter().map(text).collect();
         assert_eq!(
             compact,
-            ["f.rs", "@@ -1,3 +1,3 @@", "-fn gone() {}", "+fn added() {}"]
+            [
+                "f.rs",
+                "@@ -1,3 +1,3 @@",
+                "2 -fn gone() {}",
+                "2 +fn added() {}"
+            ],
+            "the hidden context still counts toward the numbers"
         );
+    }
+
+    /// A removal is numbered in the old file and anything else in the new
+    /// one, padded so the column lines up across the diff.
+    #[test]
+    fn code_lines_are_numbered_from_their_hunk() {
+        let diff = "@@ -8,3 +8,4 @@\n a\n-b\n+c\n+d\n e\n@@ edit @@\n+f";
+        let texts: Vec<String> = diff_body_lines(diff, None, false)
+            .iter()
+            .map(text)
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "@@ -8,3 +8,4 @@",
+                " 8  a",
+                " 9 -b",
+                " 9 +c",
+                "10 +d",
+                "11  e",
+                "@@ edit @@",
+                "   +f",
+            ],
+            "a hunk with no position leaves the column blank"
+        );
+    }
+
+    #[test]
+    fn a_diff_with_no_positions_has_no_number_column() {
+        let texts: Vec<String> = diff_body_lines("@@ edit @@\n-a\n+b", None, false)
+            .iter()
+            .map(text)
+            .collect();
+        assert_eq!(texts, ["@@ edit @@", "-a", "+b"]);
     }
 
     #[test]
