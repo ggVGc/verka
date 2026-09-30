@@ -352,6 +352,9 @@ fn render_links<'a>(
     // identifies a destination rather than parenthesised prose.
     let mut appended = vec![false; spans.len()];
     let mut selected = vec![false; spans.len()];
+    // Every entry is underlined, as a link already is, which is what
+    // [`is_entry_style`] recognises it by once it is on screen.
+    let mut underlined = vec![false; spans.len()];
     let is_destination = |index: usize| {
         index >= 1
             && index + 2 < spans.len()
@@ -367,6 +370,7 @@ fn render_links<'a>(
             && is_file_reference(&spans[index].content)
             && !is_destination(index + 1)
         {
+            underlined[index] = true;
             let entry = *entries;
             *entries += 1;
             if highlight == Some(entry) {
@@ -377,6 +381,7 @@ fn render_links<'a>(
         if !is_destination(index) {
             continue;
         }
+        underlined[index - 1] = true;
         appended[index] = true;
         appended[index + 1] = true;
         appended[index + 2] = true;
@@ -407,7 +412,10 @@ fn render_links<'a>(
             *span = true;
         }
     }
-    for (span, selected) in spans.iter_mut().zip(&selected) {
+    for ((span, selected), underlined) in spans.iter_mut().zip(&selected).zip(&underlined) {
+        if *underlined {
+            span.style = span.style.add_modifier(Modifier::UNDERLINED);
+        }
         if *selected {
             span.style = span.style.patch(entry_highlight_style());
         }
@@ -732,11 +740,26 @@ fn inline_style(
     active_link: Option<EntryIndex>,
     highlight: Option<EntryIndex>,
 ) -> Style {
-    if highlight.is_some_and(|highlight| active_link == Some(highlight)) {
+    let Some(entry) = active_link else {
+        return style;
+    };
+    let style = style.add_modifier(Modifier::UNDERLINED);
+    if highlight == Some(entry) {
         style.patch(entry_highlight_style())
     } else {
         style
     }
+}
+
+/// Whether a drawn cell belongs to an entry — a link or a file reference —
+/// so that link navigation can wash out everything else on screen.
+///
+/// Entries are the only underlined text Styra draws, bar a level-one heading,
+/// which is told apart by the accent fill it is drawn on.
+pub fn is_entry_style(style: Style) -> bool {
+    style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND)
+        || (style.add_modifier.contains(Modifier::UNDERLINED)
+            && style.bg != StyraStyleSheet.heading(1).bg)
 }
 
 fn current_style(styles: &[Style]) -> Style {

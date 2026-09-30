@@ -285,6 +285,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                     navigator: navigator.as_ref(),
                     entry_log: entry_log.as_ref(),
                     preview: preview.as_ref(),
+                    link_mode: app.link_highlight.is_some(),
                 }),
             )
         }
