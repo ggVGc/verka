@@ -141,11 +141,7 @@ mod tests {
                 auto_retry: true,
             },
         );
-        for expected in [
-            "codex: 80%",
-            "rate-limit retry: on",
-            "/workspace",
-        ] {
+        for expected in ["codex: 80%", "rate-limit retry: on", "/workspace"] {
             assert!(output.contains(expected), "missing {expected}: {output}");
         }
     }

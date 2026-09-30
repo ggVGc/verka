@@ -13,7 +13,7 @@ pub const MUTED_TEXT: Color = Color::Gray;
 /// dark gray that previously made this information look disabled.
 pub const ADDITIONAL_INFO: Color = Color::Rgb(211, 158, 96);
 
-pub const ACCENT: Color = Color::Rgb(191,185,1);
+pub const ACCENT: Color = Color::Rgb(191, 185, 1);
 pub const LIGHT_ACCENT: Color = Color::Rgb(180, 110, 180);
 pub const INFO: Color = Color::Rgb(250, 182, 179);
 pub const SUCCESS: Color = Color::Green;

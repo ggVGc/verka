@@ -626,7 +626,10 @@ mod tests {
 
         let mut refused = reading(Provider::Codex, "5h", QuotaStatus::Exhausted, Some(1.0));
         refused.resets_at_ms = Some(9_000);
-        assert!(footer_ticks(&[&refused], 1_000), "the moment is still ahead");
+        assert!(
+            footer_ticks(&[&refused], 1_000),
+            "the moment is still ahead"
+        );
         assert!(
             !footer_ticks(&[&refused], 9_001),
             "and the footer has stopped quoting it"
