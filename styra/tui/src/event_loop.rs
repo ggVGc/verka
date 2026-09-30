@@ -494,6 +494,30 @@ fn meter_frames(
     }
 }
 
+/// What the screen says while a Git branch and linked workspace are made,
+/// whichever key asked for them.
+const CREATING_WORKTREE: &str = "creating a Git branch and workspace…";
+
+/// Run a synchronous call the loop has to wait out, behind [`App::busy`].
+///
+/// Nothing reads the keyboard until `work` returns, so the notice takes the
+/// message box's place and is painted before the call is made. Keys pressed
+/// under it are thrown away afterwards rather than answered late — least of
+/// all by the event list, where a stray `q` quits.
+fn blocked_on<T>(
+    terminal: &mut dyn Ui,
+    app: &mut App,
+    notice: &str,
+    work: impl FnOnce(&mut App) -> T,
+) -> Result<T> {
+    app.busy = Some(notice.to_owned());
+    presentation::draw_application(terminal, app)?;
+    let done = work(app);
+    app.busy = None;
+    while terminal.poll_event(Duration::ZERO)?.is_some() {}
+    Ok(done)
+}
+
 /// Return the running interaction an in-client transition explicitly stops.
 pub fn stops_current_interaction(outcome: &RunOutcome, live: &Attachment) -> bool {
     match (outcome, live) {
@@ -1094,16 +1118,6 @@ pub fn run(
                         audio.toggle(app, client.clone());
                         continue;
                     }
-                    // Ctrl-Enter branches the repository and checks out a
-                    // linked worktree before the prompt is even sent, which
-                    // takes long enough to look like a hang. The send is
-                    // synchronous, so the only moment left to say what is
-                    // happening is this one: put the notice up and paint it
-                    // before handing the key over.
-                    if input::creates_worktree(app, key) {
-                        app.show_action_message("creating a new Git workspace…");
-                        presentation::draw_application(terminal, app)?;
-                    }
                     input::handle_input_key(app, client, &workspace_id, live, key)
                 }
             }
@@ -1237,14 +1251,23 @@ pub fn run(
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
             // Naming the branch asks the model for a topic and the checkout
             // copies the repository out, which together take long enough to
-            // look like a hang. The call is synchronous, so the notice goes up
-            // and is painted before it is made — and again before the restart,
-            // which stops the agent and waits for it to go.
-            Some(Request::CreateSessionWorktree) => {
+            // look like a hang. `W` and `Ctrl-Enter` differ only in what the
+            // checkout is made for: a Session already running, which has to be
+            // restarted into it, or one that the first prompt launches there.
+            Some(Request::CreateWorktree { first_prompt }) => {
+                if let Some(message) = first_prompt {
+                    // The launch branches and checks out before it sends, and
+                    // reports its own failure — restoring the message box.
+                    blocked_on(terminal, app, CREATING_WORKTREE, |app| {
+                        session::submit_message(app, client, &workspace_id, live, message, true)
+                    })?;
+                    continue;
+                }
                 let session_id = app.session_id.clone();
-                app.show_action_message("creating a linked workspace…");
-                presentation::draw_application(terminal, app)?;
-                if let Err(error) = client.create_session_worktree(&session_id) {
+                let created = blocked_on(terminal, app, CREATING_WORKTREE, |_| {
+                    client.create_session_worktree(&session_id)
+                })?;
+                if let Err(error) = created {
                     app.show_action_message(format!(
                         "could not create a linked workspace: {error}"
                     ));
@@ -1255,9 +1278,13 @@ pub fn run(
                 // the directory it started in. Reopening the Session afterwards
                 // is what puts the checkout on screen: the view then reads its
                 // directory from the revived interaction.
-                app.show_action_message("restarting the interaction in it…");
-                presentation::draw_application(terminal, app)?;
-                match session::restart(app, client, live) {
+                let restarted = blocked_on(
+                    terminal,
+                    app,
+                    "restarting the interaction in the linked workspace…",
+                    |app| session::restart(app, client, live),
+                )?;
+                match restarted {
                     Ok(_) => return Ok(RunOutcome::OpenSession(session_id)),
                     Err(error) => app.show_action_message(format!(
                         "created the linked workspace, but could not restart in it ({error}); it will be used when this Session next launches"

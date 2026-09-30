@@ -1,7 +1,7 @@
 //! Top-level main-application layout and overlay ordering.
 
 use crate::{
-    answer, driva, event_list, files, footer, interactions, launcher, log, messages, modal_input,
+    answer, busy, driva, event_list, files, footer, interactions, launcher, log, messages, modal_input,
     overlays, preview, quota, raw, recording, transcript, PanelId, RenderFeedback, ScrollFeedback,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -52,6 +52,10 @@ pub struct ApplicationOverlays<'a> {
     pub insert: Option<overlays::InsertPromptView<'a>>,
     pub branch: Option<overlays::BranchPromptView>,
     pub tags: Option<overlays::TagPickerView<'a>>,
+    /// A synchronous call the operator started, still running. It takes the
+    /// message box's place and covers everything else: no key is read until
+    /// it returns, so nothing beneath it should look like it would answer one.
+    pub busy: Option<busy::BusyView<'a>>,
 }
 
 pub struct ApplicationView<'a> {
@@ -75,6 +79,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             measured,
         );
         render_reading_overlays(frame, &view.overlays);
+        if let Some(busy) = &view.overlays.busy {
+            busy::render(frame, busy);
+        }
         return feedback;
     }
     let message_height =
@@ -150,7 +157,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
         messages::render(frame, view.notices, chunks[1]);
     }
     footer::render(frame, view.footer, chunks[2]);
-    if let Some(capture) = view.overlays.recording {
+    if view.overlays.busy.is_some() {
+        // Drawn last, below; the box it replaces is not drawn at all.
+    } else if let Some(capture) = view.overlays.recording {
         recording::render(frame, capture);
     } else if let Some(input) = view.overlays.input {
         modal_input::render(frame, input);
@@ -167,6 +176,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     }
     if let Some(launcher) = view.overlays.launcher {
         launcher::render_launcher(frame, launcher, frame.area());
+    }
+    if let Some(busy) = &view.overlays.busy {
+        busy::render(frame, busy);
     }
     feedback
 }

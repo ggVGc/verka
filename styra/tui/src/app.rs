@@ -353,6 +353,11 @@ pub struct App {
     /// would type into the box finish, cancel, or boost the recording instead:
     /// there is no text being edited to compete with them.
     pub recording: Option<Recorded>,
+    /// What the client is blocked doing, while a synchronous call the operator
+    /// started is running — creating a Git workspace, above all. While it is
+    /// set the message box is replaced by this notice: no key is read until
+    /// the call returns, so a box to type into would be a lie.
+    pub busy: Option<String>,
     /// The open "insert a path" prompt, while the operator is using it; see
     /// [`crate::insert`]. Held here rather than in [`Composer`] because its
     /// second question is about the sandbox, not about the message.
@@ -385,8 +390,11 @@ pub enum Request {
     NextLiveInteraction,
     /// Return to the blank start screen without stopping the current interaction.
     NewSession,
-    /// Give the current Session a linked Git workspace and branch.
-    CreateSessionWorktree,
+    /// Give a Session a Git branch and linked workspace of its own: `W` asks
+    /// it for the Session being viewed, and `Ctrl-Enter` for the one its
+    /// `first_prompt` is about to start. Either way the checkout is made
+    /// before the agent runs in it, so both wait behind the same notice.
+    CreateWorktree { first_prompt: Option<String> },
     /// Open the selected entry in the Files view in the configured opener.
     EditFile,
     /// Open the live Session's sandbox shell in a terminal window of its own.
@@ -518,6 +526,7 @@ impl App {
             link_highlight: None,
             branch_prompt: None,
             recording: None,
+            busy: None,
             insert: None,
             requests: VecDeque::new(),
         }

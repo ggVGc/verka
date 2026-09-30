@@ -15,6 +15,7 @@ use std::time::Duration;
 
 pub mod answer;
 pub mod application;
+pub mod busy;
 pub mod chrome;
 pub mod code;
 pub mod diff;

@@ -199,7 +199,7 @@ pub fn handle_list_key(
         }
         k if GLOBAL_WORKSPACES.matches(k) => return app.ask(Request::Workspace),
         k if GLOBAL_SESSION_WORKTREE.matches(k) && !app.session_id.is_empty() => {
-            return app.ask(Request::CreateSessionWorktree)
+            return app.ask(Request::CreateWorktree { first_prompt: None })
         }
         k if GLOBAL_SESSIONS.matches(k) => return app.ask(Request::Sessions),
         // Newly idle work needs attention first; without one, `n` walks every
@@ -640,9 +640,10 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
 /// branch and linked workspace as it sends the prompt, with no standing option
 /// to leak into a later Session.
 ///
-/// Asked from outside as well as here, because branching takes long enough to
-/// be worth saying on screen before the send blocks on it.
-pub fn creates_worktree(app: &App, key: KeyEvent) -> bool {
+/// Such a send is handed to the event loop rather than made here, the same
+/// request `W` makes for a Session that already exists: branching blocks long
+/// enough to need the notice only the loop can paint.
+fn creates_worktree(app: &App, key: KeyEvent) -> bool {
     EDITOR_SEND_IN_BRANCH.matches(key)
         && app.session_id.is_empty()
         // Nothing is sent, and so nothing is branched, for a blank box.
@@ -656,7 +657,6 @@ pub fn handle_input_key(
     live: &mut Attachment,
     key: KeyEvent,
 ) {
-    let create_worktree = creates_worktree(app, key);
     match key {
         k if GLOBAL_LEAVE_MESSAGE.matches(k) => app.enter_list(),
         // Choosing a shape is part of writing the message, so it lives in the
@@ -664,9 +664,16 @@ pub fn handle_input_key(
         k if EDITOR_CONTRACT.matches(k) => app.outbox.cycle_contract(),
         k if EDITOR_NEWLINE.matches(k) => app.composer.newline(),
         k if EDITOR_SEND.matches(k) || EDITOR_SEND_IN_BRANCH.matches(k) => {
+            let create_worktree = creates_worktree(app, k);
             if let Some(message) = app.take_message() {
                 app.enter_list();
-                session::submit_message(app, client, workspace_id, live, message, create_worktree);
+                if create_worktree {
+                    app.ask(Request::CreateWorktree {
+                        first_prompt: Some(message),
+                    });
+                } else {
+                    session::submit_message(app, client, workspace_id, live, message, false);
+                }
             }
         }
         k if EDITOR_DELETE_WORD.matches(k) => app.composer.delete_word(),
@@ -926,9 +933,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// The event loop asks this before dispatching the key, so that it can
-    /// paint the "creating…" notice over the pause the branching costs. It has
-    /// to agree with the send itself about which presses actually branch.
+    /// Only these presses are handed to the event loop to branch; every other
+    /// send goes out from the message box as it is.
     #[test]
     fn only_a_typed_first_prompt_sent_with_control_enter_branches() {
         let root = tree("creates-worktree");
@@ -958,6 +964,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// `Ctrl-Enter` asks for the same thing `W` does, carrying the prompt the
+    /// new checkout is for, so both wait behind the event loop's one notice.
+    #[test]
+    fn control_enter_hands_the_first_prompt_to_the_worktree_request() {
+        let root = tree("first-prompt-worktree");
+        let mut app = app(&root);
+        app.enter_input();
+        app.composer.set("start here".into());
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+
+        handle_input_key(
+            &mut app,
+            &client,
+            "workspace-1",
+            &mut live,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::CreateWorktree {
+                first_prompt: Some("start here".into())
+            })
+        );
+        assert!(app.composer.text.is_empty());
+        assert_eq!(live, Attachment::Detached, "nothing launches from the box");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn uppercase_w_requests_a_worktree_for_an_existing_session() {
         let root = tree("session-worktree");
@@ -979,7 +1015,10 @@ mod tests {
             &root.join("preferences.toml"),
         );
 
-        assert_eq!(app.take_request(), Some(Request::CreateSessionWorktree));
+        assert_eq!(
+            app.take_request(),
+            Some(Request::CreateWorktree { first_prompt: None })
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

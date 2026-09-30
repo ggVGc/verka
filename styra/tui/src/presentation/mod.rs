@@ -497,6 +497,10 @@ fn draw_main(
             insert,
             branch,
             tags,
+            busy: app
+                .busy
+                .as_deref()
+                .map(|message| styra_ui::busy::BusyView { message }),
         },
     };
     ui.render_application(&application)
@@ -777,6 +781,29 @@ mod tests {
         assert!(
             screen.locate("half a sentence").is_none(),
             "the buffer is not being typed into while the microphone is open"
+        );
+    }
+
+    /// Creating a Git workspace blocks the loop, so while it runs the message
+    /// box is replaced by a notice saying so: a box left on screen would offer
+    /// typing that nothing reads.
+    #[test]
+    fn a_blocking_call_replaces_the_message_box_with_its_notice() {
+        let mut app = test_support::app("");
+        app.enter_input();
+        app.composer.insert("start on the picker");
+        app.busy = Some("creating a new Git workspace…".into());
+
+        let screen = test_support::screen(&app);
+
+        assert!(
+            screen.all().contains("creating a new Git workspace…"),
+            "{}",
+            screen.all()
+        );
+        assert!(
+            screen.locate("start on the picker").is_none(),
+            "the message box is gone while the client is blocked"
         );
     }
 
