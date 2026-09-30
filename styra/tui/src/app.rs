@@ -1114,7 +1114,7 @@ impl App {
             .find_link_from(start, 0)
             .or_else(|| self.find_link_before(start));
         if self.link_highlight.is_none() {
-            self.show_action_message("no Markdown links in the visible conversation");
+            self.show_action_message("no links or file references in the visible conversation");
         }
         self.reveal_highlighted_link();
     }
@@ -3453,6 +3453,32 @@ mod tests {
         assert_eq!(
             app.link_highlight,
             Some(LinkHighlight { entry: 0, link: 1 })
+        );
+    }
+
+    #[test]
+    fn a_backticked_file_reference_is_selectable_like_a_link() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage {
+            text: "- **Field:** `/tmp/spec.rs:44` declares `default_model: &str`".into(),
+        });
+        app.timeline.selected = 0;
+
+        app.highlight_first_link();
+        assert_eq!(
+            app.link_highlight,
+            Some(LinkHighlight { entry: 0, link: 0 })
+        );
+        let (written, path, line) = app.highlighted_link_target().unwrap();
+        assert_eq!(written, "/tmp/spec.rs:44");
+        assert_eq!(path, PathBuf::from("/tmp/spec.rs"));
+        assert_eq!(line, Some(44));
+
+        // The code that is not a filename is not a second entry.
+        app.highlight_next_link();
+        assert_eq!(
+            app.link_highlight,
+            Some(LinkHighlight { entry: 0, link: 0 })
         );
     }
 
