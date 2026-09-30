@@ -326,8 +326,12 @@ fn open_path(app: &mut App, config: &dyn Configuration, path: &Path) {
 
 /// Global actions which operate on the current interaction without dismissing
 /// its navigator. They fall through to the ordinary list-key handler below.
+/// `n` is among them: stepping to the next interaction keeps the list open on
+/// the interaction it lands on.
 fn interaction_navigator_passthrough(key: crossterm::event::KeyEvent) -> bool {
-    keys::GLOBAL_FOCUS_MESSAGE.matches(key) || keys::GLOBAL_STOP.matches(key)
+    keys::GLOBAL_FOCUS_MESSAGE.matches(key)
+        || keys::GLOBAL_STOP.matches(key)
+        || keys::GLOBAL_NEXT_LIVE.matches(key)
 }
 
 /// Load the interaction the navigator's cursor has moved onto, if it is not
@@ -1231,9 +1235,9 @@ pub fn run(
                 app.interactions.open(interactions, workspaces);
                 interactions_refreshed = Instant::now();
             }
-            // Asked with the navigator closed, so the interaction is loaded
-            // outright and the navigator stays closed. Newly idle work takes
-            // priority; otherwise this walks every live interaction.
+            // The interaction is loaded outright rather than cursored, and the
+            // navigator is left as it was: open or closed. Newly idle work
+            // takes priority; otherwise this walks every live interaction.
             Some(Request::NextLiveInteraction) => {
                 // The client's snapshot is up to a refresh old, and an
                 // interaction that has since stopped is not one to step onto.
