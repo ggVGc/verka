@@ -15,6 +15,9 @@ pub struct Defaults;
 /// The program files open in.
 const FILE_OPENER: &str = "nvim";
 
+/// The browser web addresses open in. Graphical, so it gets no terminal.
+const BROWSER: &str = "firefox";
+
 /// The terminal emulator a window of its own is asked of. Both defaults need
 /// one — Neovim draws on a terminal, and a shell is typed into one — and Styra
 /// is already using the terminal it was started in.
@@ -30,6 +33,12 @@ impl Configuration for Defaults {
     fn open_file(&self, path: &Path) -> Command {
         let mut command = in_terminal();
         command.arg(FILE_OPENER).arg(path);
+        command
+    }
+
+    fn open_url(&self, url: &str) -> Command {
+        let mut command = Command::new(BROWSER);
+        command.arg(url);
         command
     }
 
@@ -74,6 +83,14 @@ mod tests {
                 OsStr::new("/work/src/monitor.c"),
             ]
         );
+    }
+
+    #[test]
+    fn web_addresses_open_in_firefox_without_a_terminal() {
+        let command = Defaults.open_url("https://example.com/a");
+
+        assert_eq!(command.get_program(), OsStr::new("firefox"));
+        assert_eq!(argv(&command), [OsStr::new("https://example.com/a")]);
     }
 
     #[test]

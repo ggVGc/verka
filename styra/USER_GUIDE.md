@@ -208,7 +208,7 @@ session JSONL (when the provider still has it).
 `f` starts link highlighting from the selected event, wrapping to the bottom-most earlier link if no later link remains. While it is on, everything but the links and file references is dimmed. It opens the event list when pressed from transcript or
 full-screen preview. While a link is highlighted, `j` and `k` move forward and
 backward through Markdown links and backticked file references (`src/app.rs:120`)
-across the visible conversation, `Enter` opens the link in the configured editor, and `Esc` returns `j`/`k` to normal list
+across the visible conversation, `Enter` opens the link in the configured editor (or, for an `http`/`https` address, the configured browser), and `Esc` returns `j`/`k` to normal list
 navigation.
 
 In Files: `e` opens the selected path in the configured opener, `a` switches

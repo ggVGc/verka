@@ -394,7 +394,9 @@ pub enum Request {
     /// it for the Session being viewed, and `Ctrl-Enter` for the one its
     /// `first_prompt` is about to start. Either way the checkout is made
     /// before the agent runs in it, so both wait behind the same notice.
-    CreateWorktree { first_prompt: Option<String> },
+    CreateWorktree {
+        first_prompt: Option<String>,
+    },
     /// Open the selected entry in the Files view in the configured opener.
     EditFile,
     /// Open the live Session's sandbox shell in a terminal window of its own.
@@ -407,6 +409,8 @@ pub enum Request {
     OpenDirectory,
     /// Open a Markdown link's resolved path in the configured editor.
     OpenPath(PathBuf),
+    /// Open a web address in the configured browser.
+    OpenUrl(String),
     /// Choose which Driva templates the next interaction launches with. The
     /// list of them lives on the server, so the event loop fetches it and runs
     /// the picker.
@@ -1163,25 +1167,44 @@ impl App {
         self.link_highlight = None;
     }
 
-    /// Ask the event loop to open the selected Markdown link in the configured
-    /// editor. Relative destinations are rooted in the current workspace, as
-    /// file citations were before link navigation replaced their picker.
+    /// Ask the event loop to open the selected link: a web address in the
+    /// configured browser, anything else in the configured editor. Relative
+    /// destinations are rooted in the current workspace, as file citations
+    /// were before link navigation replaced their picker.
     pub fn open_highlighted_link(&mut self) {
-        let Some((_, path, _)) = self.highlighted_link_target() else {
+        let Some(destination) = self.highlighted_link_destination() else {
             return self.show_action_message("selected link no longer exists");
         };
-        self.ask(Request::OpenPath(path));
+        if is_web_address(&destination) {
+            self.ask(Request::OpenUrl(destination));
+        } else if let Some((_, path, _)) = self.highlighted_link_target() {
+            self.ask(Request::OpenPath(path));
+        }
         self.clear_link_highlight();
     }
 
-    /// The active Markdown link as written, where it resolves on this host,
-    /// and its optional one-based line number. The preview and opener share
-    /// this so a `path:line` citation never attempts to read a file literally
-    /// named `path:line`.
+    /// The active file link as written, where it resolves on this host, and
+    /// its optional one-based line number. The preview and opener share this
+    /// so a `path:line` citation never attempts to read a file literally named
+    /// `path:line`. A web address names no file, so it has no target.
     pub fn highlighted_link_target(&self) -> Option<(String, PathBuf, Option<u32>)> {
+        let destination = self.highlighted_link_destination()?;
+        if is_web_address(&destination) {
+            return None;
+        }
+        let (path, line) = split_link_location(&destination);
+        let resolved = if let Some(root) = self.workspace.root_or_current_directory() {
+            files::resolve(&root, path)
+        } else {
+            PathBuf::from(path)
+        };
+        Some((destination, resolved, line))
+    }
+
+    /// The active link's destination, exactly as the reply wrote it.
+    fn highlighted_link_destination(&self) -> Option<String> {
         let highlight = self.link_highlight?;
-        let destination = self
-            .selection
+        self.selection
             .provider
             .protocol()
             .presented_detail(
@@ -1206,14 +1229,7 @@ impl App {
                 }
             })
             .flatten()
-            .next()?;
-        let (path, line) = split_link_location(&destination);
-        let resolved = if let Some(root) = self.workspace.root_or_current_directory() {
-            files::resolve(&root, path)
-        } else {
-            PathBuf::from(path)
-        };
-        Some((destination, resolved, line))
+            .next()
     }
 
     fn find_link_from(&self, start: usize, first_link: usize) -> Option<LinkHighlight> {
@@ -1482,6 +1498,11 @@ impl App {
 /// disturbing drive-letter or colon-bearing paths. The rightmost numeric part
 /// is a line unless another numeric part precedes it, in which case it is a
 /// column and the preceding part is the line.
+/// Whether a link destination is a web page rather than a file.
+fn is_web_address(destination: &str) -> bool {
+    destination.starts_with("http://") || destination.starts_with("https://")
+}
+
 fn split_link_location(destination: &str) -> (&str, Option<u32>) {
     let Some((before_last, last)) = destination.rsplit_once(':') else {
         return (destination, None);
@@ -3453,6 +3474,31 @@ mod tests {
         assert_eq!(
             app.link_highlight,
             Some(LinkHighlight { entry: 0, link: 1 })
+        );
+    }
+
+    #[test]
+    fn a_web_link_opens_as_an_address_not_a_file() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage {
+            text: "[docs](https://example.com/docs) and [local](/tmp/local.md)".into(),
+        });
+        app.timeline.selected = 0;
+
+        app.highlight_first_link();
+        assert!(app.highlighted_link_target().is_none());
+        app.open_highlighted_link();
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenUrl("https://example.com/docs".into()))
+        );
+
+        app.highlight_first_link();
+        app.highlight_next_link();
+        app.open_highlighted_link();
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenPath(PathBuf::from("/tmp/local.md")))
         );
     }
 
