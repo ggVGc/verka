@@ -219,12 +219,15 @@ impl LiveInteractions {
     /// the jump loads only where it comes to rest. Reveals All scope for the
     /// same reason unseen idle work does: live work must not be unreachable
     /// because of the filter the navigator happens to be showing.
+    ///
+    /// The step starts from the cursor, so presses quicker than the settle
+    /// keep walking rather than landing on the same row each time.
     pub fn cursor_to_next_live(
         &mut self,
         current: &str,
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        let next = self.next_live(current)?;
+        let next = self.next_live(self.cursor(current))?;
         if self.only_current_workspace && Some(next.workspace_id.as_str()) != workspace_id {
             self.only_current_workspace = false;
         }
@@ -268,7 +271,7 @@ impl LiveInteractions {
         current: &str,
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        let next = self.next_active(current)?;
+        let next = self.next_active(self.cursor(current))?;
         if self.only_current_workspace && Some(next.workspace_id.as_str()) != workspace_id {
             self.only_current_workspace = false;
         }
@@ -944,6 +947,26 @@ mod tests {
         assert!(!live.only_current_workspace);
         // Moved like a j/k step, so the load waits for the cursor to rest.
         assert_eq!(live.cursor("current"), "elsewhere");
+    }
+
+    /// Presses quicker than the settle must keep walking the live set, so
+    /// each step starts from the cursor rather than the loaded Interaction.
+    #[test]
+    fn repeated_live_steps_walk_on_from_the_cursor() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("current", InteractionActivity::Running),
+                interaction("second", InteractionActivity::Running),
+                interaction("third", InteractionActivity::Running),
+            ],
+            vec![],
+        );
+        let first = live.cursor_to_next_live("current", None).unwrap().id;
+        let second = live.cursor_to_next_live("current", None).unwrap().id;
+
+        assert_ne!(first, second);
+        assert_eq!(live.cursor("current"), second);
     }
 
     /// An idle Interaction a client has already been shown is not what the

@@ -198,7 +198,8 @@ bindings! { INTERACTIONS = "Interactions";
         => Action::InteractionsNextWorkspace;
     INTERACTIONS_PREV_WORKSPACE: [Key::ch('K')]
         => Action::InteractionsPrevWorkspace;
-    INTERACTIONS_NEXT_LIVE: [Key::ctrl('n')] => Action::InteractionsNextLive;
+    INTERACTIONS_NEXT_LIVE: [Key::ctrl('n'), Key::code(KeyCode::Tab)]
+        => Action::InteractionsNextLive;
     INTERACTIONS_NEXT_WORKING: [Key::ch('N')]
         => Action::InteractionsNextWorking;
     INTERACTIONS_NEXT_IDLE: [Key::ctrl('a')] => Action::InteractionsNextIdle;
