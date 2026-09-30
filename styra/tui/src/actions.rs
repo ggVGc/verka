@@ -143,6 +143,7 @@ pub(crate) enum Action {
     InteractionsPrevWorkspace,
     InteractionsNextLive,
     InteractionsNextWorking,
+    InteractionsPrevWorking,
     InteractionsNextIdle,
     InteractionsScope,
     InteractionsCompleted,
@@ -363,6 +364,9 @@ impl Action {
             Self::InteractionsNextLive => "next interaction that is still running",
             Self::InteractionsNextWorking => {
                 "next interaction actively working, skipping idle ones"
+            }
+            Self::InteractionsPrevWorking => {
+                "previous interaction actively working, skipping idle ones"
             }
             Self::InteractionsNextIdle => "next interaction that went idle unseen",
             Self::InteractionsScope => "current Workspace / all Workspaces",

@@ -240,7 +240,20 @@ impl LiveInteractions {
     /// [`Self::next_live`] this skips ones idle and waiting on the operator, so
     /// the step only ever lands on work in progress.
     pub fn next_active(&self, from: &str) -> Option<InteractionSummary> {
-        let order = grouped_by_workspace(&self.items, (0..self.items.len()).collect());
+        self.step_active(from, false)
+    }
+
+    /// [`Self::next_active`] walking the other way: the previous working
+    /// Interaction in display order, wrapping past the start of the list.
+    pub fn previous_active(&self, from: &str) -> Option<InteractionSummary> {
+        self.step_active(from, true)
+    }
+
+    fn step_active(&self, from: &str, backwards: bool) -> Option<InteractionSummary> {
+        let mut order = grouped_by_workspace(&self.items, (0..self.items.len()).collect());
+        if backwards {
+            order.reverse();
+        }
         let start = order
             .iter()
             .position(|index| self.items[*index].id == from)
@@ -272,11 +285,30 @@ impl LiveInteractions {
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
         let next = self.next_active(self.cursor(current))?;
-        if self.only_current_workspace && Some(next.workspace_id.as_str()) != workspace_id {
+        self.cursor_to_active(next, current, workspace_id)
+    }
+
+    /// [`Self::cursor_to_next_active`] walking the other way.
+    pub fn cursor_to_previous_active(
+        &mut self,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        let previous = self.previous_active(self.cursor(current))?;
+        self.cursor_to_active(previous, current, workspace_id)
+    }
+
+    fn cursor_to_active(
+        &mut self,
+        target: InteractionSummary,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        if self.only_current_workspace && Some(target.workspace_id.as_str()) != workspace_id {
             self.only_current_workspace = false;
         }
-        self.move_cursor_to(next.id.clone(), current);
-        Some(next)
+        self.move_cursor_to(target.id.clone(), current);
+        Some(target)
     }
 
     /// The entry the cursor rests on. That is the Interaction on screen except
@@ -967,6 +999,32 @@ mod tests {
 
         assert_ne!(first, second);
         assert_eq!(live.cursor("current"), second);
+    }
+
+    /// The backwards step walks the working set in reverse, skipping idle
+    /// work just as the forward one does.
+    #[test]
+    fn the_backwards_working_step_reverses_the_forward_one() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("current", InteractionActivity::Running),
+                interaction("idle", InteractionActivity::Pending),
+                interaction("second", InteractionActivity::Running),
+                interaction("third", InteractionActivity::Running),
+            ],
+            vec![],
+        );
+        let forward = live.next_active("current").unwrap().id;
+        let backward = live.previous_active("current").unwrap().id;
+        assert_ne!(forward, backward);
+        assert_eq!(live.previous_active(&forward).unwrap().id, "current");
+
+        let back = live.cursor_to_previous_active("current", None).unwrap().id;
+        assert_eq!(back, backward);
+        assert_ne!(back, "idle");
+        let again = live.cursor_to_previous_active("current", None).unwrap().id;
+        assert_eq!(again, forward, "a second step walks on from the cursor");
     }
 
     /// An idle Interaction a client has already been shown is not what the

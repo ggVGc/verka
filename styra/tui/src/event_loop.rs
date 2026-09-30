@@ -962,6 +962,16 @@ pub fn run(
                     }
                     continue;
                 }
+                k if keys::INTERACTIONS_PREV_WORKING.matches(k) => {
+                    if app
+                        .interactions
+                        .cursor_to_previous_active(&session_id, app.workspace.id.as_deref())
+                        .is_none()
+                    {
+                        app.show_action_message("no other interaction is actively working");
+                    }
+                    continue;
+                }
                 k if keys::INTERACTIONS_NEXT_WORKSPACE.matches(k) => {
                     app.interactions
                         .cursor_next_workspace(&session_id, app.workspace.id.as_deref());
