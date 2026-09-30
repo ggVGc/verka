@@ -8,6 +8,7 @@ path = ["~/.rustup", "~/.cargo/bin"]
 [environment]
 RUSTUP_HOME = "~/.rustup"
 CARGO_HOME = "~/.cargo"
+CARGO_BUILD_BUILD_DIR="/tmp/cargo_build"
 
 [[mount]]
 source = "/etc/resolv.conf"
