@@ -1,6 +1,7 @@
 //! Side-panel and full-screen previews for one timeline entry.
 
 use crate::code::code_block_lines;
+use crate::diff::diff_block_lines;
 use crate::event_list::{summary_line, suspicious_shell_success, wrap_rendered, EventEntry};
 use crate::footer::message_text_color;
 use crate::markdown::{markdown_block_render, EntryIndex, LinkDisplay};
@@ -56,6 +57,8 @@ pub enum FileTargetContent {
 pub struct PreviewFeedback {
     pub limit: u16,
     pub effective_scroll: u16,
+    /// How many lines the preview shows at once.
+    pub viewport: u16,
 }
 
 pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewFeedback {
@@ -120,6 +123,7 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
     PreviewFeedback {
         limit,
         effective_scroll: effective,
+        viewport: content_area.height,
     }
 }
 
@@ -147,8 +151,15 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         }
         for event in changes {
             lines.push(Line::from(""));
-            lines.extend(detail_lines(event, view, false, None));
+            lines.extend(
+                change_lines(event, view.mode)
+                    .unwrap_or_else(|| detail_lines(event, view, false, None)),
+            );
         }
+        return lines;
+    }
+    if let Some(change) = change_lines(entry.event, view.mode) {
+        lines.extend(change);
         return lines;
     }
     let suspicious = view.mode == PresentationMode::Pretty && suspicious_shell_success(entry.event);
@@ -159,6 +170,51 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         view.link_highlight,
     ));
     lines
+}
+
+/// A file change's paths and its diff, drawn by [`diff_block_lines`] so each
+/// file's code is highlighted in its own language. `None` for any other
+/// event.
+///
+/// The pretty presentation leaves out unchanged context and file metadata;
+/// raw shows the diff as the provider reported it.
+fn change_lines(event: &AgentEvent, mode: PresentationMode) -> Option<Vec<Line<'static>>> {
+    let compact = mode == PresentationMode::Pretty;
+    let color = message_text_color(event.tag());
+    match event {
+        AgentEvent::FileChanged { paths, diff, .. } => {
+            let mut lines: Vec<Line<'static>> = paths
+                .iter()
+                .map(|path| {
+                    Line::from(Span::styled(
+                        format!("{DETAIL_INDENT}{path}"),
+                        Style::default().fg(color),
+                    ))
+                })
+                .collect();
+            match diff.as_deref().filter(|diff| !diff.is_empty()) {
+                Some(diff) => {
+                    // A diff for several files names each in its headers; a
+                    // single file's may not, so the path says what it is.
+                    let path = match paths.as_slice() {
+                        [path] => Some(path.as_str()),
+                        _ => None,
+                    };
+                    lines.push(Line::from(""));
+                    lines.extend(diff_block_lines(diff, path, compact, DETAIL_INDENT));
+                }
+                None => lines.push(Line::from(Span::styled(
+                    format!("{DETAIL_INDENT}no diff reported"),
+                    Style::default().fg(palette::MUTED_TEXT),
+                ))),
+            }
+            Some(lines)
+        }
+        AgentEvent::DiffUpdated { diff } => {
+            Some(diff_block_lines(diff, None, compact, DETAIL_INDENT))
+        }
+        _ => None,
+    }
 }
 
 /// One event's presented detail blocks, a blank line between each.

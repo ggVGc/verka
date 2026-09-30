@@ -533,6 +533,7 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
             styra_ui::PanelId::Preview { .. } => {
                 app.preview.scroll.offset = scroll.effective_offset;
                 app.preview.scroll.note_limit(scroll.limit);
+                app.preview.scroll.note_viewport(scroll.viewport);
             }
             styra_ui::PanelId::Driva { .. } => {
                 if app.details_tab == crate::app::DetailsTab::Details {

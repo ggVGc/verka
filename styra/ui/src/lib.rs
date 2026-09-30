@@ -17,6 +17,7 @@ pub mod answer;
 pub mod application;
 pub mod chrome;
 pub mod code;
+pub mod diff;
 pub mod driva;
 pub mod event_list;
 pub mod files;
@@ -71,6 +72,9 @@ pub struct ScrollFeedback {
     pub panel: PanelId,
     pub limit: u16,
     pub effective_offset: u16,
+    /// How many lines the panel shows at once, for scrolling by a fraction
+    /// of it. Zero for a panel that does not report it.
+    pub viewport: u16,
 }
 
 /// Measurements produced only after a frame was drawn successfully.
@@ -304,6 +308,7 @@ where
                     panel: PanelId::Help,
                     limit,
                     effective_offset: requested_scroll.min(limit),
+                    viewport: 0,
                 }],
                 list_offset: None,
             }

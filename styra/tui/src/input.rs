@@ -261,8 +261,18 @@ pub fn handle_list_key(
                 app.entry_log_page_down()
             }
             k if EVENTS_PAGE_UP.matches(k) && app.entry_log.focused() => app.entry_log_page_up(),
-            k if EVENTS_PAGE_DOWN.matches(k) && app.preview.open => app.preview.scroll.page_down(),
-            k if EVENTS_PAGE_UP.matches(k) && app.preview.open => app.preview.scroll.page_up(),
+            k if EVENTS_PAGE_DOWN.matches(k) && app.preview.open => {
+                app.preview.scroll.half_page_down()
+            }
+            k if EVENTS_PAGE_UP.matches(k) && app.preview.open => app.preview.scroll.half_page_up(),
+            // With the preview open the arrows read it, the way `j`/`k` do the
+            // full-screen one; `J`/`K` still step between entries.
+            k if EVENTS_PREVIEW_SCROLL_DOWN.matches(k) && app.preview.open => {
+                app.preview.scroll.page_down()
+            }
+            k if EVENTS_PREVIEW_SCROLL_UP.matches(k) && app.preview.open => {
+                app.preview.scroll.page_up()
+            }
             k if EVENTS_PAGE_DOWN.matches(k) && app.entry_log.open => {
                 app.entry_log.scroll.page_down()
             }
@@ -476,15 +486,16 @@ pub fn handle_list_key(
             _ => {}
         },
         // Full-screen preview is the one view where the text, not the entry
-        // list, is what the reader is moving through: `j`/`k` scroll it ten
-        // lines at a time and the shifted pair changes entry.
+        // list, is what the reader is moving through: `j`/`k` and the arrows
+        // scroll it ten lines at a time, `PgUp`/`PgDn` half a screen, and
+        // `J`/`K` change entry.
         View::Preview => match key {
             k if PREVIEW_LINKS.matches(k) => app.highlight_first_link(),
             k if PREVIEW_LINK_DESTINATIONS.matches(k) => app.toggle_link_display(),
             k if PREVIEW_MODE.matches(k) => app.preview.toggle_mode(),
             k if PREVIEW_TARGET.matches(k) => app.preview.toggle_target(),
-            k if PREVIEW_PAGE_DOWN.matches(k) => app.preview.scroll.page_down(),
-            k if PREVIEW_PAGE_UP.matches(k) => app.preview.scroll.page_up(),
+            k if PREVIEW_PAGE_DOWN.matches(k) => app.preview.scroll.half_page_down(),
+            k if PREVIEW_PAGE_UP.matches(k) => app.preview.scroll.half_page_up(),
             k if PREVIEW_SCROLL_DOWN.matches(k) && app.link_highlight.is_some() => {
                 app.highlight_next_link()
             }
@@ -861,6 +872,58 @@ mod tests {
                 &root.join("preferences.toml"),
             );
             assert_eq!(app.view, View::Events, "Esc from {view:?}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// With a preview open the arrows scroll it ten lines, as `j`/`k` do the
+    /// full-screen one, and `PgUp`/`PgDn` scroll it by half of what it shows.
+    /// `J`/`K` are still how the selection moves.
+    #[test]
+    fn arrows_scroll_an_open_preview_and_page_keys_move_half_of_it() {
+        let root = tree("preview-arrows");
+        let mut app = app(&root);
+        app.enter_list();
+        for index in 0..3 {
+            app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
+                text: format!("message {index}\n\nwith more below"),
+            });
+        }
+        app.select_first();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+        let mut press = |app: &mut App, code: KeyCode| {
+            handle_list_key(
+                app,
+                &client,
+                &mut live,
+                KeyEvent::new(code, KeyModifiers::NONE),
+                &mut pending_fold,
+                &root.join("preferences.toml"),
+            )
+        };
+
+        for view in [View::Events, View::Preview] {
+            app.view = view;
+            app.preview.show();
+            app.preview.scroll.reset();
+            app.preview.scroll.note_limit(100);
+            app.preview.scroll.note_viewport(30);
+            let selected = app.timeline.selected;
+
+            press(&mut app, KeyCode::Down);
+            assert_eq!(app.preview.scroll.offset, 10, "{view:?}: ↓ scrolls");
+            assert_eq!(app.timeline.selected, selected, "{view:?}: and stays put");
+            press(&mut app, KeyCode::PageDown);
+            assert_eq!(app.preview.scroll.offset, 25, "{view:?}: half of 30");
+            press(&mut app, KeyCode::PageUp);
+            press(&mut app, KeyCode::Up);
+            assert_eq!(app.preview.scroll.offset, 0, "{view:?}: back to the top");
+
+            press(&mut app, KeyCode::Char('J'));
+            assert_ne!(app.timeline.selected, selected, "{view:?}: J moves");
+            app.select_first();
         }
         let _ = std::fs::remove_dir_all(root);
     }

@@ -185,14 +185,19 @@ resumed.
 | `y` | copy the selected item to the clipboard |
 | `c` | show conversation events only (events and transcript) |
 
-In the event list: `j`/`k` moves by line, `J`/`K` (or arrows) moves by event,
+In the event list: `j`/`k` moves by line, `J`/`K` (or the arrows, while no
+preview is open) moves by event,
 `g`/`G` jumps first/last, and `Enter` on a `branch` marker opens the linked
 interaction (from either side of a branch). Otherwise, `Space`/`Enter`/`o`
 folds the selected event; `O` expands only it, `z R` expands all, `z M`
-collapses all, and `m` hides/shows minor events. `PgUp`/`PgDn` scrolls a
-preview. On a conversation line (a message, an error, a model change or a
+collapses all, and `m` hides/shows minor events. With a preview open, side or
+full-screen, `↑`/`↓` scroll it ten lines and `PgUp`/`PgDn` half its height;
+in the full-screen preview `j`/`k` scroll too. On a conversation line (a message, an error, a model change or a
 branch marker), the preview shows the file changes the agent made during that
-entry's turn — the same stretch `e` lists — rather than the line itself. Raw, log, quota, and transcript
+entry's turn — the same stretch `e` lists — rather than the line itself.
+Diffs mark additions and removals with a green `+` and a red `-` and highlight
+the code in the language of each file's extension; `v` switches between only
+the changed lines and the whole diff as reported. Raw, log, quota, and transcript
 use `j`/`k` plus `g`/`G` to navigate. In the raw view, `v` switches between
 Styra's captured app-server wire traffic and the provider's native persisted
 session JSONL (when the provider still has it).

@@ -66,14 +66,13 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     let mut feedback = RenderFeedback::default();
     if let MainView::Preview(preview) = &view.main {
         let measured = preview::render(frame, preview, frame.area());
-        note_scroll(
+        note_preview_scroll(
             &mut feedback,
             PanelId::Preview {
                 session: view.session_id.into(),
                 target: preview_panel(preview),
             },
-            measured.limit,
-            measured.effective_scroll,
+            measured,
         );
         render_reading_overlays(frame, &view.overlays);
         return feedback;
@@ -185,14 +184,13 @@ fn render_events(
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
         let measured = preview::render(frame, view.preview.unwrap(), panes[1]);
-        note_scroll(
+        note_preview_scroll(
             feedback,
             PanelId::Preview {
                 session: session_id.into(),
                 target: preview_panel(view.preview.unwrap()),
             },
-            measured.limit,
-            measured.effective_scroll,
+            measured,
         );
         panes[0]
     } else {
@@ -232,14 +230,13 @@ fn render_events(
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(event_area);
             let measured = preview::render(frame, preview_view, panes[1]);
-            note_scroll(
+            note_preview_scroll(
                 feedback,
                 PanelId::Preview {
                     session: session_id.into(),
                     target: preview_panel(preview_view),
                 },
-                measured.limit,
-                measured.effective_scroll,
+                measured,
             );
             panes[0]
         } else {
@@ -272,14 +269,13 @@ fn render_files(
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(columns[1]);
         let measured = preview::render(frame, preview_view, right[0]);
-        note_scroll(
+        note_preview_scroll(
             feedback,
             PanelId::Preview {
                 session: session_id.into(),
                 target: preview_panel(preview_view),
             },
-            measured.limit,
-            measured.effective_scroll,
+            measured,
         );
         right[1]
     } else {
@@ -301,6 +297,22 @@ fn note_scroll(feedback: &mut RenderFeedback, panel: PanelId, limit: u16, effect
         panel,
         limit,
         effective_offset,
+        viewport: 0,
+    });
+}
+
+/// As [`note_scroll`], for a preview, which also reports how many lines it
+/// shows at once.
+fn note_preview_scroll(
+    feedback: &mut RenderFeedback,
+    panel: PanelId,
+    measured: preview::PreviewFeedback,
+) {
+    feedback.scroll.push(ScrollFeedback {
+        panel,
+        limit: measured.limit,
+        effective_offset: measured.effective_scroll,
+        viewport: measured.viewport,
     });
 }
 
