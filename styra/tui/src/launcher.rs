@@ -174,7 +174,9 @@ impl Launcher {
             .position(|row| row == selection)
             .unwrap_or_default();
         Self {
-            list: FuzzyList::at(&labels, at),
+            // Filtering keeps the recency order above rather than ranking by
+            // match, so the models in use stay first however little is typed.
+            list: FuzzyList::at(&labels, at).keeping_order(),
             rows,
             opened_on: selection.clone(),
             provider_locked,
@@ -365,8 +367,37 @@ mod tests {
 
         // Down to the rung: the effort is part of what is being typed at.
         let mut launcher = opened("claude");
-        typed(&mut launcher, "opus-5/max");
-        assert_eq!(label(&launcher.selection()), "claude:claude-opus-5/max");
+        typed(&mut launcher, "opus-5-5/max");
+        assert_eq!(label(&launcher.selection()), "claude:claude-opus-5-5/max");
+    }
+
+    /// Typing narrows the list without reshuffling it: a query several models
+    /// match leaves the most recently selected of them on top, even where
+    /// another would rank as the closer match.
+    #[test]
+    fn recency_order_holds_while_filtering() {
+        let recent = vec!["claude-sonnet-5".to_owned(), "claude-opus-5".to_owned()];
+        let mut launcher =
+            Launcher::from_selection(&Selection::new(Provider::Claude), &recent, false);
+        typed(&mut launcher, "co5");
+        assert_eq!(launcher.selection().model, "claude-sonnet-5");
+
+        let matched: Vec<String> = launcher
+            .list
+            .matches(&launcher.labels())
+            .into_iter()
+            .map(|found| launcher.labels()[found.index].clone())
+            .collect();
+        let opus = matched
+            .iter()
+            .position(|label| label.contains(":claude-opus-5/"))
+            .expect("the older recent model still matches");
+        assert!(
+            matched[..opus]
+                .iter()
+                .all(|label| label.contains(":claude-sonnet-5/")),
+            "only the most recent model's rows come before the next: {matched:?}"
+        );
     }
 
     /// A query can cross the agent boundary, which is the whole point of one
@@ -485,12 +516,12 @@ mod tests {
     #[test]
     fn deleting_a_word_takes_back_one_part_of_the_triple() {
         let mut launcher = opened("claude");
-        typed(&mut launcher, "claude:claude-opus-5/mox");
+        typed(&mut launcher, "claude:claude-opus-5-5/mox");
         assert!(launcher.list.matches(&launcher.labels()).is_empty());
 
         launcher.delete_query_word();
-        assert_eq!(launcher.list.query, "claude:claude-opus-5/");
-        assert_eq!(launcher.selection().model, "claude-opus-5");
+        assert_eq!(launcher.list.query, "claude:claude-opus-5-5/");
+        assert_eq!(launcher.selection().model, "claude-opus-5-5");
     }
 
     /// The list is long enough to page through, and a page lands on a row

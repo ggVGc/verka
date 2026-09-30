@@ -944,7 +944,7 @@ mod cli_tests {
         ));
         let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
         app.open_launcher();
-        for character in "claude-opus-5/mox".chars() {
+        for character in "claude-opus-5-5/mox".chars() {
             launcher::handle_key(
                 &mut app,
                 KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
@@ -958,8 +958,8 @@ mod cli_tests {
             &path,
         );
         let launcher = app.launcher.as_ref().expect("still open");
-        assert_eq!(launcher.list.query, "claude-opus-5/");
-        assert_eq!(launcher.selection().model, "claude-opus-5");
+        assert_eq!(launcher.list.query, "claude-opus-5-5/");
+        assert_eq!(launcher.selection().model, "claude-opus-5-5");
 
         // A chord the picker has no command for types nothing.
         launcher::handle_key(
@@ -969,7 +969,7 @@ mod cli_tests {
         );
         assert_eq!(
             app.launcher.as_ref().unwrap().list.query,
-            "claude-opus-5/",
+            "claude-opus-5-5/",
             "an unbound chord is not a letter of the query"
         );
         std::fs::remove_dir_all(path.parent().unwrap()).ok();

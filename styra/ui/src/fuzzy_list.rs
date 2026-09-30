@@ -10,7 +10,8 @@
 //! Matching is subsequence matching, the same bargain every fuzzy finder
 //! makes: `c45` finds `claude-haiku-4-5`. The score then decides the order,
 //! and it is built to put the row the operator *meant* first — see
-//! [`score`].
+//! [`score`] — unless the list was opened with [`FuzzyList::keeping_order`],
+//! in which case the query only narrows and the caller's order stands.
 
 use crate::palette;
 
@@ -47,6 +48,10 @@ pub struct FuzzyList {
     /// Ranking reorders the matches under the cursor, so an index into the
     /// underlying list would not survive a keystroke.
     pub selected: usize,
+    /// Whether a query only narrows the rows rather than ranking them. Set for
+    /// a list whose own order is the one that matters — most recently used
+    /// first — so that order holds while it is typed at.
+    pub keeps_order: bool,
 }
 
 impl FuzzyList {
@@ -55,13 +60,24 @@ impl FuzzyList {
         Self {
             query: String::new(),
             selected: row.min(rows.len().saturating_sub(1)),
+            keeps_order: false,
         }
     }
 
-    /// The rows the query leaves standing, best first. With nothing typed
-    /// this is every row in its original order — the caller's own ordering is
-    /// a deliberate one (most recently used first, say) and the list does not
-    /// get to overrule it until there is a query to rank by.
+    /// This list, but with the rows a query leaves standing kept in the order
+    /// they were given instead of ranked by how well they match.
+    pub fn keeping_order(self) -> Self {
+        Self {
+            keeps_order: true,
+            ..self
+        }
+    }
+
+    /// The rows the query leaves standing, best first — or, for a list
+    /// [keeping its order](Self::keeping_order), in the order given. With
+    /// nothing typed this is every row in its original order — the caller's
+    /// own ordering is a deliberate one (most recently used first, say) and the
+    /// list does not get to overrule it until there is a query to rank by.
     pub fn matches(&self, rows: &[String]) -> Vec<Match> {
         if self.query.trim().is_empty() {
             return rows
@@ -82,8 +98,11 @@ impl FuzzyList {
             })
             .collect();
         // Ties keep the caller's order: `index` breaks them, and the sort is
-        // stable on top of that.
-        scored.sort_by_key(|(score, index, _)| (*score, *index));
+        // stable on top of that. A list keeping its order is left as
+        // collected, which is the order the rows were given in.
+        if !self.keeps_order {
+            scored.sort_by_key(|(score, index, _)| (*score, *index));
+        }
         scored.into_iter().map(|(_, _, found)| found).collect()
     }
 
@@ -426,6 +445,22 @@ mod tests {
             matched.contains(&"claude-sonnet-5".to_owned()),
             "the other row still matches, it just ranks lower: {matched:?}"
         );
+    }
+
+    /// A list keeping its order narrows without ranking: the same query as
+    /// above leaves the rows standing in the order they were given.
+    #[test]
+    fn a_list_keeping_its_order_only_narrows() {
+        let rows: Vec<String> = rows().into_iter().rev().collect();
+        let mut list = FuzzyList::at(&rows, 0).keeping_order();
+        for character in "co5".chars() {
+            list.push(character);
+        }
+        assert_eq!(
+            matched_rows(&list, &rows),
+            vec!["claude-sonnet-5", "claude-opus-5"]
+        );
+        assert_eq!(list.selected_row(&rows), Some(1));
     }
 
     #[test]
