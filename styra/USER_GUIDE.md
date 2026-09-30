@@ -96,8 +96,10 @@ paths are from the Workspace root and absolute paths must remain inside it.
 list, the session or Workspace picker, the launcher, the interaction list, or
 any of the modal choosers — so the screens themselves carry no strip of
 shortcuts along their top. `i` or `Tab` enters the message editor;
-`Esc` or `Tab` returns to the event list. `q` quits the client without stopping
-live interactions.
+`Esc` or `Tab` returns to the event list. The other views (raw, log, quota,
+transcript, details, files, answer, preview) stack over the event list, and
+`Esc` in any of them, with no prompt or chooser open, goes straight back to it.
+`q` quits the client without stopping live interactions.
 
 | Key | Use |
 | --- | --- |

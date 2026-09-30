@@ -13,6 +13,7 @@ bindings! { GLOBAL = "Global";
     HELP: [Key::ch('?')] => Action::Help;
     GLOBAL_FOCUS_MESSAGE: [Key::ch('i')] => Action::GlobalFocusMessage;
     GLOBAL_LEAVE_MESSAGE: [Key::code(KeyCode::Esc)] => Action::GlobalLeaveMessage;
+    GLOBAL_BACK: [Key::code(KeyCode::Esc)] ("other views") => Action::GlobalBack;
     GLOBAL_QUIT: [Key::ch('q')] => Action::GlobalQuit;
     GLOBAL_INTERRUPT: [Key::ch('s')] => Action::GlobalInterrupt;
     GLOBAL_STOP: [Key::ch('S')] => Action::GlobalStop;

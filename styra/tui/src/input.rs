@@ -134,6 +134,18 @@ pub fn handle_list_key(
     }
     match key {
         k if GLOBAL_QUIT.matches(k) => return app.ask(Request::Quit),
+        // The event list is the bottom of the stack every other view is
+        // opened over, so Esc goes straight back to it from any of them. The
+        // modals that claim Esc for themselves (prompts, pickers, the
+        // navigator, the reference) are answered before this is reached. A
+        // link highlight is cleared first, as it is on the event list.
+        k if GLOBAL_BACK.matches(k) && app.view != View::Events => {
+            if app.link_highlight.is_some() {
+                return app.clear_link_highlight();
+            }
+            app.view = View::Events;
+            return;
+        }
         k if GLOBAL_INTERRUPT.matches(k) => {
             return session::interrupt_interaction(app, client, live)
         }
@@ -817,6 +829,39 @@ mod tests {
         );
 
         assert_eq!(app.view, View::Log);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn esc_returns_to_the_event_list_from_every_other_view() {
+        let root = tree("esc-back");
+        let mut app = app(&root);
+        app.enter_list();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        for view in [
+            View::Raw,
+            View::Log,
+            View::Quota,
+            View::Transcript,
+            View::Driva,
+            View::Files,
+            View::Answer,
+            View::Preview,
+        ] {
+            app.view = view;
+            handle_list_key(
+                &mut app,
+                &client,
+                &mut live,
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                &mut pending_fold,
+                &root.join("preferences.toml"),
+            );
+            assert_eq!(app.view, View::Events, "Esc from {view:?}");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
