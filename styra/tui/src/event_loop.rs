@@ -1128,6 +1128,17 @@ pub fn run(
                     picker::WorkspaceChoice::Existing(workspace) => {
                         client.workspace(&workspace.id).unwrap_or(workspace)
                     }
+                    // A fresh interaction is asked for outright, so neither
+                    // live work nor the Session list stands in the way.
+                    picker::WorkspaceChoice::New(workspace) => {
+                        return Ok(RunOutcome::OpenWorkspace {
+                            workspace: Box::new(
+                                client.workspace(&workspace.id).unwrap_or(workspace),
+                            ),
+                            session_id: None,
+                            open_interactions: false,
+                        });
+                    }
                     picker::WorkspaceChoice::CreateCurrentDirectory => {
                         let host_path = session::resolve_workspace(None)?;
                         session::create_workspace(client, host_path, None)?

@@ -146,8 +146,10 @@ filter over the Session name and first prompt; `Esc` abandons the filter. `c`
 shows or hides the Sessions marked completed, and `C` marks the selected
 Session completed — or, on one already marked, unmarks it. `n` leaves the list
 without resuming anything and starts a new Session in the Workspace whose list
-you were reading. `V` opens the Workspace list, where `/` filters the same way
-over the Workspace name. Press `r` in the Workspace list to change the selected
+you were reading. `V` opens the Workspace list, where `/` (or `f`) filters the
+same way over the Workspace name. `n` there enters the selected Workspace on a
+new interaction, skipping its live work and Session list; `c` creates a
+Workspace for the current directory. Press `r` in the Workspace list to change the selected
 Workspace's display name; submitting a blank name restores its directory-name
 fallback.
 

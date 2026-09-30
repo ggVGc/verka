@@ -252,9 +252,10 @@ bindings! { WORKSPACE_PICKER = "Workspaces";
     WORKSPACES_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::WorkspacesNext;
     WORKSPACES_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::WorkspacesPrev;
     WORKSPACES_OPEN: [Key::code(KeyCode::Enter)] => Action::WorkspacesOpen;
-    WORKSPACES_CREATE: [Key::ch('n')] => Action::WorkspacesCreate;
+    WORKSPACES_NEW: [Key::ch('n')] => Action::WorkspacesNew;
+    WORKSPACES_CREATE: [Key::ch('c')] => Action::WorkspacesCreate;
     WORKSPACES_RENAME: [Key::ch('r')] => Action::WorkspacesRename;
-    WORKSPACES_FILTER: [Key::ch('/')] => Action::WorkspacesFilter;
+    WORKSPACES_FILTER: [Key::ch('/'), Key::ch('f')] => Action::WorkspacesFilter;
     WORKSPACES_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => Action::WorkspacesCancel;
 }
 

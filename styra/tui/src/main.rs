@@ -295,6 +295,9 @@ fn main() -> Result<()> {
     // current directory when one exists. Otherwise it starts with the durable
     // Workspace list. Explicit CLI targets retain their direct behavior.
     let ordinary_launch = cli.workspace.is_none() && cli.view.is_none() && cli.command.is_none();
+    // Set when the operator picks a Workspace with `n`: they asked for a new
+    // interaction, so its live work is not joined on the way in.
+    let mut start_fresh = false;
     let mut active_workspace = if ordinary_launch {
         let current_directory = session::resolve_workspace(None)?;
         let mut workspaces = client.list_workspaces()?;
@@ -324,6 +327,10 @@ fn main() -> Result<()> {
                 picker::WorkspaceChoice::Existing(workspace) => {
                     Ok(client.workspace(&workspace.id).unwrap_or(workspace))
                 }
+                picker::WorkspaceChoice::New(workspace) => {
+                    start_fresh = true;
+                    Ok(client.workspace(&workspace.id).unwrap_or(workspace))
+                }
                 picker::WorkspaceChoice::CreateCurrentDirectory => {
                     session::create_workspace(&client, current_directory, None)
                 }
@@ -349,7 +356,7 @@ fn main() -> Result<()> {
     // startup picker. A trailing prompt overrides it below: that is input the
     // operator has already given, so it starts an Interaction of its own rather
     // than joining one in flight.
-    let startup_interaction = if ordinary_launch {
+    let startup_interaction = if ordinary_launch && !start_fresh {
         client.list_interactions().ok().and_then(|interactions| {
             interactions::first_live_in_workspace(&interactions, &active_workspace.id)
         })

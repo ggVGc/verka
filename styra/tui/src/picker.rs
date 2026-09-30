@@ -40,6 +40,9 @@ fn picker_order(order: SessionOrder) -> styra_ui::picker::SessionOrder {
 #[allow(clippy::large_enum_variant)]
 pub enum WorkspaceChoice {
     Existing(WorkspaceSummary),
+    /// Enter this Workspace on a fresh interaction rather than any live work
+    /// or stored Session it holds.
+    New(WorkspaceSummary),
     CreateCurrentDirectory,
 }
 
@@ -710,6 +713,9 @@ pub fn run_workspace_picker(
                 return Ok(Some(WorkspaceChoice::Existing(
                     workspaces[selected].clone(),
                 )));
+            }
+            k if keys::WORKSPACES_NEW.matches(k) && !workspaces.is_empty() => {
+                return Ok(Some(WorkspaceChoice::New(workspaces[selected].clone())));
             }
             k if keys::WORKSPACES_CREATE.matches(k) => {
                 return Ok(Some(WorkspaceChoice::CreateCurrentDirectory))
