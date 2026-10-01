@@ -132,6 +132,49 @@ mod tests {
         assert_eq!(app.search.query(), Some("queq"));
     }
 
+    /// Opening a new interaction shows the prompt that was typed into it, not
+    /// a row from the interaction on screen before it.
+    ///
+    /// The renderer caches finished rows in a thread-local that lives as long
+    /// as the process, keyed on the entry's identity rather than its text. A
+    /// new interaction is a new [`App`] with a new timeline, so if identities
+    /// restart with each timeline, its first prompt asks the cache the same
+    /// question the previous interaction's first prompt did, and is answered
+    /// with that prompt's rows. Restarting styra empties the cache, which is
+    /// why the right prompt shows after a restart.
+    #[test]
+    fn a_new_interaction_shows_its_own_prompt_not_the_previous_ones() {
+        let mut earlier = test_support::app("s1");
+        earlier.push_event(AgentEvent::UserMessage {
+            text: "rename the config loader".into(),
+        });
+        let screen = test_support::screen(&earlier);
+        assert!(
+            screen.body().contains("rename the config loader"),
+            "the earlier interaction shows its prompt: {}",
+            screen.body()
+        );
+
+        // Drawn on the same thread, at the same size, with the same flags —
+        // as the event loop draws whichever interaction is current.
+        let mut next = test_support::app("s2");
+        next.push_event(AgentEvent::UserMessage {
+            text: "add retries to the uploader".into(),
+        });
+        let screen = test_support::screen(&next);
+
+        assert!(
+            screen.body().contains("add retries to the uploader"),
+            "the new interaction shows the prompt typed into it: {}",
+            screen.body()
+        );
+        assert!(
+            !screen.body().contains("rename the config loader"),
+            "and not the previous interaction's: {}",
+            screen.body()
+        );
+    }
+
     /// Draw `app` and feed the render's own offset back into it, exactly as
     /// the event loop does. The viewport offset only survives across frames
     /// through this round trip, so a test about scrolling has to make it.
