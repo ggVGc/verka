@@ -964,7 +964,50 @@ pub fn run(
         // be loaded. Enter only closes the navigator; there is no preview.
         if app.interactions.open && app.focus == Focus::List {
             let session_id = app.session_id.clone();
+            // The `/` filter is modal while it is being typed, as the event
+            // list's search is: every printable key is part of the term. The
+            // arrows still walk what it leaves standing.
+            if app.interactions.typing_filter() {
+                let workspace_id = app.workspace.id.clone();
+                match key.code {
+                    KeyCode::Esc => app.interactions.clear_filter(),
+                    KeyCode::Enter => app.interactions.finish_filter(),
+                    KeyCode::Down => app
+                        .interactions
+                        .cursor_next(&session_id, workspace_id.as_deref()),
+                    KeyCode::Up => app
+                        .interactions
+                        .cursor_previous(&session_id, workspace_id.as_deref()),
+                    KeyCode::Backspace => {
+                        app.interactions
+                            .type_filter(None, &session_id, workspace_id.as_deref())
+                    }
+                    KeyCode::Char(character)
+                        if !character.is_control()
+                            && !key
+                                .modifiers
+                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        app.interactions.type_filter(
+                            Some(character),
+                            &session_id,
+                            workspace_id.as_deref(),
+                        )
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             match key {
+                k if keys::INTERACTIONS_FILTER.matches(k) => {
+                    app.interactions.start_filter();
+                    continue;
+                }
+                // Esc widens a filtered list back out before it closes it.
+                k if k.code == KeyCode::Esc && app.interactions.filter().is_some() => {
+                    app.interactions.clear_filter();
+                    continue;
+                }
                 // In All scope the entries are grouped under Workspace
                 // headings, and J/K skip whole groups: one press per
                 // Workspace rather than one per interaction. They move the

@@ -110,6 +110,11 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         scope,
         all_workspaces,
         completion_filter: Cow::Borrowed(completion_filter),
+        filter: app
+            .interactions
+            .filter()
+            .or(app.interactions.typing_filter().then_some("")),
+        typing_filter: app.interactions.typing_filter(),
         rows,
     }
 }

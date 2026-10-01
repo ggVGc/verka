@@ -73,6 +73,10 @@ pub struct InteractionNavigator<'a> {
     pub scope: Cow<'a, str>,
     pub all_workspaces: bool,
     pub completion_filter: Cow<'a, str>,
+    /// The `/` filter's term, when one is being typed or is in force.
+    pub filter: Option<&'a str>,
+    /// Whether the filter is still being typed, so it is drawn with a caret.
+    pub typing_filter: bool,
     pub rows: Vec<InteractionRow<'a>>,
 }
 
@@ -106,7 +110,35 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
             " {} · interactions · {} · ? keys ",
             view.scope, view.completion_filter
         ));
-    let items = view.rows.iter().map(row_item);
+    let block = match view.filter {
+        Some(filter) if view.typing_filter || !filter.is_empty() => {
+            block.title_bottom(Line::from(vec![
+                Span::styled(" /", Style::default().fg(palette::MUTED_TEXT)),
+                Span::styled(
+                    filter.to_owned(),
+                    Style::default()
+                        .fg(palette::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    if view.typing_filter { "▏ " } else { " " },
+                    Style::default().fg(palette::ACCENT),
+                ),
+            ]))
+        }
+        _ => block,
+    };
+    let mut items = view.rows.iter().map(row_item).collect::<Vec<_>>();
+    if items.is_empty() {
+        if let Some(filter) = view.filter.filter(|filter| !filter.is_empty()) {
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("  no interaction matches {filter}"),
+                Style::default()
+                    .fg(palette::MUTED_TEXT)
+                    .add_modifier(Modifier::DIM),
+            ))));
+        }
+    }
     let list = List::new(items).block(block).highlight_style(
         Style::default()
             .bg(palette::SELECTION_BACKGROUND)
@@ -308,6 +340,8 @@ mod tests {
             scope: "All".into(),
             all_workspaces: true,
             completion_filter: "completed hidden".into(),
+            filter: None,
+            typing_filter: false,
             rows: vec![
                 InteractionRow::Workspace("Payments".into()),
                 InteractionRow::Interaction {
@@ -347,6 +381,8 @@ mod tests {
             scope: "All".into(),
             all_workspaces: true,
             completion_filter: "completed hidden".into(),
+            filter: None,
+            typing_filter: false,
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 provider: "codex",
@@ -384,6 +420,8 @@ mod tests {
             scope: "Payments".into(),
             all_workspaces: false,
             completion_filter: "completed hidden".into(),
+            filter: None,
+            typing_filter: false,
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 provider: "claude",
@@ -413,6 +451,8 @@ mod tests {
             scope: "Payments".into(),
             all_workspaces: false,
             completion_filter: "completed hidden".into(),
+            filter: None,
+            typing_filter: false,
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 provider: "claude",
@@ -443,6 +483,8 @@ mod tests {
             scope: "Payments".into(),
             all_workspaces: false,
             completion_filter: "completed hidden".into(),
+            filter: None,
+            typing_filter: false,
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 provider: "claude",
@@ -470,6 +512,8 @@ mod tests {
             scope: "Payments".into(),
             all_workspaces: false,
             completion_filter: "completed hidden".into(),
+            filter: None,
+            typing_filter: false,
             rows: vec![
                 InteractionRow::Interaction {
                     name: "shown below".into(),

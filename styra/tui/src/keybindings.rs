@@ -210,6 +210,7 @@ bindings! { INTERACTIONS = "Interactions";
     INTERACTIONS_TAGS: [Key::ch('T')] => Action::InteractionsTags;
     INTERACTIONS_STOP: [Key::ch('S')] => Action::InteractionsStop;
     INTERACTIONS_DELETE: [Key::ch('D')] => Action::InteractionsDelete;
+    INTERACTIONS_FILTER: [Key::ch('/')] => Action::InteractionsFilter;
     INTERACTIONS_CLOSE: [Key::code(KeyCode::Enter), Key::ch('a'), Key::code(KeyCode::Esc)]
         => Action::InteractionsClose;
 }

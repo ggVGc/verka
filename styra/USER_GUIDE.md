@@ -122,7 +122,11 @@ provider resume. In the main interaction view, `T` edits the current
 interaction's tags. `a` opens the live-interaction list; there, `w` switches
 current/all-Workspace scope, `j`/`k` selects, `T` edits the selected
 interaction's tags, and `D` deletes a stopped
-interaction (the durable Session remains). The interaction under the cursor is
+interaction (the durable Session remains). `/` filters the list as you type —
+case-insensitively, by name, tag, branch, provider, or Workspace name. The
+arrows still move the cursor while you type. `Enter` keeps the filter and gives
+the keys back to the list, and `Esc` clears it (a second `Esc` closes the list).
+The interaction under the cursor is
 loaded once the cursor rests on it, so the list can be crossed without waiting
 for every row on the way; the row being loaded says so, and any other key acts
 on it as soon as it arrives. When an interaction is associated with a Git

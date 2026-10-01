@@ -39,6 +39,13 @@ pub struct LiveInteractions {
     /// so holding `j` must not queue one load per row it passes over; the load
     /// waits for the cursor to settle.
     settle_from: Option<Instant>,
+    /// The `/` filter: only rows whose labels contain it, case-insensitively,
+    /// are listed. `None` lists every row the scope and completion settings
+    /// allow.
+    filter: Option<String>,
+    /// Set while the filter is being typed, when every printable key is part
+    /// of the term rather than a command on the list.
+    typing_filter: bool,
 }
 
 /// The event list's tally of listed Interactions by activity, rendered on the
@@ -56,6 +63,10 @@ impl LiveInteractions {
         self.items = items;
         self.workspaces = workspaces;
         self.open = true;
+        // A filter is a search for something particular; opening the list
+        // again is a fresh look at all of it.
+        self.filter = None;
+        self.typing_filter = false;
     }
 
     /// Incorporate a periodic server snapshot. Idle acknowledgement belongs to
@@ -132,7 +143,8 @@ impl LiveInteractions {
             .filter_map(|(index, interaction)| {
                 ((!self.only_current_workspace
                     || workspace_id.is_some_and(|id| interaction.workspace_id == id))
-                    && (self.show_completed || !interaction.completed.is_done()))
+                    && (self.show_completed || !interaction.completed.is_done())
+                    && self.matches_filter(interaction))
                 .then_some(index)
             })
             .collect()
@@ -231,6 +243,7 @@ impl LiveInteractions {
         if self.only_current_workspace && Some(next.workspace_id.as_str()) != workspace_id {
             self.only_current_workspace = false;
         }
+        self.reveal_past_filter(&next);
         self.move_cursor_to(next.id.clone(), current);
         Some(next)
     }
@@ -307,6 +320,7 @@ impl LiveInteractions {
         if self.only_current_workspace && Some(target.workspace_id.as_str()) != workspace_id {
             self.only_current_workspace = false;
         }
+        self.reveal_past_filter(&target);
         self.move_cursor_to(target.id.clone(), current);
         Some(target)
     }
@@ -486,6 +500,105 @@ impl LiveInteractions {
             .position(|leader| self.items[*leader].workspace_id == current.workspace_id)
     }
 
+    /// Start typing the `/` filter, afresh.
+    pub fn start_filter(&mut self) {
+        self.filter = Some(String::new());
+        self.typing_filter = true;
+    }
+
+    pub fn typing_filter(&self) -> bool {
+        self.typing_filter
+    }
+
+    /// The filter in force, if anything has been typed into it.
+    pub fn filter(&self) -> Option<&str> {
+        self.filter.as_deref().filter(|filter| !filter.is_empty())
+    }
+
+    /// Take a typed character into the filter, or drop the last one.
+    pub fn type_filter(
+        &mut self,
+        character: Option<char>,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) {
+        let filter = self.filter.get_or_insert_with(String::new);
+        match character {
+            Some(character) => filter.push(character),
+            None => {
+                filter.pop();
+            }
+        }
+        self.follow_filter(current, workspace_id);
+    }
+
+    /// Stop typing and keep the filter, so the narrowed list can be walked
+    /// with the list's own keys.
+    pub fn finish_filter(&mut self) {
+        self.typing_filter = false;
+        if self.filter().is_none() {
+            self.filter = None;
+        }
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.filter = None;
+        self.typing_filter = false;
+    }
+
+    /// Keep the cursor on a listed row as the filter narrows: once the row
+    /// under it is filtered out, it moves to the first that still matches,
+    /// and loads there once it rests like any other move.
+    fn follow_filter(&mut self, current: &str, workspace_id: Option<&str>) {
+        let shown = self.display_indices(workspace_id);
+        let cursor = self.cursor(current);
+        if shown.iter().any(|index| self.items[*index].id == cursor) {
+            return;
+        }
+        if let Some(first) = shown.first().map(|index| self.items[*index].id.clone()) {
+            self.move_cursor_to(first, current);
+        }
+    }
+
+    /// The jumps to live and working Interactions reach past the filter as
+    /// they do past the Workspace scope: drop it when it hides their target.
+    fn reveal_past_filter(&mut self, target: &InteractionSummary) {
+        if !self.matches_filter(target) {
+            self.clear_filter();
+        }
+    }
+
+    /// Whether `interaction` passes the filter: its name (or short id), a tag,
+    /// its branch, its provider, or its Workspace's name contains the term.
+    /// The last message is left out — it changes as the agent talks, and rows
+    /// would come and go under the cursor with it.
+    fn matches_filter(&self, interaction: &InteractionSummary) -> bool {
+        let Some(filter) = self.filter() else {
+            return true;
+        };
+        let filter = filter.to_lowercase();
+        let name = interaction
+            .name
+            .as_deref()
+            .unwrap_or_else(|| styra_ui::picker::short_id(&interaction.id));
+        let workspace = self
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == interaction.workspace_id)
+            .map(crate::workspace::display_name);
+        std::iter::once(name)
+            .chain(interaction.tags.iter().map(String::as_str))
+            .chain(
+                interaction
+                    .checkout
+                    .as_ref()
+                    .and_then(|checkout| checkout.branch.as_deref()),
+            )
+            .chain(std::iter::once(interaction.selection.provider.as_str()))
+            .chain(workspace.as_deref())
+            .any(|text| text.to_lowercase().contains(&filter))
+    }
+
     pub fn toggle_workspace_scope(&mut self) {
         self.only_current_workspace = !self.only_current_workspace;
     }
@@ -544,6 +657,9 @@ impl LiveInteractions {
         self.rest();
         if self.visible_indices(workspace_id).is_empty() {
             self.only_current_workspace = false;
+        }
+        if self.visible_indices(workspace_id).is_empty() {
+            self.clear_filter();
         }
         let visible = self.visible_indices(workspace_id);
         visible
@@ -700,7 +816,11 @@ mod tests {
         };
         assert_eq!(
             order(&live),
-            ["0000000000300-1-0", "0000000000200-1-0", "0000000000100-1-0"]
+            [
+                "0000000000300-1-0",
+                "0000000000200-1-0",
+                "0000000000100-1-0"
+            ]
         );
         assert_eq!(
             live.current("0000000000100-1-0").unwrap().id,
@@ -715,7 +835,11 @@ mod tests {
         ]);
         assert_eq!(
             order(&live),
-            ["0000000000300-1-0", "0000000000200-1-0", "0000000000100-1-0"]
+            [
+                "0000000000300-1-0",
+                "0000000000200-1-0",
+                "0000000000100-1-0"
+            ]
         );
     }
 
@@ -1454,6 +1578,86 @@ mod tests {
         assert_eq!(next.id, "other");
         assert!(!live.only_current_workspace);
         assert!(live.open);
+    }
+
+    fn named(id: &str, name: &str) -> InteractionSummary {
+        let mut interaction = interaction(id, InteractionActivity::Pending);
+        interaction.name = Some(name.into());
+        interaction
+    }
+
+    #[test]
+    fn the_filter_narrows_the_list_by_name_or_tag_case_insensitively() {
+        let mut tagged = named("three", "refactor");
+        tagged.tags = vec!["Billing".into()];
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                named("one", "Fix checkout"),
+                named("two", "write docs"),
+                tagged,
+            ],
+            vec![],
+        );
+
+        live.start_filter();
+        assert!(live.typing_filter());
+        for character in "CHECK".chars() {
+            live.type_filter(Some(character), "one", Some("workspace"));
+        }
+        assert_eq!(live.visible_indices(Some("workspace")), vec![0]);
+
+        live.clear_filter();
+        live.start_filter();
+        for character in "bill".chars() {
+            live.type_filter(Some(character), "one", Some("workspace"));
+        }
+        assert_eq!(live.visible_indices(Some("workspace")), vec![2]);
+
+        // Enter keeps the filter but hands the keys back to the list.
+        live.finish_filter();
+        assert!(!live.typing_filter());
+        assert_eq!(live.filter(), Some("bill"));
+
+        live.clear_filter();
+        assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
+    }
+
+    /// A cursor left on a row the filter hid would act on something the
+    /// operator can no longer see, so it moves to the first match.
+    #[test]
+    fn the_cursor_follows_the_filter_onto_the_first_match() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                named("one", "Fix checkout"),
+                named("two", "write docs"),
+                named("three", "more docs"),
+            ],
+            vec![],
+        );
+
+        live.start_filter();
+        for character in "docs".chars() {
+            live.type_filter(Some(character), "one", Some("workspace"));
+        }
+        assert_eq!(live.cursor("one"), "two");
+
+        // Still matching as the term changes, so it stays put.
+        live.cursor_next("one", Some("workspace"));
+        live.type_filter(None, "one", Some("workspace"));
+        assert_eq!(live.cursor("one"), "three");
+    }
+
+    #[test]
+    fn reopening_the_list_drops_the_filter() {
+        let mut live = LiveInteractions::default();
+        live.open(vec![named("one", "Fix checkout")], vec![]);
+        live.start_filter();
+        live.type_filter(Some('z'), "one", None);
+        live.open(vec![named("one", "Fix checkout")], vec![]);
+        assert!(live.filter().is_none());
+        assert!(!live.typing_filter());
     }
 
     /// The fleet is listed several times a second and is usually exactly as it
