@@ -11,19 +11,32 @@
 //! deliberately does not hold. [`crate::app::App`] carries a [`Timeline`] and
 //! joins the two.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use styra_protocol::event::{AgentEvent, DetailBlock};
 use styra_protocol::Contract;
 
 /// A stable handle to one row of the list.
 ///
-/// Minted when the entry is appended and never reused within a session, so it
-/// keeps naming the same row as entries arrive above and below it — unlike a
-/// position, which every filter change reinterprets. A renderer can therefore
-/// hold one across frames and know what it refers to.
+/// Minted when the entry is appended and never reused, so it keeps naming the
+/// same row as entries arrive above and below it — unlike a position, which
+/// every filter change reinterprets. A renderer can therefore hold one across
+/// frames and know what it refers to.
+///
+/// Unique across the whole process, not just one list: the renderer's row
+/// cache outlives any one interaction, so an id that restarted with each
+/// [`Timeline`] would let a new interaction's rows be drawn from an earlier
+/// one's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EventId(u64);
 
 impl EventId {
+    /// An id no other entry in this process has or will have.
+    fn mint() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+
     /// The bare number, for handing this identity to a renderer that keys
     /// cached work on it without depending on this crate.
     pub fn as_u64(self) -> u64 {
@@ -179,10 +192,6 @@ pub struct Timeline {
     /// `selected` distinguishes deliberate upward navigation from a live row
     /// merely changing height between frames.
     pub rendered_selection: Option<usize>,
-    /// The next [`EventId`] to hand out. Monotonic and never rewound, so an
-    /// id is unique for the life of the list even though entries are only
-    /// ever appended.
-    next_id: u64,
 }
 
 impl Default for Timeline {
@@ -196,14 +205,12 @@ impl Default for Timeline {
             conversation_only: true,
             list_offset: 0,
             rendered_selection: None,
-            next_id: 0,
         }
     }
 }
 
 impl Timeline {
-    /// Append a row, giving it an identity no other row in this list has or
-    /// will have.
+    /// Append a row, giving it an identity no other row has or will have.
     ///
     /// The only way to build an [`Entry`]: ids come from here, so an entry
     /// cannot exist without one.
@@ -214,10 +221,8 @@ impl Timeline {
         raw_index: Option<usize>,
         contract: Option<Contract>,
     ) {
-        let id = EventId(self.next_id);
-        self.next_id += 1;
         self.entries.push(Entry {
-            id,
+            id: EventId::mint(),
             revision: 0,
             event,
             expanded,
