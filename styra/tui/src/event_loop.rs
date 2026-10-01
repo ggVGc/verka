@@ -324,6 +324,17 @@ fn open_path(app: &mut App, config: &dyn Configuration, path: &Path) {
     }
 }
 
+/// Hand a web address to the configured browser, reporting the outcome as
+/// [`open_path`] does.
+fn open_url(app: &mut App, config: &dyn Configuration, url: &str) {
+    let mut command = config.open_url(url);
+    let described = crate::terminal::describe(&command);
+    match crate::terminal::spawn_detached(&mut command) {
+        Ok(()) => app.show_action_message(format!("opened {described}")),
+        Err(error) => app.push_log(LogEntry::error(format!("could not open {url}: {error:#}"))),
+    }
+}
+
 /// Global actions which operate on the current interaction without dismissing
 /// its navigator. They fall through to the ordinary list-key handler below.
 /// `n` is among them: stepping to the next interaction keeps the list open on
@@ -1419,6 +1430,7 @@ pub fn run(
                 open_path(app, config, &path);
             }
             Some(Request::OpenPath(path)) => open_path(app, config, &path),
+            Some(Request::OpenUrl(url)) => open_url(app, config, &url),
             Some(Request::OpenDirectory) => {
                 let Some(directory) = app.workspace.working_directory_or_current() else {
                     app.show_action_message("no directory to open a terminal in");

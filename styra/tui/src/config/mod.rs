@@ -25,6 +25,11 @@ pub trait Configuration {
     /// nothing to assume — it spawns what it is given.
     fn open_file(&self, path: &Path) -> Command;
 
+    /// The command that opens a web address from a reply — a link whose
+    /// destination is `http://` or `https://`, which an editor has nothing to
+    /// show for. A whole command for the same reason [`Self::open_file`] is.
+    fn open_url(&self, url: &str) -> Command;
+
     /// The command that runs `argv` in a terminal window of its own — what the
     /// `!` key opens a Session's sandbox shell with.
     ///

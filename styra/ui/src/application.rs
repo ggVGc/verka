@@ -4,7 +4,9 @@ use crate::{
     answer, busy, driva, event_list, files, footer, interactions, launcher, log, messages, modal_input,
     overlays, preview, quota, raw, recording, transcript, PanelId, RenderFeedback, ScrollFeedback,
 };
+use crate::{markdown, palette};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::Modifier;
 use ratatui::Frame;
 
 pub struct EventView<'a> {
@@ -12,6 +14,9 @@ pub struct EventView<'a> {
     pub navigator: Option<&'a interactions::InteractionNavigator<'a>>,
     pub entry_log: Option<&'a event_list::EntryLogView<'a>>,
     pub preview: Option<&'a preview::PreviewView<'a>>,
+    /// Whether link navigation is on, which washes out everything in the
+    /// view but the links and file references it walks.
+    pub link_mode: bool,
 }
 
 pub struct FilesView<'a> {
@@ -257,6 +262,25 @@ fn render_events(
         feedback.list_offset =
             Some(event_list::render(frame, view.list, list_area).effective_offset);
     }
+    if view.link_mode {
+        tint_all_but_entries(frame, area);
+    }
+}
+
+/// Wash `area` down the way [`modal_input::render`] washes the screen behind
+/// the message box, sparing the cells [`markdown::is_entry_style`] recognises,
+/// so the links being walked stand out from the conversation around them.
+fn tint_all_but_entries(frame: &mut Frame, area: Rect) {
+    let buffer = frame.buffer_mut();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buffer[(x, y)];
+            if !markdown::is_entry_style(cell.style()) {
+                cell.set_fg(palette::MODAL_BACKDROP);
+                cell.modifier.insert(Modifier::DIM);
+            }
+        }
+    }
 }
 
 fn render_files(
@@ -331,5 +355,47 @@ fn note_preview_scroll(
 fn render_reading_overlays(frame: &mut Frame, view: &ApplicationOverlays<'_>) {
     if let Some(references) = view.references {
         overlays::render_references(frame, references, frame.area());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::style::Style;
+    use ratatui::widgets::Paragraph;
+    use ratatui::Terminal;
+
+    #[test]
+    fn link_mode_washes_everything_but_the_entries() {
+        let text = "see `src/app.rs:4` and [docs](/docs.md) or `Provider::x()`";
+        let lines = markdown::markdown_block_lines_with_links(
+            text,
+            Style::default().fg(palette::TEXT),
+            "",
+            markdown::LinkDisplay::Compact,
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
+        terminal
+            .draw(|frame| {
+                frame.render_widget(Paragraph::new(lines.clone()), frame.area());
+                tint_all_but_entries(frame, frame.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row: String = (0..80).map(|x| buffer[(x, 0)].symbol()).collect();
+        let washed = |word: &str| {
+            let start = row.find(word).unwrap() as u16;
+            (start..start + word.len() as u16).all(|x| buffer[(x, 0)].fg == palette::MODAL_BACKDROP)
+        };
+        let bright = |word: &str| {
+            let start = row.find(word).unwrap() as u16;
+            (start..start + word.len() as u16).all(|x| buffer[(x, 0)].fg != palette::MODAL_BACKDROP)
+        };
+
+        assert!(bright("src/app.rs:4"), "{row}");
+        assert!(bright("docs"), "{row}");
+        assert!(washed("see"), "{row}");
+        assert!(washed("Provider::x()"), "{row}");
     }
 }

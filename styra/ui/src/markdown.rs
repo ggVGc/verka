@@ -109,15 +109,69 @@ pub fn markdown_link_count(text: &str) -> usize {
     markdown_block_render(text, Style::default(), "", LinkDisplay::Compact, None).entries
 }
 
-/// Destination of the `index`th Markdown link, in the same reading order as
-/// [`markdown_link_count`] and [`markdown_block_render`].
+/// Destination of the `index`th entry, in the same reading order as
+/// [`markdown_link_count`] and [`markdown_block_render`]: a link's
+/// destination, or the text of a code span that names a file.
 pub fn markdown_link_destination(text: &str, index: EntryIndex) -> Option<String> {
+    let mut depth = 0usize;
     Parser::new_ext(text, Options::all())
         .filter_map(|event| match event {
-            Event::Start(Tag::Link { dest_url, .. }) => Some(dest_url.into_string()),
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                depth += 1;
+                Some(dest_url.into_string())
+            }
+            Event::End(TagEnd::Link) => {
+                depth = depth.saturating_sub(1);
+                None
+            }
+            // A code span inside a link is its label; the link is the entry.
+            Event::Code(code) if depth == 0 && is_file_reference(&code) => Some(code.into_string()),
             _ => None,
         })
         .nth(index)
+}
+
+/// Whether an inline code span reads as a file reference — `src/app.rs`,
+/// `app.rs:120`, `lib/mod.rs:7:3` — rather than code.
+///
+/// Agents cite files in backticks as often as they write links, and a
+/// citation should be selectable however it was written. What rules out code
+/// is its punctuation: a call, a path in `::`, a URL, or anything with a space
+/// is not a filename. A dotted name with no slash must end in a short,
+/// letter-led extension, so `Cargo.toml` is a file while `1.2.3` and
+/// `config.default_model` are not. A short field access such as `self.spec`
+/// still passes; selecting it only opens a file that does not exist.
+pub fn is_file_reference(code: &str) -> bool {
+    let mut path = code;
+    // At most `:line:column`, the same suffix link destinations may carry.
+    for _ in 0..2 {
+        match path.rsplit_once(':') {
+            Some((before, digits))
+                if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                path = before;
+            }
+            _ => break,
+        }
+    }
+    if path.is_empty()
+        || !path.chars().any(|ch| ch.is_ascii_alphabetic())
+        || !path.chars().all(|ch| {
+            ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '~' | '+' | '@')
+        })
+    {
+        return false;
+    }
+    if path.contains('/') {
+        return true;
+    }
+    // A dotfile (`.gitignore`) is all extension, so its length says nothing.
+    path.rsplit_once('.').is_some_and(|(stem, extension)| {
+        (stem.is_empty() || (1..=5).contains(&extension.len()))
+            && !extension.is_empty()
+            && extension.starts_with(|ch: char| ch.is_ascii_alphabetic())
+            && extension.chars().all(|ch| ch.is_ascii_alphanumeric())
+    })
 }
 
 /// Syntax-highlights a standalone fenced-code block when `language` is known
@@ -298,14 +352,36 @@ fn render_links<'a>(
     // identifies a destination rather than parenthesised prose.
     let mut appended = vec![false; spans.len()];
     let mut selected = vec![false; spans.len()];
-    for index in 1..spans.len().saturating_sub(2) {
-        if !(spans[index].content == " ("
+    // Every entry is underlined, as a link already is, which is what
+    // [`is_entry_style`] recognises it by once it is on screen.
+    let mut underlined = vec![false; spans.len()];
+    let is_destination = |index: usize| {
+        index >= 1
+            && index + 2 < spans.len()
+            && spans[index].content == " ("
             && spans[index + 2].content == ")"
             && spans[index + 1].style == StyraStyleSheet.link()
-            && is_link_label(&spans[index - 1]))
+            && is_link_label(&spans[index - 1])
+    };
+    for index in 0..spans.len() {
+        // A code span that names a file is an entry of its own, unless it is
+        // the label of the link whose destination follows it.
+        if is_code_span(&spans[index])
+            && is_file_reference(&spans[index].content)
+            && !is_destination(index + 1)
         {
+            underlined[index] = true;
+            let entry = *entries;
+            *entries += 1;
+            if highlight == Some(entry) {
+                selected[index] = true;
+            }
             continue;
         }
+        if !is_destination(index) {
+            continue;
+        }
+        underlined[index - 1] = true;
         appended[index] = true;
         appended[index + 1] = true;
         appended[index + 2] = true;
@@ -317,10 +393,14 @@ fn render_links<'a>(
             continue;
         }
         // The label is however many spans the emphasis inside it was split
-        // into; in `Full` the destination is on screen too, and the selection
-        // covers what is on screen.
+        // into — or the one code span it was written as, which the code style
+        // replaces the link style on; in `Full` the destination is on screen
+        // too, and the selection covers what is on screen.
         let mut first = index;
         while first > 0 && is_link_span(&spans[first - 1]) {
+            first -= 1;
+        }
+        if first == index && is_code_span(&spans[index - 1]) {
             first -= 1;
         }
         let last = if links == LinkDisplay::Full {
@@ -332,7 +412,10 @@ fn render_links<'a>(
             *span = true;
         }
     }
-    for (span, selected) in spans.iter_mut().zip(&selected) {
+    for ((span, selected), underlined) in spans.iter_mut().zip(&selected).zip(&underlined) {
+        if *underlined {
+            span.style = span.style.add_modifier(Modifier::UNDERLINED);
+        }
         if *selected {
             span.style = span.style.patch(entry_highlight_style());
         }
@@ -357,9 +440,19 @@ fn is_link_span(span: &Span<'_>) -> bool {
 ///
 /// Underlining is what the link style contributes that survives any emphasis,
 /// heading, or inline code the label was written inside — so a `(destination)`
-/// preceded by ordinary text belongs to a link that wrote no label.
+/// preceded by ordinary text belongs to a link that wrote no label. The
+/// exception is a label written as one code span, `` [`app.rs`](/src/app.rs) ``,
+/// which `tui-markdown` draws in the code style alone.
 fn is_link_label(span: &Span<'_>) -> bool {
-    span.style.add_modifier.contains(Modifier::UNDERLINED)
+    span.style.add_modifier.contains(Modifier::UNDERLINED) || is_code_span(span)
+}
+
+/// Whether `span` is inline code as `tui-markdown` draws it. Fenced code is
+/// never drawn this way, so a filename on a line of its own in a code block
+/// is not mistaken for a citation.
+fn is_code_span(span: &Span<'_>) -> bool {
+    let code = StyraStyleSheet.code();
+    span.style.fg == code.fg && span.style.bg == code.bg
 }
 
 /// The column a rendered Markdown line's continuation rows should be indented
@@ -610,14 +703,24 @@ fn render_spans(
                 text.into_string(),
                 inline_style(current_style(&styles), active_link, highlight),
             )),
-            Event::Code(code) => spans.push(Span::styled(
-                code.into_string(),
-                inline_style(
-                    current_style(&styles).fg(palette::WARNING),
-                    active_link,
-                    highlight,
-                ),
-            )),
+            Event::Code(code) => {
+                // Numbered like `markdown_link_destination`: a code span
+                // naming a file outside any link is an entry of its own.
+                let entry = if active_link.is_none() && is_file_reference(&code) {
+                    links += 1;
+                    Some(links - 1)
+                } else {
+                    active_link
+                };
+                spans.push(Span::styled(
+                    code.into_string(),
+                    inline_style(
+                        current_style(&styles).fg(palette::WARNING),
+                        entry,
+                        highlight,
+                    ),
+                ));
+            }
             Event::SoftBreak | Event::HardBreak => spans.push(Span::styled(
                 " ",
                 inline_style(current_style(&styles), active_link, highlight),
@@ -637,11 +740,26 @@ fn inline_style(
     active_link: Option<EntryIndex>,
     highlight: Option<EntryIndex>,
 ) -> Style {
-    if highlight.is_some_and(|highlight| active_link == Some(highlight)) {
+    let Some(entry) = active_link else {
+        return style;
+    };
+    let style = style.add_modifier(Modifier::UNDERLINED);
+    if highlight == Some(entry) {
         style.patch(entry_highlight_style())
     } else {
         style
     }
+}
+
+/// Whether a drawn cell belongs to an entry — a link or a file reference —
+/// so that link navigation can wash out everything else on screen.
+///
+/// Entries are the only underlined text Styra draws, bar a level-one heading,
+/// which is told apart by the accent fill it is drawn on.
+pub fn is_entry_style(style: Style) -> bool {
+    style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND)
+        || (style.add_modifier.contains(Modifier::UNDERLINED)
+            && style.bg != StyraStyleSheet.heading(1).bg)
 }
 
 fn current_style(styles: &[Style]) -> Style {
@@ -775,6 +893,90 @@ mod tests {
             .iter()
             .flat_map(|line| &line.spans)
             .all(|span| span.style.bg != Some(palette::LINK_HIGHLIGHT_BACKGROUND)));
+    }
+
+    #[test]
+    fn a_code_span_naming_a_file_is_an_entry_in_reading_order() {
+        let base = Style::default();
+        let text = "- **Field:** `genta/src/spec.rs:44` calls `Provider::x()`, \
+                    see [lib.rs](/src/lib.rs) and `Cargo.toml`";
+        let highlighted = |entry| {
+            markdown_block_render(text, base, "", LinkDisplay::Compact, Some(entry)).lines[0]
+                .spans
+                .iter()
+                .filter(|span| span.style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND))
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        };
+
+        assert_eq!(markdown_link_count(text), 3);
+        assert_eq!(highlighted(0), "genta/src/spec.rs:44");
+        assert_eq!(highlighted(1), "lib.rs");
+        assert_eq!(highlighted(2), "Cargo.toml");
+        assert_eq!(
+            markdown_link_destination(text, 0).as_deref(),
+            Some("genta/src/spec.rs:44")
+        );
+        assert_eq!(
+            markdown_link_destination(text, 1).as_deref(),
+            Some("/src/lib.rs")
+        );
+        assert_eq!(
+            markdown_link_destination(text, 2).as_deref(),
+            Some("Cargo.toml")
+        );
+
+        let summary = parse_inline_spans_with_highlight(text, base, Some(2));
+        let summary: String = summary
+            .iter()
+            .filter(|span| span.style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND))
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(summary, "Cargo.toml");
+    }
+
+    #[test]
+    fn a_link_labelled_in_code_is_one_entry_and_drops_its_destination() {
+        let base = Style::default();
+        let text = "see [`app.rs:120`](/src/app.rs:120)";
+        let render = markdown_block_render(text, base, "", LinkDisplay::Compact, Some(0));
+
+        assert_eq!(render.entries, 1);
+        assert_eq!(rendered_line(&render.lines[0]), "see app.rs:120");
+        assert_eq!(
+            markdown_link_destination(text, 0).as_deref(),
+            Some("/src/app.rs:120")
+        );
+    }
+
+    #[test]
+    fn only_code_that_reads_as_a_filename_is_a_file_reference() {
+        for file in [
+            "src/app.rs",
+            "app.rs:120",
+            "lib/mod.rs:7:3",
+            "Cargo.toml",
+            ".gitignore",
+            "~/notes",
+        ] {
+            assert!(is_file_reference(file), "{file}");
+        }
+        for code in [
+            "Provider::default_model",
+            "self.spec().model",
+            "config.default_model",
+            "1.2.3",
+            "https://example.com/a",
+            "a b.rs",
+            "\"claude-opus-5\"",
+        ] {
+            assert!(!is_file_reference(code), "{code}");
+        }
+    }
+
+    #[test]
+    fn a_filename_in_a_fenced_code_block_is_not_an_entry() {
+        assert_eq!(markdown_link_count("```\nsrc/main.rs\n```"), 0);
     }
 
     #[test]
