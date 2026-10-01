@@ -41,10 +41,10 @@ pub const INTERACTION_TAG: Color = Color::Rgb(255, 215, 175);
 /// notice on its pane's border. A clear yellow (221), since it is the one
 /// mark asking for action.
 pub const UNCOMMITTED: Color = Color::Rgb(255, 215, 95);
-/// The spinner of a running turn, in the navigator and the log: a bright
-/// orange, the loudest hue on its row, and apart from the yellow that means
-/// work left uncommitted.
-pub const RUNNING: Color = Color::Rgb(255, 135, 0);
+/// The spinner of a running turn, in the navigator and the log: a soft
+/// coral orange (209), the loudest hue on its row without glaring, and apart
+/// from the yellow that means work left uncommitted.
+pub const RUNNING: Color = Color::Rgb(255, 135, 95);
 /// The terminal's own red, as before the orgone port.
 pub const ERROR: Color = Color::Red;
 /// 211, `Special`.
@@ -92,9 +92,19 @@ pub const SUBORDINATE_TEXT: Color = MUTED_TEXT;
 /// 228, `PreProc` / `MatchParen` text.
 pub const SELECTION_MARKER: Color = Color::Rgb(255, 255, 135);
 /// The focused Markdown link: visible without the hard yellow used for a row
-/// cursor, since it sits directly behind the link's own syntax styling.
-/// 101, `MatchParen`.
-pub const LINK_HIGHLIGHT_BACKGROUND: Color = Color::Rgb(135, 135, 95);
+/// cursor, since it sits directly behind the link's own syntax styling. A
+/// dusty rose (95) under the rose of the link itself, in place of orgone's
+/// olive `MatchParen`, which read as the one green-gray in a warm palette.
+pub const LINK_HIGHLIGHT_BACKGROUND: Color = Color::Rgb(135, 95, 95);
+/// Markdown link labels: the rose of [`LIGHT_ACCENT`], so a link reads as a
+/// link rather than as the near-white of [`INFO`].
+pub const MARKDOWN_LINK: Color = LIGHT_ACCENT;
+/// Markdown headings: the gold of a navigator group heading, so a section
+/// in a reply reads like a section anywhere else in the UI.
+pub const MARKDOWN_HEADING: Color = WORKSPACE_NAME;
+/// Markdown block quotes: the tan of supporting information, in place of
+/// the terminal's own green, which belongs to success and the operator.
+pub const MARKDOWN_QUOTE: Color = ADDITIONAL_INFO;
 pub const LIVE_MARKER: Color = SUCCESS;
 
 /// 180, `Statement`.

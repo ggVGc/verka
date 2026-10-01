@@ -151,10 +151,18 @@ fn row_item(row: &InteractionRow<'_>) -> ListItem<'static> {
         unreachable!()
     };
     let (marker, color) = status_marker(*status);
-    // The marker sits on the row's own background; a running spinner is told
-    // apart by its glyph and color, not by a patch behind it.
-    let marker_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+    // A running spinner is drawn inverted, cut out of a patch of its color, so
+    // a working row is found at a glance; every other marker sits on the row's
+    // own background.
     let running = matches!(status, InteractionStatus::Running { .. });
+    let marker_style = if running {
+        Style::default()
+            .fg(palette::INTERACTION_ROW_BACKGROUND)
+            .bg(color)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(color).add_modifier(Modifier::BOLD)
+    };
     let mut main = vec![
         Span::styled(
             if *current { "• " } else { "  " },

@@ -313,7 +313,7 @@ fn render_markdown_block(
 
 /// The selection drawn over a highlighted entry.
 ///
-/// A muted amber fill stays visible on the selected row too, whose own
+/// A dusty rose fill stays visible on the selected row too, whose own
 /// background is already [`palette::SELECTION_BACKGROUND`], without competing
 /// with the bright-yellow row cursor.
 fn entry_highlight_style() -> Style {
@@ -565,11 +565,10 @@ impl StyleSheet for StyraStyleSheet {
     fn heading(&self, level: u8) -> Style {
         match level {
             1 => Style::new()
-                .fg(palette::TEXT)
-                .bg(palette::ACCENT)
+                .fg(palette::MARKDOWN_HEADING)
                 .bold()
                 .underlined(),
-            2 => Style::new().fg(palette::ACCENT).bold(),
+            2 => Style::new().fg(palette::MARKDOWN_HEADING).bold(),
             3 => Style::new().fg(palette::ACCENT).bold().italic(),
             _ => Style::new().fg(palette::LIGHT_ACCENT).italic(),
         }
@@ -590,11 +589,11 @@ impl StyleSheet for StyraStyleSheet {
     }
 
     fn link(&self) -> Style {
-        Style::new().fg(palette::INFO).underlined()
+        Style::new().fg(palette::MARKDOWN_LINK).underlined()
     }
 
     fn blockquote(&self) -> Style {
-        Style::new().fg(palette::SUCCESS)
+        Style::new().fg(palette::MARKDOWN_QUOTE).italic()
     }
 
     fn heading_meta(&self) -> Style {
@@ -736,7 +735,7 @@ mod tests {
         let lines = markdown_block_lines("# Title", base, "  ");
 
         assert_eq!(rendered_line(&lines[0]), "  Title");
-        assert_eq!(lines[0].style.bg, Some(palette::ACCENT));
+        assert_eq!(lines[0].style.fg, Some(palette::MARKDOWN_HEADING));
         assert!(lines[0].style.add_modifier.contains(Modifier::BOLD));
     }
 
