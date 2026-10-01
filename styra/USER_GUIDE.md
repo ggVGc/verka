@@ -167,8 +167,9 @@ or mid-turn, seen or unseen — in list order, wrapping at the end. Stopped and
 completed interactions are skipped.
 
 The tag editor lists every tag already used by a Session, across Workspaces.
-Use `Space` to select or clear one, `n` to type and add a new tag, and `Enter`
-to save. Tags remain with the durable Session when its interaction stops or is
+Type to fuzzy-filter the list (`Esc` clears the filter), move with the arrows
+or `Ctrl-J`/`Ctrl-K`, and use `Space` to select or clear a tag, `Ctrl-N` to
+type and add a new tag (starting from the filter), and `Enter` to save. Tags remain with the durable Session when its interaction stops or is
 resumed.
 
 ## Read the session
