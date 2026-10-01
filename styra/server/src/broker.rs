@@ -85,6 +85,15 @@ fn run(config: BrokerConfig) -> Result<ExitStatus> {
 }
 
 fn start_tmux(config: &BrokerConfig) -> Result<()> {
+    let workdir = config.workdir.to_string_lossy();
+    // Exiting the shell closes the only session, which would normally take
+    // the tmux server — and with it the operator's way back in — down too.
+    // Keep the server running and stand a fresh shell up in its place, so the
+    // next attach finds one waiting.
+    let respawn = format!(
+        "new-session -d -s shell -c {} /bin/sh",
+        tmux_quote(&workdir)
+    );
     let status = tmux_command(config)
         .args([
             "new-session",
@@ -92,8 +101,18 @@ fn start_tmux(config: &BrokerConfig) -> Result<()> {
             "-s",
             "shell",
             "-c",
-            &config.workdir.to_string_lossy(),
+            &workdir,
             "/bin/sh",
+            ";",
+            "set-option",
+            "-s",
+            "exit-empty",
+            "off",
+            ";",
+            "set-hook",
+            "-g",
+            "session-closed",
+            &respawn,
         ])
         // The detached server must not retain the agent protocol pipes.
         .stdin(Stdio::null())
@@ -123,6 +142,13 @@ fn stop_tmux(config: &BrokerConfig) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+}
+
+/// Quote `text` as one argument of a tmux command string. Single quotes take
+/// everything literally; a quote inside is closed, escaped and reopened, the
+/// same way `sh` does it.
+fn tmux_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
 }
 
 fn tmux_command(config: &BrokerConfig) -> Command {
