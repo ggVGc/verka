@@ -1,0 +1,4 @@
+Linka could provide a mechanicsm for defining the sandbox required for executing a task.
+It should not implement the isolation, but another tool (for example Styra) could implement the sandbox specification, for example with bwrap.
+
+Linka could provide a mechanism for assembling the context for working on a task. An agentic tool then loads that context in order to do the work, without implementing the context-building based on linka nodes.
