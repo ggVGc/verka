@@ -1,10 +1,9 @@
 //! Markdown-to-Ratatui styling for agent messages.
 //!
-//! Multi-line detail blocks are rendered by `tui-markdown`, which parses a
-//! whole buffer at once and so can render tables, code fences, and other
-//! multi-line constructs correctly. Single-line summaries stay on the
-//! lighter-weight `pulldown-cmark`-based inline renderer below, since
-//! `tui-markdown` has no single-line-only mode.
+//! Everything is rendered by `tui-markdown`, which parses a whole buffer at
+//! once and so can render tables, code fences, and other multi-line
+//! constructs correctly. A single-line summary is the same rendering with its
+//! lines laid end to end, so a row and its expanded body never disagree.
 
 use crate::palette;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -414,6 +413,9 @@ fn render_links<'a>(
     }
     for ((span, selected), underlined) in spans.iter_mut().zip(&selected).zip(&underlined) {
         if *underlined {
+            if is_code_span(span) {
+                span.style = span.style.bg(palette::ENTRY_CODE_BACKGROUND);
+            }
             span.style = span.style.add_modifier(Modifier::UNDERLINED);
         }
         if *selected {
@@ -579,8 +581,8 @@ impl StyleSheet for StyraStyleSheet {
 
     fn code(&self) -> Style {
         Style::new()
-            .fg(palette::WARNING)
-            .bg(palette::CODE_BACKGROUND)
+            .fg(palette::INLINE_CODE)
+            .bg(palette::INLINE_CODE_BACKGROUND)
     }
 
     fn code_block_fence(&self) -> &str {
@@ -659,95 +661,31 @@ pub fn parse_inline_spans_with_highlight(
     base_style: Style,
     highlight: Option<EntryIndex>,
 ) -> Vec<Span<'static>> {
-    let spans = render_spans(text, base_style, highlight);
+    // The summary is the block rendering laid end to end, so a row and its
+    // expanded body style and number their entries identically. The block is
+    // rendered on the default style, which keeps it the same cache entry as
+    // [`markdown_link_count`]'s, and `base_style` is laid under it here.
+    let render = markdown_block_render(text, Style::default(), "", LinkDisplay::Compact, highlight);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for line in render.lines {
+        if line.spans.iter().all(|span| span.content.trim().is_empty()) {
+            continue;
+        }
+        if !spans.is_empty() {
+            spans.push(Span::styled(" ", base_style));
+        }
+        let line_style = base_style.patch(line.style);
+        spans.extend(
+            line.spans
+                .into_iter()
+                .filter(|span| !span.content.is_empty())
+                .map(|span| Span::styled(span.content, line_style.patch(span.style))),
+        );
+    }
     if spans.is_empty() {
         vec![Span::styled(String::new(), base_style)]
     } else {
         spans
-    }
-}
-
-fn render_spans(
-    text: &str,
-    base_style: Style,
-    highlight: Option<EntryIndex>,
-) -> Vec<Span<'static>> {
-    let parser = Parser::new_ext(text, Options::ENABLE_STRIKETHROUGH);
-    let mut spans = Vec::new();
-    let mut styles = vec![base_style];
-    let mut links = 0;
-    let mut active_link = None;
-
-    for event in parser {
-        match event {
-            Event::Start(tag) => match tag {
-                Tag::Strong => styles.push(current_style(&styles).add_modifier(Modifier::BOLD)),
-                Tag::Emphasis => styles.push(current_style(&styles).add_modifier(Modifier::ITALIC)),
-                Tag::Strikethrough => {
-                    styles.push(current_style(&styles).add_modifier(Modifier::CROSSED_OUT))
-                }
-                Tag::Link { .. } => {
-                    active_link = Some(links);
-                    links += 1;
-                }
-                _ => {}
-            },
-            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough) => {
-                if styles.len() > 1 {
-                    styles.pop();
-                }
-            }
-            Event::End(TagEnd::Link) => active_link = None,
-            Event::End(_) => {}
-            Event::Text(text) => spans.push(Span::styled(
-                text.into_string(),
-                inline_style(current_style(&styles), active_link, highlight),
-            )),
-            Event::Code(code) => {
-                // Numbered like `markdown_link_destination`: a code span
-                // naming a file outside any link is an entry of its own.
-                let entry = if active_link.is_none() && is_file_reference(&code) {
-                    links += 1;
-                    Some(links - 1)
-                } else {
-                    active_link
-                };
-                spans.push(Span::styled(
-                    code.into_string(),
-                    inline_style(
-                        current_style(&styles).fg(palette::WARNING),
-                        entry,
-                        highlight,
-                    ),
-                ));
-            }
-            Event::SoftBreak | Event::HardBreak => spans.push(Span::styled(
-                " ",
-                inline_style(current_style(&styles), active_link, highlight),
-            )),
-            Event::Html(html) | Event::InlineHtml(html) => spans.push(Span::styled(
-                html.into_string(),
-                inline_style(current_style(&styles), active_link, highlight),
-            )),
-            _ => {}
-        }
-    }
-    spans
-}
-
-fn inline_style(
-    style: Style,
-    active_link: Option<EntryIndex>,
-    highlight: Option<EntryIndex>,
-) -> Style {
-    let Some(entry) = active_link else {
-        return style;
-    };
-    let style = style.add_modifier(Modifier::UNDERLINED);
-    if highlight == Some(entry) {
-        style.patch(entry_highlight_style())
-    } else {
-        style
     }
 }
 
@@ -760,10 +698,6 @@ pub fn is_entry_style(style: Style) -> bool {
     style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND)
         || (style.add_modifier.contains(Modifier::UNDERLINED)
             && style.bg != StyraStyleSheet.heading(1).bg)
-}
-
-fn current_style(styles: &[Style]) -> Style {
-    styles.last().copied().unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -946,6 +880,55 @@ mod tests {
         assert_eq!(
             markdown_link_destination(text, 0).as_deref(),
             Some("/src/app.rs:120")
+        );
+    }
+
+    #[test]
+    fn code_that_is_an_entry_is_backed_apart_from_plain_code() {
+        let text = "`Provider::x()`, `Cargo.toml` and [`app.rs`](/src/app.rs)";
+        let render = markdown_block_render(text, Style::default(), "", LinkDisplay::Compact, None);
+        let background = |content: &str| {
+            render.lines[0]
+                .spans
+                .iter()
+                .find(|span| span.content == content)
+                .and_then(|span| span.style.bg)
+        };
+
+        assert_eq!(
+            background("Provider::x()"),
+            Some(palette::INLINE_CODE_BACKGROUND)
+        );
+        assert_eq!(
+            background("Cargo.toml"),
+            Some(palette::ENTRY_CODE_BACKGROUND)
+        );
+        assert_eq!(background("app.rs"), Some(palette::ENTRY_CODE_BACKGROUND));
+    }
+
+    #[test]
+    fn a_summary_styles_code_as_a_rendered_block_does() {
+        let text = "`Provider::x()`, `Cargo.toml` and [`app.rs`](/src/app.rs)";
+        let spans = parse_inline_spans(text, Style::default());
+        let style = |content: &str| {
+            spans
+                .iter()
+                .find(|span| span.content == content)
+                .map(|span| (span.style.fg, span.style.bg))
+        };
+        let code = Some(palette::INLINE_CODE);
+
+        assert_eq!(
+            style("Provider::x()"),
+            Some((code, Some(palette::INLINE_CODE_BACKGROUND)))
+        );
+        assert_eq!(
+            style("Cargo.toml"),
+            Some((code, Some(palette::ENTRY_CODE_BACKGROUND)))
+        );
+        assert_eq!(
+            style("app.rs"),
+            Some((code, Some(palette::ENTRY_CODE_BACKGROUND)))
         );
     }
 

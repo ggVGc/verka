@@ -23,7 +23,6 @@ use styra_protocol::Contract;
 
 const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
-const RUNNING_INDICATOR: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Which row this is, and which state of it — see the host's event identity
 /// (`tui::timeline::EventVersion`), which this mirrors.
@@ -650,7 +649,7 @@ fn status_tail(status: &EventListStatus) -> Line<'static> {
             elapsed,
             quiet,
             events,
-        } => (running_tail(*elapsed, *quiet, *events), palette::WARNING),
+        } => (running_tail(*elapsed, *quiet, *events), palette::RUNNING),
         // Idle carries no elapsed figure: nothing is happening, so a
         // climbing counter only draws the eye to a number that means nothing.
         EventListStatus::Idle { reason } => {
@@ -677,7 +676,7 @@ fn status_tail(status: &EventListStatus) -> Line<'static> {
 fn running_tail(elapsed: Duration, quiet: Option<Duration>, events: usize) -> String {
     let mut text = format!(
         "  {} working {}",
-        RUNNING_INDICATOR[events % RUNNING_INDICATOR.len()],
+        crate::interactions::running_indicator(events),
         format_duration(elapsed)
     );
     if let Some(gap) = quiet.filter(|gap| *gap >= QUIET_THRESHOLD) {

@@ -43,7 +43,7 @@ pub fn uncommitted_title(block: Block<'static>) -> Block<'static> {
     block.title_bottom(Line::from(Span::styled(
         " uncommitted changes ",
         Style::default()
-            .fg(palette::WARNING)
+            .fg(palette::UNCOMMITTED)
             .add_modifier(Modifier::BOLD),
     )))
 }

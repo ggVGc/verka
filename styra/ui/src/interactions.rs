@@ -8,7 +8,15 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 use std::borrow::Cow;
 
-const RUNNING_INDICATOR: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// A quarter-filled circle turning one step per event: solid enough to catch
+/// the eye in a long list, where a single braille dot is easily missed.
+const RUNNING_INDICATOR: [&str; 4] = ["◐", "◓", "◑", "◒"];
+
+/// The spinner frame for a running turn that has seen `events` events. The
+/// navigator row and the conversation's running tail draw the same one.
+pub(crate) fn running_indicator(events: usize) -> &'static str {
+    RUNNING_INDICATOR[events % RUNNING_INDICATOR.len()]
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InteractionStatus {
@@ -98,8 +106,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
             " {} · interactions · {} · ? keys ",
             view.scope, view.completion_filter
         ));
-    let width = area.width.saturating_sub(2);
-    let items = view.rows.iter().map(|row| row_item(row, width));
+    let items = view.rows.iter().map(row_item);
     let list = List::new(items).block(block).highlight_style(
         Style::default()
             .bg(palette::SELECTION_BACKGROUND)
@@ -114,12 +121,12 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
+fn row_item(row: &InteractionRow<'_>) -> ListItem<'static> {
     if let InteractionRow::Workspace(name) = row {
         return ListItem::new(Line::from(Span::styled(
             format!(" {name}"),
             Style::default()
-                .fg(palette::WARNING)
+                .fg(palette::WORKSPACE_NAME)
                 .add_modifier(Modifier::BOLD),
         )));
     }
@@ -144,17 +151,10 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
         unreachable!()
     };
     let (marker, color) = status_marker(*status);
-    // A running row's spinner gets a soft background behind it so the
-    // handful that are working can be picked out of a long list at a
-    // glance, without inverting the dots themselves.
-    let marker_style = if matches!(status, InteractionStatus::Running { .. }) {
-        Style::default()
-            .fg(color)
-            .bg(palette::SELECTION_BACKGROUND)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(color).add_modifier(Modifier::BOLD)
-    };
+    // The marker sits on the row's own background; a running spinner is told
+    // apart by its glyph and color, not by a patch behind it.
+    let marker_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+    let running = matches!(status, InteractionStatus::Running { .. });
     let mut main = vec![
         Span::styled(
             if *current { "• " } else { "  " },
@@ -166,18 +166,45 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
         ),
         Span::styled(marker.to_string(), marker_style),
         Span::raw(" "),
-        Span::styled(name.to_string(), Style::default().fg(palette::TEXT)),
-        Span::styled(
-            format!(" · {provider}"),
-            Style::default().fg(palette::ACCENT),
-        ),
     ];
-    if let Some(branch) = branch {
+    // Work left uncommitted is flagged ahead of the prompt, where the eye
+    // starts on every row, rather than at the end of a line of labels.
+    if *uncommitted {
         main.push(Span::styled(
-            format!(" · branch {branch}"),
-            Style::default().fg(palette::INTERACTION_STATUS_INFO),
+            "! ",
+            Style::default()
+                .fg(palette::UNCOMMITTED)
+                .add_modifier(Modifier::BOLD),
         ));
     }
+    // A working agent's prompt is bold too, so its row still stands out when
+    // the eye lands between spinner steps.
+    let name_style = Style::default().fg(palette::TEXT);
+    main.push(Span::styled(
+        name.to_string(),
+        if running {
+            name_style.add_modifier(Modifier::BOLD)
+        } else {
+            name_style
+        },
+    ));
+    // Tags belong to the prompt they label, so they follow it directly.
+    if !tags.is_empty() {
+        main.push(Span::styled(
+            format!(" #{}", tags.join(" #")),
+            Style::default().fg(palette::INTERACTION_TAG),
+        ));
+    }
+    if let Some(branch) = branch {
+        main.push(Span::styled(
+            format!(" · {branch}"),
+            Style::default().fg(palette::ACCENT),
+        ));
+    }
+    main.push(Span::styled(
+        format!(" · {provider}"),
+        Style::default().fg(palette::INTERACTION_STATUS_INFO),
+    ));
     if let Some(why) = stop_reason {
         main.push(Span::styled(
             format!(" · {why}"),
@@ -206,14 +233,6 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    if *uncommitted {
-        main.push(Span::styled(
-            " · UNCOMMITTED",
-            Style::default()
-                .fg(palette::WARNING)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
     if *sealed {
         main.push(Span::styled(
             " · SEALED",
@@ -229,21 +248,13 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    if !tags.is_empty() {
-        main.push(Span::styled(
-            format!(" · #{}", tags.join(" #")),
-            Style::default().fg(palette::WARNING),
-        ));
-    }
-    let mut lines = vec![Line::from(main)];
+    // The tint is the line's own style, so it runs the full width of the row.
+    let mut lines =
+        vec![Line::from(main).style(Style::default().bg(palette::INTERACTION_ROW_BACKGROUND))];
     if let Some(text) = last_message {
-        let body = format!("    « {text}");
-        let padding = usize::from(width).saturating_sub(body.chars().count());
         lines.push(Line::from(Span::styled(
-            format!("{body}{}", " ".repeat(padding)),
-            Style::default()
-                .fg(palette::SUBORDINATE_TEXT)
-                .bg(palette::SUBORDINATE_BACKGROUND),
+            format!("    « {text}"),
+            Style::default().fg(palette::SUBORDINATE_TEXT),
         )));
     }
     ListItem::new(lines)
@@ -252,15 +263,14 @@ fn row_item(row: &InteractionRow<'_>, width: u16) -> ListItem<'static> {
 fn status_marker(status: InteractionStatus) -> (&'static str, ratatui::style::Color) {
     match status {
         InteractionStatus::Pending => (".", palette::INFO),
-        InteractionStatus::Running { events } => (
-            RUNNING_INDICATOR[events % RUNNING_INDICATOR.len()],
-            palette::WARNING,
-        ),
+        InteractionStatus::Running { events } => (running_indicator(events), palette::RUNNING),
         InteractionStatus::Idle => ("o", palette::SUCCESS),
         InteractionStatus::Background => ("*", palette::MUTED_WARNING),
         InteractionStatus::Stopped => ("#", palette::INACTIVE),
-        InteractionStatus::Error => ("!", palette::ERROR),
-        InteractionStatus::Ended => ("x", palette::INACTIVE),
+        // Not `!`, which marks work left uncommitted on the same row.
+        InteractionStatus::Error => ("x", palette::ERROR),
+        // Not `x`, which an error is drawn as.
+        InteractionStatus::Ended => ("-", palette::INACTIVE),
     }
 }
 
@@ -296,7 +306,7 @@ mod tests {
                     name: "repair checkout".into(),
                     provider: "codex",
                     branch: Some("fix"),
-                    status: InteractionStatus::Running { events: 3 },
+                    status: InteractionStatus::Running { events: 2 },
                     current: true,
                     selected: true,
                     loading: false,
@@ -314,12 +324,47 @@ mod tests {
         let screen = rendered(&view);
         assert!(screen.contains("Payments"), "{screen}");
         assert!(
-            screen.contains("⠸ repair checkout · codex · branch fix"),
+            screen.contains("◑ repair checkout #bug #urgent · fix · codex"),
             "{screen}"
         );
-        assert!(screen.contains("NEWLY IDLE · #bug #urgent"), "{screen}");
+        assert!(screen.contains("· NEWLY IDLE"), "{screen}");
         assert!(screen.contains("« The checks are green."), "{screen}");
         assert_eq!(height(&view, 12), 5);
+    }
+
+    #[test]
+    fn the_interaction_line_is_tinted_across_the_row_and_its_message_is_not() {
+        let tags = Vec::new();
+        let view = InteractionNavigator {
+            scope: "All".into(),
+            all_workspaces: true,
+            completion_filter: "completed hidden".into(),
+            rows: vec![InteractionRow::Interaction {
+                name: "repair checkout".into(),
+                provider: "codex",
+                branch: None,
+                status: InteractionStatus::Idle,
+                current: false,
+                selected: false,
+                loading: false,
+                newly_idle: false,
+                stop_reason: None,
+                rate_limited: None,
+                uncommitted: false,
+                completed: false,
+                sealed: false,
+                tags: &tags,
+                last_message: Some("The checks are green."),
+            }],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &view, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(buffer[(78, 1)].bg, palette::INTERACTION_ROW_BACKGROUND);
+        assert_eq!(buffer[(78, 2)].bg, palette::RESET);
     }
 
     /// The list is where an operator scanning several stopped agents decides
@@ -349,7 +394,7 @@ mod tests {
                 last_message: None,
             }],
         };
-        assert!(rendered(&view).contains("repair checkout · claude · UNCOMMITTED"));
+        assert!(rendered(&view).contains("! repair checkout · claude"));
     }
 
     /// A stopped entry is one the operator has to decide whether to resume,

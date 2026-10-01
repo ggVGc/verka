@@ -1,8 +1,9 @@
 //! Top-level main-application layout and overlay ordering.
 
 use crate::{
-    answer, busy, driva, event_list, files, footer, interactions, launcher, log, messages, modal_input,
-    overlays, preview, quota, raw, recording, transcript, PanelId, RenderFeedback, ScrollFeedback,
+    answer, busy, driva, event_list, files, footer, interactions, launcher, log, messages,
+    modal_input, overlays, preview, quota, raw, recording, transcript, PanelId, RenderFeedback,
+    ScrollFeedback,
 };
 use crate::{markdown, palette};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
