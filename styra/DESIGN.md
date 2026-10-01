@@ -933,8 +933,8 @@ picker's conversation preview does) and the pane says `loading…` until it
 lands: a Workspace with no Sessions and an unread one must not read the same.
 
 Choosing a Workspace that holds live Interactions skips the Session picker
-entirely: the first live one — the ordering the Interactions navigator uses, so
-one waiting on the operator outranks one mid-turn — becomes current, and the
+entirely: the first live one — one waiting on the operator outranking one mid-turn,
+the newest winning a tie — becomes current, and the
 client lands on the main Interaction view with the live Interactions list open.
 The green dot the row carried is what `Enter` then acts on, and the rest of that
 Workspace's live work is on screen rather than a second picker away.
@@ -1043,9 +1043,9 @@ The Interaction previously shown keeps running on the server; only this
 client's current view changes. No separate loader state shadows the current
 screen. `Enter` merely closes the navigator.
 
-The navigator refreshes its summaries while open. Pending work is listed
-first, running work next, and stopped Interactions last, with server order
-retained within each group. Each row shows the latest received agent message
+The navigator refreshes its summaries while open. Interactions are listed
+newest first by creation time, whatever they are doing, so a row does not move
+when its activity changes. Each row shows the latest received agent message
 on a subordinate line, updated along with those live summaries. All-Workspaces
 mode always groups the rows beneath
 Workspace headings; current-Workspace mode omits the one redundant heading.

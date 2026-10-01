@@ -556,9 +556,10 @@ impl LiveInteractions {
     }
 }
 
-/// The Interaction the navigator would land on first within `workspace_id`:
-/// the live ones in the order [`sort_interactions`] gives them, so one waiting
-/// on the operator outranks one mid-turn.
+/// The Interaction to land on when entering `workspace_id`: one waiting on the
+/// operator outranks one mid-turn, and the newest wins a tie. Unlike the
+/// navigator's own creation-time order, this does weigh activity — it picks
+/// one Interaction once, rather than holding rows in place.
 ///
 /// Stopped Interactions are not candidates. Entering a Workspace should land on
 /// work that can still be talked to, and a stopped Interaction is reached the
@@ -575,13 +576,13 @@ pub fn first_live_in_workspace(
         .cloned()
         .collect::<Vec<_>>();
     sort_interactions(&mut live);
-    live.into_iter().next()
+    live.into_iter().min_by_key(activity_rank)
 }
 
 /// `visible` re-ordered so each Workspace's entries are contiguous, in the
 /// order the Workspaces themselves first appear: what [`crate::presentation::interactions`]
 /// draws under its Workspace headings, and so what walking the list has to
-/// follow rather than the activity-sorted item order.
+/// follow rather than the creation-sorted item order.
 fn grouped_by_workspace(interactions: &[InteractionSummary], visible: Vec<usize>) -> Vec<usize> {
     let mut ordered = Vec::with_capacity(visible.len());
     for leader in &visible {
@@ -599,13 +600,33 @@ fn grouped_by_workspace(interactions: &[InteractionSummary], visible: Vec<usize>
     ordered
 }
 
+/// Newest first, by creation time alone. What an Interaction is doing changes
+/// several times a turn, and a list re-sorted by it moves rows out from under
+/// the cursor.
 fn sort_interactions(interactions: &mut [InteractionSummary]) {
-    interactions.sort_by_key(|interaction| match interaction.activity {
+    interactions.sort_by_key(|interaction| std::cmp::Reverse(created_at_ms(interaction)));
+}
+
+/// The creation time the server embeds as the leading field of an Interaction
+/// id (its Session id), in epoch milliseconds. An id of any other shape sorts
+/// as oldest rather than failing the listing.
+fn created_at_ms(interaction: &InteractionSummary) -> u64 {
+    interaction
+        .id
+        .split('-')
+        .next()
+        .and_then(|millis| millis.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Waiting on the operator outranks mid-turn, which outranks stopped.
+fn activity_rank(interaction: &InteractionSummary) -> u8 {
+    match interaction.activity {
         styra_protocol::InteractionActivity::Pending => 0,
         styra_protocol::InteractionActivity::Running
         | styra_protocol::InteractionActivity::Background => 1,
         styra_protocol::InteractionActivity::Stopped => 2,
-    });
+    }
 }
 
 /// `Pending` is the server summary's name for a live interaction waiting for
@@ -659,26 +680,43 @@ mod tests {
     }
 
     #[test]
-    fn live_interactions_open_on_the_current_session_in_status_order() {
+    fn live_interactions_open_newest_first_whatever_they_are_doing() {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("stopped", InteractionActivity::Stopped),
-                interaction("running", InteractionActivity::Running),
-                interaction("idle", InteractionActivity::Pending),
+                interaction("0000000000200-1-0", InteractionActivity::Pending),
+                interaction("0000000000300-1-0", InteractionActivity::Stopped),
+                interaction("0000000000100-1-0", InteractionActivity::Running),
             ],
             vec![],
         );
 
         assert!(live.open);
-        assert_eq!(
+        let order = |live: &LiveInteractions| {
             live.items
                 .iter()
-                .map(|interaction| interaction.id.as_str())
-                .collect::<Vec<_>>(),
-            ["idle", "running", "stopped"]
+                .map(|interaction| interaction.id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            order(&live),
+            ["0000000000300-1-0", "0000000000200-1-0", "0000000000100-1-0"]
         );
-        assert_eq!(live.current("running").unwrap().id, "running");
+        assert_eq!(
+            live.current("0000000000100-1-0").unwrap().id,
+            "0000000000100-1-0"
+        );
+
+        // A change of activity does not move a row.
+        live.refresh(vec![
+            interaction("0000000000100-1-0", InteractionActivity::Pending),
+            interaction("0000000000200-1-0", InteractionActivity::Running),
+            interaction("0000000000300-1-0", InteractionActivity::Stopped),
+        ]);
+        assert_eq!(
+            order(&live),
+            ["0000000000300-1-0", "0000000000200-1-0", "0000000000100-1-0"]
+        );
     }
 
     #[test]
@@ -720,7 +758,7 @@ mod tests {
 
         assert_eq!(
             live.visible_indices(Some("workspace")),
-            vec![0],
+            vec![1],
             "completed rows are hidden by default"
         );
         live.toggle_completed();
@@ -867,11 +905,10 @@ mod tests {
             vec![],
         );
 
-        // The list is held in activity order — one waiting on the operator
-        // first — and the step follows that order, wrapping at its end.
-        assert_eq!(live.next_live("waiting").unwrap().id, "current");
-        assert_eq!(live.next_live("current").unwrap().id, "background");
-        assert_eq!(live.next_live("background").unwrap().id, "waiting");
+        // The step follows the list's order, wrapping at its end.
+        assert_eq!(live.next_live("current").unwrap().id, "waiting");
+        assert_eq!(live.next_live("waiting").unwrap().id, "background");
+        assert_eq!(live.next_live("background").unwrap().id, "current");
     }
 
     #[test]
@@ -1315,7 +1352,7 @@ mod tests {
         };
         assert_eq!(
             ordered(&live),
-            ["pending", "stopped", "other-running", "other-stopped"]
+            ["pending", "stopped", "other-stopped", "other-running"]
         );
 
         // And in Workspace scope, where only this Workspace's entries are
