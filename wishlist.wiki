@@ -1,3 +1,4 @@
+- Reference an interaction, or a part of an interaction, in another one
 - After a planning session, get a list of tasks to do. Each of those tasks should be driven by Styra, executed in sequence, each branched from the planning session, so that each gets the context they need, but not the context from implementing the earlier tasks.
 - Knowledge of which branch/commit work was started from is useful, and should also be inserted into context. For example, so that agent knows which source to diff against.
 - User defined actions -> Store per workspace or global -> Attach such actions as hooks, e.g "run 'cargo fmt' after merge/complete-interaction"
