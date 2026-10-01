@@ -356,7 +356,7 @@ pub fn render_fuzzy_list(frame: &mut Frame, view: &FuzzyListView, area: Rect) {
 /// `row` cut into spans so the characters at `positions` carry the match
 /// mark. The letters that were typed are the reason the row is on screen, so
 /// they are what the eye should land on.
-fn marked(row: &str, positions: &[usize]) -> Vec<Span<'static>> {
+pub fn marked(row: &str, positions: &[usize]) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut plain = String::new();
     for (index, character) in row.chars().enumerate() {

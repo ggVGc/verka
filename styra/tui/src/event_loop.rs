@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -907,15 +907,36 @@ pub fn run(
             match key {
                 k if keys::TAGS_NEXT.matches(k) => picker.next(),
                 k if keys::TAGS_PREV.matches(k) => picker.previous(),
+                k if keys::TAGS_PAGE_DOWN.matches(k) => picker.page_down(),
+                k if keys::TAGS_PAGE_UP.matches(k) => picker.page_up(),
+                k if keys::TAGS_DELETE_WORD.matches(k) => picker.delete_query_word(),
                 k if keys::TAGS_TOGGLE.matches(k) => picker.toggle(),
-                k if keys::TAGS_NEW.matches(k) => picker.new_tag = Some(String::new()),
-                k if keys::TAGS_CANCEL.matches(k) => app.tag_picker = None,
+                k if keys::TAGS_NEW.matches(k) => picker.start_new(),
+                // Esc widens the list back out before it closes the picker.
+                k if keys::TAGS_CANCEL.matches(k) => {
+                    if picker.is_filtering() {
+                        picker.clear_query();
+                    } else {
+                        app.tag_picker = None;
+                    }
+                }
                 k if keys::TAGS_SAVE.matches(k) => {
                     let tags = picker.selected.clone();
                     let id = app.session_id.clone();
                     save_tags(app, client, id, tags);
                 }
-                _ => {}
+                _ => match key.code {
+                    KeyCode::Backspace => picker.type_query(None),
+                    KeyCode::Char(character)
+                        if !character.is_control()
+                            && !key
+                                .modifiers
+                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        picker.type_query(Some(character));
+                    }
+                    _ => {}
+                },
             }
             continue;
         }

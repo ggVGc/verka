@@ -223,12 +223,19 @@ bindings! { BRANCH = "Branch from selected entry";
 }
 
 bindings! { TAGS = "Interaction tags";
-    TAGS_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::TagsNext;
-    TAGS_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::TagsPrev;
+    // The list is typed at, as the launcher's is, so letters are the query and
+    // the commands are on Space, Enter, Esc, the arrows and control chords.
+    // Space can stay a command because the filter ignores whitespace.
+    TAGS_FILTER: [] as "any letter" => Action::TagsFilter;
+    TAGS_NEXT: [Key::code(KeyCode::Down), Key::ctrl('j')] => Action::TagsNext;
+    TAGS_PREV: [Key::code(KeyCode::Up), Key::ctrl('k')] => Action::TagsPrev;
+    TAGS_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::TagsPageDown;
+    TAGS_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::TagsPageUp;
+    TAGS_DELETE_WORD: [Key::ctrl('w')] => Action::TagsDeleteWord;
     TAGS_TOGGLE: [Key::ch(' ')] => Action::TagsToggle;
-    TAGS_NEW: [Key::ch('n')] => Action::TagsNew;
+    TAGS_NEW: [Key::ctrl('n')] => Action::TagsNew;
     TAGS_SAVE: [Key::code(KeyCode::Enter)] => Action::TagsSave;
-    TAGS_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => Action::TagsCancel;
+    TAGS_CANCEL: [Key::code(KeyCode::Esc)] => Action::TagsCancel;
 }
 
 bindings! { SESSION_PICKER = "Stored sessions";

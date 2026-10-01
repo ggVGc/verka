@@ -481,7 +481,7 @@ fn draw_main(
         .map(|picker| styra_ui::overlays::TagPickerView {
             available: &picker.available,
             selected: &picker.selected,
-            cursor: picker.cursor,
+            list: &picker.list,
             new_tag: picker.new_tag.as_deref(),
         });
     let application = styra_ui::application::ApplicationView {

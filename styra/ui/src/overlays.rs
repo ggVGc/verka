@@ -1,3 +1,4 @@
+use crate::fuzzy_list::{marked, FuzzyList};
 use crate::palette;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -43,13 +44,15 @@ pub fn render_branch(frame: &mut Frame, prompt: BranchPromptView, frame_area: Re
 pub struct TagPickerView<'a> {
     pub available: &'a [String],
     pub selected: &'a [String],
-    pub cursor: usize,
+    pub list: &'a FuzzyList,
     pub new_tag: Option<&'a str>,
 }
 
 pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
     let area = frame.area();
-    let height = (picker.available.len() as u16 + 6).min(area.height.saturating_sub(2));
+    // Sized to the whole catalog rather than the matches, so the box does not
+    // jump about as the filter narrows it.
+    let height = (picker.available.len().max(1) as u16 + 6).min(area.height.saturating_sub(2));
     let width = area.width.saturating_sub(8).min(56);
     let popup = Rect::new(
         area.x + (area.width.saturating_sub(width)) / 2,
@@ -58,33 +61,58 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(" Interaction tags · ? keys ");
+    if picker.list.is_filtering() {
+        block = block.title_bottom(Line::from(vec![
+            Span::styled(" /", Style::default().fg(palette::MUTED_TEXT)),
+            Span::styled(
+                format!("{} ", picker.list.query),
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
     let inside = block.inner(popup);
     frame.render_widget(block, popup);
-    let rows = picker
-        .available
-        .iter()
-        .map(|tag| {
-            ListItem::new(Line::from(vec![
-                Span::styled(
+    let matches = picker.list.matches(picker.available);
+    let rows = if matches.is_empty() {
+        let note = if picker.available.is_empty() {
+            "no tags yet".to_owned()
+        } else {
+            format!("no match for {}", picker.list.query)
+        };
+        vec![ListItem::new(Line::from(Span::styled(
+            format!("  {note}"),
+            Style::default()
+                .fg(palette::MUTED_TEXT)
+                .add_modifier(Modifier::DIM),
+        )))]
+    } else {
+        matches
+            .iter()
+            .map(|found| {
+                let tag = &picker.available[found.index];
+                let mut spans = vec![Span::styled(
                     if picker.selected.contains(tag) {
                         " [x] "
                     } else {
                         " [ ] "
                     },
                     Style::default().fg(palette::ACCENT),
-                ),
-                Span::raw(tag.clone()),
-            ]))
-        })
-        .collect::<Vec<_>>();
+                )];
+                spans.extend(marked(tag, &found.positions));
+                ListItem::new(Line::from(spans))
+            })
+            .collect::<Vec<_>>()
+    };
     let input = picker
         .new_tag
         .map(|value| format!("new tag: {value} · Enter add & save"))
-        .unwrap_or_else(|| "n adds a new tag".into());
+        .unwrap_or_else(|| "type to filter · ctrl-n adds a new tag".into());
     let list_area = Rect::new(
         inside.x,
         inside.y,
@@ -103,7 +131,7 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
-    state.select((!picker.available.is_empty()).then_some(picker.cursor));
+    state.select((!matches.is_empty()).then(|| picker.list.selected.min(matches.len() - 1)));
     frame.render_stateful_widget(list, list_area, &mut state);
     frame.render_widget(
         Paragraph::new(input).style(Style::default().fg(palette::SUBORDINATE_TEXT)),
