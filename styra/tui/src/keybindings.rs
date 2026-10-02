@@ -260,15 +260,20 @@ bindings! { SESSION_PICKER = "Stored sessions";
 }
 
 bindings! { WORKSPACE_PICKER = "Workspaces";
+    // The list is typed at, as the launcher's is, so letters are the query and
+    // the commands are on Enter, Esc, the arrows and control chords.
+    WORKSPACES_FILTER: [] as "any letter" => Action::WorkspacesFilter;
+    // `?` stays a command, as in the launcher: a Workspace name that needs
+    // one to be told apart is not worth giving up the reference for.
     WORKSPACES_HELP: [Key::ch('?')] => Action::WorkspacesHelp;
-    WORKSPACES_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::WorkspacesNext;
-    WORKSPACES_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::WorkspacesPrev;
+    WORKSPACES_NEXT: [Key::code(KeyCode::Down), Key::ctrl('j')] => Action::WorkspacesNext;
+    WORKSPACES_PREV: [Key::code(KeyCode::Up), Key::ctrl('k')] => Action::WorkspacesPrev;
+    WORKSPACES_DELETE_WORD: [Key::ctrl('w')] => Action::WorkspacesDeleteWord;
     WORKSPACES_OPEN: [Key::code(KeyCode::Enter)] => Action::WorkspacesOpen;
-    WORKSPACES_NEW: [Key::ch('n')] => Action::WorkspacesNew;
-    WORKSPACES_CREATE: [Key::ch('c')] => Action::WorkspacesCreate;
-    WORKSPACES_RENAME: [Key::ch('r')] => Action::WorkspacesRename;
-    WORKSPACES_FILTER: [Key::ch('/'), Key::ch('f')] => Action::WorkspacesFilter;
-    WORKSPACES_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => Action::WorkspacesCancel;
+    WORKSPACES_NEW: [Key::ctrl('n')] => Action::WorkspacesNew;
+    WORKSPACES_CREATE: [Key::ctrl('c')] => Action::WorkspacesCreate;
+    WORKSPACES_RENAME: [Key::ctrl('r')] => Action::WorkspacesRename;
+    WORKSPACES_CANCEL: [Key::code(KeyCode::Esc)] => Action::WorkspacesCancel;
 }
 
 bindings! { LAUNCHER = "Launch";

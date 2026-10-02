@@ -184,7 +184,6 @@ pub trait Ui {
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
-        searching: bool,
     ) -> UiResult<RenderFeedback>;
 
     fn render_workspace_picker_name_prompt(
@@ -194,7 +193,6 @@ pub trait Ui {
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
-        searching: bool,
         value: &str,
     ) -> UiResult<RenderFeedback>;
 
@@ -426,7 +424,6 @@ where
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
-        searching: bool,
     ) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
             picker::render_workspace_picker(
@@ -436,7 +433,6 @@ where
                 interactions,
                 preview,
                 filter,
-                searching,
             );
             RenderFeedback::default()
         })
@@ -449,7 +445,6 @@ where
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
-        searching: bool,
         value: &str,
     ) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
@@ -460,7 +455,6 @@ where
                 interactions,
                 preview,
                 filter,
-                searching,
             );
             picker::render_workspace_name_prompt(frame, value);
             RenderFeedback::default()
@@ -615,7 +609,6 @@ where
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
-        searching: bool,
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_workspace_picker(
             self,
@@ -624,7 +617,6 @@ where
             interactions,
             preview,
             filter,
-            searching,
         )
     }
 
@@ -635,7 +627,6 @@ where
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
-        searching: bool,
         value: &str,
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_workspace_picker_name_prompt(
@@ -645,7 +636,6 @@ where
             interactions,
             preview,
             filter,
-            searching,
             value,
         )
     }

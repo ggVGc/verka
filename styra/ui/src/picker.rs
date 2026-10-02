@@ -364,7 +364,6 @@ pub fn render_workspace_picker(
     interactions: &[InteractionSummary],
     preview: SessionsPreview<'_>,
     filter: Option<&str>,
-    searching: bool,
 ) {
     let area = frame.area();
     let panes = Layout::default()
@@ -374,12 +373,12 @@ pub fn render_workspace_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(workspace_picker_title(filter, searching));
+        .title(workspace_picker_title(filter));
     if workspaces.is_empty() {
         let empty = if filter.is_some_and(|filter| !filter.is_empty()) {
             "  no Workspaces match the filter \u{b7} Esc clears it"
         } else {
-            "  no Workspaces found \u{b7} press c to create one in the current directory"
+            "  no Workspaces found \u{b7} press Ctrl+C to create one in the current directory"
         };
         render_placeholder(frame, block, panes[0], empty);
         render_sessions_preview(frame, None, preview, interactions, panes[1]);
@@ -404,15 +403,14 @@ pub fn render_workspace_picker(
 }
 
 /// The Workspace picker's title says what the list cannot be read without:
-/// the filter narrowing it, and whether a search is being typed. The rest of
-/// the keys live behind `?`, as they do for the session picker.
-fn workspace_picker_title(filter: Option<&str>, searching: bool) -> String {
+/// the filter narrowing it. Every letter typed is part of that filter, so the
+/// rest of the keys live behind `?`, as they do for the session picker.
+fn workspace_picker_title(filter: Option<&str>) -> String {
     let filter = filter
         .filter(|filter| !filter.is_empty())
         .map(|filter| format!(" \u{b7} filter: {filter}"))
         .unwrap_or_default();
-    let searching = searching.then_some(" \u{b7} searching").unwrap_or("");
-    format!(" styra \u{b7} Workspaces{filter}{searching} \u{b7} ? keys ")
+    format!(" styra \u{b7} Workspaces{filter} \u{b7} type to filter \u{b7} ? keys ")
 }
 
 /// One Workspace row. A Workspace holding an Interaction the server still
@@ -930,7 +928,7 @@ mod tests {
         interactions: &[InteractionSummary],
         preview: SessionsPreview<'_>,
     ) -> String {
-        rendered_filtered_workspace_picker(workspaces, selected, interactions, preview, None, false)
+        rendered_filtered_workspace_picker(workspaces, selected, interactions, preview, None)
     }
 
     fn rendered_filtered_workspace_picker(
@@ -939,21 +937,12 @@ mod tests {
         interactions: &[InteractionSummary],
         preview: SessionsPreview<'_>,
         filter: Option<&str>,
-        searching: bool,
     ) -> String {
         let mut terminal =
             Terminal::new(TestBackend::new(WORKSPACE_PICKER_WIDTH as u16, 14)).unwrap();
         terminal
             .draw(|frame| {
-                render_workspace_picker(
-                    frame,
-                    workspaces,
-                    selected,
-                    interactions,
-                    preview,
-                    filter,
-                    searching,
-                )
+                render_workspace_picker(frame, workspaces, selected, interactions, preview, filter)
             })
             .unwrap();
         screen_text(terminal.backend().buffer())
@@ -971,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_picker_title_states_the_filter_and_the_search() {
+    fn workspace_picker_title_states_the_filter() {
         let workspace = workspace_summary("retry", "retry work", 3);
 
         let screen = rendered_filtered_workspace_picker(
@@ -980,11 +969,9 @@ mod tests {
             &[],
             SessionsPreview::Ready(&[]),
             Some("ret"),
-            true,
         );
 
         assert!(screen.contains("filter: ret"), "{screen}");
-        assert!(screen.contains("searching"), "{screen}");
     }
 
     #[test]
@@ -995,7 +982,6 @@ mod tests {
             &[],
             SessionsPreview::Ready(&[]),
             Some("nothing"),
-            false,
         );
 
         assert!(screen.contains("no Workspaces match"), "{screen}");

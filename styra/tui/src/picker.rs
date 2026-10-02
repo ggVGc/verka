@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use styra_protocol::{
@@ -570,11 +570,11 @@ fn read_session_name(
     }
 }
 
-/// The Workspace picker loop: j/k or arrows to move, Enter to open a
-/// Workspace, `c` to create one for the current directory, `/` to filter by
-/// name, Esc or q to back out, and `?` for that list on
-/// screen. Esc abandons an active search, then clears the filter, then backs
-/// out.
+/// The Workspace picker loop. The list is typed at: every printable key
+/// narrows it by name, so the commands are on the arrows (or Ctrl+J/K), Enter
+/// to open a Workspace, and control chords — Ctrl+N to start a new interaction,
+/// Ctrl+C to create a Workspace for the current directory, Ctrl+R to rename —
+/// with `?` for that list on screen. Esc clears the filter, then backs out.
 ///
 /// The list is ordered once on entry, by [`sort_workspaces`]. A Workspace the
 /// operator opens is not reordered under them while they look at it — but its
@@ -594,8 +594,7 @@ pub fn run_workspace_picker(
     sort_workspaces(workspaces, &interactions);
     label_recency(workspaces, &interactions, unix_now_ms());
     let mut all_workspaces = workspaces.to_vec();
-    let mut filter: Option<String> = None;
-    let mut searching = false;
+    let mut filter = String::new();
     let mut workspaces = picker_workspaces(&all_workspaces, None);
     let mut selected = 0usize;
     let mut refreshed = Instant::now();
@@ -646,8 +645,7 @@ pub fn run_workspace_picker(
                 selected,
                 &interactions,
                 preview,
-                filter.as_deref(),
-                searching,
+                Some(&filter),
             )?;
         }
         let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
@@ -659,52 +657,50 @@ pub fn run_workspace_picker(
         if handle_help_key(&mut help, key) {
             continue;
         }
-        if searching {
-            match key.code {
-                KeyCode::Esc => {
-                    filter = None;
-                    searching = false;
+        // The cursor stays on the Workspace it was on for as long as the
+        // narrowing list still holds it; when it is typed away, the list reads
+        // from the top.
+        let cursor_id = workspaces
+            .get(selected)
+            .map(|workspace| workspace.id.clone());
+        let typed = match key {
+            k if keys::WORKSPACES_CANCEL.matches(k) => {
+                if filter.is_empty() {
+                    return Ok(None);
                 }
-                KeyCode::Enter => searching = false,
-                KeyCode::Backspace => {
-                    if let Some(filter) = &mut filter {
-                        filter.pop();
-                    }
-                }
-                KeyCode::Char(character) if !character.is_control() => {
-                    filter.get_or_insert_with(String::new).push(character);
-                }
-                _ => continue,
+                filter.clear();
+                true
             }
-            // The cursor stays on the Workspace it was on for as long as the
-            // narrowing list still holds it; when it is typed away, the list
-            // reads from the top.
-            let cursor_id = workspaces
-                .get(selected)
-                .map(|workspace| workspace.id.clone());
-            workspaces = picker_workspaces(&all_workspaces, filter.as_deref());
+            k if keys::WORKSPACES_HELP.matches(k) => {
+                help.open();
+                false
+            }
+            k if keys::WORKSPACES_DELETE_WORD.matches(k) => {
+                delete_last_word(&mut filter);
+                true
+            }
+            _ => match key.code {
+                KeyCode::Backspace => filter.pop().is_some(),
+                KeyCode::Char(character)
+                    if !character.is_control()
+                        && !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    filter.push(character);
+                    true
+                }
+                _ => false,
+            },
+        };
+        if typed {
+            workspaces = picker_workspaces(&all_workspaces, Some(&filter));
             selected = cursor_id
                 .and_then(|id| workspaces.iter().position(|workspace| workspace.id == id))
                 .unwrap_or(0);
             continue;
         }
         match key {
-            k if k.code == KeyCode::Esc && filter.is_some() => {
-                let cursor_id = workspaces
-                    .get(selected)
-                    .map(|workspace| workspace.id.clone());
-                filter = None;
-                workspaces = picker_workspaces(&all_workspaces, None);
-                selected = cursor_id
-                    .and_then(|id| workspaces.iter().position(|workspace| workspace.id == id))
-                    .unwrap_or(0);
-            }
-            k if keys::WORKSPACES_CANCEL.matches(k) => return Ok(None),
-            k if keys::WORKSPACES_HELP.matches(k) => help.open(),
-            k if keys::WORKSPACES_FILTER.matches(k) => {
-                filter = Some(String::new());
-                searching = true;
-            }
             k if keys::WORKSPACES_NEXT.matches(k) => {
                 selected = (selected + 1).min(workspaces.len().saturating_sub(1));
             }
@@ -727,7 +723,7 @@ pub fn run_workspace_picker(
                     selected,
                     &interactions,
                     preview,
-                    filter.as_deref(),
+                    Some(&filter),
                     workspaces[selected].name.as_deref().unwrap_or(""),
                 )? {
                     let renamed = client.rename_workspace(
@@ -766,7 +762,6 @@ fn read_workspace_name(
             interactions,
             preview,
             filter,
-            false,
             &value,
         )?;
         let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
@@ -785,6 +780,20 @@ fn read_workspace_name(
             _ => {}
         }
     }
+}
+
+/// Drop the last word of a typed filter, and the separators after it, the way
+/// Ctrl+W does in a shell.
+fn delete_last_word(filter: &mut String) {
+    let boundary = |character: char| !character.is_alphanumeric();
+    filter.truncate(filter.trim_end_matches(boundary).len());
+    let word: usize = filter
+        .chars()
+        .rev()
+        .take_while(|character| !boundary(*character))
+        .map(char::len_utf8)
+        .sum();
+    filter.truncate(filter.len() - word);
 }
 
 /// The Workspaces the filter leaves on screen, in the order they were sorted
@@ -1244,6 +1253,17 @@ mod tests {
             filtered.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
             vec!["work-a", "work-b"]
         );
+    }
+
+    #[test]
+    fn deleting_a_word_drops_it_and_the_separators_after_it() {
+        let mut filter = String::from("styra wörk- ");
+        delete_last_word(&mut filter);
+        assert_eq!(filter, "styra ");
+        delete_last_word(&mut filter);
+        assert_eq!(filter, "");
+        delete_last_word(&mut filter);
+        assert_eq!(filter, "");
     }
 
     #[test]
