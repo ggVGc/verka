@@ -51,7 +51,7 @@ pub fn uncommitted_title(block: Block<'static>) -> Block<'static> {
 pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
     let tone = match chrome.status_tone {
         StatusTone::Pending => palette::INFO,
-        StatusTone::Running => palette::WARNING,
+        StatusTone::Running => palette::RUNNING_STATUS,
         StatusTone::Idle => palette::SUCCESS,
         StatusTone::Background => palette::MUTED_WARNING,
         StatusTone::Stopped | StatusTone::Ended => palette::INACTIVE,

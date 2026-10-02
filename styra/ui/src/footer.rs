@@ -62,7 +62,7 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             .map(|segment| {
                 let color = match segment.tone {
                     Tone::Muted => palette::MUTED_TEXT,
-                    Tone::Warning => palette::WARNING,
+                    Tone::Warning => palette::QUOTA_WARNING,
                     Tone::Error => palette::ERROR,
                 };
                 let style = if segment.bold {

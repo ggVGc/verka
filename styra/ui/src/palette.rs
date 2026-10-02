@@ -31,6 +31,12 @@ pub const SUCCESS: Color = Color::Green;
 /// A dusty rose: orgone's `Todo` (139) warmed away from purple. Orgone's own
 /// `WarningMsg` (170) is too loud for the amount of text drawn in this color.
 pub const WARNING: Color = Color::Rgb(230, 168, 165);
+/// The running status in a pane's top border, in the hue of the log's own
+/// `working …` line.
+pub const RUNNING_STATUS: Color = RUNNING;
+/// A quota nearing its limit, on the quota screen and in the footer: the
+/// terminal's own yellow, as before the orgone port.
+pub const QUOTA_WARNING: Color = Color::Yellow;
 /// A workspace heading in the live-interactions navigator: a soft gold, so a
 /// group reads clearly without the glare of the terminal's own yellow.
 pub const WORKSPACE_NAME: Color = Color::Rgb(230, 200, 120);

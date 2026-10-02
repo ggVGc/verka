@@ -338,7 +338,7 @@ fn utilization_tone(value: f64) -> Tone {
 fn status_color(status: QuotaStatus) -> Color {
     match status {
         QuotaStatus::Allowed => palette::MUTED_TEXT,
-        QuotaStatus::Warning => palette::WARNING,
+        QuotaStatus::Warning => palette::QUOTA_WARNING,
         QuotaStatus::Exhausted => palette::ERROR,
     }
 }
