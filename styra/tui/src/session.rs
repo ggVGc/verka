@@ -109,7 +109,8 @@ pub fn submit_message(
                     app.workspace.id = Some(info.workspace_id);
                     app.session_id = info.id.clone();
                     app.checkout_from = None;
-                    app.session_name = info.name;
+                    app.interactions
+                        .note_name(info.id.clone(), info.name.clone());
                     if create_worktree {
                         app.show_action_message(format!(
                             "new Git workspace ready: {}",
@@ -486,7 +487,8 @@ pub fn launch_live_session(
     )?;
     let mut app = App::new(info.selection.clone(), info.id.clone());
     app.launch.interaction = launch.clone();
-    app.session_name = info.name.clone();
+    app.interactions
+        .note_name(info.id.clone(), info.name.clone());
     app.workspace.id = Some(info.workspace_id.clone());
     app.workspace.enter(info.workspace.clone());
     app.launch.record(info.driva.clone());
@@ -519,7 +521,8 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
     );
     let interaction = loaded.summary;
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
-    app.session_name = interaction.name.clone();
+    app.interactions
+        .note_name(interaction.id.clone(), interaction.name.clone());
     app.workspace.id = Some(interaction.workspace_id.clone());
     app.workspace.enter(interaction.workspace.clone());
     app.launch.record(interaction.driva.clone());
@@ -572,8 +575,9 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
 /// to once it finds no interaction serving the Session.
 pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment)> {
     let stored = client.stored_session(session_id)?;
+    let name = stored.summary.name.clone();
     let mut app = App::new(stored.summary.selection, stored.summary.id);
-    app.session_name = stored.summary.name;
+    app.interactions.note_name(app.session_id.clone(), name);
     app.workspace.id = Some(stored.summary.workspace_id);
     // A replayed Session has no live root — nothing is mounted anywhere — but
     // the server can still say where it was working when it stopped, and the
@@ -694,7 +698,8 @@ pub fn resume_and_send(
         selection: Some(app.selection.clone()),
     }) {
         Ok(info) => {
-            app.session_name = info.name.clone();
+            app.interactions
+                .note_name(info.id.clone(), info.name.clone());
             app.workspace.enter(info.workspace);
             app.launch.record(info.driva);
             // What the server actually revived it on, which is the answer to

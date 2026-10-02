@@ -567,7 +567,6 @@ struct ManagedInteraction {
     /// Captured at spawn so the interaction can be listed and reattached to without
     /// re-deriving them: the agent selection, host workspace, and launch policy.
     workspace_id: String,
-    name: Mutex<Option<String>>,
     /// What the interaction is running under *now*: the operator can switch
     /// model mid-session, and every such switch is mirrored to `session.json`
     /// so reattaching or resuming picks up the switch rather than the launch.
@@ -728,11 +727,7 @@ impl ManagedInteraction {
         let activity = state.activity;
         InteractionSummary {
             id: self.interaction.session_id().to_owned(),
-            name: self
-                .name
-                .lock()
-                .expect("session name lock poisoned")
-                .clone(),
+            name: stored.as_ref().and_then(|summary| summary.name.clone()),
             tags: stored
                 .as_ref()
                 .map(|summary| summary.tags.clone())
@@ -1702,7 +1697,6 @@ impl ServerState {
             working_tree: Arc::clone(&working_tree),
             events: Arc::clone(&events),
             workspace_id: request.workspace_id.clone(),
-            name: Mutex::new(name.clone()),
             selection: Mutex::new(selection.clone()),
             workspace: checkout.clone(),
             driva: driva.clone(),
@@ -2329,7 +2323,6 @@ impl ServerState {
             working_tree: Arc::clone(&working_tree),
             events: Arc::clone(&events),
             workspace_id: summary.workspace_id.clone(),
-            name: Mutex::new(summary.name.clone()),
             selection: Mutex::new(selection.clone()),
             workspace: checkout.clone(),
             driva: driva.clone(),
@@ -3364,16 +3357,7 @@ impl ServerState {
             )),
             Request::RenameSession(request) => {
                 let summary = self.stored_summary(&request.id)?;
-                let name = journal::store_session_name(&summary.path, request.name.as_deref())?;
-                if let Some(interaction) = self
-                    .inner
-                    .interactions
-                    .lock()
-                    .expect("server interaction lock poisoned")
-                    .get(&request.id)
-                {
-                    *interaction.name.lock().expect("session name lock poisoned") = name;
-                }
+                journal::store_session_name(&summary.path, request.name.as_deref())?;
                 Ok(Response::SessionRenamed(self.stored_summary(&request.id)?))
             }
             Request::SetSessionTags(request) => {

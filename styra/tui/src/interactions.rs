@@ -4,6 +4,7 @@
 //! Held apart from [`App`](crate::app::App) because none of it depends on the
 //! Interaction currently on screen. [`crate::presentation::interactions`] renders it.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use styra_protocol::{InteractionSummary, WorkspaceSummary};
@@ -30,6 +31,10 @@ pub struct LiveInteractions {
     pub show_completed: bool,
     pub items: Vec<InteractionSummary>,
     pub workspaces: Vec<WorkspaceSummary>,
+    /// The one client-side index of operator-facing Session names. Interaction
+    /// rows and the current screen both resolve through this map instead of
+    /// retaining independent copies that a rename has to keep synchronized.
+    names: HashMap<String, Option<String>>,
     /// Where the cursor is while that is not the Interaction on screen.
     /// `None` — the resting state — means the cursor is on the current
     /// Interaction, so there is no move outstanding.
@@ -59,6 +64,7 @@ pub struct ActivityCounts {
 
 impl LiveInteractions {
     pub fn open(&mut self, mut items: Vec<InteractionSummary>, workspaces: Vec<WorkspaceSummary>) {
+        self.take_names(&mut items);
         sort_interactions(&mut items);
         self.items = items;
         self.workspaces = workspaces;
@@ -76,8 +82,9 @@ impl LiveInteractions {
     /// fleet is listed several times a second and is usually exactly as it
     /// was, so this is what keeps the poll from counting as news.
     pub fn refresh(&mut self, mut items: Vec<InteractionSummary>) -> bool {
+        let names_changed = self.take_names(&mut items);
         sort_interactions(&mut items);
-        let changed = self.items != items;
+        let changed = self.items != items || names_changed;
         self.items = items;
         // An entry another client closed cannot be loaded, and a cursor left
         // pointing at one would keep asking for it every frame.
@@ -87,6 +94,36 @@ impl LiveInteractions {
             .is_some_and(|id| !self.items.iter().any(|interaction| interaction.id == id))
         {
             self.rest();
+        }
+        changed
+    }
+
+    /// Record the name carried by a create, resume, load, or stored-session
+    /// response before that Session necessarily appears in the live listing.
+    pub fn note_name(&mut self, id: impl Into<String>, name: Option<String>) {
+        self.names.insert(id.into(), name);
+    }
+
+    /// The current operator-facing name for `id`, shared by every TUI surface.
+    pub fn name(&self, id: &str) -> Option<&str> {
+        self.names.get(id).and_then(Option::as_deref)
+    }
+
+    /// Preserve names learned while constructing a newly loaded screen when
+    /// the operator-owned navigator state is carried onto it.
+    pub fn adopt_names_from(&mut self, newer: &Self) {
+        self.names.extend(newer.names.clone());
+    }
+
+    fn take_names(&mut self, items: &mut [InteractionSummary]) -> bool {
+        let mut changed = false;
+        for interaction in items {
+            let name = interaction.name.take();
+            changed |= self
+                .names
+                .insert(interaction.id.clone(), name.clone())
+                .as_ref()
+                != Some(&name);
         }
         changed
     }
@@ -577,9 +614,8 @@ impl LiveInteractions {
             return true;
         };
         let filter = filter.to_lowercase();
-        let name = interaction
-            .name
-            .as_deref()
+        let name = self
+            .name(&interaction.id)
             .unwrap_or_else(|| styra_ui::picker::short_id(&interaction.id));
         let workspace = self
             .workspaces
@@ -895,6 +931,24 @@ mod tests {
             live.current("two").unwrap().last_message.as_deref(),
             Some("new response")
         );
+    }
+
+    #[test]
+    fn refreshed_names_have_one_lookup_for_the_list_and_current_screen() {
+        let mut live = LiveInteractions::default();
+        let mut original = interaction("one", InteractionActivity::Pending);
+        original.name = Some("Original".into());
+        live.open(vec![original], vec![]);
+
+        assert_eq!(live.name("one"), Some("Original"));
+        assert_eq!(live.current("one").unwrap().name, None);
+
+        let mut renamed = interaction("one", InteractionActivity::Pending);
+        renamed.name = Some("Renamed".into());
+        assert!(live.refresh(vec![renamed]));
+
+        assert_eq!(live.name("one"), Some("Renamed"));
+        assert_eq!(live.current("one").unwrap().name, None);
     }
 
     #[test]
