@@ -40,11 +40,11 @@ pub const INTERACTION_TAG: Color = Color::Rgb(255, 215, 175);
 /// Work left uncommitted: the `!` ahead of such an interaction and the
 /// notice on its pane's border. A clear yellow (221), since it is the one
 /// mark asking for action.
-pub const UNCOMMITTED: Color = Color::Rgb(255, 215, 95);
+pub const UNCOMMITTED: Color = Color::Rgb(230, 200, 95);
 /// The spinner of a running turn, in the navigator and the log: a soft
 /// coral orange (209), the loudest hue on its row without glaring, and apart
 /// from the yellow that means work left uncommitted.
-pub const RUNNING: Color = Color::Rgb(255, 135, 95);
+pub const RUNNING: Color = UNCOMMITTED;
 /// The terminal's own red, as before the orgone port.
 pub const ERROR: Color = Color::Red;
 /// 211, `Special`.
