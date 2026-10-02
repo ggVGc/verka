@@ -372,7 +372,7 @@ pub struct FakeGit {
     /// same one, which is the part of history a caller can observe.
     branches: Mutex<BTreeMap<String, String>>,
     /// How many commits the fake has named, so each new one is distinct.
-    commits: Mutex<u64>,
+    named_commits: Mutex<u64>,
     /// Roots a test has declared to have uncommitted work. A fake with no
     /// history cannot derive this, and the callers only ever ask the
     /// question, so it is simply stated.
@@ -451,9 +451,9 @@ impl FakeGit {
 
     /// A commit id no other commit in this fake has, shaped like Git's.
     fn next_commit(&self) -> String {
-        let mut commits = self.commits.lock().unwrap();
-        *commits += 1;
-        format!("{:040x}", *commits)
+        let mut named = self.named_commits.lock().unwrap();
+        *named += 1;
+        format!("{:040x}", *named)
     }
 
     /// The commit `revision` names: a branch's head, or a commit some branch
