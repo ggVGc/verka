@@ -129,6 +129,7 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
             typing: false,
         },
         status: EventListStatus::Idle { reason: None },
+        queued: &[],
     };
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
         WIDTH as u16,

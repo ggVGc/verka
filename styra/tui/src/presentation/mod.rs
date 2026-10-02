@@ -229,6 +229,7 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
     let preceding = app
         .outbox
         .queued()
+        .iter()
         .map(|message: &styra_protocol::QueuedMessage| {
             let prefix = match message.contract {
                 Some(contract) => format!("queued ({}): ", contract.as_str()),

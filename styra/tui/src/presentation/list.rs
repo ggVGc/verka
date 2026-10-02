@@ -99,6 +99,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         links: ui_link_display(app.link_display),
         search: app.search.view(),
         status,
+        queued: app.outbox.queued(),
     }
 }
 
@@ -132,6 +133,55 @@ mod tests {
         // `q` quits the list; here it is a letter of the term.
         crate::input::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char('q')));
         assert_eq!(app.search.query(), Some("queq"));
+    }
+
+    /// Messages written while the agent is busy are listed at the end of the
+    /// log, under the status tail and in the order they will be sent.
+    #[test]
+    fn queued_messages_are_listed_after_the_status_tail() {
+        use styra_protocol::QueuedMessage;
+
+        let mut app = test_support::app("s1");
+        app.push_event(AgentEvent::UserMessage {
+            text: "rename the config loader".into(),
+        });
+        app.outbox.replace_queued(vec![
+            QueuedMessage::new("then run the tests"),
+            QueuedMessage::new("and commit it\nwith a short message"),
+        ]);
+
+        let screen = test_support::screen(&app);
+        let (_, working) = screen.find("working");
+        let (_, first) = screen.find("queued » then run the tests");
+        let (_, second) = screen.find("queued » and commit it");
+        assert!(working < first && first < second, "{}", screen.all());
+        assert!(
+            screen.locate("with a short message").is_none(),
+            "a queued message takes one row: {}",
+            screen.all()
+        );
+    }
+
+    /// A long queue is counted past a few rows rather than listed, so it
+    /// cannot push the status tail off the screen.
+    #[test]
+    fn a_long_queue_is_counted_rather_than_listed() {
+        use styra_protocol::QueuedMessage;
+
+        let mut app = test_support::app("s1");
+        app.push_event(AgentEvent::UserMessage {
+            text: "rename the config loader".into(),
+        });
+        app.outbox.replace_queued(
+            (0..8)
+                .map(|n| QueuedMessage::new(format!("follow-up {n}")))
+                .collect(),
+        );
+
+        let screen = test_support::screen(&app);
+        assert!(screen.locate("follow-up 4").is_some(), "{}", screen.all());
+        assert!(screen.locate("follow-up 5").is_none(), "{}", screen.all());
+        assert!(screen.all().contains("+3 more queued"), "{}", screen.all());
     }
 
     /// Opening a new interaction shows the prompt that was typed into it, not

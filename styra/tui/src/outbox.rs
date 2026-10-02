@@ -50,8 +50,8 @@ impl Outbox {
         self.contract = contract;
     }
 
-    pub fn queued(&self) -> impl Iterator<Item = &QueuedMessage> {
-        self.queued.iter()
+    pub fn queued(&self) -> &[QueuedMessage] {
+        &self.queued
     }
 
     pub fn queued_count(&self) -> usize {
