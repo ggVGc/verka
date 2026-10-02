@@ -846,6 +846,7 @@ mod tests {
             checkout: None,
             last_message: None,
             auto_retry: false,
+            auto_commit: false,
             events: 0,
             completed: CompletionState::Active,
         }

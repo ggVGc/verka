@@ -125,6 +125,15 @@ pub trait Git: Send + Sync {
     /// a tracked one.
     fn has_uncommitted_changes(&self, checkout: &Path) -> Result<bool>;
 
+    /// Stage everything `git status` reports in `checkout` — tracked or not —
+    /// and commit it with `message`, returning the new commit's abbreviated
+    /// id.
+    ///
+    /// The same coarse scope as [`Self::has_uncommitted_changes`], and asked
+    /// after it: a turn's commit is of what the turn left, which is what the
+    /// operator would otherwise have been told was uncommitted.
+    fn commit_all(&self, checkout: &Path, message: &str) -> Result<String>;
+
     /// Resolve `path` to the root of its nearest enclosing Git checkout.
     fn repository_root(&self, path: &Path) -> Result<PathBuf> {
         self.discover(path)?
@@ -277,6 +286,22 @@ impl Git for SystemGit {
             .output()?;
         Ok(!status.trim().is_empty())
     }
+
+    fn commit_all(&self, checkout: &Path, message: &str) -> Result<String> {
+        Invocation::new(checkout, "stage the working tree")
+            .args(["add", "--all"])
+            .succeed()?;
+        // On stdin rather than as `-m`: a turn's messages can outgrow the
+        // length the kernel allows a single argument. `whitespace` keeps
+        // lines starting with `#`, which an agent's Markdown is full of.
+        Invocation::new(checkout, "commit the turn")
+            .args(["commit", "--quiet", "--cleanup=whitespace", "--file=-"])
+            .stdin(message)
+            .succeed()?;
+        Invocation::new(checkout, "read the new commit")
+            .args(["rev-parse", "--short", "HEAD"])
+            .output()
+    }
 }
 
 fn git_path<I, S>(directory: &Path, arguments: I) -> Result<PathBuf>
@@ -333,6 +358,9 @@ pub struct FakeGit {
     /// history cannot derive this, and the callers only ever ask the
     /// question, so it is simply stated.
     dirty: Mutex<Vec<PathBuf>>,
+    /// Every commit [`Git::commit_all`] made, as the checkout root it was made
+    /// in and its message, oldest first.
+    commits: Mutex<Vec<(PathBuf, String)>>,
 }
 
 /// One checkout the fake knows about: the main one, or a linked worktree.
@@ -411,6 +439,19 @@ impl FakeGit {
             }
             _ => {}
         }
+    }
+
+    /// The messages of the commits made in the checkout containing `root`,
+    /// oldest first.
+    pub fn commits(&self, root: &Path) -> Vec<String> {
+        let root = root.canonicalize().expect("canonicalising the fake root");
+        self.commits
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(made_in, _)| *made_in == root)
+            .map(|(_, message)| message.clone())
+            .collect()
     }
 
     /// The checkout `repository` names, which every worktree operation is run
@@ -584,6 +625,21 @@ impl Git for FakeGit {
         };
         Ok(self.dirty.lock().unwrap().contains(&found.root))
     }
+
+    fn commit_all(&self, checkout: &Path, message: &str) -> Result<String> {
+        if !self.has_uncommitted_changes(checkout)? {
+            anyhow::bail!("git could not commit the turn: nothing to commit, working tree clean");
+        }
+        let checkout = checkout.canonicalize()?;
+        let root = self
+            .containing(&checkout)
+            .expect("checked to be in a checkout above")
+            .root;
+        self.set_uncommitted_changes(&root, false);
+        let mut commits = self.commits.lock().unwrap();
+        commits.push((root, message.to_owned()));
+        Ok(format!("{:07x}", commits.len()))
+    }
 }
 
 /// The nearest enclosing directory of `start` that holds a `.git`. Inside a
@@ -656,6 +712,7 @@ struct Invocation<'a> {
     directory: &'a Path,
     action: String,
     arguments: Vec<OsString>,
+    stdin: Option<String>,
 }
 
 impl<'a> Invocation<'a> {
@@ -664,7 +721,14 @@ impl<'a> Invocation<'a> {
             directory,
             action: action.into(),
             arguments: Vec::new(),
+            stdin: None,
         }
+    }
+
+    /// Feed `input` to the command's standard input.
+    fn stdin(mut self, input: impl Into<String>) -> Self {
+        self.stdin = Some(input.into());
+        self
     }
 
     fn arg(mut self, argument: impl AsRef<OsStr>) -> Self {
@@ -706,12 +770,13 @@ impl<'a> Invocation<'a> {
     }
 
     fn run(self, require_success: bool) -> Result<Option<String>> {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(self.directory)
-            .args(&self.arguments)
-            .output()
-            .with_context(|| format!("running git to {}", self.action))?;
+        let mut command = Command::new("git");
+        command.arg("-C").arg(self.directory).args(&self.arguments);
+        let output = match &self.stdin {
+            None => command.output(),
+            Some(input) => feed(&mut command, input),
+        }
+        .with_context(|| format!("running git to {}", self.action))?;
         if output.status.success() {
             let stdout = String::from_utf8(output.stdout).with_context(|| {
                 format!(
@@ -733,6 +798,30 @@ impl<'a> Invocation<'a> {
         };
         anyhow::bail!("git could not {}: {detail}", self.action)
     }
+}
+
+/// Run `command` with `input` on its standard input, collecting its output.
+fn feed(command: &mut Command, input: &str) -> std::io::Result<std::process::Output> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Dropped before waiting, so git sees the end of the message.
+    let written = child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(input.as_bytes());
+    let output = child.wait_with_output()?;
+    // A git that refused before reading all of it says why on stderr, which
+    // is the better error than the broken pipe that refusal caused here.
+    if output.status.success() {
+        written?;
+    }
+    Ok(output)
 }
 
 /// Repository setup the real-Git conformance tests need. Here rather than in
@@ -759,6 +848,20 @@ pub(crate) mod fixture {
             .args(["init", "--quiet"])
             .succeed()
             .unwrap();
+    }
+
+    /// Give the repository at `checkout` an identity of its own, for a test
+    /// that commits through code which passes none.
+    pub fn identify(checkout: &Path) {
+        for (key, value) in [
+            ("user.name", "Styra"),
+            ("user.email", "styra@example.invalid"),
+        ] {
+            Invocation::new(checkout, "configure a test identity")
+                .args(["config", key, value])
+                .succeed()
+                .unwrap();
+        }
     }
 
     /// Commit with no changes, and without depending on whether whoever runs
@@ -1077,6 +1180,37 @@ mod conformance {
 
         std::fs::write(root.join("left-behind.txt"), "work").unwrap();
         assert!(SystemGit.has_uncommitted_changes(&root).unwrap());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A turn's commit takes everything `git status` reported — the new file
+    /// as well as the edit — and keeps the message as written, Markdown
+    /// headings included.
+    #[test]
+    #[ignore = "requires a real git binary"]
+    fn real_git_commits_all_of_a_turns_work() {
+        if !fixture::git_available() {
+            eprintln!("skipping: no usable git");
+            return;
+        }
+        let root = temporary_directory("conformance-commit");
+        std::fs::create_dir_all(&root).unwrap();
+        fixture::init(&root);
+        fixture::identify(&root);
+        fixture::commit_empty(&root, "root");
+        std::fs::write(root.join("new.txt"), "work").unwrap();
+
+        let message = "Add the file\n\n# Heading\nbody";
+        let commit = SystemGit.commit_all(&root, message).unwrap();
+
+        assert!(!commit.is_empty());
+        assert!(!SystemGit.has_uncommitted_changes(&root).unwrap());
+        let logged = Invocation::new(&root, "read the commit message")
+            .args(["log", "-1", "--format=%B"])
+            .output()
+            .unwrap();
+        assert_eq!(logged.trim_end(), message);
 
         std::fs::remove_dir_all(root).unwrap();
     }

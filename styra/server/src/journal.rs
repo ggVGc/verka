@@ -56,6 +56,14 @@ struct StoredSessionMeta {
     /// once.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     auto_retry: bool,
+    /// Whether the work an interaction of this Session leaves in its checkout
+    /// is committed each time it goes idle. On unless the operator turned it
+    /// off, so a Session from before the setting existed has it on as well.
+    ///
+    /// Stored with the Session for the reason [`Self::auto_retry`] is: the
+    /// operator's answer has to survive the interaction being resumed.
+    #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
+    auto_commit: bool,
     /// The linked checkout and branch this Session works in, for a Session
     /// launched with one. `None` means it works in the Workspace directory
     /// itself — or that it predates this field, which is why a reader that
@@ -73,6 +81,14 @@ struct StoredSessionMeta {
     completed: CompletionState,
     #[serde(flatten)]
     agent: SessionMeta,
+}
+
+fn enabled() -> bool {
+    true
+}
+
+fn is_enabled(value: &bool) -> bool {
+    *value
 }
 
 /// Decode a Session's completion state, accepting the JSON boolean that stood
@@ -367,6 +383,7 @@ fn write_session_meta(
         origin: None,
         contract: None,
         auto_retry: false,
+        auto_commit: true,
         checkout: None,
         completed: CompletionState::Active,
         agent: meta.clone(),
@@ -668,6 +685,28 @@ pub fn store_session_auto_retry(path: &Path, auto_retry: bool) -> Result<()> {
         return Ok(());
     }
     stored.auto_retry = auto_retry;
+    write_stored_session_meta(&directory, &stored)
+}
+
+/// Whether an interaction of this Session commits what each turn leaves
+/// behind in its checkout.
+pub fn read_session_auto_commit(path: &Path) -> Result<bool> {
+    Ok(read_stored_session_meta(path)?.auto_commit)
+}
+
+/// Record whether this Session's turns are committed as they end. Kept with
+/// the Session so a resumed interaction carries on doing what the last one did.
+pub fn store_session_auto_commit(path: &Path, auto_commit: bool) -> Result<()> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    if stored.auto_commit == auto_commit {
+        return Ok(());
+    }
+    stored.auto_commit = auto_commit;
     write_stored_session_meta(&directory, &stored)
 }
 
@@ -1629,6 +1668,31 @@ mod tests {
             read_session_meta(directory).unwrap().protocol,
             Protocol::CodexJsonl
         );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&host).ok();
+    }
+
+    /// Committing each turn is on until the operator says otherwise, and
+    /// saying so is remembered by the Session rather than by the interaction
+    /// that happened to be open.
+    #[test]
+    fn committing_each_turn_is_on_by_default_and_stored_with_the_session() {
+        let root = temp_dir("auto-commit-store");
+        let host = temp_dir("auto-commit-host");
+        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, _) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+        let directory = journal.path().parent().unwrap();
+
+        assert!(read_session_auto_commit(directory).unwrap());
+        store_session_auto_commit(directory, false).unwrap();
+        assert!(!read_session_auto_commit(directory).unwrap());
+        store_session_auto_commit(directory, true).unwrap();
+        assert!(read_session_auto_commit(directory).unwrap());
+        assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&host).ok();

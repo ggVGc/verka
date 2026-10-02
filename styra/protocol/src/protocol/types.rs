@@ -912,6 +912,12 @@ pub struct InteractionSummary {
     /// See [`crate::protocol::Request::SetInteractionAutoRetry`].
     #[serde(default)]
     pub auto_retry: bool,
+    /// Whether the work this interaction leaves in its checkout is committed
+    /// each time it goes idle. See
+    /// [`crate::protocol::Request::SetInteractionAutoCommit`]. `false` from a
+    /// server too old to commit anything.
+    #[serde(default)]
+    pub auto_commit: bool,
     /// How many events have arrived from this interaction's agent. A listing
     /// client steps its running indicator with this rather than with the
     /// clock, so the motion means "this interaction produced something"

@@ -460,6 +460,7 @@ fn draw_main(
         working_directory: &working_directory,
         quota: &quota_alert,
         auto_retry: app.auto_retry,
+        auto_commit: app.auto_commit && !app.session_id.is_empty(),
     };
     let launcher = app.launcher.as_ref().map(launcher_view);
     let capture = app.recording.as_ref().map(recording);

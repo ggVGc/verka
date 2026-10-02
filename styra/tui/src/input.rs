@@ -185,6 +185,7 @@ pub fn handle_list_key(
             return app.toggle_entry_log()
         }
         k if GLOBAL_DETAILS.matches(k) => return app.toggle_view(View::Driva),
+        k if GLOBAL_AUTO_COMMIT.matches(k) => return toggle_auto_commit(app),
         k if GLOBAL_FILES.matches(k) && app.view != View::Answer => return app.toggle_files(),
         k if GLOBAL_FILES_ALIAS.matches(k)
             && !matches!(app.view, View::Events | View::Transcript | View::Preview) =>
@@ -650,6 +651,16 @@ fn creates_worktree(app: &App, key: KeyEvent) -> bool {
         && !app.composer.text.trim().is_empty()
 }
 
+/// Ask the server to commit this interaction's turns as they end, or to stop.
+/// A screen with no interaction yet has nothing to answer for: the one it
+/// starts commits its turns, as every new one does.
+fn toggle_auto_commit(app: &mut App) {
+    if app.session_id.is_empty() {
+        return app.show_action_message("no interaction yet — new ones commit each turn");
+    }
+    app.ask(Request::SetAutoCommit(!app.auto_commit));
+}
+
 pub fn handle_input_key(
     app: &mut App,
     client: &Client,
@@ -682,6 +693,9 @@ pub fn handle_input_key(
         // box rather than from the driva view that the grant it may ask for
         // would otherwise have to be made in.
         k if EDITOR_INSERT_PATH.matches(k) => open_insert(app),
+        // Also from the box, so the turn about to be sent can be kept out of
+        // the history without leaving the message half-written.
+        k if EDITOR_AUTO_COMMIT.matches(k) => toggle_auto_commit(app),
         k if EDITOR_HISTORY_OLDER.matches(k) => app.composer.history_previous(),
         k if EDITOR_HISTORY_NEWER.matches(k) => app.composer.history_next(),
         k if k.code == KeyCode::Backspace => app.composer.backspace(),

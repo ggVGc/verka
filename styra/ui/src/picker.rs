@@ -1090,6 +1090,7 @@ mod tests {
     ) -> InteractionSummary {
         InteractionSummary {
             auto_retry: false,
+            auto_commit: false,
             id: id.into(),
             name: None,
             tags: Vec::new(),

@@ -26,6 +26,9 @@ pub struct FooterView<'a> {
     pub working_directory: &'a str,
     pub quota: &'a [Segment],
     pub auto_retry: bool,
+    /// Whether the interaction shown commits each turn's work as it goes
+    /// idle.
+    pub auto_commit: bool,
 }
 
 pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
@@ -40,12 +43,19 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         .map(UnicodeWidthStr::width)
         .unwrap_or_default()
         .min(area.width.saturating_sub(quota_width) as usize) as u16;
+    let commit = view.auto_commit.then_some(" ^G auto-commit ");
+    let commit_width = commit
+        .map(UnicodeWidthStr::width)
+        .unwrap_or_default()
+        .min(area.width.saturating_sub(quota_width + retry_width) as usize)
+        as u16;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(0),
             Constraint::Length(quota_width),
             Constraint::Length(retry_width),
+            Constraint::Length(commit_width),
         ])
         .split(area);
     frame.render_widget(
@@ -83,6 +93,16 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             )))
             .right_aligned(),
             chunks[2],
+        );
+    }
+    if let Some(commit) = commit {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                commit,
+                Style::default().fg(palette::SUCCESS),
+            )))
+            .right_aligned(),
+            chunks[3],
         );
     }
 }
@@ -139,9 +159,15 @@ mod tests {
                 working_directory: "/workspace",
                 quota: &quota,
                 auto_retry: true,
+                auto_commit: true,
             },
         );
-        for expected in ["codex: 80%", "rate-limit retry: on", "/workspace"] {
+        for expected in [
+            "codex: 80%",
+            "rate-limit retry: on",
+            "^G auto-commit",
+            "/workspace",
+        ] {
             assert!(output.contains(expected), "missing {expected}: {output}");
         }
     }

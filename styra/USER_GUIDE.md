@@ -116,6 +116,7 @@ transcript, details, files, answer, preview) stack over the event list, and
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
 | `Ctrl+N` | step to the next interaction that is still running |
 | `Ctrl+L` | choose provider, model, and effort (one list, typed at) |
+| `Ctrl+G` | turn auto-commit on/off for this interaction (also in the message editor) |
 
 Sending a message to a stopped or viewed Session automatically attempts native
 provider resume. In the main interaction view, `T` edits the current
@@ -145,6 +146,18 @@ attached to.
 The checkout is read at the moment the agent stops working, so the mark
 describes what that turn left; it clears the next time the interaction goes
 idle. A workspace that is not in a repository says nothing either way.
+
+Auto-commit is on for every new interaction: each time it goes idle, the
+server stages everything `git status` reports in its checkout and commits it.
+The subject is the start of the agent's last message in the turn; the body
+holds the message that started the turn, then every agent message in it. The
+interaction's stream logs the commit's id and subject, or why it could not be
+made — a missing Git identity or a refusing hook, say. A clean checkout, or a
+workspace that is not in a repository, commits nothing. `Ctrl+G` turns it off
+or back on for the interaction you are attached to. The Session remembers the
+choice, so resuming it keeps it. The footer shows `^G auto-commit` while it is on.
+Whatever `git status` sees is committed, so a checkout you edit yourself
+alongside the agent has your changes committed too.
 
 `A` opens the full Session list. In that list, `/` starts a case-insensitive
 filter over the Session name and first prompt; `Esc` abandons the filter. `c`
