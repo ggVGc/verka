@@ -703,6 +703,7 @@ M.types.SessionSummary = {
     { name = "last_event_at_ms", required = false, type = { kind = "optional", inner = { kind = "number", integer = true } } },
     { name = "last_event_age", required = false, type = { kind = "string" } },
     { name = "origin", required = false, type = { kind = "optional", inner = { kind = "ref", name = "SessionOrigin" } } },
+    { name = "branched_from", required = false, type = { kind = "optional", inner = { kind = "ref", name = "BranchPoint" } } },
     { name = "completed", required = false, type = { kind = "ref", name = "CompletionState" } },
   },
 }
@@ -760,6 +761,7 @@ M.types.InteractionSummary = {
     { name = "idle_unseen", required = false, type = { kind = "boolean" } },
     { name = "uncommitted_changes", required = false, type = { kind = "boolean" } },
     { name = "checkout", required = false, type = { kind = "optional", inner = { kind = "ref", name = "CheckoutState" } } },
+    { name = "branched_from", required = false, type = { kind = "optional", inner = { kind = "ref", name = "BranchPoint" } } },
     { name = "last_message", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "auto_retry", required = false, type = { kind = "boolean" } },
     { name = "events", required = false, type = { kind = "number", integer = true } },
@@ -974,6 +976,20 @@ M.types.SessionOrigin = {
     { name = "provider", required = true, type = { kind = "ref", name = "Provider" } },
     { name = "at_ms", required = false, type = { kind = "optional", inner = { kind = "number", integer = true } } },
     { name = "history", required = false, type = { kind = "ref", name = "BranchHistory" } },
+  },
+}
+
+--- The branch and commit a Session's own branch was created from, recorded
+--- when Styra created it.
+---
+--- The commit is the one the branch was actually made at, not the one its
+--- origin points to now: an origin branch moves on, and what the Session's
+--- branch has that it did not is measured from here.
+M.types.BranchPoint = {
+  kind = "struct",
+  fields = {
+    { name = "branch", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "commit", required = true, type = { kind = "string" } },
   },
 }
 

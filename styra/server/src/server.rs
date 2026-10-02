@@ -696,6 +696,9 @@ impl ManagedInteraction {
     }
 
     fn summary(&self) -> InteractionSummary {
+        // The Session's own record, read once for everything this summary
+        // takes from it.
+        let stored = journal::session_summary_at(&self.session_path, &self.workspace_id).ok();
         let state = self.activity.get();
         let activity = state.activity;
         InteractionSummary {
@@ -705,8 +708,9 @@ impl ManagedInteraction {
                 .lock()
                 .expect("session name lock poisoned")
                 .clone(),
-            tags: journal::session_summary_at(&self.session_path, &self.workspace_id)
-                .map(|summary| summary.tags)
+            tags: stored
+                .as_ref()
+                .map(|summary| summary.tags.clone())
                 .unwrap_or_default(),
             workspace_id: self.workspace_id.clone(),
             selection: self.selection(),
@@ -722,6 +726,7 @@ impl ManagedInteraction {
             // `InteractionSummary::checkout`. Where the work is happening is
             // still the answer while the agent is working on it.
             checkout: self.working_tree.checkout_state(),
+            branched_from: stored.and_then(|summary| summary.branched_from),
             activity,
             activity_reason: state.reason,
             activity_since_ms: state.since_ms,
@@ -5066,6 +5071,7 @@ mod tests {
                 idle_unseen: false,
                 uncommitted_changes: false,
                 checkout: None,
+                branched_from: None,
                 last_message: None,
                 auto_retry: false,
                 events: 0,

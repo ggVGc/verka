@@ -783,6 +783,7 @@ mod tests {
             checkout: None,
             last_message: None,
             events: 0,
+            branched_from: None,
             completed: CompletionState::Active,
         }
     }

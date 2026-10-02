@@ -766,6 +766,22 @@ pub struct CheckoutState {
     pub branch: Option<String>,
 }
 
+/// The branch and commit a Session's own branch was created from, recorded
+/// when Styra created it.
+///
+/// The commit is the one the branch was actually made at, not the one its
+/// origin points to now: an origin branch moves on, and what the Session's
+/// branch has that it did not is measured from here.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchPoint {
+    /// The branch the new one was made from, as `git branch` shows it.
+    /// `None` when the repository's head was detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The commit the new branch started at.
+    pub commit: String,
+}
+
 impl CheckoutState {
     /// Whether the agent worked in a linked worktree rather than in the
     /// repository's main checkout.
@@ -902,6 +918,11 @@ pub struct InteractionSummary {
     /// details view empty its Git rows every time the operator said anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<CheckoutState>,
+    /// Where the Session's own branch was created from — see
+    /// [`BranchPoint`]. `None` for a Session Styra made no branch for, and for
+    /// one whose branch predates this being recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branched_from: Option<BranchPoint>,
     /// The most recent message the agent sent, flattened to a single line and
     /// clipped, so a list of interactions says what each one is actually
     /// talking about. `None` before the agent has said anything.
@@ -1034,6 +1055,10 @@ pub struct SessionSummary {
     /// launched fresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SessionOrigin>,
+    /// Where the branch Styra made for this Session was created from — see
+    /// [`BranchPoint`]. `None` for a Session with no branch of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branched_from: Option<BranchPoint>,
     /// Whether the operator has finished with this Session — see
     /// [`crate::protocol::Request::SetSessionCompleted`]. Cleared when the
     /// Session is resumed: an interaction working on it again is not one the

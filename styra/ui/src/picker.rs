@@ -741,6 +741,7 @@ mod tests {
             last_event_at_ms: None,
             last_event_age: String::new(),
             origin: None,
+            branched_from: None,
             completed: styra_protocol::CompletionState::Active,
         }
     }
@@ -1111,6 +1112,7 @@ mod tests {
             idle_unseen: false,
             uncommitted_changes: false,
             checkout: None,
+            branched_from: None,
             last_message: None,
             events: 0,
             completed: styra_protocol::CompletionState::Active,

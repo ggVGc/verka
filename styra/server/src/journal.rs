@@ -411,6 +411,7 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
         last_event_at_ms,
         last_event_age: humanize_age(now_ms(), last_event_at_ms),
         origin: meta.origin,
+        branched_from: meta.checkout.and_then(|checkout| checkout.branched_from),
         completed: meta.completed,
     })
 }
@@ -1829,6 +1830,7 @@ mod tests {
             last_event_at_ms: created_at_ms,
             last_event_age: String::new(),
             origin: None,
+            branched_from: None,
             completed: CompletionState::Active,
         };
         let mut sessions = vec![

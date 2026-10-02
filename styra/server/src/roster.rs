@@ -103,6 +103,16 @@ impl Roster {
                 entry.summary.completed =
                     crate::journal::read_session_completed(&entry.session_path)
                         .unwrap_or(CompletionState::Active);
+                // A row mirrored before this was reported has none; the
+                // Session's own record has it, and it is set once, so the
+                // record is right whichever run wrote the row.
+                if entry.summary.branched_from.is_none() {
+                    entry.summary.branched_from =
+                        crate::journal::read_session_checkout(&entry.session_path)
+                            .ok()
+                            .flatten()
+                            .and_then(|checkout| checkout.branched_from);
+                }
                 (entry.summary.id.clone(), entry)
             })
             .collect();
@@ -274,6 +284,10 @@ mod tests {
                 worktree: PathBuf::from("/tmp/worktrees/project-session"),
                 repository: PathBuf::from("/tmp/project"),
                 branch: Some("styra/project-session".into()),
+            }),
+            branched_from: Some(crate::protocol::BranchPoint {
+                branch: Some("main".into()),
+                commit: "0123456789abcdef0123456789abcdef01234567".into(),
             }),
             last_message: Some("still going".into()),
             auto_retry: false,

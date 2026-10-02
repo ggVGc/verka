@@ -16,6 +16,7 @@
 
 use crate::agent::MountSpec;
 use crate::git::{Git, Repository};
+pub use crate::protocol::BranchPoint;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -48,21 +49,6 @@ pub struct Checkout {
     /// commit yet to start from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branched_from: Option<BranchPoint>,
-}
-
-/// The branch and commit a Session's branch was created from.
-///
-/// The commit is the one the branch was actually made at, not the one its
-/// origin points to now: an origin branch moves on, and what the Session's
-/// branch has that it did not is measured from here.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BranchPoint {
-    /// The branch the new one was made from, as `git branch` shows it.
-    /// `None` when the repository's head was detached.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    /// The commit the new branch started at.
-    pub commit: String,
 }
 
 impl Checkout {

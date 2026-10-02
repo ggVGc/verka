@@ -1013,6 +1013,7 @@ mod tests {
             last_event_at_ms: None,
             last_event_age: String::new(),
             origin: None,
+            branched_from: None,
             completed: CompletionState::Active,
         }
     }
@@ -1043,6 +1044,7 @@ mod tests {
             checkout: None,
             last_message: None,
             events: 0,
+            branched_from: None,
             completed: CompletionState::Active,
         }
     }
