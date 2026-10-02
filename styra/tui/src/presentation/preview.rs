@@ -123,7 +123,7 @@ mod tests {
     /// open over the conversation-only list.
     fn app_with_two_turns() -> App {
         let mut app = test_support::app("s1");
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.push_event(AgentEvent::UserMessage {
             text: "fix the retry backoff".into(),
         });
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn a_work_entry_still_previews_as_itself() {
         let mut app = app_with_two_turns();
-        app.timeline.conversation_only = false;
+        app.timeline.all_events = true;
         app.select_next_line();
         assert_eq!(
             app.preview_entry().map(|entry| entry.event().tag()),

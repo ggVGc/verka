@@ -65,7 +65,7 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_COLLAPSE_ALL: [Key::ch('M')] as "z M" => Action::EventsCollapseAll;
     EVENTS_MINOR: [Key::ch('m')] => Action::EventsMinor;
     EVENTS_PREVIEW_PANEL: [Key::ch('p')] => Action::EventsPreviewPanel;
-    EVENTS_CONVERSATION_ONLY: [Key::ch('c')] => Action::EventsConversationOnly;
+    EVENTS_ALL_EVENTS: [Key::ch('c')] => Action::EventsAllEvents;
     EVENTS_PREVIEW_TARGET: [Key::ch('C')] ("preview open") => Action::EventsPreviewTarget;
     EVENTS_COMPLETE: [Key::ch('C')] ("preview closed")
         => Action::EventsComplete;
@@ -86,8 +86,8 @@ bindings! { READING = "Raw, log, quota, and transcript";
     READING_LAST: [Key::ch('G')] => Action::ReadingLast;
     READING_LINKS: [Key::ch('f')] ("transcript")
         => Action::ReadingLinks;
-    READING_CONVERSATION_ONLY: [Key::ch('c')] ("transcript")
-        => Action::ReadingConversationOnly;
+    READING_ALL_EVENTS: [Key::ch('c')] ("transcript")
+        => Action::ReadingAllEvents;
     READING_RETRY: [Key::ch('R')] ("quota")
         => Action::ReadingRetry;
     READING_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::ReadingPageDown;

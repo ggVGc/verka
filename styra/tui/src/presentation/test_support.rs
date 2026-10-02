@@ -49,7 +49,7 @@ pub(crate) fn app_with(profile: &str, session: &str) -> App {
 /// The filter state every rendering test starts from, stated rather than
 /// inherited: everything visible, so a test that pushes an event can find it.
 fn configure(mut app: App) -> App {
-    app.timeline.conversation_only = false;
+    app.timeline.all_events = true;
     app.timeline.show_minor = false;
     app
 }

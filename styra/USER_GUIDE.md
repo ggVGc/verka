@@ -140,7 +140,7 @@ is showing it is not one of them — you watched it happen.
 An interaction that stops with uncommitted changes in its Git checkout — edits
 or new files the agent left behind — is marked `UNCOMMITTED` in the list, and
 `uncommitted changes` sits on the bottom border of the pane — beside
-`conversation only` when that filter is on — for the interaction you are
+`all events` when every event is shown — for the interaction you are
 attached to.
 The checkout is read at the moment the agent stops working, so the mark
 describes what that turn left; it clears the next time the interaction goes
@@ -190,7 +190,7 @@ resumed.
 | `p` / `P` | toggle side preview / full-screen preview |
 | `C` | preview the newest command |
 | `y` | copy the selected item to the clipboard |
-| `c` | show conversation events only (events and transcript) |
+| `c` | show all events instead of the conversation only (events and transcript); the border then says `all events · minor shown` or `minor hidden` |
 
 In the event list: `j`/`k` moves by line, `J`/`K` (or the arrows, while no
 preview is open) moves by event,

@@ -51,7 +51,7 @@ pub(crate) enum Action {
     EventsCollapseAll,
     EventsMinor,
     EventsPreviewPanel,
-    EventsConversationOnly,
+    EventsAllEvents,
     EventsPreviewTarget,
     EventsComplete,
     EventsLinkDestinations,
@@ -65,7 +65,7 @@ pub(crate) enum Action {
     ReadingFirst,
     ReadingLast,
     ReadingLinks,
-    ReadingConversationOnly,
+    ReadingAllEvents,
     ReadingRetry,
     ReadingPageDown,
     ReadingPageUp,
@@ -267,7 +267,7 @@ impl Action {
             Self::EventsCollapseAll => "collapse all",
             Self::EventsMinor => "toggle minor events",
             Self::EventsPreviewPanel => "toggle preview panel",
-            Self::EventsConversationOnly => "toggle conversation-only events",
+            Self::EventsAllEvents => "toggle all events (conversation only by default)",
             Self::EventsPreviewTarget => "preview the newest command",
             Self::EventsComplete => "mark this interaction completed and stop it",
             Self::EventsLinkDestinations => "toggle link destinations",
@@ -285,7 +285,7 @@ impl Action {
             Self::ReadingLinks => {
                 "highlight conversation links (j/k moves, Enter opens, Esc exits)"
             }
-            Self::ReadingConversationOnly => "toggle conversation-only events",
+            Self::ReadingAllEvents => "toggle all events (conversation only by default)",
             Self::ReadingRetry => {
                 "after a rate limit, ask this session again once the window resets"
             }

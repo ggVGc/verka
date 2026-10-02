@@ -61,6 +61,20 @@ pub struct PanelChrome {
     pub session: Option<String>,
 }
 
+/// The bottom-border marker for a panel showing every event rather than the
+/// default conversation only, saying too whether minor lifecycle events are
+/// among them — with all events on, that is the other half of what is on
+/// screen.
+pub fn all_events_title(show_minor: bool) -> Line<'static> {
+    let minor = if show_minor { "minor shown" } else { "minor hidden" };
+    Line::from(Span::styled(
+        format!(" all events · {minor} "),
+        Style::default()
+            .fg(palette::ACCENT)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
 /// Mark a panel as showing an interaction that stopped working and left
 /// uncommitted changes in its repository. It rides the bottom border of the
 /// pane the operator is already reading, beside the other markers about what
