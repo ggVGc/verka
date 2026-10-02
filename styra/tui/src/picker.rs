@@ -115,10 +115,8 @@ pub fn run_session_picker(
             }
             if settle_from.is_some_and(|since| since.elapsed() >= PREVIEW_SETTLE) {
                 settle_from = None;
-                preview_live = client
-                    .list_interactions()?
-                    .iter()
-                    .any(|interaction| interaction.id == preview_id);
+                preview_live =
+                    session_has_live_interaction(&preview_id, &client.list_interactions()?);
                 if !preview_live {
                     // The preview renders decoded events only, so the raw wire
                     // lines are left on the server rather than shipped here to
@@ -1003,6 +1001,21 @@ fn has_live_interaction(workspace: &WorkspaceSummary, interactions: &[Interactio
     })
 }
 
+/// Whether a Session has an Interaction with a live update stream behind it.
+///
+/// `ListInteractions` also includes stopped rows restored from the previous
+/// server run. Those rows have no update stream, so their preview must be read
+/// from the stored Session journal instead.
+fn session_has_live_interaction(id: &str, interactions: &[InteractionSummary]) -> bool {
+    interactions.iter().any(|interaction| {
+        interaction.id == id
+            && !matches!(
+                interaction.activity_reason.as_ref(),
+                Some(styra_protocol::InteractionActivityReason::ServerRestarted)
+            )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1128,6 +1141,20 @@ mod tests {
         let sessions = vec![session("first"), session("current"), session("last")];
         assert_eq!(initial_session_selection(&sessions, Some("current")), 1);
         assert_eq!(initial_session_selection(&sessions, Some("gone")), 0);
+    }
+
+    #[test]
+    fn session_preview_reads_restored_interactions_from_the_stored_journal() {
+        let live = interaction("live", InteractionActivity::Pending);
+        let stopped_here = interaction("stopped-here", InteractionActivity::Stopped);
+        let mut restored = interaction("restored", InteractionActivity::Stopped);
+        restored.activity_reason = Some(styra_protocol::InteractionActivityReason::ServerRestarted);
+        let interactions = vec![live, stopped_here, restored];
+
+        assert!(session_has_live_interaction("live", &interactions));
+        assert!(session_has_live_interaction("stopped-here", &interactions));
+        assert!(!session_has_live_interaction("restored", &interactions));
+        assert!(!session_has_live_interaction("unknown", &interactions));
     }
 
     #[test]
