@@ -468,7 +468,7 @@ pub struct OperatorState {
     interactions: LiveInteractions,
     /// The event list's own filter, which is a display choice like the rest;
     /// a caller that wants a different one sets it after adopting.
-    conversation_only: bool,
+    all_events: bool,
     /// The preview panel's own display choices; see
     /// [`Preview::choices`](crate::preview::Preview::choices).
     preview: preview::Choices,
@@ -559,7 +559,7 @@ impl App {
     pub fn take_operator_state(&mut self) -> OperatorState {
         OperatorState {
             interactions: std::mem::take(&mut self.interactions),
-            conversation_only: self.timeline.conversation_only,
+            all_events: self.timeline.all_events,
             preview: self.preview.choices(),
             link_display: self.link_display,
             recent_models: std::mem::take(&mut self.recent_models),
@@ -577,7 +577,7 @@ impl App {
     /// deliberately not, in one place rather than once per switching path.
     pub fn adopt(&mut self, state: OperatorState) {
         self.interactions = state.interactions;
-        self.timeline.conversation_only = state.conversation_only;
+        self.timeline.all_events = state.all_events;
         self.preview.adopt(state.preview);
         self.link_display = state.link_display;
         self.recent_models = state.recent_models;
@@ -1024,9 +1024,10 @@ impl App {
         self.moved(moved);
     }
 
-    /// Toggle whether the main event list shows only operator/agent messages.
-    pub fn toggle_conversation_only(&mut self) {
-        let moved = self.timeline.toggle_conversation_only();
+    /// Toggle whether the main event list shows every event rather than only
+    /// operator/agent messages.
+    pub fn toggle_all_events(&mut self) {
+        let moved = self.timeline.toggle_all_events();
         self.moved(moved);
     }
 
@@ -1540,7 +1541,7 @@ mod tests {
             styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
             "session-1",
         );
-        app.timeline.conversation_only = false;
+        app.timeline.all_events = true;
         app.timeline.show_minor = false;
         app
     }
@@ -2970,7 +2971,7 @@ mod tests {
     }
 
     #[test]
-    fn conversation_only_filters_the_event_list_without_changing_views() {
+    fn all_events_filters_the_event_list_without_changing_views() {
         let mut app = app();
         app.push_event(AgentEvent::AgentMessage {
             text: "hello".into(),
@@ -2982,16 +2983,16 @@ mod tests {
         // What the filter does, at each of its two states named outright. The
         // toggle's job is to move between them; which one a fresh session
         // starts in is a product decision, not this test's business.
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         assert!(app.timeline.is_visible(0));
         assert!(!app.timeline.is_visible(1), "the command should be hidden");
 
-        app.toggle_conversation_only();
-        assert!(!app.timeline.conversation_only);
+        app.toggle_all_events();
+        assert!(app.timeline.all_events);
         assert!(app.timeline.is_visible(1));
 
-        app.toggle_conversation_only();
-        assert!(app.timeline.conversation_only);
+        app.toggle_all_events();
+        assert!(!app.timeline.all_events);
         assert!(!app.timeline.is_visible(1));
 
         // Filtering the list is not a view change.
@@ -3001,7 +3002,7 @@ mod tests {
     #[test]
     fn conversation_only_still_shows_errors_and_model_changes() {
         let mut app = app();
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.push_event(AgentEvent::Error {
             message: "workspace is out of credits".into(),
         });

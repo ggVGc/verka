@@ -181,9 +181,10 @@ pub struct Timeline {
     /// When false, minor lifecycle events (thread/turn/usage) are hidden from
     /// the list and skipped by navigation.
     pub show_minor: bool,
-    /// When true, the list contains only messages exchanged between the
-    /// operator and the agent.
-    pub conversation_only: bool,
+    /// When false — the default — the list contains only messages exchanged
+    /// between the operator and the agent; when true it shows every event
+    /// (minor ones still subject to `show_minor`).
+    pub all_events: bool,
     /// First visible item in the event list. Rendering updates this after it
     /// accounts for wrapped and expanded row heights, so navigation can keep
     /// a vim-like margin above and below the selection.
@@ -202,7 +203,7 @@ impl Default for Timeline {
             // A fresh list is at its own tail, so it follows what arrives.
             follow: true,
             show_minor: false,
-            conversation_only: true,
+            all_events: false,
             list_offset: 0,
             rendered_selection: None,
         }
@@ -235,7 +236,7 @@ impl Timeline {
 
     pub(crate) fn event_is_visible(&self, event: &AgentEvent) -> bool {
         (self.show_minor || !event.is_minor())
-            && (!self.conversation_only || event.is_conversation())
+            && (self.all_events || event.is_conversation())
     }
 
     /// Whether an entry is shown in the list under the current filters.
@@ -267,10 +268,10 @@ impl Timeline {
         self.reconcile_selection()
     }
 
-    /// Toggle whether the list shows only operator/agent messages; see
-    /// [`Self::toggle_minor`] for the return.
-    pub fn toggle_conversation_only(&mut self) -> bool {
-        self.conversation_only = !self.conversation_only;
+    /// Toggle whether the list shows every event or only operator/agent
+    /// messages; see [`Self::toggle_minor`] for the return.
+    pub fn toggle_all_events(&mut self) -> bool {
+        self.all_events = !self.all_events;
         self.reconcile_selection()
     }
 
@@ -378,9 +379,9 @@ impl Timeline {
     /// remaining line in full: with tool activity filtered away, what is left
     /// is prose meant to be read, and folding it would leave the list nearly
     /// empty. The per-entry flag is left untouched, so the previous folding
-    /// comes back as soon as the filter is turned off.
+    /// comes back as soon as all events are shown.
     pub fn entry_expanded(&self, idx: usize) -> bool {
-        self.conversation_only || self.entries[idx].expanded
+        !self.all_events || self.entries[idx].expanded
     }
 
     pub fn toggle_expand(&mut self) {

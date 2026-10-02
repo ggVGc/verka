@@ -1,9 +1,9 @@
 //! Filtered plain-text transcript presentation.
 
-use crate::chrome::{panel_block, uncommitted_title, PanelChrome};
+use crate::chrome::{all_events_title, panel_block, uncommitted_title, PanelChrome};
 use crate::palette;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -14,7 +14,9 @@ pub struct TranscriptView<'a> {
     /// clipboard and export behavior; the renderer only borrows it.
     pub text: &'a str,
     pub has_entries: bool,
-    pub conversation_only: bool,
+    /// See [`all_events_title`].
+    pub all_events: bool,
+    pub show_minor: bool,
     /// See [`crate::chrome::uncommitted_title`].
     pub uncommitted_changes: bool,
     pub requested_scroll: u16,
@@ -22,13 +24,8 @@ pub struct TranscriptView<'a> {
 
 pub fn render(frame: &mut Frame, view: &TranscriptView<'_>, area: Rect) -> u16 {
     let mut block = panel_block(&view.chrome);
-    if view.conversation_only {
-        block = block.title_bottom(Line::from(Span::styled(
-            " conversation only ",
-            Style::default()
-                .fg(palette::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )));
+    if view.all_events {
+        block = block.title_bottom(all_events_title(view.show_minor));
     }
     if view.uncommitted_changes {
         block = uncommitted_title(block);
@@ -83,7 +80,7 @@ mod tests {
     fn screen(
         text: &str,
         has_entries: bool,
-        conversation_only: bool,
+        all_events: bool,
         uncommitted_changes: bool,
         requested_scroll: u16,
     ) -> (String, u16) {
@@ -97,7 +94,8 @@ mod tests {
                         chrome: chrome(),
                         text,
                         has_entries,
-                        conversation_only,
+                        all_events,
+                        show_minor: false,
                         uncommitted_changes,
                         requested_scroll,
                     },
@@ -118,7 +116,7 @@ mod tests {
     #[test]
     fn content_and_filter_marker_are_rendered() {
         let (output, _) = screen("user: hello\nagent: hi", true, true, false, 0);
-        assert!(output.contains("conversation only"));
+        assert!(output.contains("all events · minor hidden"));
         assert!(output.contains("user: hello"));
     }
     #[test]
@@ -126,7 +124,7 @@ mod tests {
         let (output, _) = screen("user: hello", true, true, true, 0);
         let bottom = output.lines().last().unwrap().to_owned();
         assert!(
-            bottom.find("conversation only") < bottom.find("uncommitted changes"),
+            bottom.find("all events") < bottom.find("uncommitted changes"),
             "{bottom}"
         );
         let (clean, _) = screen("user: hello", true, true, false, 0);

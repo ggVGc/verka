@@ -1,7 +1,7 @@
 //! The main event list: each entry a summary line that grows inline when
 //! expanded, plus the empty-list start screen and the trailing status tail.
 
-use crate::chrome::{panel_block, PanelChrome};
+use crate::chrome::{all_events_title, panel_block, PanelChrome};
 use crate::code::{code_block_lines, is_error_diagnostic};
 use crate::footer::{message_text_color, tag_color};
 use crate::markdown::{
@@ -94,7 +94,11 @@ pub struct EventListView<'a> {
     /// The whole fleet's tally, on this pane's bottom border — see
     /// [`ActivityCounts`].
     pub activity: ActivityCounts,
-    pub conversation_only: bool,
+    /// The list shows every event rather than the default conversation only,
+    /// which the bottom border then says, along with `show_minor`.
+    pub all_events: bool,
+    /// Whether minor lifecycle events are among them; see [`all_events_title`].
+    pub show_minor: bool,
     /// The interaction being shown has stopped working and left uncommitted
     /// changes in its repository — see [`crate::chrome::uncommitted_title`].
     pub uncommitted_changes: bool,
@@ -260,8 +264,8 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     if !activity.is_empty() {
         block = block.title_bottom(Line::from(activity));
     }
-    if view.conversation_only {
-        block = conversation_only_title(block);
+    if view.all_events {
+        block = block.title_bottom(all_events_title(view.show_minor).right_aligned());
     }
     if view.uncommitted_changes {
         block = crate::chrome::uncommitted_title(block);
@@ -1642,20 +1646,6 @@ fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
     spans
 }
 
-fn conversation_only_title(
-    block: ratatui::widgets::Block<'static>,
-) -> ratatui::widgets::Block<'static> {
-    block.title_bottom(
-        Line::from(Span::styled(
-            " conversation only ",
-            Style::default()
-                .fg(palette::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .right_aligned(),
-    )
-}
-
 fn format_duration(duration: Duration) -> String {
     let seconds = duration.as_secs();
     if seconds < 60 {
@@ -1751,7 +1741,8 @@ mod tests {
             },
             entries,
             activity: ActivityCounts::default(),
-            conversation_only: false,
+            all_events: false,
+            show_minor: false,
             uncommitted_changes: false,
             usage: None,
             can_configure_launch: false,
@@ -1872,7 +1863,8 @@ mod tests {
                 link_highlight: None,
             }],
             activity: ActivityCounts::default(),
-            conversation_only: false,
+            all_events: false,
+            show_minor: false,
             uncommitted_changes: false,
             usage: None,
             can_configure_launch: false,

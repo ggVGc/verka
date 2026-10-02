@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn entry_log_follows_the_selected_message() {
         let mut app = app_with_two_turns();
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.timeline.selected = 0;
         app.toggle_entry_log();
         let screen = test_support::screen_sized(&app, 120, 30);
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn entry_log_ignores_the_conversation_only_filter() {
         let mut app = app_with_two_turns();
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.timeline.selected = 0;
         app.toggle_entry_log();
         assert!(test_support::rendered(&app).contains("cargo test backoff"));
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn entry_log_hides_minor_events_unless_the_list_shows_them() {
         let mut app = test_support::app("s1");
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.push_event(AgentEvent::UserMessage {
             text: "run the tests".into(),
         });
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn entry_log_keeps_each_scoped_entry_to_one_line() {
         let mut app = test_support::app("s1");
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.push_event(AgentEvent::UserMessage {
             text: "run the tests".into(),
         });
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn entry_log_is_a_selection_following_pane_below_the_event_list() {
         let mut app = app_with_two_turns();
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.timeline.selected = 0;
         app.toggle_entry_log();
 
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn tab_moves_the_keys_to_the_pane_and_the_preview_stays_on_its_cursor() {
         let mut app = app_with_two_turns();
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = true;
         app.timeline.selected = 0;
         app.toggle_entry_log();
         app.preview.show();
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn closing_the_pane_returns_the_preview_to_the_list_selection() {
         let mut app = app_with_two_turns();
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.timeline.selected = 0;
         app.toggle_entry_log();
         app.toggle_entry_log_focus();
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn an_unfocused_panes_cursor_follows_the_list_selection() {
         let mut app = app_with_two_turns();
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.select_first();
         app.toggle_entry_log();
 
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn the_pane_scrolls_to_keep_its_cursor_on_screen() {
         let mut app = test_support::app("s1");
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.push_event(AgentEvent::UserMessage {
             text: "run everything".into(),
         });
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn preview_stays_full_height_when_the_entry_log_is_open() {
         let mut app = app_with_two_turns();
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = true;
         app.timeline.selected = 0;
         app.toggle_entry_log();
         app.preview.show();
@@ -394,13 +394,13 @@ mod tests {
         let screen = test_support::screen_sized(&app, width, height);
         let (preview_x, preview_y) = screen.find("preview · C: command");
         let (entry_log_x, entry_log_y) = screen.find("entry log · follows selection");
-        let (_, conversation_bottom) = screen.find("conversation only");
+        let (_, list_bottom) = screen.find("all events");
 
         assert!(preview_x > split, "the preview is the right-hand pane");
         assert_eq!(preview_y, 0, "the preview starts at the top");
         assert!(entry_log_x < split, "the entry log stays in the left pane");
         assert!(
-            entry_log_y > conversation_bottom,
+            entry_log_y > list_bottom,
             "the entry log stays below the main list"
         );
         // The left pane closes and reopens around the entry log; the preview's

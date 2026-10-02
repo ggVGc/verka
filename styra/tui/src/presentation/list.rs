@@ -83,7 +83,8 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
                 newly_idle: app.interactions.idle_notification_count(),
             }
         },
-        conversation_only: app.timeline.conversation_only,
+        all_events: app.timeline.all_events,
+        show_minor: app.timeline.show_minor,
         uncommitted_changes: super::uncommitted_changes(app),
         usage,
         can_configure_launch: app.can_configure_launch(),
@@ -187,7 +188,7 @@ mod tests {
     /// scrolled away from the top and a reset is observable.
     fn scrolled_conversation(ui: &mut dyn Ui) -> App {
         let mut app = test_support::app("s1");
-        app.timeline.conversation_only = true;
+        app.timeline.all_events = false;
         app.timeline.show_minor = false;
         app.push_event(AgentEvent::UserMessage {
             text: "please refactor the retry backoff logic".into(),
@@ -206,7 +207,7 @@ mod tests {
     }
 
     /// A tool finishing replaces the row that showed it starting, in place.
-    /// Under the default `conversation_only` filter neither row is shown, so
+    /// Under the default conversation-only filter neither row is shown, so
     /// the operator's view of the conversation must not move at all: nothing
     /// they can see has changed, and they did not navigate.
     ///

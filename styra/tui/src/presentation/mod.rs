@@ -334,7 +334,8 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 chrome: panel_chrome(app, Some("transcript")),
                 text: &text,
                 has_entries: !app.timeline.entries.is_empty(),
-                conversation_only: app.timeline.conversation_only,
+                all_events: app.timeline.all_events,
+                show_minor: app.timeline.show_minor,
                 uncommitted_changes: uncommitted_changes(app),
                 requested_scroll: app.transcript.offset,
             };
@@ -720,10 +721,17 @@ mod tests {
     }
 
     #[test]
-    fn event_list_header_indicates_conversation_only_filter() {
+    fn event_list_border_marks_all_events_and_whether_minor_ones_are_shown() {
         let mut app = test_support::app("s1");
-        app.timeline.conversation_only = true;
-        assert!(rendered(&app).contains("conversation only"));
+        app.timeline.all_events = false;
+        assert!(!rendered(&app).contains("all events"));
+
+        app.timeline.all_events = true;
+        app.timeline.show_minor = false;
+        assert!(rendered(&app).contains("all events · minor hidden"));
+
+        app.timeline.show_minor = true;
+        assert!(rendered(&app).contains("all events · minor shown"));
     }
 
     #[test]
