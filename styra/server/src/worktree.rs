@@ -43,6 +43,26 @@ pub struct Checkout {
     pub path: Option<PathBuf>,
     /// The branch checked out there, as `git branch` shows it.
     pub branch: String,
+    /// Where the branch was made from, read when Styra made it. `None` for a
+    /// checkout recorded before this was, and for one whose repository had no
+    /// commit yet to start from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branched_from: Option<BranchPoint>,
+}
+
+/// The branch and commit a Session's branch was created from.
+///
+/// The commit is the one the branch was actually made at, not the one its
+/// origin points to now: an origin branch moves on, and what the Session's
+/// branch has that it did not is measured from here.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchPoint {
+    /// The branch the new one was made from, as `git branch` shows it.
+    /// `None` when the repository's head was detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The commit the new branch started at.
+    pub commit: String,
 }
 
 impl Checkout {
@@ -61,6 +81,7 @@ impl Checkout {
         Self {
             branch: format!("{BRANCH_PREFIX}/{name}"),
             path: Some(path),
+            branched_from: None,
         }
     }
 
@@ -69,7 +90,16 @@ impl Checkout {
     pub fn without_worktree(&self) -> Self {
         Self {
             path: None,
-            branch: self.branch.clone(),
+            ..self.clone()
+        }
+    }
+
+    /// The same checkout working in `path`: what a Session records once its
+    /// branch has been checked out again, or once it shares this checkout.
+    pub fn with_worktree(&self, path: PathBuf) -> Self {
+        Self {
+            path: Some(path),
+            ..self.clone()
         }
     }
 
@@ -116,17 +146,40 @@ impl Worktrees {
     /// so returns to the checkout it left, which is the point: a provider can
     /// restore a conversation but nothing restores uncommitted files. It
     /// passes no topic and needs none, because the name is on disk already.
-    pub fn checkout(&self, id: &str, topic: Option<&str>) -> Result<PathBuf> {
+    ///
+    /// A checkout made here records the branch and commit the repository had
+    /// checked out, and the branch is made at that commit rather than at
+    /// whatever the head is by the time Git gets to it, so the record is
+    /// where the branch really starts. A checkout found already made says
+    /// nothing about where it came from: that was for its creation to record.
+    pub fn checkout(&self, id: &str, topic: Option<&str>) -> Result<Checkout> {
         if let Some(existing) = self.existing(id) {
-            return Ok(existing);
+            return Ok(Checkout::at(existing));
         }
+        let root = &self.repository.root;
         let path = self.host_root.join(named(id, topic));
-        self.git.create_worktree(
-            &self.repository.root,
-            &format!("{BRANCH_PREFIX}/{}", named(id, topic)),
-            &path,
-        )?;
-        Ok(path)
+        let branch = format!("{BRANCH_PREFIX}/{}", named(id, topic));
+        let origin = self.git.current_branch(root)?;
+        let branched_from = match self.git.commit(root, "HEAD")? {
+            Some(commit) => {
+                self.git.fork_worktree(root, &branch, &path, &commit)?;
+                Some(BranchPoint {
+                    branch: origin,
+                    commit,
+                })
+            }
+            // Nothing committed yet: Git starts the branch with no history,
+            // and there is no commit to say it came from.
+            None => {
+                self.git.create_worktree(root, &branch, &path)?;
+                None
+            }
+        };
+        Ok(Checkout {
+            path: Some(path),
+            branch,
+            branched_from,
+        })
     }
 
     /// The checkout interaction `id` works in, created on a branch of
@@ -139,18 +192,25 @@ impl Worktrees {
     /// the two diverge from there. Only committed work comes along —
     /// uncommitted files stay in the checkout that holds them, which is the
     /// source Session's, still working in it.
-    pub fn fork(&self, id: &str, topic: Option<&str>, start_point: &str) -> Result<PathBuf> {
+    pub fn fork(&self, id: &str, topic: Option<&str>, start_point: &str) -> Result<Checkout> {
         if let Some(existing) = self.existing(id) {
-            return Ok(existing);
+            return Ok(Checkout::at(existing));
         }
+        let root = &self.repository.root;
+        let commit = self.git.commit(root, start_point)?.with_context(|| {
+            format!("branch {start_point} has no commit to start a new branch from")
+        })?;
         let path = self.host_root.join(named(id, topic));
-        self.git.fork_worktree(
-            &self.repository.root,
-            &format!("{BRANCH_PREFIX}/{}", named(id, topic)),
-            &path,
-            start_point,
-        )?;
-        Ok(path)
+        let branch = format!("{BRANCH_PREFIX}/{}", named(id, topic));
+        self.git.fork_worktree(root, &branch, &path, &commit)?;
+        Ok(Checkout {
+            path: Some(path),
+            branch,
+            branched_from: Some(BranchPoint {
+                branch: Some(start_point.to_owned()),
+                commit,
+            }),
+        })
     }
 
     /// Check `branch` out again in a checkout of its own, for a Session whose
@@ -302,7 +362,11 @@ mod tests {
         let (root, git, worktrees) = workspace("create");
         let host_root = root.join("state/worktrees");
 
-        let checkout = worktrees.checkout("1757000000000-1-0", None).unwrap();
+        let checkout = worktrees
+            .checkout("1757000000000-1-0", None)
+            .unwrap()
+            .path
+            .unwrap();
 
         assert_eq!(checkout, host_root.join("1757000000000-1-0"));
         assert_eq!(
@@ -319,6 +383,74 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// A new checkout says where its branch came from: the branch the
+    /// repository had checked out, at the commit it was at then — which stays
+    /// the answer after that branch moves on.
+    #[test]
+    fn a_new_checkout_records_the_branch_and_commit_it_was_made_from() {
+        let (root, git, worktrees) = workspace("branched-from");
+        let start = git.commit(&root.join("checkout"), "HEAD").unwrap().unwrap();
+
+        let checkout = worktrees
+            .checkout("1757000000000-1-8", Some("record-the-origin"))
+            .unwrap();
+        let moved_on = git.commit_on("main");
+
+        assert_eq!(
+            checkout.branched_from,
+            Some(BranchPoint {
+                branch: Some("main".to_owned()),
+                commit: start.clone(),
+            })
+        );
+        assert_ne!(moved_on, start);
+        assert_eq!(
+            git.commit(checkout.path.as_deref().unwrap(), "HEAD")
+                .unwrap(),
+            Some(start),
+            "the branch starts where the record says it does"
+        );
+        // Asking again finds the checkout and does not invent its origin.
+        assert_eq!(
+            worktrees
+                .checkout("1757000000000-1-8", None)
+                .unwrap()
+                .branched_from,
+            None
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A Session branched from another records the source's branch, and the
+    /// commit that branch was at when the two diverged.
+    #[test]
+    fn a_forked_checkout_records_the_branch_it_was_forked_from() {
+        let (root, git, worktrees) = workspace("forked-from");
+        let source = worktrees
+            .checkout("1757000000000-1-9", Some("record-the-origin"))
+            .unwrap();
+        let source_commit = git.commit_on(&source.branch);
+
+        let forked = worktrees
+            .fork(
+                "1757000000000-2-0",
+                Some("record-the-origin"),
+                &source.branch,
+            )
+            .unwrap();
+
+        assert_eq!(
+            forked.branched_from,
+            Some(BranchPoint {
+                branch: Some(source.branch.clone()),
+                commit: source_commit,
+            })
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// A Session branched from another one gets a checkout of its own, on a
     /// branch of the source's rather than of the repository's own head — and
     /// under the source's topic, because it is about the same work.
@@ -328,6 +460,8 @@ mod tests {
         let host_root = root.join("state/worktrees");
         let source = worktrees
             .checkout("1757000000000-1-0", Some("teach-the-picker-to-filter"))
+            .unwrap()
+            .path
             .unwrap();
         let topic = topic_of(&source, "1757000000000-1-0");
         assert_eq!(topic.as_deref(), Some("teach-the-picker-to-filter"));
@@ -338,6 +472,8 @@ mod tests {
                 topic.as_deref(),
                 "styra/teach-the-picker-to-filter-1757000000000-1-0",
             )
+            .unwrap()
+            .path
             .unwrap();
 
         assert_eq!(
@@ -374,10 +510,16 @@ mod tests {
 
         let first = worktrees
             .checkout("1757000000000-1-1", Some("teach-the-picker-to-filter"))
+            .unwrap()
+            .path
             .unwrap();
         std::fs::write(first.join("in-progress.txt"), "half-done").unwrap();
         // A resume knows only the id, and the topic is not repeated to it.
-        let second = worktrees.checkout("1757000000000-1-1", None).unwrap();
+        let second = worktrees
+            .checkout("1757000000000-1-1", None)
+            .unwrap()
+            .path
+            .unwrap();
 
         assert_eq!(first, second);
         assert_eq!(
@@ -398,9 +540,13 @@ mod tests {
         // id each carries is what keeps their branches apart.
         let one = worktrees
             .checkout("1757000000000-1-2", Some("fix-the-flaky-test"))
+            .unwrap()
+            .path
             .unwrap();
         let two = worktrees
             .checkout("1757000000000-1-3", Some("fix-the-flaky-test"))
+            .unwrap()
+            .path
             .unwrap();
 
         assert_ne!(one, two);
@@ -421,6 +567,8 @@ mod tests {
 
         let checkout = worktrees
             .checkout("1757000000000-1-4", Some("fix-flaky-checkout-test"))
+            .unwrap()
+            .path
             .unwrap();
 
         assert_eq!(
@@ -448,6 +596,8 @@ mod tests {
 
         let checkout = worktrees
             .checkout("1757000000000-1-6", Some("tidy-the-worktrees"))
+            .unwrap()
+            .path
             .unwrap();
         let branch = git.current_branch(&checkout).unwrap().unwrap();
         worktrees.remove(&checkout).unwrap();
@@ -470,7 +620,11 @@ mod tests {
     fn restoring_a_checkout_that_is_still_there_returns_it() {
         let (root, git, worktrees) = workspace("restore-existing");
 
-        let checkout = worktrees.checkout("1757000000000-1-7", None).unwrap();
+        let checkout = worktrees
+            .checkout("1757000000000-1-7", None)
+            .unwrap()
+            .path
+            .unwrap();
         let branch = git.current_branch(&checkout).unwrap().unwrap();
         std::fs::write(checkout.join("in-progress.txt"), "half-done").unwrap();
 
@@ -499,6 +653,8 @@ mod tests {
 
         let checkout = worktrees
             .checkout("1757000000000-1-5", Some("rename-the-thing"))
+            .unwrap()
+            .path
             .unwrap();
 
         let branch = git.current_branch(&checkout).unwrap().unwrap();

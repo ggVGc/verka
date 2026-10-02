@@ -28,6 +28,7 @@
 
 use crate::agent::MountSpec;
 use anyhow::{Context, Result};
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -113,6 +114,11 @@ pub trait Git: Send + Sync {
     /// The branch checked out in `checkout`, or `None` when its head is
     /// detached.
     fn current_branch(&self, checkout: &Path) -> Result<Option<String>>;
+
+    /// The commit `revision` names, as seen from `checkout`, or `None` when it
+    /// names none — which is what `HEAD` answers on a branch with no commits
+    /// yet.
+    fn commit(&self, checkout: &Path, revision: &str) -> Result<Option<String>>;
 
     /// Whether `checkout` has work that is not committed: anything `git
     /// status` would report, tracked or not.
@@ -271,6 +277,13 @@ impl Git for SystemGit {
         Ok(Some(branch).filter(|branch| !branch.is_empty()))
     }
 
+    fn commit(&self, checkout: &Path, revision: &str) -> Result<Option<String>> {
+        Invocation::new(checkout, "resolve a commit")
+            .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
+            .arg(format!("{revision}^{{commit}}"))
+            .optional_output()
+    }
+
     fn has_uncommitted_changes(&self, checkout: &Path) -> Result<bool> {
         let status = Invocation::new(checkout, "read the working tree status")
             .args(["status", "--porcelain"])
@@ -328,7 +341,13 @@ pub struct FakeGit {
     /// removing a worktree separates: the checkout goes and the branch stays,
     /// so a fake that read branches off its checkouts would let a cleaned-up
     /// Session's branch be created a second time.
-    branches: Mutex<Vec<String>>,
+    ///
+    /// Each branch names the commit it is at. The fake has no history, so a
+    /// commit is only a name — but a branch made from another starts at the
+    /// same one, which is the part of history a caller can observe.
+    branches: Mutex<BTreeMap<String, String>>,
+    /// How many commits the fake has named, so each new one is distinct.
+    commits: Mutex<u64>,
     /// Roots a test has declared to have uncommitted work. A fake with no
     /// history cannot derive this, and the callers only ever ask the
     /// question, so it is simply stated.
@@ -376,14 +395,49 @@ impl FakeGit {
             },
             branch: Some("main".to_owned()),
         });
-        self.branches.lock().unwrap().push("main".to_owned());
+        let initial = self.next_commit();
+        self.branches
+            .lock()
+            .unwrap()
+            .insert("main".to_owned(), initial);
         repository
     }
 
     /// Whether the repository has `branch`, whether or not it is checked out
     /// anywhere. What `git branch --list` would answer.
     pub fn has_branch(&self, branch: &str) -> bool {
-        self.branches.lock().unwrap().iter().any(|it| it == branch)
+        self.branches.lock().unwrap().contains_key(branch)
+    }
+
+    /// Move `branch` on to a new commit, as committing on it would, and return
+    /// that commit.
+    pub fn commit_on(&self, branch: &str) -> String {
+        let commit = self.next_commit();
+        let mut branches = self.branches.lock().unwrap();
+        let head = branches
+            .get_mut(branch)
+            .expect("committing on a branch the fake does not have");
+        *head = commit.clone();
+        commit
+    }
+
+    /// A commit id no other commit in this fake has, shaped like Git's.
+    fn next_commit(&self) -> String {
+        let mut commits = self.commits.lock().unwrap();
+        *commits += 1;
+        format!("{:040x}", *commits)
+    }
+
+    /// The commit `revision` names: a branch's head, or a commit some branch
+    /// is at. The fake knows no other commits, so it can name no others.
+    fn resolve(&self, revision: &str) -> Option<String> {
+        let branches = self.branches.lock().unwrap();
+        branches.get(revision).cloned().or_else(|| {
+            branches
+                .values()
+                .find(|commit| *commit == revision)
+                .cloned()
+        })
     }
 
     /// Point an already-registered checkout at a `git_dir` outside its common
@@ -461,6 +515,28 @@ impl FakeGit {
         Ok(())
     }
 
+    /// Create `branch` at `start` and lay it out as a linked worktree at
+    /// `path`: what `git worktree add -b` does, with or without a start point.
+    fn branch_out(
+        &self,
+        repository: &Path,
+        branch: &str,
+        path: &Path,
+        start: String,
+    ) -> Result<()> {
+        if self.has_branch(branch) {
+            anyhow::bail!(
+                "git could not create the branch and worktree: branch {branch:?} already exists"
+            );
+        }
+        self.check_out(repository, branch, path)?;
+        self.branches
+            .lock()
+            .unwrap()
+            .insert(branch.to_owned(), start);
+        Ok(())
+    }
+
     /// The checkout whose root is `path` or an ancestor of it, longest root
     /// first so a linked worktree nested under a checkout wins over it.
     fn containing(&self, path: &Path) -> Option<Checkout> {
@@ -494,14 +570,10 @@ impl Git for FakeGit {
     }
 
     fn create_worktree(&self, repository: &Path, branch: &str, path: &Path) -> Result<()> {
-        if self.has_branch(branch) {
-            anyhow::bail!(
-                "git could not create the branch and worktree: branch {branch:?} already exists"
-            );
-        }
-        self.check_out(repository, branch, path)?;
-        self.branches.lock().unwrap().push(branch.to_owned());
-        Ok(())
+        let head = self
+            .commit(repository, "HEAD")?
+            .context("the fake repository's head has no commit to branch from")?;
+        self.branch_out(repository, branch, path, head)
     }
 
     fn fork_worktree(
@@ -511,12 +583,12 @@ impl Git for FakeGit {
         path: &Path,
         start_point: &str,
     ) -> Result<()> {
-        if !self.has_branch(start_point) {
+        let Some(start) = self.resolve(start_point) else {
             anyhow::bail!(
                 "git could not create the branch and worktree: invalid reference: {start_point:?}"
             );
-        }
-        self.create_worktree(repository, branch, path)
+        };
+        self.branch_out(repository, branch, path, start)
     }
 
     fn add_worktree(&self, repository: &Path, branch: &str, path: &Path) -> Result<()> {
@@ -573,6 +645,15 @@ impl Git for FakeGit {
             .canonicalize()
             .with_context(|| format!("checkout {} must exist", checkout.display()))?;
         Ok(self.containing(&checkout).and_then(|found| found.branch))
+    }
+
+    fn commit(&self, checkout: &Path, revision: &str) -> Result<Option<String>> {
+        if revision != "HEAD" {
+            return Ok(self.resolve(revision));
+        }
+        Ok(self
+            .current_branch(checkout)?
+            .and_then(|branch| self.resolve(&branch)))
     }
 
     fn has_uncommitted_changes(&self, checkout: &Path) -> Result<bool> {
@@ -1223,6 +1304,53 @@ mod conformance {
         assert!(fake.remove_worktree(&fake_checkout, &fake_linked).is_err());
         assert!(real_linked.join("left-behind.txt").exists());
         assert!(fake_linked.exists());
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// A commit is named by a branch or by itself, a branch made at one starts
+    /// there, and a head with nothing committed names none — in both.
+    #[test]
+    #[ignore = "requires a real git binary"]
+    fn real_git_resolves_commits_as_the_fake_does() {
+        if !fixture::git_available() {
+            eprintln!("skipping: no usable git");
+            return;
+        }
+        let base = temporary_directory("conformance-commit");
+        let checkout = base.join("checkout");
+        std::fs::create_dir_all(&checkout).unwrap();
+        fixture::init(&checkout);
+        assert_eq!(SystemGit.commit(&checkout, "HEAD").unwrap(), None);
+        fixture::commit_empty(&checkout, "initial");
+        let branch = SystemGit.current_branch(&checkout).unwrap().unwrap();
+        let head = SystemGit.commit(&checkout, "HEAD").unwrap().unwrap();
+        assert_eq!(head.len(), 40);
+        assert_eq!(
+            SystemGit.commit(&checkout, &branch).unwrap(),
+            Some(head.clone())
+        );
+        assert_eq!(SystemGit.commit(&checkout, "no-such-branch").unwrap(), None);
+        let real_linked = base.join("real");
+        SystemGit
+            .fork_worktree(&checkout, "styra/pinned", &real_linked, &head)
+            .unwrap();
+        assert_eq!(SystemGit.commit(&real_linked, "HEAD").unwrap(), Some(head));
+
+        let fake = FakeGit::new();
+        let fake_checkout = base.join("fake-checkout");
+        fake.init(&fake_checkout);
+        let fake_head = fake.commit(&fake_checkout, "HEAD").unwrap().unwrap();
+        assert_eq!(fake_head.len(), 40);
+        assert_eq!(
+            fake.commit(&fake_checkout, "main").unwrap(),
+            Some(fake_head.clone())
+        );
+        assert_eq!(fake.commit(&fake_checkout, "no-such-branch").unwrap(), None);
+        let fake_linked = base.join("fake");
+        fake.fork_worktree(&fake_checkout, "styra/pinned", &fake_linked, &fake_head)
+            .unwrap();
+        assert_eq!(fake.commit(&fake_linked, "HEAD").unwrap(), Some(fake_head));
 
         std::fs::remove_dir_all(base).unwrap();
     }
