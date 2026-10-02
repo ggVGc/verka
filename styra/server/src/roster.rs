@@ -130,17 +130,14 @@ impl Roster {
     /// The rows a previous run left, in no particular order; the caller sorts
     /// them together with its live ones.
     pub fn restored(&self) -> Vec<InteractionSummary> {
-        self.lock()
-            .values()
-            .map(|entry| entry.summary.clone())
-            .collect()
+        self.lock().values().map(current_summary).collect()
     }
 
     /// The restored row for `id`, and the Session directory its history is in.
     pub fn restored_session(&self, id: &str) -> Option<(InteractionSummary, PathBuf)> {
         self.lock()
             .get(id)
-            .map(|entry| (entry.summary.clone(), entry.session_path.clone()))
+            .map(|entry| (current_summary(entry), entry.session_path.clone()))
     }
 
     pub fn holds(&self, id: &str) -> bool {
@@ -178,9 +175,15 @@ impl Roster {
         };
         let mut entries: Vec<Entry> = live
             .into_iter()
-            .map(|(session_path, summary)| Entry {
-                session_path,
-                summary,
+            .map(|(session_path, mut summary)| {
+                // The Session metadata is the sole owner of its mutable name.
+                // The roster records only the Interaction snapshot and joins
+                // the current name when a client asks for the row.
+                summary.name = None;
+                Entry {
+                    session_path,
+                    summary,
+                }
             })
             .collect();
         let live_ids: std::collections::HashSet<String> = entries
@@ -191,7 +194,11 @@ impl Roster {
             self.lock()
                 .values()
                 .filter(|entry| !live_ids.contains(&entry.summary.id))
-                .cloned(),
+                .cloned()
+                .map(|mut entry| {
+                    entry.summary.name = None;
+                    entry
+                }),
         );
         if let Err(error) = write(path, &entries) {
             eprintln!("styra-server: mirroring the interaction roster: {error:#}");
@@ -203,6 +210,16 @@ impl Roster {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+}
+
+/// Join a restored Interaction's immutable run snapshot with the Session
+/// metadata that still changes after the process which produced it is gone.
+/// A roster written by an older build may contain a name, but it is transport
+/// history rather than an authority and is deliberately ignored here.
+fn current_summary(entry: &Entry) -> InteractionSummary {
+    let mut summary = entry.summary.clone();
+    summary.name = crate::journal::read_session_name(&entry.session_path).unwrap_or_default();
+    summary
 }
 
 /// Read the mirrored rows, skipping any line that no longer parses. A summary
@@ -382,6 +399,15 @@ mod tests {
         let mut row = summary(&id);
         row.workspace_id = workspace.id.clone();
         Roster::open(&root).publish(vec![(session.clone(), row)]);
+
+        // The roster's copy is an interaction snapshot, not another owner of
+        // mutable Session metadata. A later rename is resolved directly from
+        // the Session even though the mirrored row predates it.
+        crate::journal::store_session_name(&session, Some("Renamed after restart")).unwrap();
+        assert_eq!(
+            Roster::open(&root).restored()[0].name.as_deref(),
+            Some("Renamed after restart")
+        );
 
         // Set from a live interaction, as `set_completed` does: written to the
         // Session's own metadata first, then mirrored onto the roster row.

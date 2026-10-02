@@ -528,6 +528,15 @@ pub fn read_session_workspace_id(path: &Path) -> Result<String> {
     Ok(read_stored_session_meta(path)?.workspace_id)
 }
 
+/// Return the Session's operator-facing name from its durable metadata.
+///
+/// Names belong to Sessions, not to whichever live or restored Interaction
+/// currently presents them. Keeping this read here lets those projections
+/// resolve the current value instead of retaining another mutable copy.
+pub fn read_session_name(path: &Path) -> Result<Option<String>> {
+    Ok(read_stored_session_meta(path)?.name)
+}
+
 /// Read the provider's native identity for a stored Session.
 pub fn read_provider_session_id(path: &Path) -> Result<Option<String>> {
     Ok(read_stored_session_meta(path)?.provider_session_id)

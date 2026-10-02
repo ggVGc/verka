@@ -66,7 +66,7 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
         activity: DrivaActivity { status },
         selection_name: app.selection.name(),
         session_id: &app.session_id,
-        session_name: app.session_name.as_deref(),
+        session_name: app.interactions.name(&app.session_id),
         queued_count: app.outbox.queued_count(),
         last_message,
         workspace_launch_pending: app.workspace_launch_pending,

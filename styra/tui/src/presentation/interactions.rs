@@ -79,9 +79,9 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             Status::Ended { error: Some(_), .. } => InteractionStatus::Error,
             Status::Ended { .. } => InteractionStatus::Ended,
         };
-        let name = interaction
-            .name
-            .as_deref()
+        let name = app
+            .interactions
+            .name(&interaction.id)
             .map(Cow::Borrowed)
             .unwrap_or_else(|| Cow::Borrowed(styra_ui::picker::short_id(&interaction.id)));
         rows.push(InteractionRow::Interaction {

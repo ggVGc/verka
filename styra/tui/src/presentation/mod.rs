@@ -144,7 +144,7 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         status_tone: tone,
         elapsed: status_elapsed(app),
         suffix: suffix.map(str::to_owned),
-        session: app.session_name.clone(),
+        session: app.interactions.name(&app.session_id).map(str::to_owned),
     }
 }
 
@@ -732,7 +732,7 @@ mod tests {
     fn header_shows_the_workspace_name_alongside_the_session_name() {
         let mut app = test_support::app("s1");
         app.workspace.name = Some("payments".into());
-        app.session_name = Some("Fix retries".into());
+        app.interactions.note_name("s1", Some("Fix retries".into()));
         let screen = rendered(&app);
         assert!(screen.contains("Fix retries"));
         assert!(screen.contains("payments"));

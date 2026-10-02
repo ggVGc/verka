@@ -304,8 +304,6 @@ pub struct App {
     /// Set by `n`; the server resolves and validates the association rather
     /// than accepting a client-supplied path.
     pub checkout_from: Option<String>,
-    /// Optional operator-facing name of the current durable Session.
-    pub session_name: Option<String>,
     /// The sandbox policy: both of its layers, the sandbox they resolve to, and
     /// which layer the driva view's keys are editing. See [`Launch`].
     pub launch: Launch,
@@ -524,7 +522,6 @@ impl App {
             search: Search::default(),
             session_id: session_id.into(),
             checkout_from: None,
-            session_name: None,
             launch: Launch::default(),
             raw: RawView::default(),
             provider_raw: None,
@@ -586,7 +583,9 @@ impl App {
     /// says which fields outlive a screen — so a new field is carried, or
     /// deliberately not, in one place rather than once per switching path.
     pub fn adopt(&mut self, state: OperatorState) {
-        self.interactions = state.interactions;
+        let mut interactions = state.interactions;
+        interactions.adopt_names_from(&self.interactions);
+        self.interactions = interactions;
         self.timeline.all_events = state.all_events;
         self.preview.adopt(state.preview);
         self.link_display = state.link_display;
