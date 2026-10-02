@@ -1,5 +1,6 @@
 //! The live-interaction navigator embedded above the event timeline.
 
+use crate::chrome::StopTone;
 use crate::palette;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -24,7 +25,7 @@ pub enum InteractionStatus {
     Running { events: usize },
     Idle,
     Background,
-    Stopped,
+    Stopped(StopTone),
     Error,
     Ended,
 }
@@ -238,10 +239,13 @@ fn row_item(row: &InteractionRow<'_>) -> ListItem<'static> {
         Style::default().fg(palette::INTERACTION_STATUS_INFO),
     ));
     if let Some(why) = stop_reason {
-        main.push(Span::styled(
-            format!(" · {why}"),
-            Style::default().fg(palette::INTERACTION_STATUS_INFO),
-        ));
+        // In the stop's own color, so how it ended is told apart down the
+        // foot of the list without reading every word.
+        let tone = match status {
+            InteractionStatus::Stopped(tone) => tone.color(),
+            _ => palette::INTERACTION_STATUS_INFO,
+        };
+        main.push(Span::styled(format!(" · {why}"), Style::default().fg(tone)));
     }
     if *loading {
         main.push(Span::styled(
@@ -269,14 +273,14 @@ fn row_item(row: &InteractionRow<'_>) -> ListItem<'static> {
         main.push(Span::styled(
             " · SEALED",
             Style::default()
-                .fg(palette::SUCCESS)
+                .fg(palette::STOP_SEALED)
                 .add_modifier(Modifier::BOLD),
         ));
     } else if *completed {
         main.push(Span::styled(
             " · COMPLETED",
             Style::default()
-                .fg(palette::SUCCESS)
+                .fg(palette::STOP_COMPLETED)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -298,7 +302,7 @@ fn status_marker(status: InteractionStatus) -> (&'static str, ratatui::style::Co
         InteractionStatus::Running { events } => (running_indicator(events), palette::RUNNING),
         InteractionStatus::Idle => ("o", palette::SUCCESS),
         InteractionStatus::Background => ("*", palette::MUTED_WARNING),
-        InteractionStatus::Stopped => ("#", palette::INACTIVE),
+        InteractionStatus::Stopped(why) => ("#", why.color()),
         // Not `!`, which marks work left uncommitted on the same row.
         InteractionStatus::Error => ("x", palette::ERROR),
         // Not `x`, which an error is drawn as.
@@ -449,7 +453,7 @@ mod tests {
                 name: "repair checkout".into(),
                 provider: "claude",
                 branch: None,
-                status: InteractionStatus::Stopped,
+                status: InteractionStatus::Stopped(StopTone::Paused),
                 current: false,
                 selected: false,
                 loading: false,

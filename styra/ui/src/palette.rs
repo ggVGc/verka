@@ -83,6 +83,29 @@ pub const MODAL_BACKDROP: Color = MUTED_STONE;
 /// recolored without changing disabled controls, borders, or markers.
 pub const INTERACTION_STATUS_INFO: Color = MUTED_STONE;
 
+/// Why a stopped interaction stopped, one hue per reason, so the way it ended
+/// reads at a glance in the status title, the navigator row and the log tail.
+/// The operator paused it: the tan of supporting information, calm and
+/// deliberate.
+pub const STOP_PAUSED: Color = ADDITIONAL_INFO;
+/// The operator finished with it: a soft green, apart from the terminal green
+/// of a live, idle agent.
+pub const STOP_COMPLETED: Color = Color::Rgb(135, 200, 140);
+/// Finished for good: the completed green a step deeper.
+pub const STOP_SEALED: Color = Color::Rgb(95, 165, 110);
+/// A plan window refused the work: an amber orange, waiting rather than
+/// broken.
+pub const STOP_RATE_LIMITED: Color = Color::Rgb(230, 145, 80);
+/// The last turn failed.
+pub const STOP_FAILED: Color = ERROR;
+/// The agent's process went away on its own. 211, `Special`.
+pub const STOP_EXITED: Color = SPECIAL;
+/// The server run that owned it went down: a mauve, the one hue in the
+/// palette that says "not anything the agent did".
+pub const STOP_SERVER_RESTARTED: Color = Color::Rgb(205, 160, 215);
+/// Stopped without saying why.
+pub const STOP_UNKNOWN: Color = INACTIVE;
+
 /// A restrained cue behind operator-authored rows, separating prompts from
 /// agent output without turning the log into chat bubbles. Paired with
 /// [`USER_TEXT`]; both predate the orgone port.

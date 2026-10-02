@@ -75,7 +75,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             },
             Status::Idle(_) => InteractionStatus::Idle,
             Status::Background => InteractionStatus::Background,
-            Status::Stopped(_) => InteractionStatus::Stopped,
+            Status::Stopped(ref why) => InteractionStatus::Stopped(super::stop_tone(why)),
             Status::Ended { error: Some(_), .. } => InteractionStatus::Error,
             Status::Ended { .. } => InteractionStatus::Ended,
         };

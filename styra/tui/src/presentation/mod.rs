@@ -99,6 +99,22 @@ pub(crate) fn clock_reading(app: &App) -> Option<String> {
     ))
 }
 
+/// The color a stopped interaction is drawn in, by why it stopped.
+pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrome::StopTone {
+    use crate::activity::StopReason;
+    use styra_ui::chrome::StopTone;
+    match reason {
+        StopReason::Paused => StopTone::Paused,
+        StopReason::Completed => StopTone::Completed,
+        StopReason::Sealed => StopTone::Sealed,
+        StopReason::RateLimited(_) => StopTone::RateLimited,
+        StopReason::Failed { .. } => StopTone::Failed,
+        StopReason::Exited { .. } => StopTone::Exited,
+        StopReason::ServerRestarted => StopTone::ServerRestarted,
+        StopReason::NotAccepting => StopTone::Unknown,
+    }
+}
+
 /// The chrome every full-region view wears: a border that brightens when the
 /// list has focus, the session's status title (opening with the Workspace
 /// name), and the Session name at the top right. `suffix` names the view in
@@ -112,7 +128,7 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         Status::Running => StatusTone::Running,
         Status::Idle(_) => StatusTone::Idle,
         Status::Background => StatusTone::Background,
-        Status::Stopped(_) => StatusTone::Stopped,
+        Status::Stopped(ref why) => StatusTone::Stopped(stop_tone(why)),
         Status::Ended { error: Some(_), .. } => StatusTone::Error,
         Status::Ended { .. } => StatusTone::Ended,
     };

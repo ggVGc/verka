@@ -11,9 +11,38 @@ pub enum StatusTone {
     Running,
     Idle,
     Background,
-    Stopped,
+    Stopped(StopTone),
     Error,
     Ended,
+}
+
+/// Why an interaction stopped, as far as its color goes. Shared by every view
+/// that draws a stopped interaction, so one reason reads the same everywhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopTone {
+    Paused,
+    Completed,
+    Sealed,
+    RateLimited,
+    Failed,
+    Exited,
+    ServerRestarted,
+    Unknown,
+}
+
+impl StopTone {
+    pub fn color(self) -> ratatui::style::Color {
+        match self {
+            StopTone::Paused => palette::STOP_PAUSED,
+            StopTone::Completed => palette::STOP_COMPLETED,
+            StopTone::Sealed => palette::STOP_SEALED,
+            StopTone::RateLimited => palette::STOP_RATE_LIMITED,
+            StopTone::Failed => palette::STOP_FAILED,
+            StopTone::Exited => palette::STOP_EXITED,
+            StopTone::ServerRestarted => palette::STOP_SERVER_RESTARTED,
+            StopTone::Unknown => palette::STOP_UNKNOWN,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,7 +83,8 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
         StatusTone::Running => palette::RUNNING_STATUS,
         StatusTone::Idle => palette::SUCCESS,
         StatusTone::Background => palette::MUTED_WARNING,
-        StatusTone::Stopped | StatusTone::Ended => palette::INACTIVE,
+        StatusTone::Stopped(why) => why.color(),
+        StatusTone::Ended => palette::INACTIVE,
         StatusTone::Error => palette::ERROR,
     };
     let text = Style::default().fg(palette::MUTED_TEXT);
@@ -128,4 +158,30 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
         );
     }
     block
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The point of the tones is telling one ending from another, so no two
+    /// reasons may share a color.
+    #[test]
+    fn every_stop_reason_has_its_own_color() {
+        let tones = [
+            StopTone::Paused,
+            StopTone::Completed,
+            StopTone::Sealed,
+            StopTone::RateLimited,
+            StopTone::Failed,
+            StopTone::Exited,
+            StopTone::ServerRestarted,
+            StopTone::Unknown,
+        ];
+        for (i, a) in tones.iter().enumerate() {
+            for b in &tones[i + 1..] {
+                assert_ne!(a.color(), b.color(), "{a:?} and {b:?}");
+            }
+        }
+    }
 }

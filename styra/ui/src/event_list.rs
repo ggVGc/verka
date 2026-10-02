@@ -72,6 +72,7 @@ pub enum EventListStatus {
     Stopped {
         elapsed: Duration,
         reason: Option<String>,
+        tone: crate::chrome::StopTone,
     },
     Ended,
 }
@@ -662,8 +663,8 @@ fn status_tail(status: &EventListStatus) -> Line<'static> {
             ),
             palette::WARNING,
         ),
-        EventListStatus::Stopped { reason, .. } => {
-            (format!("  ── stopped{} ──", why(reason)), palette::INACTIVE)
+        EventListStatus::Stopped { reason, tone, .. } => {
+            (format!("  ── stopped{} ──", why(reason)), tone.color())
         }
         _ => return Line::default(),
     };

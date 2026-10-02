@@ -58,9 +58,10 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         Status::Background => styra_ui::event_list::EventListStatus::Background {
             elapsed: progress.in_status,
         },
-        Status::Stopped(_) => styra_ui::event_list::EventListStatus::Stopped {
+        Status::Stopped(ref why) => styra_ui::event_list::EventListStatus::Stopped {
             elapsed: progress.in_status,
             reason: app.activity.status.reason_label(),
+            tone: super::stop_tone(why),
         },
         Status::Ended { .. } => styra_ui::event_list::EventListStatus::Ended,
     };
