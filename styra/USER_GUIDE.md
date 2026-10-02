@@ -152,7 +152,7 @@ shows or hides the Sessions marked completed, and `C` marks the selected
 Session completed — or, on one already marked, unmarks it. `n` leaves the list
 without resuming anything and starts a new Session in the Workspace whose list
 you were reading. `V` opens the Workspace list, which is typed at: every
-printable key filters it over the Workspace name, `Ctrl+W` drops the last
+printable key filters it over the Workspace name and host path, `Ctrl+W` drops the last
 word, and `Esc` clears the filter before a second `Esc` backs out. The arrows
 (or `Ctrl+J`/`Ctrl+K`) move and `Enter` opens. `Ctrl+N` enters the selected
 Workspace on a new interaction, skipping its live work and Session list;

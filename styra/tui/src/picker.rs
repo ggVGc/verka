@@ -571,10 +571,10 @@ fn read_session_name(
 }
 
 /// The Workspace picker loop. The list is typed at: every printable key
-/// narrows it by name, so the commands are on the arrows (or Ctrl+J/K), Enter
-/// to open a Workspace, and control chords — Ctrl+N to start a new interaction,
-/// Ctrl+C to create a Workspace for the current directory, Ctrl+R to rename —
-/// with `?` for that list on screen. Esc clears the filter, then backs out.
+/// narrows it by name or host path, so the commands are on the arrows (or
+/// Ctrl+J/K), Enter to open a Workspace, and control chords — Ctrl+N to start a
+/// new interaction, Ctrl+C to create a Workspace for the current directory,
+/// Ctrl+R to rename — with `?` for that list on screen. Esc clears the filter, then backs out.
 ///
 /// The list is ordered once on entry, by [`sort_workspaces`]. A Workspace the
 /// operator opens is not reordered under them while they look at it — but its
@@ -820,17 +820,18 @@ fn picker_workspaces(
 }
 
 /// Whether `filter`, already lowercased, appears in the Workspace's displayed
-/// name.
+/// name or its host path. An unnamed Workspace shows its directory name in
+/// place of a name, which the host path already covers.
 fn workspace_matches(workspace: &WorkspaceSummary, filter: &str) -> bool {
-    let name = workspace.name.clone().unwrap_or_else(|| {
-        workspace
+    workspace
+        .name
+        .as_ref()
+        .is_some_and(|name| name.to_lowercase().contains(filter))
+        || workspace
             .host_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_owned()
-    });
-    name.to_lowercase().contains(filter)
+            .to_string_lossy()
+            .to_lowercase()
+            .contains(filter)
 }
 
 /// Root-loop-owned state for the Driva template chooser. `templates` is `None`
@@ -1217,7 +1218,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_filter_matches_the_name_case_insensitively() {
+    fn workspace_filter_matches_the_name_and_host_path_case_insensitively() {
         let mut named = workspace("w-1", 3);
         named.name = Some("Payments API".into());
         let workspaces = vec![named, workspace("billing", 2), workspace("quiet", 1)];
@@ -1239,8 +1240,14 @@ mod tests {
             vec!["billing"]
         );
 
-        // The host path beside the name is not searched: only the name is.
-        assert!(picker_workspaces(&workspaces, Some("/home/op")).is_empty());
+        // The host path beside the name is searched too, so a named
+        // Workspace is found by its directory as well.
+        assert_eq!(picker_workspaces(&workspaces, Some("/HOME/OP")).len(), 3);
+        let by_path = picker_workspaces(&workspaces, Some("op/w-1"));
+        assert_eq!(
+            by_path.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
+            vec!["w-1"]
+        );
     }
 
     #[test]

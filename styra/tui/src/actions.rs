@@ -423,7 +423,9 @@ impl Action {
             Self::WorkspacesNew => "start a new interaction in the selected Workspace",
             Self::WorkspacesCreate => "create a Workspace for the current directory",
             Self::WorkspacesRename => "rename the selected Workspace",
-            Self::WorkspacesFilter => "narrow the list by name to what is typed (Esc clears)",
+            Self::WorkspacesFilter => {
+                "narrow the list by name or path to what is typed (Esc clears)"
+            }
             Self::WorkspacesDeleteWord => "delete the last word of the filter",
             Self::WorkspacesCancel => "cancel",
             Self::LauncherHelp => "show/close this reference",
