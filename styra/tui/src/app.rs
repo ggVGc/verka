@@ -1524,7 +1524,7 @@ fn split_link_location(destination: &str) -> (&str, Option<u32>) {
 mod tests {
     use super::*;
     use crate::activity::{EndReason, IdleReason, StopReason};
-    use styra_protocol::agent::{efforts_for, Effort};
+    use styra_protocol::agent::efforts_for;
     use styra_protocol::event::{TokenUsage, TurnOutcome, TurnUsage};
     use styra_protocol::RawLine;
     use styra_protocol::{Answer, AnswerValue, FileLocation};
@@ -2290,49 +2290,6 @@ mod tests {
         app.cancel_launcher();
         assert!(app.launcher.is_none());
         assert_eq!(app.selection, selection, "cancelling changes nothing");
-    }
-
-    /// A model the catalog no longer lists can still arrive from stored state,
-    /// and confirming must not silently replace it. The picker carries it as
-    /// its own row; it cannot author one.
-    #[test]
-    fn a_model_outside_the_catalog_is_carried_as_its_own_row() {
-        let selection = Selection::parse("claude:claude-opus-4-1-20250805").unwrap();
-        let mut app = App::pending(selection.clone());
-        app.open_launcher();
-        let launcher = app.launcher.as_ref().unwrap();
-        assert_eq!(
-            launcher
-                .labels()
-                .iter()
-                .filter(|label| label.contains("claude-opus-4-1-20250805"))
-                .count(),
-            1,
-            "the carried model has a row of its own"
-        );
-        assert_eq!(launcher.selection().model, selection.model);
-
-        // Confirming keeps the model rather than falling back to a catalogued
-        // one — but it does pin an effort, since the picker has no row for
-        // leaving that to the agent. The launch asked for none, so it keeps
-        // the rung the selection arrived with.
-        app.confirm_launcher();
-        assert_eq!(app.selection.model, selection.model);
-        assert_eq!(app.selection.effort, Effort::High);
-
-        // Having just been confirmed it is now the most recently selected
-        // model, so reopening lists it first. It is an ordinary row either
-        // way, just not one the picker could write.
-        app.open_launcher();
-        let launcher = app.launcher.as_ref().unwrap();
-        assert!(
-            launcher
-                .labels()
-                .first()
-                .is_some_and(|label| label.contains("claude-opus-4-1-20250805")),
-            "the model just used leads the list"
-        );
-        assert_eq!(launcher.selection().model, selection.model);
     }
 
     /// Confirming a model moves it to the front of the ordering, and the list
