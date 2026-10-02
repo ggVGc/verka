@@ -329,6 +329,12 @@ pub struct App {
     /// interaction summary whenever one is attached. Changed only by asking
     /// (see [`Request::SetAutoRetry`]), so what is shown is what was accepted.
     pub auto_retry: bool,
+    /// Whether the server commits what each of this interaction's turns
+    /// leaves in its checkout as the interaction goes idle. The server's
+    /// answer in the same way [`Self::auto_retry`] is, read from the
+    /// interaction summary and changed only by asking (see
+    /// [`Request::SetAutoCommit`]).
+    pub auto_commit: bool,
     /// How far down the rendered transcript is scrolled; 0 shows its start.
     /// Unlike the raw/log views, the transcript reads as a document from the
     /// beginning rather than anchoring to the tail.
@@ -439,6 +445,9 @@ pub enum Request {
     /// stop doing so. The waiting is the server's — it outlives this client
     /// and the interaction the limit stopped — so this only asks.
     SetAutoRetry(bool),
+    /// Ask the server to commit each turn's work as this interaction goes
+    /// idle, or to stop doing so. Stored with the Session by the server.
+    SetAutoCommit(bool),
     /// Fetch the last turn's typed answer from the server, which parses it.
     /// `contract` names a shape to read the reply under instead of the one the
     /// turn was sent with, which is how a mis-shaped answer is recovered
@@ -523,6 +532,7 @@ impl App {
             log: Tail::default(),
             quota: Tail::default(),
             auto_retry: false,
+            auto_commit: false,
             transcript: Scroll::default(),
             entry_log: EntryLog::default(),
             files: FilesView::default(),

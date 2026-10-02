@@ -11,6 +11,7 @@ mod tests {
     fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
             auto_retry: false,
+            auto_commit: false,
             id: id.into(),
             name: None,
             tags: Vec::new(),
@@ -62,6 +63,19 @@ mod tests {
         app.auto_retry = true;
 
         assert!(rendered(&app).contains("R rate-limit retry: on"));
+    }
+
+    /// Committing turns is on by default in a worktree, so the footer has to
+    /// say so for the operator to know that branch's history is being written
+    /// to.
+    #[test]
+    fn footer_reports_that_turns_are_committed() {
+        let mut app = test_support::app("s1");
+        assert!(!rendered(&app).contains("auto-commit"));
+
+        app.auto_commit = true;
+
+        assert!(rendered(&app).contains("^G auto-commit"));
     }
 
     /// Beside the fleet's tally on the panel's bottom border, not in the

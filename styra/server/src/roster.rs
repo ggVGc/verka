@@ -291,6 +291,7 @@ mod tests {
             }),
             last_message: Some("still going".into()),
             auto_retry: false,
+            auto_commit: false,
             events: 12,
             completed: CompletionState::Active,
         }

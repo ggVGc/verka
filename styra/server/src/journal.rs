@@ -56,6 +56,15 @@ struct StoredSessionMeta {
     /// once.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     auto_retry: bool,
+    /// Whether the work an interaction of this Session leaves in its checkout
+    /// is committed each time it goes idle, as the operator last answered it.
+    /// `None` until they do, and then the answer depends on where the Session
+    /// works — see [`resolve_auto_commit`].
+    ///
+    /// Stored with the Session for the reason [`Self::auto_retry`] is: the
+    /// operator's answer has to survive the interaction being resumed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_commit: Option<bool>,
     /// The linked checkout and branch this Session works in, for a Session
     /// launched with one. `None` means it works in the Workspace directory
     /// itself — or that it predates this field, which is why a reader that
@@ -367,6 +376,7 @@ fn write_session_meta(
         origin: None,
         contract: None,
         auto_retry: false,
+        auto_commit: None,
         checkout: None,
         completed: CompletionState::Active,
         agent: meta.clone(),
@@ -669,6 +679,40 @@ pub fn store_session_auto_retry(path: &Path, auto_retry: bool) -> Result<()> {
         return Ok(());
     }
     stored.auto_retry = auto_retry;
+    write_stored_session_meta(&directory, &stored)
+}
+
+/// Whether an interaction of this Session commits what each turn leaves
+/// behind in its checkout, as the operator answered it — `None` if they never
+/// have.
+pub fn read_session_auto_commit(path: &Path) -> Result<Option<bool>> {
+    Ok(read_stored_session_meta(path)?.auto_commit)
+}
+
+/// Whether a Session's turns are committed: the operator's answer if they gave
+/// one, and otherwise whether it works in a linked checkout of its own.
+///
+/// A checkout of its own is a branch nobody else is writing to, so committing
+/// every turn there costs the operator nothing they did not ask for. The
+/// Workspace directory is usually the operator's own checkout, whose history
+/// is theirs to write; it is committed to only when they say so.
+pub fn resolve_auto_commit(stored: Option<bool>, in_linked_checkout: bool) -> bool {
+    stored.unwrap_or(in_linked_checkout)
+}
+
+/// Record whether this Session's turns are committed as they end. Kept with
+/// the Session so a resumed interaction carries on doing what the last one did.
+pub fn store_session_auto_commit(path: &Path, auto_commit: bool) -> Result<()> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    if stored.auto_commit == Some(auto_commit) {
+        return Ok(());
+    }
+    stored.auto_commit = Some(auto_commit);
     write_stored_session_meta(&directory, &stored)
 }
 
@@ -1630,6 +1674,41 @@ mod tests {
             read_session_meta(directory).unwrap().protocol,
             Protocol::CodexJsonl
         );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&host).ok();
+    }
+
+    /// Until the operator answers, a Session's turns are committed only in a
+    /// checkout of its own; their answer, once given, is remembered by the
+    /// Session rather than by the interaction that happened to be open.
+    #[test]
+    fn committing_each_turn_defaults_to_the_checkout_and_is_stored_with_the_session() {
+        let root = temp_dir("auto-commit-store");
+        let host = temp_dir("auto-commit-host");
+        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, _) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+        let directory = journal.path().parent().unwrap();
+
+        let stored = read_session_auto_commit(directory).unwrap();
+        assert_eq!(stored, None);
+        assert!(resolve_auto_commit(stored, true), "on in a linked checkout");
+        assert!(!resolve_auto_commit(stored, false), "off in the Workspace");
+
+        store_session_auto_commit(directory, false).unwrap();
+        assert!(!resolve_auto_commit(
+            read_session_auto_commit(directory).unwrap(),
+            true
+        ));
+        store_session_auto_commit(directory, true).unwrap();
+        assert!(resolve_auto_commit(
+            read_session_auto_commit(directory).unwrap(),
+            false
+        ));
+        assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&host).ok();

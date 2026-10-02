@@ -447,6 +447,19 @@ pub enum Request {
         id: String,
         enabled: bool,
     },
+    /// Commit the work this interaction leaves in its checkout each time it
+    /// goes idle, or stop doing so. Until the operator answers, it is on for a
+    /// Session working in a linked checkout of its own and off for one working
+    /// in the Workspace directory; the answer is stored with the Session, so
+    /// resuming it keeps it.
+    ///
+    /// The commit is subject-lined with the start of the turn's last agent
+    /// message, and its body holds the message that started the turn and
+    /// every agent message in it.
+    SetInteractionAutoCommit {
+        id: String,
+        enabled: bool,
+    },
     /// Persist an operator message in the session's durable input queue
     /// without sending it yet, so it survives the client disconnecting before
     /// the interaction is idle enough to accept it.

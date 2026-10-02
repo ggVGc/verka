@@ -175,6 +175,14 @@ M.types.Request = {
         { name = "enabled", required = true, type = { kind = "boolean" } },
       },
     } },
+    { name = "set_interaction_auto_commit", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+        { name = "enabled", required = true, type = { kind = "boolean" } },
+      },
+    } },
     { name = "queue_message", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -764,6 +772,7 @@ M.types.InteractionSummary = {
     { name = "branched_from", required = false, type = { kind = "optional", inner = { kind = "ref", name = "BranchPoint" } } },
     { name = "last_message", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "auto_retry", required = false, type = { kind = "boolean" } },
+    { name = "auto_commit", required = false, type = { kind = "boolean" } },
     { name = "events", required = false, type = { kind = "number", integer = true } },
     { name = "completed", required = false, type = { kind = "ref", name = "CompletionState" } },
   },
@@ -1550,7 +1559,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1582,6 +1591,7 @@ M.Request = {
   SET_SESSION_SELECTION = "set_session_selection",
   SET_INTERACTION_WORKING_DIRECTORY = "set_interaction_working_directory",
   SET_INTERACTION_AUTO_RETRY = "set_interaction_auto_retry",
+  SET_INTERACTION_AUTO_COMMIT = "set_interaction_auto_commit",
   QUEUE_MESSAGE = "queue_message",
   SEND_QUEUED_MESSAGE = "send_queued_message",
   CLEAR_QUEUED_MESSAGES = "clear_queued_messages",
@@ -2522,6 +2532,23 @@ end
 ---   enabled  boolean
 function M.request.set_interaction_auto_retry(data)
   return M.build("set_interaction_auto_retry", data)
+end
+
+--- Commit the work this interaction leaves in its checkout each time it
+--- goes idle, or stop doing so. Until the operator answers, it is on for a
+--- Session working in a linked checkout of its own and off for one working
+--- in the Workspace directory; the answer is stored with the Session, so
+--- resuming it keeps it.
+---
+--- The commit is subject-lined with the start of the turn's last agent
+--- message, and its body holds the message that started the turn and
+--- every agent message in it.
+---
+--- Fields of `data`:
+---   id       string
+---   enabled  boolean
+function M.request.set_interaction_auto_commit(data)
+  return M.build("set_interaction_auto_commit", data)
 end
 
 --- Persist an operator message in the session's durable input queue

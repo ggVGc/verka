@@ -359,6 +359,18 @@ impl Client {
         }
     }
 
+    /// Commit the work each turn of this interaction leaves in its checkout as
+    /// it goes idle, or stop doing so.
+    pub fn set_interaction_auto_commit(&self, id: &str, enabled: bool) -> Result<()> {
+        match self.request(Request::SetInteractionAutoCommit {
+            id: id.to_owned(),
+            enabled,
+        })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
     /// Switch a live interaction onto another model straight away, rather than
     /// leaving it for the next message to carry. The server records it with the
     /// session, so reopening the session keeps the switch.

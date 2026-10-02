@@ -1487,6 +1487,23 @@ pub fn run(
                     }
                 }
             }
+            Some(Request::SetAutoCommit(enabled)) => {
+                match client.set_interaction_auto_commit(&app.session_id, enabled) {
+                    Ok(()) => {
+                        app.auto_commit = enabled;
+                        app.show_action_message(if enabled {
+                            "auto-commit on — each turn's work is committed when it goes idle"
+                        } else {
+                            "auto-commit off"
+                        });
+                    }
+                    Err(error) => {
+                        let message = format!("could not change auto-commit: {error:#}");
+                        app.show_action_message(message.clone());
+                        app.push_log(LogEntry::error(message));
+                    }
+                }
+            }
             Some(Request::EditFile) => {
                 let Some(path) = app.selected_file_path() else {
                     continue;

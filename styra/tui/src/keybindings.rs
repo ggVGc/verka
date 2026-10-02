@@ -33,6 +33,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_LOG: [Key::ctrl('l')] => Action::GlobalLog;
     GLOBAL_TRANSCRIPT: [Key::ch('t')] => Action::GlobalTranscript;
     GLOBAL_DETAILS: [Key::ctrl('o')] => Action::GlobalDetails;
+    GLOBAL_AUTO_COMMIT: [Key::ctrl('g')] => Action::GlobalAutoCommit;
     GLOBAL_ENTRY_LOG: [Key::ch('e')] => Action::GlobalEntryLog;
     GLOBAL_ENTRY_LOG_FOCUS: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]
         => Action::GlobalEntryLogFocus;
@@ -185,6 +186,7 @@ bindings! { MESSAGE_EDITOR = "Message editor";
     EDITOR_LAUNCHER: [Key::ctrl('l')]
         => Action::EditorLauncher;
     EDITOR_INSERT_PATH: [Key::ctrl('f')] => Action::EditorInsertPath;
+    EDITOR_AUTO_COMMIT: [Key::ctrl('g')] => Action::GlobalAutoCommit;
     EDITOR_MOUNT_READABLE: [Key::ch('r')] ("unmounted path") => Action::EditorMountReadable;
     EDITOR_MOUNT_WRITABLE: [Key::ch('w')] ("unmounted path") => Action::EditorMountWritable;
     EDITOR_MOUNT_NEITHER: [Key::ch('n')] ("unmounted path") => Action::EditorMountNeither;

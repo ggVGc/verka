@@ -185,6 +185,14 @@ defmodule Styra.Protocol do
             %{name: "enabled", required: true, type: %{kind: :boolean}}
           ]
         }},
+        %{name: "set_interaction_auto_commit", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}},
+            %{name: "enabled", required: true, type: %{kind: :boolean}}
+          ]
+        }},
         %{name: "queue_message", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -774,6 +782,7 @@ defmodule Styra.Protocol do
         %{name: "branched_from", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "BranchPoint"}}},
         %{name: "last_message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "auto_retry", required: false, type: %{kind: :boolean}},
+        %{name: "auto_commit", required: false, type: %{kind: :boolean}},
         %{name: "events", required: false, type: %{kind: :number, integer: true}},
         %{name: "completed", required: false, type: %{kind: :ref, name: "CompletionState"}}
       ]
@@ -1599,6 +1608,7 @@ defmodule Styra.Protocol do
     "set_session_selection",
     "set_interaction_working_directory",
     "set_interaction_auto_retry",
+    "set_interaction_auto_commit",
     "queue_message",
     "send_queued_message",
     "clear_queued_messages",
@@ -2475,6 +2485,27 @@ defmodule Styra.Protocol do
 
     @doc "`set_interaction_auto_retry/1`, raising on a request the server would refuse."
     def set_interaction_auto_retry!(data), do: Styra.Protocol.build!("set_interaction_auto_retry", data)
+
+    @doc ~S"""
+    Commit the work this interaction leaves in its checkout each time it
+    goes idle, or stop doing so. Until the operator answers, it is on for a
+    Session working in a linked checkout of its own and off for one working
+    in the Workspace directory; the answer is stored with the Session, so
+    resuming it keeps it.
+
+    The commit is subject-lined with the start of the turn's last agent
+    message, and its body holds the message that started the turn and
+    every agent message in it.
+
+    Fields of `data`:
+
+      * `id     `  string
+      * `enabled`  boolean
+    """
+    def set_interaction_auto_commit(data), do: Styra.Protocol.build("set_interaction_auto_commit", data)
+
+    @doc "`set_interaction_auto_commit/1`, raising on a request the server would refuse."
+    def set_interaction_auto_commit!(data), do: Styra.Protocol.build!("set_interaction_auto_commit", data)
 
     @doc ~S"""
     Persist an operator message in the session's durable input queue

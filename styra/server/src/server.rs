@@ -195,22 +195,32 @@ impl IdleNotice {
     }
 }
 
-/// Everything an interaction reaching idle records: that going idle is news
-/// for a client that was not watching, and what the agent left uncommitted in
-/// the checkout.
+/// Everything an interaction reaching idle does: commit what the turn left
+/// in the checkout, when the operator has left that on, record that going idle
+/// is news for a client that was not watching, and what the agent left
+/// uncommitted in the checkout.
 ///
-/// One handle rather than two because the two are the same event. The
+/// One handle rather than several because they are the same event. The
 /// collector thread notices an interaction stop working in three places — a
 /// turn completing, a background task set emptying, a background poll
-/// finishing — and each of them has to record both, so the pair is held
-/// together where forgetting one is not possible.
+/// finishing — and each of them has to do all of it, so it is held together
+/// where forgetting one is not possible.
 struct GoneIdle {
     notice: Arc<IdleNotice>,
     working_tree: Arc<WorkingTree>,
+    /// Weak because the collector thread holding this must not keep the
+    /// interaction alive: it is the interaction's own thread.
+    interaction: std::sync::Weak<ManagedInteraction>,
 }
 
 impl GoneIdle {
     fn became_idle(&self) {
+        // Committed first, so the reading below describes what the commit
+        // left — nothing, ordinarily — and a client arriving at the idle
+        // interaction finds the commit already in its stream.
+        if let Some(interaction) = self.interaction.upgrade() {
+            interaction.commit_turn();
+        }
         self.notice.became_idle();
         self.working_tree.reread();
     }
@@ -348,6 +358,17 @@ impl WorkingTree {
             .unwrap_or(false);
         self.uncommitted.store(uncommitted, Ordering::Release);
         self.locate();
+    }
+
+    /// Commit everything the agent left in the checkout with `message`,
+    /// returning the commit's abbreviated id — or `None` when there was
+    /// nothing to commit, which includes a workspace outside any repository.
+    fn commit(&self, message: &str) -> Result<Option<String>> {
+        let checkout = self.checkout();
+        if !self.git.has_uncommitted_changes(&checkout).unwrap_or(false) {
+            return Ok(None);
+        }
+        self.git.commit_all(&checkout, message).map(Some)
     }
 
     /// Ask Git where the work is happening, and only that.
@@ -563,6 +584,10 @@ struct ManagedInteraction {
     /// retry resumes the Session as a new interaction and the setting has to
     /// survive that. See [`ServerState::retry_after_reset`].
     auto_retry: Arc<AtomicBool>,
+    /// Whether what each turn leaves in the checkout is committed as the
+    /// interaction goes idle; mirrored into `session_path` so a resumed
+    /// interaction keeps the operator's answer. See [`Self::commit_turn`].
+    auto_commit: Arc<AtomicBool>,
     /// Whether the operator has finished with this interaction's Session;
     /// mirrored into `session_path` since it is a property of the Session,
     /// not of this interaction — see [`crate::protocol::SessionSummary::completed`].
@@ -732,6 +757,7 @@ impl ManagedInteraction {
             activity_since_ms: state.since_ms,
             last_message: self.last_message(),
             auto_retry: self.auto_retry.load(Ordering::Acquire),
+            auto_commit: self.auto_commit.load(Ordering::Acquire),
             events: self.events.load(Ordering::Acquire),
             completed: *self.completed.lock().expect("completion lock poisoned"),
         }
@@ -757,6 +783,60 @@ impl ManagedInteraction {
         journal::store_session_auto_retry(&self.session_path, enabled)?;
         self.auto_retry.store(enabled, Ordering::Release);
         Ok(())
+    }
+
+    /// Commit each turn's work as the interaction goes idle, or stop doing so,
+    /// and record it where a resumed interaction will read it back.
+    fn set_auto_commit(&self, enabled: bool) -> Result<()> {
+        journal::store_session_auto_commit(&self.session_path, enabled)?;
+        self.auto_commit.store(enabled, Ordering::Release);
+        Ok(())
+    }
+
+    /// Commit what the turn that has just ended left in the checkout, if the
+    /// operator has left committing on, and say what happened in the
+    /// interaction's own stream — a commit the operator did not make has to be
+    /// visible where they read the turn, and so does one that failed.
+    fn commit_turn(&self) {
+        if !self.auto_commit.load(Ordering::Acquire) {
+            return;
+        }
+        let (prompt, replies) = self.turn_messages();
+        let message = turn_commit_message(prompt.as_deref(), &replies);
+        match self.working_tree.commit(&message) {
+            Ok(None) => {}
+            Ok(Some(commit)) => {
+                let subject = message.lines().next().unwrap_or_default();
+                self.push_update(InteractionUpdate::Log(LogEntry::info(format!(
+                    "committed {commit}: {subject}"
+                ))));
+            }
+            Err(error) => self.push_update(InteractionUpdate::Log(LogEntry::warn(format!(
+                "could not commit this turn: {error:#}"
+            )))),
+        }
+    }
+
+    /// The operator message that started the latest turn, and everything the
+    /// agent has said since, oldest first.
+    fn turn_messages(&self) -> (Option<String>, Vec<String>) {
+        let updates = self.updates.lock().expect("interaction updates poisoned");
+        let mut replies = Vec::new();
+        let mut prompt = None;
+        for sequenced in updates.iter().rev() {
+            match &sequenced.update {
+                InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage { text }) => {
+                    replies.push(text.clone());
+                }
+                InteractionUpdate::Event(crate::event::AgentEvent::UserMessage { text }) => {
+                    prompt = Some(text.clone());
+                    break;
+                }
+                _ => {}
+            }
+        }
+        replies.reverse();
+        (prompt, replies)
     }
 
     /// Record which window refused this interaction's work, and — when the
@@ -865,6 +945,52 @@ impl ManagedInteraction {
                 _ => None,
             })
     }
+}
+
+/// The message a turn's work is committed under: the start of the agent's
+/// last message as the subject, and the operator message that began the turn
+/// followed by every agent message in it as the body.
+///
+/// A turn the agent said nothing in takes its subject from the prompt instead,
+/// so the subject still says what the work was for.
+fn turn_commit_message(prompt: Option<&str>, replies: &[String]) -> String {
+    let subject = replies
+        .last()
+        .and_then(|reply| commit_subject(reply))
+        .or_else(|| prompt.and_then(commit_subject))
+        .unwrap_or_else(|| "Work left by an agent turn".to_owned());
+    let mut message = subject;
+    if let Some(prompt) = prompt.map(str::trim).filter(|prompt| !prompt.is_empty()) {
+        message.push_str("\n\nUser:\n");
+        message.push_str(prompt);
+    }
+    let replies = replies
+        .iter()
+        .map(|reply| reply.trim())
+        .filter(|reply| !reply.is_empty())
+        .collect::<Vec<_>>();
+    if !replies.is_empty() {
+        message.push_str("\n\nAgent:\n");
+        message.push_str(&replies.join("\n\n"));
+    }
+    message.push('\n');
+    message
+}
+
+/// The first line of `text` with something on it, stripped of the Markdown
+/// heading marks an agent often opens with and clipped to the length a commit
+/// subject is read at. `None` for text with nothing on any line.
+fn commit_subject(text: &str) -> Option<String> {
+    const LIMIT: usize = 72;
+    let line = text
+        .lines()
+        .map(|line| line.trim().trim_start_matches('#').trim())
+        .find(|line| !line.is_empty())?;
+    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    Some(match line.char_indices().nth(LIMIT - 1) {
+        Some((end, _)) => format!("{}…", line[..end].trim_end()),
+        None => line,
+    })
 }
 
 /// Collapse a message to a single display line: whitespace runs (including the
@@ -1583,6 +1709,13 @@ impl ServerState {
             shell,
             queue: Mutex::new(std::collections::VecDeque::new()),
             auto_retry: Arc::new(AtomicBool::new(false)),
+            // A new Session has no answer of its own yet, so where it works
+            // decides: `checkout` is the Workspace directory unless it was
+            // given a linked checkout above.
+            auto_commit: Arc::new(AtomicBool::new(journal::resolve_auto_commit(
+                None,
+                checkout != workspace,
+            ))),
             completed: Arc::new(Mutex::new(CompletionState::Active)),
             refused_by: Arc::new(Mutex::new(None)),
             interrupt_requested: Arc::clone(&interrupt_requested),
@@ -1599,6 +1732,7 @@ impl ServerState {
         let idle = GoneIdle {
             notice: Arc::clone(&idle),
             working_tree: Arc::clone(&working_tree),
+            interaction: Arc::downgrade(&managed),
         };
         let moved = Arc::clone(&working_tree);
         let quota_session = id.clone();
@@ -2172,6 +2306,13 @@ impl ServerState {
         // idle enough to send them), so reload them rather than starting empty.
         let queued = journal::read_queued_messages(&summary.path)?;
         let auto_retry = journal::read_session_auto_retry(&summary.path)?;
+        // `checkout` is the Workspace directory unless the Session works in a
+        // linked checkout of its own, which is what an unanswered Session's
+        // default turns on.
+        let auto_commit = journal::resolve_auto_commit(
+            journal::read_session_auto_commit(&summary.path)?,
+            checkout != workspace,
+        );
         // Resuming is what undoes completion: an interaction working on the
         // Session again is not one the operator is finished with, and there is
         // no separate client action to clear it. Only a completed Session gets
@@ -2198,6 +2339,7 @@ impl ServerState {
             // this resume is the operator's standing answer to a rate limit,
             // and a Session that keeps hitting the window has to keep it.
             auto_retry: Arc::new(AtomicBool::new(auto_retry)),
+            auto_commit: Arc::new(AtomicBool::new(auto_commit)),
             completed: Arc::new(Mutex::new(CompletionState::Active)),
             refused_by: Arc::new(Mutex::new(None)),
             interrupt_requested: Arc::clone(&interrupt_requested),
@@ -2212,6 +2354,7 @@ impl ServerState {
         let idle = GoneIdle {
             notice: Arc::clone(&idle),
             working_tree: Arc::clone(&working_tree),
+            interaction: Arc::downgrade(&managed),
         };
         let moved = Arc::clone(&working_tree);
         let quota_session = id.clone();
@@ -3295,6 +3438,10 @@ impl ServerState {
             }
             Request::SetInteractionAutoRetry { id, enabled } => {
                 self.interaction(&id)?.set_auto_retry(enabled)?;
+                Ok(Response::Accepted)
+            }
+            Request::SetInteractionAutoCommit { id, enabled } => {
+                self.interaction(&id)?.set_auto_commit(enabled)?;
                 Ok(Response::Accepted)
             }
             Request::QueueMessage { id, message } => Ok(Response::QueuedMessages(
@@ -4432,6 +4579,67 @@ mod tests {
         assert!(!tree.uncommitted());
     }
 
+    /// A turn's work is committed only where there is work and a repository
+    /// to commit it to, and committing it leaves the tree clean.
+    #[test]
+    fn a_working_tree_commits_only_work_that_is_there() {
+        let host = temp_path("working-tree-commit-host");
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let tree = WorkingTree::new(git.clone(), host.clone());
+
+        assert_eq!(tree.commit("Nothing").unwrap(), None, "a clean tree");
+
+        git.set_uncommitted_changes(&host, true);
+        assert!(tree.commit("Add the file").unwrap().is_some());
+        assert_eq!(git.commits(&host), vec!["Add the file".to_owned()]);
+        tree.reread();
+        assert!(!tree.uncommitted(), "the commit took everything");
+
+        let bare = temp_path("working-tree-commit-bare");
+        std::fs::remove_dir_all(&bare).ok();
+        std::fs::create_dir_all(&bare).unwrap();
+        let outside = WorkingTree::new(crate::git::FakeGit::shared(), bare);
+        assert_eq!(outside.commit("Anything").unwrap(), None, "no repository");
+    }
+
+    /// The subject is the start of what the agent said last; the body is the
+    /// whole turn, the operator's message first.
+    #[test]
+    fn a_turn_is_committed_under_its_last_message_with_the_whole_turn_below() {
+        let replies = vec![
+            "Looking at the tests.".to_owned(),
+            "## Fixed the flaky test\n\nIt raced the clock.".to_owned(),
+        ];
+        let message = turn_commit_message(Some("Fix the flaky test"), &replies);
+        assert_eq!(
+            message,
+            "Fixed the flaky test\n\n\
+             User:\nFix the flaky test\n\n\
+             Agent:\nLooking at the tests.\n\n## Fixed the flaky test\n\nIt raced the clock.\n"
+        );
+    }
+
+    #[test]
+    fn a_commit_subject_is_one_clipped_line() {
+        let long = "word ".repeat(40);
+        let subject = commit_subject(&long).unwrap();
+        assert_eq!(subject.chars().count(), 72);
+        assert!(subject.ends_with('…'));
+        assert_eq!(commit_subject("\n  \n").as_deref(), None);
+        // Nothing said in the turn: the prompt names the work instead.
+        assert_eq!(
+            turn_commit_message(Some("Rename it"), &[]),
+            "Rename it\n\nUser:\nRename it\n"
+        );
+        assert_eq!(
+            turn_commit_message(None, &[]),
+            "Work left by an agent turn\n"
+        );
+    }
+
     /// An operator arriving at an interaction that left work uncommitted is
     /// usually arriving to commit it. The claim is checked again just after
     /// they get there, so it stops being made once it stops being true — and
@@ -5074,6 +5282,7 @@ mod tests {
                 branched_from: None,
                 last_message: None,
                 auto_retry: false,
+                auto_commit: false,
                 events: 0,
                 completed: CompletionState::Active,
             },
