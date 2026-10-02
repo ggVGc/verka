@@ -653,10 +653,12 @@ fn creates_worktree(app: &App, key: KeyEvent) -> bool {
 
 /// Ask the server to commit this interaction's turns as they end, or to stop.
 /// A screen with no interaction yet has nothing to answer for: the one it
-/// starts commits its turns, as every new one does.
+/// starts commits its turns if it is given a linked checkout of its own.
 fn toggle_auto_commit(app: &mut App) {
     if app.session_id.is_empty() {
-        return app.show_action_message("no interaction yet — new ones commit each turn");
+        return app.show_action_message(
+            "no interaction yet — one started in its own worktree commits each turn",
+        );
     }
     app.ask(Request::SetAutoCommit(!app.auto_commit));
 }

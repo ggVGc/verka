@@ -2472,8 +2472,10 @@ defmodule Styra.Protocol do
 
     @doc ~S"""
     Commit the work this interaction leaves in its checkout each time it
-    goes idle, or stop doing so. On by default; stored with the Session, so
-    resuming it keeps the operator's answer.
+    goes idle, or stop doing so. Until the operator answers, it is on for a
+    Session working in a linked checkout of its own and off for one working
+    in the Workspace directory; the answer is stored with the Session, so
+    resuming it keeps it.
 
     The commit is subject-lined with the start of the turn's last agent
     message, and its body holds the message that started the turn and

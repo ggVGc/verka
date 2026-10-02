@@ -64,8 +64,9 @@ mod tests {
         assert!(rendered(&app).contains("R rate-limit retry: on"));
     }
 
-    /// Committing turns is on by default, so the footer has to say so for the
-    /// operator to know their checkout's history is being written to.
+    /// Committing turns is on by default in a worktree, so the footer has to
+    /// say so for the operator to know that branch's history is being written
+    /// to.
     #[test]
     fn footer_reports_that_turns_are_committed() {
         let mut app = test_support::app("s1");

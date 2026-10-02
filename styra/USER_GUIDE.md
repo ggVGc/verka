@@ -147,17 +147,22 @@ The checkout is read at the moment the agent stops working, so the mark
 describes what that turn left; it clears the next time the interaction goes
 idle. A workspace that is not in a repository says nothing either way.
 
-Auto-commit is on for every new interaction: each time it goes idle, the
-server stages everything `git status` reports in its checkout and commits it.
+Auto-commit is on by default for an interaction working in a linked worktree
+of its own (see [Git checkout association and linked
+worktrees](#git-checkout-association-and-linked-worktrees)), and off for one
+working in the Workspace directory. While it is on, each time the interaction
+goes idle the server stages everything `git status` reports in its checkout
+and commits it.
 The subject is the start of the agent's last message in the turn; the body
 holds the message that started the turn, then every agent message in it. The
 interaction's stream logs the commit's id and subject, or why it could not be
 made — a missing Git identity or a refusing hook, say. A clean checkout, or a
-workspace that is not in a repository, commits nothing. `Ctrl+G` turns it off
-or back on for the interaction you are attached to. The Session remembers the
-choice, so resuming it keeps it. The footer shows `^G auto-commit` while it is on.
-Whatever `git status` sees is committed, so a checkout you edit yourself
-alongside the agent has your changes committed too.
+workspace that is not in a repository, commits nothing. `Ctrl+G` turns it on
+or off for the interaction you are attached to. The Session remembers your
+choice, which overrides the default from then on — including after `W` moves
+the Session into a worktree. The footer shows `^G auto-commit` while it is on.
+Whatever `git status` sees is committed, so if you turn it on in a checkout you
+edit yourself, your changes are committed alongside the agent's.
 
 `A` opens the full Session list. In that list, `/` starts a case-insensitive
 filter over the Session name and first prompt; `Esc` abandons the filter. `c`

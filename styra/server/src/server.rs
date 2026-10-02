@@ -1711,8 +1711,13 @@ impl ServerState {
             shell,
             queue: Mutex::new(std::collections::VecDeque::new()),
             auto_retry: Arc::new(AtomicBool::new(false)),
-            // On for every new Session; see `Request::SetInteractionAutoCommit`.
-            auto_commit: Arc::new(AtomicBool::new(true)),
+            // A new Session has no answer of its own yet, so where it works
+            // decides: `checkout` is the Workspace directory unless it was
+            // given a linked checkout above.
+            auto_commit: Arc::new(AtomicBool::new(journal::resolve_auto_commit(
+                None,
+                checkout != workspace,
+            ))),
             completed: Arc::new(Mutex::new(CompletionState::Active)),
             refused_by: Arc::new(Mutex::new(None)),
             interrupt_requested: Arc::clone(&interrupt_requested),
@@ -2303,7 +2308,13 @@ impl ServerState {
         // idle enough to send them), so reload them rather than starting empty.
         let queued = journal::read_queued_messages(&summary.path)?;
         let auto_retry = journal::read_session_auto_retry(&summary.path)?;
-        let auto_commit = journal::read_session_auto_commit(&summary.path)?;
+        // `checkout` is the Workspace directory unless the Session works in a
+        // linked checkout of its own, which is what an unanswered Session's
+        // default turns on.
+        let auto_commit = journal::resolve_auto_commit(
+            journal::read_session_auto_commit(&summary.path)?,
+            checkout != workspace,
+        );
         // Resuming is what undoes completion: an interaction working on the
         // Session again is not one the operator is finished with, and there is
         // no separate client action to clear it. Only a completed Session gets
