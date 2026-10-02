@@ -19,7 +19,7 @@ use ratatui::Frame;
 use std::cell::RefCell;
 use std::time::Duration;
 use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
-use styra_protocol::Contract;
+use styra_protocol::{Contract, QueuedMessage};
 
 const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
@@ -112,6 +112,9 @@ pub struct EventListView<'a> {
     /// the keys. See [`crate::search`].
     pub search: SearchView<'a>,
     pub status: EventListStatus,
+    /// Messages written while the agent was busy, oldest first. They are
+    /// listed under the status tail, where they will land once sent.
+    pub queued: &'a [QueuedMessage],
 }
 
 /// What every row of the list renders the same way: the protocol that reads
@@ -274,7 +277,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         // Before anything is launched, the empty list is the start screen: the
         // one moment the agent, model, and effort are still open, so it says
         // what they are and how to change them instead of only waiting.
-        let lines = if view.can_configure_launch {
+        let mut lines = if view.can_configure_launch {
             vec![
                 Line::from(vec![
                     Span::styled(
@@ -299,6 +302,10 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
                 Style::default().fg(palette::MUTED_TEXT),
             ))]
         };
+        lines.extend(queued_lines(
+            view.queued,
+            area.width.saturating_sub(2) as usize,
+        ));
         frame.render_widget(Paragraph::new(lines).block(block), area);
         return EventListFeedback::default();
     }
@@ -319,7 +326,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     // cannot see what is under it.
     let mut items = LazyItems {
         entries: &view.entries,
-        tail: ListItem::new(status_tail(&view.status)),
+        tail: ListItem::new(tail_lines(&view.status, view.queued, width)),
         built: (0..=view.entries.len()).map(|_| None).collect(),
         width,
         viewport_height,
@@ -668,6 +675,56 @@ fn status_tail(status: &EventListStatus) -> Line<'static> {
         _ => return Line::default(),
     };
     Line::from(Span::styled(text, Style::default().fg(color)))
+}
+
+/// Queued messages beyond this many are counted rather than listed. The tail
+/// is one list item, and the list draws only items that fit whole, so a long
+/// queue would otherwise take the status line off the screen with it.
+const MAX_QUEUED_ROWS: usize = 5;
+
+/// The status line, followed by the messages waiting to be sent after it.
+fn tail_lines(
+    status: &EventListStatus,
+    queued: &[QueuedMessage],
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![status_tail(status)];
+    lines.extend(queued_lines(queued, width));
+    lines
+}
+
+/// One row per queued message, clipped to the pane: the message box lists
+/// them in full, so here they only have to say what is waiting, and in what
+/// order.
+fn queued_lines(queued: &[QueuedMessage], width: usize) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(palette::INACTIVE);
+    let mut lines: Vec<Line<'static>> = queued
+        .iter()
+        .take(MAX_QUEUED_ROWS)
+        .map(|message| {
+            let label = match message.contract {
+                Some(contract) => format!("  ⧗ queued ({}) » ", contract.as_str()),
+                None => "  ⧗ queued » ".to_owned(),
+            };
+            // One row each, so a multi-line message reads as its first line.
+            let text = message.text.lines().next().unwrap_or_default().to_owned();
+            truncate_line(
+                Line::from(vec![
+                    Span::styled(label, muted),
+                    Span::styled(text, Style::default().fg(palette::MUTED_TEXT)),
+                ]),
+                width,
+                false,
+            )
+        })
+        .collect();
+    if queued.len() > MAX_QUEUED_ROWS {
+        lines.push(Line::from(Span::styled(
+            format!("  ⧗ +{} more queued", queued.len() - MAX_QUEUED_ROWS),
+            muted,
+        )));
+    }
+    lines
 }
 
 /// The tail of a running turn: a spinner, how long the turn has been going,
@@ -1765,6 +1822,7 @@ mod tests {
                 typing: false,
             },
             status: EventListStatus::Idle { reason: None },
+            queued: &[],
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         let mut offset = 0;
@@ -1883,6 +1941,7 @@ mod tests {
             links: LinkDisplay::Compact,
             search,
             status: EventListStatus::Idle { reason: None },
+            queued: &[],
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
         terminal
