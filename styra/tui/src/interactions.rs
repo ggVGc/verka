@@ -633,6 +633,11 @@ impl LiveInteractions {
     /// shown — the interaction the operator just completed, with completed
     /// rows hidden. The row itself stays: it is the listing that filters it,
     /// so nothing here removes it from the list.
+    ///
+    /// Work still live in the completed interaction's own Workspace comes
+    /// first, nearest after it and then nearest before: finishing one piece
+    /// of a Workspace's work leads on to the rest of it, rather than off into
+    /// whichever Workspace happens to sit next in the list.
     pub fn select_past_hidden(
         &mut self,
         id: &str,
@@ -642,6 +647,27 @@ impl LiveInteractions {
             .items
             .iter()
             .position(|interaction| interaction.id == id)?;
+        let own_workspace = &self.items[hidden].workspace_id;
+        let live_alongside = self
+            .visible_indices(workspace_id)
+            .into_iter()
+            .filter(|index| {
+                let interaction = &self.items[*index];
+                *index != hidden
+                    && interaction.workspace_id == *own_workspace
+                    && interaction.activity.accepting()
+            })
+            .collect::<Vec<_>>();
+        if let Some(index) = live_alongside
+            .iter()
+            .copied()
+            .find(|index| *index > hidden)
+            .or_else(|| live_alongside.last().copied())
+        {
+            // The cursor is not left on an entry the navigator no longer offers.
+            self.rest();
+            return self.items.get(index).cloned();
+        }
         self.select_from(hidden, workspace_id)
     }
 
@@ -923,6 +949,43 @@ mod tests {
 
         assert_eq!(next.id, "next");
         assert_eq!(live.items.len(), 2, "the completed row is still listed");
+    }
+
+    /// The rest of the completed interaction's own Workspace comes before any
+    /// other Workspace, even one listed next to it — and a stopped row of its
+    /// own Workspace does not count as the rest of its work.
+    #[test]
+    fn completing_an_interaction_moves_on_to_live_work_in_its_own_workspace() {
+        let mut live = LiveInteractions::default();
+        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
+        elsewhere.workspace_id = "other".into();
+        live.open(
+            vec![
+                interaction("earlier", InteractionActivity::Running),
+                completed("finished"),
+                elsewhere,
+                interaction("stopped", InteractionActivity::Stopped),
+            ],
+            vec![],
+        );
+
+        let next = live.select_past_hidden("finished", None).unwrap();
+
+        assert_eq!(next.id, "earlier");
+    }
+
+    /// With no live work left in its own Workspace, the move falls back to the
+    /// next visible row wherever it is.
+    #[test]
+    fn completing_the_last_live_interaction_of_a_workspace_moves_past_it() {
+        let mut live = LiveInteractions::default();
+        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
+        elsewhere.workspace_id = "other".into();
+        live.open(vec![completed("finished"), elsewhere], vec![]);
+
+        let next = live.select_past_hidden("finished", None).unwrap();
+
+        assert_eq!(next.id, "elsewhere");
     }
 
     #[test]
