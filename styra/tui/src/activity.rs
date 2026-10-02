@@ -847,6 +847,7 @@ mod tests {
             last_message: None,
             auto_retry: false,
             events: 0,
+            branched_from: None,
             completed: CompletionState::Active,
         }
     }

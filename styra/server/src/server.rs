@@ -696,6 +696,9 @@ impl ManagedInteraction {
     }
 
     fn summary(&self) -> InteractionSummary {
+        // The Session's own record, read once for everything this summary
+        // takes from it.
+        let stored = journal::session_summary_at(&self.session_path, &self.workspace_id).ok();
         let state = self.activity.get();
         let activity = state.activity;
         InteractionSummary {
@@ -705,8 +708,9 @@ impl ManagedInteraction {
                 .lock()
                 .expect("session name lock poisoned")
                 .clone(),
-            tags: journal::session_summary_at(&self.session_path, &self.workspace_id)
-                .map(|summary| summary.tags)
+            tags: stored
+                .as_ref()
+                .map(|summary| summary.tags.clone())
                 .unwrap_or_default(),
             workspace_id: self.workspace_id.clone(),
             selection: self.selection(),
@@ -722,6 +726,7 @@ impl ManagedInteraction {
             // `InteractionSummary::checkout`. Where the work is happening is
             // still the answer while the agent is working on it.
             checkout: self.working_tree.checkout_state(),
+            branched_from: stored.and_then(|summary| summary.branched_from),
             activity,
             activity_reason: state.reason,
             activity_since_ms: state.since_ms,
@@ -1160,9 +1165,7 @@ impl ServerState {
         };
         let topic =
             crate::naming::topic_for_prompt(&session.selection, session.first_prompt.as_deref());
-        let checkout = crate::worktree::Checkout::at(
-            worktrees.checkout(id, topic.as_ref().map(Topic::branch))?,
-        );
+        let checkout = worktrees.checkout(id, topic.as_ref().map(Topic::branch))?;
         journal::store_session_checkout(&session.path, &checkout)?;
         Ok(())
     }
@@ -1492,17 +1495,12 @@ impl ServerState {
                 };
                 journal::store_session_checkout(
                     &journal_path,
-                    &crate::worktree::Checkout {
-                        path: Some(path.clone()),
-                        branch: inherited.branch.clone(),
-                    },
+                    &inherited.with_worktree(path.clone()),
                 )?;
                 path
             }
             (None, Some(worktrees)) => {
-                let made = crate::worktree::Checkout::at(
-                    worktrees.checkout(&id, topic.as_ref().map(Topic::branch))?,
-                );
+                let made = worktrees.checkout(&id, topic.as_ref().map(Topic::branch))?;
                 // Written down here, while the name and the branch are known
                 // first-hand, rather than left to be recognised later from
                 // the shape of a directory name.
@@ -2058,14 +2056,14 @@ impl ServerState {
                 let restored = worktrees.restore(&stored.branch)?;
                 journal::store_session_checkout(
                     &summary.path,
-                    &crate::worktree::Checkout {
-                        path: Some(restored.clone()),
-                        branch: stored.branch.clone(),
-                    },
+                    &stored.with_worktree(restored.clone()),
                 )?;
                 restored
             }
-            (Some(worktrees), _) => worktrees.checkout(&request.id, None)?,
+            (Some(worktrees), _) => worktrees
+                .checkout(&request.id, None)?
+                .path
+                .expect("a checkout asked for has its directory"),
             (None, _) => workspace.clone(),
         };
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
@@ -2573,7 +2571,7 @@ impl ServerState {
                 .as_deref()
                 .and_then(|path| crate::worktree::topic_of(path, id));
             let checkout = worktrees.fork(&new_id, topic.as_deref(), &source_checkout.branch)?;
-            journal::store_session_checkout(&directory, &crate::worktree::Checkout::at(checkout))?;
+            journal::store_session_checkout(&directory, &checkout)?;
         }
         // The marker goes in before the copied history: it is the branch's
         // first line, so reading the new Session from the top starts with
@@ -5073,6 +5071,7 @@ mod tests {
                 idle_unseen: false,
                 uncommitted_changes: false,
                 checkout: None,
+                branched_from: None,
                 last_message: None,
                 auto_retry: false,
                 events: 0,
@@ -5162,11 +5161,9 @@ mod tests {
             .workspace_worktrees(&workspace, true)
             .unwrap()
             .unwrap();
-        let made = crate::worktree::Checkout::at(
-            worktrees
-                .checkout(&id, Some("teach-the-picker-to-filter"))
-                .unwrap(),
-        );
+        let made = worktrees
+            .checkout(&id, Some("teach-the-picker-to-filter"))
+            .unwrap();
         journal::store_session_checkout(&session_path, &made).unwrap();
         let made_path = made.path.clone().expect("the checkout was just made");
 
@@ -5222,11 +5219,9 @@ mod tests {
             .workspace_worktrees(&workspace, true)
             .unwrap()
             .unwrap();
-        let checkout = crate::worktree::Checkout::at(
-            worktrees
-                .checkout(&id, Some("shared-investigation"))
-                .unwrap(),
-        );
+        let checkout = worktrees
+            .checkout(&id, Some("shared-investigation"))
+            .unwrap();
         journal::store_session_checkout(&session_path, &checkout).unwrap();
 
         let plan = state
@@ -5282,7 +5277,11 @@ mod tests {
             .workspace_worktrees(&workspace, true)
             .unwrap()
             .unwrap();
-        let path = worktrees.checkout(&id, Some("fix-the-flaky-test")).unwrap();
+        let path = worktrees
+            .checkout(&id, Some("fix-the-flaky-test"))
+            .unwrap()
+            .path
+            .unwrap();
         assert_eq!(journal::read_session_checkout(&session_path).unwrap(), None);
 
         let found = state

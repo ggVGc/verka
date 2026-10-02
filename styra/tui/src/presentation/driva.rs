@@ -78,5 +78,9 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
             .interactions
             .current(&app.session_id)
             .and_then(|interaction| interaction.checkout.clone()),
+        branched_from: app
+            .interactions
+            .current(&app.session_id)
+            .and_then(|interaction| interaction.branched_from.clone()),
     }
 }

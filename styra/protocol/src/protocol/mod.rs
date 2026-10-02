@@ -14,11 +14,12 @@ mod types;
 
 pub use types::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
-    BranchHistory, CheckoutState, CleanedWorktree, CompletionState, Contract, Direction,
-    DrivaOptions, FileLocation, InteractionActivity, InteractionActivityReason, InteractionEnd,
-    InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel,
-    ModelSummary, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin,
-    SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary, WorktreeCleanup,
+    BranchHistory, BranchPoint, CheckoutState, CleanedWorktree, CompletionState, Contract,
+    Direction, DrivaOptions, FileLocation, InteractionActivity, InteractionActivityReason,
+    InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
+    LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
+    SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary,
+    WorktreeCleanup,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export

@@ -984,6 +984,7 @@ mod tests {
             last_event_at_ms,
             last_event_age: String::new(),
             origin: None,
+            branched_from: None,
             completed: CompletionState::Active,
         }
     }

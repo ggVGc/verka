@@ -28,8 +28,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use std::path::PathBuf;
 use styra_protocol::{
-    AttributedMount, CheckoutState, DrivaOptions, FloorKind, LaunchMount, LaunchPolicy, Mount,
-    MountAccess, MountOrigin, VariableOrigin, WritableMountMode,
+    AttributedMount, BranchPoint, CheckoutState, DrivaOptions, FloorKind, LaunchMount,
+    LaunchPolicy, Mount, MountAccess, MountOrigin, VariableOrigin, WritableMountMode,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -170,6 +170,10 @@ pub struct DrivaView<'a> {
     /// workspace is not in a repository, or before the interaction has gone
     /// idle once.
     pub checkout: Option<CheckoutState>,
+    /// Where the Session's own branch was created from — see
+    /// [`styra_protocol::InteractionSummary::branched_from`]. `None` for a
+    /// Session Styra made no branch for.
+    pub branched_from: Option<BranchPoint>,
 }
 
 impl DrivaView<'_> {
@@ -1083,6 +1087,7 @@ fn interaction_lines(app: &DrivaView) -> Vec<Line<'static>> {
         detail_field_line("queued", &app.queued_count.to_string()),
     ]);
     lines.extend(checkout_lines(app.checkout.as_ref()));
+    lines.extend(app.branched_from.as_ref().map(branched_from_line));
     if let Some(message) = &app.last_message {
         lines.push(detail_field_line("last message", &message));
     }
@@ -1120,6 +1125,20 @@ fn checkout_lines(checkout: Option<&CheckoutState>) -> Vec<Line<'static>> {
             },
         ),
     ]
+}
+
+/// Where the Session's branch started: the branch it was made from and the
+/// commit it was made at, abbreviated the way `git log --oneline` would.
+///
+/// The commit is the one recorded when the branch was made, not where that
+/// branch is now, so it is the base to compare the Session's work against.
+fn branched_from_line(point: &BranchPoint) -> Line<'static> {
+    let commit = point.commit.get(..10).unwrap_or(&point.commit);
+    let value = match &point.branch {
+        Some(branch) => format!("{branch} @ {commit}"),
+        None => format!("detached head @ {commit}"),
+    };
+    detail_field_line("branched from", &value)
 }
 
 fn section_line(title: &str) -> Line<'static> {
@@ -1689,6 +1708,28 @@ mod tests {
         let lines = text(checkout_lines(Some(&state("/work", "/work", None))));
 
         assert!(lines[0].contains("detached head"), "{lines:?}");
+    }
+
+    #[test]
+    fn a_branch_point_names_the_branch_and_the_commit_it_started_at() {
+        let line = text(vec![branched_from_line(&BranchPoint {
+            branch: Some("main".to_owned()),
+            commit: "3f2a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a".to_owned(),
+        })]);
+
+        assert!(line[0].contains("branched from"), "{line:?}");
+        assert!(line[0].contains("main @ 3f2a1b4c9d"), "{line:?}");
+        assert!(!line[0].contains("3f2a1b4c9d8"), "{line:?}");
+    }
+
+    #[test]
+    fn a_branch_point_on_a_detached_head_still_names_its_commit() {
+        let line = text(vec![branched_from_line(&BranchPoint {
+            branch: None,
+            commit: "3f2a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a".to_owned(),
+        })]);
+
+        assert!(line[0].contains("detached head @ 3f2a1b4c9d"), "{line:?}");
     }
 
     /// "Not a checkout" and "not looked at yet" would both render as no rows
