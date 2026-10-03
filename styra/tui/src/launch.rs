@@ -520,7 +520,7 @@ pub fn set_templates_for(app: &mut App, scope: LaunchScope, chosen: Vec<String>)
 
 /// Open the prompt that adds an extra mount.
 pub fn open_prompt(app: &mut App) {
-    if !app.allow_launch_edit() {
+    if !app.allow_mount_edit() {
         return;
     }
     // Mounts are normally adjacent to the Workspace already on screen. Start
@@ -543,7 +543,7 @@ pub fn confirm_prompt(app: &mut App) {
     let Some(text) = app.launch.prompt.clone() else {
         return;
     };
-    if !app.allow_launch_edit() {
+    if !app.allow_mount_edit() {
         app.launch.prompt = None;
         return;
     }
@@ -558,10 +558,12 @@ pub fn confirm_prompt(app: &mut App) {
             return app.show_action_message("the Workspace policy already grants that mount");
         }
         workspace_change(app, WorkspaceLaunchChange::AddMounts(vec![parsed]));
+        app.note_mount_change();
         return app.show_action_message(format!("added {label} to every launch in this Workspace"));
     }
     match app.launch.add_mount(parsed) {
         Ok(()) => {
+            app.note_mount_change();
             let scope = app.launch.scope;
             app.show_action_message(format!("added {label} to {}", scope.subject()));
         }
@@ -571,7 +573,7 @@ pub fn confirm_prompt(app: &mut App) {
 
 /// Drop the selected mount from the layer being edited.
 pub fn remove_selected_mount(app: &mut App) {
-    if !app.allow_launch_edit() {
+    if !app.allow_mount_edit() {
         return;
     }
     let scope = app.launch.scope;
@@ -586,6 +588,7 @@ pub fn remove_selected_mount(app: &mut App) {
             return app.show_action_message("the Workspace policy has no mounts to remove");
         };
         workspace_change(app, WorkspaceLaunchChange::RemoveMount(removed.clone()));
+        app.note_mount_change();
         return app.show_action_message(format!(
             "removed {} from every launch in this Workspace",
             mount::label(&removed)
@@ -593,6 +596,7 @@ pub fn remove_selected_mount(app: &mut App) {
     }
     match app.launch.remove_mount() {
         Ok(removed) => {
+            app.note_mount_change();
             app.show_action_message(format!(
                 "removed {} from {}",
                 mount::label(&removed),
@@ -670,10 +674,24 @@ pub fn editable(status: &Status) -> bool {
     )
 }
 
+/// Whether mounts can be added or removed: wherever the rest of the policy can
+/// be edited, and also while the interaction is idle.
+///
+/// A live sandbox's mounts are still fixed for its lifetime, but an idle agent
+/// is not in the middle of anything, so the edit is applied by restarting it
+/// under the new policy (see [`App::note_mount_change`]). The conversation
+/// resumes natively, so the restart costs a moment rather than any context.
+/// Mounts are the one part of the policy this is offered for: they are what a
+/// conversation turns out to need mid-way, when a file it is asked about lives
+/// somewhere the sandbox cannot see.
+pub fn mounts_editable(status: &Status) -> bool {
+    editable(status) || status.is_idle()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::activity::StopReason;
+    use crate::activity::{IdleReason, StopReason};
     use std::path::PathBuf;
 
     fn workspace_policy() -> LaunchPolicy {
@@ -1223,6 +1241,65 @@ mod tests {
         assert!(pending.can_edit_launch());
         cycle_network(&mut pending);
         assert_eq!(pending.launch.interaction.network, Some(true));
+    }
+
+    /// An idle agent is not in the middle of anything, so a mount is not
+    /// refused: it is added, and the interaction is marked to be restarted
+    /// under it. The rest of the policy stays a record.
+    #[test]
+    fn an_idle_interaction_takes_a_mount_by_restarting() {
+        let mut app = running();
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
+        assert!(!app.can_edit_launch());
+
+        cycle_network(&mut app);
+        assert_eq!(app.launch.interaction.network, None);
+        assert!(!app.restart_for_mounts);
+
+        add_mount(&mut app, "/srv/data");
+        assert_eq!(app.launch.interaction.mounts.len(), 1);
+        assert!(app.restart_for_mounts);
+
+        app.restart_for_mounts = false;
+        remove_selected_mount(&mut app);
+        assert!(app.launch.interaction.mounts.is_empty());
+        assert!(app.restart_for_mounts);
+    }
+
+    /// The Workspace's layer is the server's, so the edit is sent, and the
+    /// restart waits on it in the event loop rather than being made here.
+    #[test]
+    fn an_idle_interactions_workspace_mount_is_sent_and_restarts() {
+        let mut app = running();
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
+        toggle_scope(&mut app);
+
+        add_mount(&mut app, "/srv/data");
+
+        assert!(matches!(
+            app.take_request(),
+            Some(Request::ChangeWorkspaceLaunch {
+                change: WorkspaceLaunchChange::AddMounts(_),
+                ..
+            })
+        ));
+        assert!(app.restart_for_mounts);
+    }
+
+    /// A working agent's sandbox cannot be restarted under it, and a stopped
+    /// one's next launch takes the mount without a restart.
+    #[test]
+    fn only_an_idle_interaction_is_restarted_for_a_mount() {
+        let mut working = running();
+        working.activity.status = Status::Running;
+        open_prompt(&mut working);
+        assert!(working.launch.prompt.is_none());
+
+        let mut stopped = running();
+        stopped.activity.status = Status::Stopped(StopReason::Paused);
+        add_mount(&mut stopped, "/srv/data");
+        assert_eq!(stopped.launch.interaction.mounts.len(), 1);
+        assert!(!stopped.restart_for_mounts);
     }
 
     #[test]

@@ -152,6 +152,10 @@ impl DrivaLaunch<'_> {
 pub struct DrivaView<'a> {
     pub chrome: PanelChrome,
     pub editable: bool,
+    /// Whether mounts can be added and removed even though the rest of the
+    /// policy is a record: true for an idle interaction, which is restarted to
+    /// take them.
+    pub mounts_editable: bool,
     pub tab: DetailsTab,
     pub details_requested_scroll: u16,
     pub launch: DrivaLaunch<'a>,
@@ -214,9 +218,10 @@ pub fn render(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
         return render_sandbox(frame, app, options, inner);
     }
 
-    // A live interaction's policy is a record: there is nothing to choose, so
-    // the panes and their keys are not drawn over it at all.
-    if !app.can_edit_launch() {
+    // A working interaction's policy is a record: there is nothing to choose,
+    // so the panes and their keys are not drawn over it at all. An idle one
+    // keeps them, for the mounts it can still be restarted to take.
+    if !app.can_edit_launch() && !app.mounts_editable {
         let feedback = render_overview(frame, app, inner);
         render_prompt(frame, app, area);
         render_git_repository_prompt(frame, app, area);
@@ -1466,6 +1471,25 @@ fn render_pane(
 /// pane answers to, then what is particular to the focused one.
 fn hint_lines(app: &DrivaView) -> Vec<Line<'static>> {
     let muted = Style::default().fg(palette::ADDITIONAL_INFO);
+    if !app.can_edit_launch() {
+        return vec![
+            Line::from(Span::styled(
+                format!(
+                    "  ↑/↓ {} · m mount · x remove — the idle interaction restarts to apply them",
+                    app.launch.scope.other().phrase()
+                ),
+                muted,
+            )),
+            Line::from(Span::styled(
+                if app.workspace_launch_pending > 0 {
+                    "  saving Workspace launch policy…"
+                } else {
+                    "  the rest of the policy is fixed while the interaction is live"
+                },
+                muted,
+            )),
+        ];
+    }
     let mut lines = vec![Line::from(Span::styled(
         format!(
             "  ↑/↓ {} · m mount · x remove · T templates · w network · R workspace ro/rw",

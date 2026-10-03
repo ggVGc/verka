@@ -757,22 +757,60 @@ pub fn restart(app: &App, client: &Client, live: &Attachment) -> Result<SessionI
     })
 }
 
+/// Restart the idle interaction on screen under the launch policy as it now
+/// stands, and stay on it.
+///
+/// This is how a mount added or removed while the agent sat idle reaches its
+/// sandbox. Unlike the worktree restart, nothing about where the Session lives
+/// has changed, so the view is kept rather than reopened: reopening would
+/// reset this interaction's own policy layer to the standing one — dropping
+/// the very mount being applied — and lose whatever is being composed.
+pub fn restart_for_mounts(app: &mut App, client: &Client, live: &mut Attachment) -> Result<()> {
+    let info = match restart(app, client, live) {
+        Ok(info) => info,
+        Err(error) => {
+            // A resume that failed after the stop went through leaves nothing
+            // running. Say so, so the next message takes the resume path —
+            // which launches under the edited policy all the same.
+            if !accepting(client, &app.session_id) {
+                mark_stopped(app, live, StopReason::NotAccepting);
+            }
+            return Err(error);
+        }
+    };
+    app.interactions
+        .note_name(info.id.clone(), info.name.clone());
+    app.workspace.enter(info.workspace);
+    app.launch.record(info.driva);
+    app.set_selection(info.selection);
+    app.outbox.replace_queued(info.queued);
+    app.session_id = info.id;
+    *live = Attachment::Attached {
+        cursor: info.updates_after,
+    };
+    Ok(())
+}
+
 /// Poll until `session_id` has no interaction still taking input, or until the
 /// grace period runs out. A server that cannot be asked is treated as stopped:
 /// the resume that follows reports the same fault better than a wait would.
 fn wait_until_stopped(client: &Client, session_id: &str) {
     let deadline = Instant::now() + RESTART_STOP_GRACE;
     loop {
-        let live = client.list_interactions().is_ok_and(|interactions| {
-            interactions
-                .iter()
-                .any(|interaction| interaction.id == session_id && interaction.activity.accepting())
-        });
-        if !live || Instant::now() >= deadline {
+        if !accepting(client, session_id) || Instant::now() >= deadline {
             return;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Whether the server has an interaction for `session_id` still taking input.
+fn accepting(client: &Client, session_id: &str) -> bool {
+    client.list_interactions().is_ok_and(|interactions| {
+        interactions
+            .iter()
+            .any(|interaction| interaction.id == session_id && interaction.activity.accepting())
+    })
 }
 
 pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) {

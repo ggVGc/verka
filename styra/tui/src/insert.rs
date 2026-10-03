@@ -46,8 +46,9 @@ pub struct Prompt {
     /// to check it against at all — a replayed journal has neither a sandbox
     /// nor one planned.
     mounts: Option<Vec<Mount>>,
-    /// Whether a path outside the sandbox can still be granted. False once the
-    /// sandbox is running, whose mounts are fixed for its lifetime.
+    /// Whether a path outside the sandbox can be granted. False while the agent
+    /// is working: its sandbox's mounts are fixed for its lifetime, and only an
+    /// idle one is restarted to take a new mount.
     can_grant: bool,
 }
 
@@ -182,14 +183,14 @@ impl Prompt {
                 self.state = Insert::Grant(host);
                 Outcome::Open
             }
-            // Nothing carries it and nothing can, because a running sandbox's
-            // mounts are fixed for its lifetime. Say so instead of offering a
-            // grant that would be refused, and insert the path anyway — the
-            // operator asked for it and may well mean it.
+            // Nothing carries it and nothing can yet, because the agent is
+            // mid-turn and its sandbox cannot be restarted under it. Say so
+            // instead of offering a grant that would be refused, and insert
+            // the path anyway — the operator asked for it and may well mean it.
             None => Outcome::Insert {
                 path: host,
                 notice: Some(
-                    "outside the sandbox — stop the interaction to mount it (S, then d)".into(),
+                    "outside the sandbox — it can be mounted once the agent is idle".into(),
                 ),
             },
         }
@@ -466,7 +467,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&outside);
     }
 
-    /// A running sandbox's mounts are fixed for its lifetime, so there is no
+    /// A working agent's sandbox cannot be restarted under it, so there is no
     /// grant to offer. The path is inserted and the limit is said out loud,
     /// rather than a question being asked whose answers would all fail.
     #[test]

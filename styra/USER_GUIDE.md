@@ -275,8 +275,11 @@ In the editor, `Ctrl+F` opens a path prompt. Type a host path, use `Tab` to
 complete, and press `Enter` to insert the sandbox-visible path into the
 message. If no existing mount carries that path, choose `r` to add a read-only
 mount, `w` for read/write, or `n` to insert without a mount. The path must
-exist. New grants affect the next launch/resume; a running sandbox cannot gain
-mounts, so Styra tells you when the inserted path is unreachable now.
+exist. A sandbox cannot gain mounts while it runs, so on an idle interaction
+Styra restarts the agent under the new grant (resuming the same conversation)
+before you send; on a stopped one the grant applies at the next resume. While
+the agent is working, no grant is offered and Styra tells you the inserted path
+is unreachable now.
 
 ## Control isolation and reusable launch policy
 
@@ -298,7 +301,10 @@ In the mount prompt, `Ctrl+W` removes the final path component.
 
 Workspace edits take effect for future launches everywhere in that Workspace.
 Interaction edits apply only to its next launch/resume unless promoted. Existing
-live sandboxes are immutable.
+live sandboxes are immutable, with one exception: while the interaction is idle,
+`m` and `x` still work (on either layer), and Styra restarts the agent under the
+new mounts, resuming the same conversation. The rest of the policy stays fixed
+until the interaction is stopped.
 
 ## Git checkout association and linked worktrees
 

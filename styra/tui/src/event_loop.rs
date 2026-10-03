@@ -653,6 +653,36 @@ pub fn run(
             dirty = true;
         }
 
+        // A mount changed while the agent sat idle. Restarted here rather than
+        // where the key was pressed, so a Workspace mount is in the server's
+        // policy before the resume merges it, and ahead of the queued send
+        // below, so a waiting message is answered under the new mounts.
+        if app.restart_for_mounts && app.workspace_launch_pending == 0 {
+            app.restart_for_mounts = false;
+            dirty = true;
+            if let Attachment::Attached { .. } = live {
+                if app.activity.status.is_idle() {
+                    let restarted = blocked_on(
+                        terminal,
+                        app,
+                        "restarting the interaction with the new mounts…",
+                        |app| session::restart_for_mounts(app, client, live),
+                    )?;
+                    match restarted {
+                        Ok(()) => app.show_action_message("restarted with the new mounts"),
+                        Err(error) => app.show_action_message(format!(
+                            "could not restart with the new mounts ({error:#}); they apply when this Session next launches"
+                        )),
+                    }
+                } else {
+                    // A turn started before the restart could: leave it be.
+                    app.show_action_message(
+                        "the agent is working — the new mounts apply when this Session next launches",
+                    );
+                }
+            }
+        }
+
         if let Attachment::Attached { .. } = live {
             if app.activity.status.is_idle() && app.outbox.queued_count() > 0 {
                 dirty = true;

@@ -619,7 +619,7 @@ fn open_insert(app: &mut App) {
     app.insert = Some(insert::Prompt::new(
         app.workspace.root().map(std::path::Path::to_path_buf),
         app.launch.driva.as_ref(),
-        app.can_edit_launch(),
+        app.can_change_mounts(),
     ));
 }
 
@@ -645,11 +645,17 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
             app.insert = None;
             let label = crate::mount::label(&mount);
             let message = match app.launch.add_interaction_mount(mount) {
-                // The mount is a request, not a live change: nothing rebinds
-                // the sandbox of an interaction that has already started, so
-                // the message says when it will actually apply rather than
-                // only that it was added.
-                Ok(()) => format!("added {label} — applies when this Session next launches"),
+                // The mount is a request, not a live change: nothing rebinds a
+                // running sandbox. An idle one is restarted under it before
+                // this message goes out; otherwise it waits for the launch.
+                Ok(()) => {
+                    app.note_mount_change();
+                    if app.restart_for_mounts {
+                        format!("added {label} — restarting the interaction to apply it")
+                    } else {
+                        format!("added {label} — applies when this Session next launches")
+                    }
+                }
                 Err(reason) => reason.to_owned(),
             };
             app.composer.insert(&path.display().to_string());

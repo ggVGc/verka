@@ -46,6 +46,7 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
     DrivaView {
         chrome: super::panel_chrome(app, Some("details")),
         editable: app.can_edit_launch(),
+        mounts_editable: app.can_change_mounts(),
         tab: match app.details_tab {
             DetailsTab::Details => styra_ui::driva::DetailsTab::Details,
             DetailsTab::Sandbox => styra_ui::driva::DetailsTab::Sandbox,

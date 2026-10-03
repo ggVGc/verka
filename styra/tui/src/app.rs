@@ -282,6 +282,10 @@ pub struct App {
     /// worker but not yet acknowledged. Policy controls pause while nonzero so
     /// a second toggle cannot be derived from a stale server snapshot.
     pub workspace_launch_pending: usize,
+    /// A mount was added or removed while the interaction was idle, so its
+    /// running sandbox no longer matches the policy. The event loop restarts it
+    /// once any Workspace edit has been stored; see [`App::note_mount_change`].
+    pub restart_for_mounts: bool,
     /// Models the operator has confirmed in the launch picker, most recent
     /// first. Loaded from the saved preferences when the loop starts and
     /// written back as the picker is used, so the ordering of the model
@@ -515,6 +519,7 @@ impl App {
             launcher: None,
             template_picker: None,
             workspace_launch_pending: 0,
+            restart_for_mounts: false,
             recent_models: Vec::new(),
             workspace: Location::default(),
             git_repository_prompt: None,
@@ -1361,6 +1366,36 @@ impl App {
         }
         self.show_action_message("the launch policy is fixed while an interaction is running");
         false
+    }
+
+    /// Whether mounts can be added or removed; see [`launch::mounts_editable`].
+    pub fn can_change_mounts(&self) -> bool {
+        launch::mounts_editable(&self.activity.status)
+    }
+
+    /// [`Self::allow_launch_edit`] for mounts, which an idle interaction is
+    /// restarted to take rather than refused.
+    pub fn allow_mount_edit(&mut self) -> bool {
+        if self.workspace_launch_pending > 0 {
+            self.show_action_message("the Workspace launch policy is still saving");
+            return false;
+        }
+        if self.can_change_mounts() {
+            return true;
+        }
+        self.show_action_message(
+            "mounts are fixed while the agent is working — they can change once it is idle",
+        );
+        false
+    }
+
+    /// Record that a mount was just added or removed. Where nothing is running
+    /// the next launch picks it up anyway; an idle interaction's sandbox has
+    /// to be restarted for it to apply, which the event loop does.
+    pub fn note_mount_change(&mut self) {
+        if !self.can_edit_launch() && self.activity.status.is_idle() {
+            self.restart_for_mounts = true;
+        }
     }
 
     /// Plain text for whatever the current view treats as "the selected
