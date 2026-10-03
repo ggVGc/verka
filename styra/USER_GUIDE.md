@@ -288,11 +288,13 @@ switches focused layer; `j`/`k` selects a mount.
 | --- | --- |
 | `w` | cycle network permission |
 | `T` | select Driva templates |
-| `m` / `x` | add a mount / remove selected mount |
+| `m` / `x` | add a mount (prefilled with the Workspace path) / remove selected mount |
 | `I` | make this interaction add to, or ignore, Workspace policy |
 | `U` | promote this interaction's additions into Workspace policy |
 | `D` | save this interaction's additions as new-client defaults |
 | `G` | set the Workspace Git checkout; submit an empty path to clear it |
+
+In the mount prompt, `Ctrl+W` removes the final path component.
 
 Workspace edits take effect for future launches everywhere in that Workspace.
 Interaction edits apply only to its next launch/resume unless promoted. Existing

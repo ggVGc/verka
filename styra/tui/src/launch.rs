@@ -523,7 +523,14 @@ pub fn open_prompt(app: &mut App) {
     if !app.allow_launch_edit() {
         return;
     }
-    app.launch.prompt = Some(String::new());
+    // Mounts are normally adjacent to the Workspace already on screen. Start
+    // there so adding one only needs the part of the path that differs.
+    app.launch.prompt = Some(
+        app.workspace
+            .root_or_current_directory()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+    );
 }
 
 pub fn cancel_prompt(app: &mut App) {
@@ -1062,6 +1069,16 @@ mod tests {
         add_mount(&mut app, "relative/path");
         assert_eq!(app.launch.prompt.as_deref(), Some("relative/path"));
         assert!(app.launch.interaction.mounts.is_empty());
+    }
+
+    #[test]
+    fn opening_a_mount_prompt_prefills_the_current_workspace_path() {
+        let mut app = pending();
+        app.workspace.enter(PathBuf::from("/home/op/project"));
+
+        open_prompt(&mut app);
+
+        assert_eq!(app.launch.prompt.as_deref(), Some("/home/op/project"));
     }
 
     /// Editing the launch inputs changes what would be launched, so the plan on

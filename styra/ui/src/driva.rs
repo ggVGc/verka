@@ -1516,7 +1516,7 @@ fn render_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" mount · source[:destination][:ro|rw] · Enter add · Esc cancel ")
+        .title(" mount · source[:destination][:ro|rw] · Ctrl-W parent · Enter add · Esc cancel ")
         .title_bottom(Line::from(Span::styled(
             format!(" for {} ", app.launch.scope.phrase()),
             Style::default().fg(palette::ACCENT),

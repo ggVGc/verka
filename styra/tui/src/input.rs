@@ -41,6 +41,11 @@ pub fn handle_mount_prompt_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => launch::cancel_prompt(app),
         KeyCode::Enter => launch::confirm_prompt(app),
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(text) = app.launch.prompt.as_mut() {
+                delete_path_part(text);
+            }
+        }
         KeyCode::Backspace => {
             if let Some(text) = app.launch.prompt.as_mut() {
                 text.pop();
@@ -52,6 +57,24 @@ pub fn handle_mount_prompt_key(app: &mut App, key: KeyEvent) {
             }
         }
         _ => {}
+    }
+}
+
+/// Remove the last path component without erasing an absolute path's root.
+/// This is deliberately path-oriented rather than readline's word-oriented:
+/// a mount prompt begins with a filesystem path, and `/work/project` becomes
+/// `/work` after `Ctrl-W`.
+fn delete_path_part(path: &mut String) {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        path.truncate(1);
+        return;
+    }
+    let parent_end = trimmed.rfind('/').unwrap_or(0);
+    if parent_end == 0 && trimmed.starts_with('/') {
+        path.truncate(1);
+    } else {
+        path.truncate(parent_end);
     }
 }
 
@@ -788,6 +811,36 @@ mod tests {
             app.git_repository_prompt.as_deref(),
             Some(root.join("repository").to_string_lossy().as_ref())
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn control_w_removes_mount_path_parts() {
+        let root = tree("mount-path-prompt");
+        let mut app = app(&root);
+        app.launch.prompt = Some("/home/op/project/crates/inner".into());
+
+        handle_mount_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(
+            app.launch.prompt.as_deref(),
+            Some("/home/op/project/crates")
+        );
+
+        handle_mount_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.launch.prompt.as_deref(), Some("/home/op/project"));
+
+        app.launch.prompt = Some("/".into());
+        handle_mount_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.launch.prompt.as_deref(), Some("/"));
         let _ = std::fs::remove_dir_all(root);
     }
 
