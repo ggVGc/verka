@@ -40,6 +40,7 @@ pub mod raw;
 pub mod recording;
 mod render_cache;
 pub mod search;
+pub mod text_prompt;
 pub mod transcript;
 
 /// A stable identity for layout feedback that application navigation consumes.

@@ -3,6 +3,7 @@
 //! session, so they render from their own borrowed data rather than app state.
 
 use crate::palette;
+use crate::text_prompt::{self, TextPrompt};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -304,45 +305,13 @@ pub fn render_message_popup(frame: &mut Frame, title: &str, message: &str) {
 }
 
 pub fn render_name_prompt(frame: &mut Frame, value: &str) {
-    let area = frame.area();
-    let width = area.width.saturating_sub(8).min(72);
-    let popup = Rect::new(
-        area.x + (area.width.saturating_sub(width)) / 2,
-        area.y + area.height.saturating_sub(3) / 2,
-        width,
-        3,
-    );
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(value.to_owned()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(palette::ACCENT))
-                .title(" Session name · Enter save · Esc cancel "),
-        ),
-        popup,
-    );
+    let prompt = TextPrompt::new(" Session name · Enter save · Esc cancel ", value);
+    text_prompt::render(frame, &prompt, frame.area());
 }
 
 pub fn render_workspace_name_prompt(frame: &mut Frame, value: &str) {
-    let area = frame.area();
-    let width = area.width.saturating_sub(8).min(72);
-    let popup = Rect::new(
-        area.x + (area.width.saturating_sub(width)) / 2,
-        area.y + area.height.saturating_sub(3) / 2,
-        width,
-        3,
-    );
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(value.to_owned()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(palette::ACCENT))
-                .title(" Workspace name · Enter save · Esc cancel "),
-        ),
-        popup,
-    );
+    let prompt = TextPrompt::new(" Workspace name · Enter save · Esc cancel ", value);
+    text_prompt::render(frame, &prompt, frame.area());
 }
 
 /// Whether the picker has the selected Workspace's Session list yet. Loading

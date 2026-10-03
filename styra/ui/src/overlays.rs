@@ -1,5 +1,6 @@
 use crate::fuzzy_list::{marked, FuzzyList};
 use crate::palette;
+use crate::text_prompt::{self, TextPrompt};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -235,27 +236,8 @@ fn insert_floating(area: Rect, height: u16) -> Rect {
 }
 
 fn render_insert_typing(frame: &mut Frame, text: &str, area: Rect) {
-    let prompt = insert_floating(area, 3);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
-        .title(" path · Tab complete · Enter insert · Esc cancel ");
-    let inner = block.inner(prompt);
-    frame.render_widget(Clear, prompt);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            text.to_owned(),
-            Style::default().fg(palette::TEXT),
-        )))
-        .block(block),
-        prompt,
-    );
-    if inner.width > 0 {
-        frame.set_cursor_position(ratatui::layout::Position {
-            x: inner.x + (text.chars().count() as u16).min(inner.width - 1),
-            y: inner.y,
-        });
-    }
+    let prompt = TextPrompt::new(" path · Tab complete · Enter insert · Esc cancel ", text);
+    text_prompt::render(frame, &prompt, area);
 }
 
 fn render_insert_grant(frame: &mut Frame, host: &str, restarts: bool, area: Rect) {

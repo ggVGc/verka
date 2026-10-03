@@ -242,7 +242,7 @@ mod tests {
     }
 }
 
-fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+pub(crate) fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for logical_line in text.split('\n') {
         let mut current = String::new();

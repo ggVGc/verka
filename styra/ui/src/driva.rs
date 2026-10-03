@@ -21,10 +21,11 @@
 
 use crate::chrome::{panel_block, PanelChrome};
 use crate::palette;
+use crate::text_prompt::{self, TextPrompt};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use std::path::PathBuf;
 use styra_protocol::{
@@ -1525,14 +1526,6 @@ fn render_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
     let Some(text) = &app.launch.prompt else {
         return;
     };
-    let width = area.width.saturating_sub(4).min(72);
-    let height = 3u16.min(area.height);
-    let prompt = Rect {
-        x: area.x + area.width.saturating_sub(width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    };
     // Which layer the mount lands in is the prompt's own business too: it is
     // opened from either pane and the path being typed says nothing about that.
     // On the bottom border rather than beside the syntax, which is already as
@@ -1548,21 +1541,12 @@ fn render_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
             Style::default().fg(palette::WARNING),
         ));
     }
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
-        .title(" mount · source[:destination][:ro|rw] · Ctrl-W parent · Enter add · Esc cancel ")
-        .title_bottom(Line::from(bottom));
-    frame.render_widget(Clear, prompt);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled((*text).to_owned(), Style::default().fg(palette::TEXT)),
-            Span::styled("▏", Style::default().fg(palette::WARNING)),
-        ]))
-        .block(block),
-        prompt,
-    );
+    let prompt = TextPrompt::new(
+        " mount · source[:destination][:ro|rw] · Ctrl-W parent · Enter add · Esc cancel ",
+        text,
+    )
+    .bottom(bottom);
+    text_prompt::render(frame, &prompt, area);
 }
 
 /// The durable Workspace Git checkout, which is intentionally not an extra
@@ -1571,28 +1555,11 @@ fn render_git_repository_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) 
     let Some(text) = &app.git_repository_prompt else {
         return;
     };
-    let width = area.width.saturating_sub(4).min(72);
-    let height = 3u16.min(area.height);
-    let prompt = Rect {
-        x: area.x + area.width.saturating_sub(width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
-        .title(" Git checkout · path in repository · Enter save · empty clears · Esc cancel ");
-    frame.render_widget(Clear, prompt);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled((*text).to_owned(), Style::default().fg(palette::TEXT)),
-            Span::styled("▏", Style::default().fg(palette::WARNING)),
-        ]))
-        .block(block),
-        prompt,
+    let prompt = TextPrompt::new(
+        " Git checkout · path in repository · Enter save · empty clears · Esc cancel ",
+        text,
     );
+    text_prompt::render(frame, &prompt, area);
 }
 
 fn driva_field_line(label: &str, value: &str) -> Line<'static> {
