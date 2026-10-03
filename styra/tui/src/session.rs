@@ -759,7 +759,26 @@ pub fn restart(app: &App, client: &Client, live: &Attachment) -> Result<SessionI
 /// has changed, so the view is kept rather than reopened: reopening would
 /// reset this interaction's own policy layer to the standing one — dropping
 /// the very mount being applied — and lose whatever is being composed.
-pub fn restart_for_mounts(app: &mut App, client: &Client, live: &mut Attachment) -> Result<()> {
+pub fn restart_for_mounts(
+    app: &mut App,
+    client: &Client,
+    live: &mut Attachment,
+) -> Result<(), MountRestartError> {
+    // Checked before anything is stopped. A stopped interaction's edits are
+    // planned as they are made, so a mount that cannot be launched is caught
+    // in the view; an idle one's are not, and finding out from the resume
+    // means finding out with the agent already gone.
+    if let Some(workspace_id) = app.workspace.id.clone() {
+        client
+            .plan_session(&PlanSession {
+                workspace_id,
+                selection: app.selection.clone(),
+                launch: app.launch.interaction.clone(),
+                create_worktree: false,
+                checkout_from: None,
+            })
+            .map_err(MountRestartError::Rejected)?;
+    }
     let info = match restart(app, client, live) {
         Ok(info) => info,
         Err(error) => {
@@ -769,7 +788,7 @@ pub fn restart_for_mounts(app: &mut App, client: &Client, live: &mut Attachment)
             if !accepting(client, &app.session_id) {
                 mark_stopped(app, live, StopReason::NotAccepting);
             }
-            return Err(error);
+            return Err(MountRestartError::Failed(error));
         }
     };
     app.interactions
@@ -783,6 +802,17 @@ pub fn restart_for_mounts(app: &mut App, client: &Client, live: &mut Attachment)
         cursor: info.updates_after,
     };
     Ok(())
+}
+
+/// Why [`restart_for_mounts`] did not restart, which decides what is left
+/// running and so what the operator is told.
+#[derive(Debug)]
+pub enum MountRestartError {
+    /// The server will not launch under the new mounts. Found out before the
+    /// stop, so the agent is still running under the old ones.
+    Rejected(anyhow::Error),
+    /// The stop or the resume failed.
+    Failed(anyhow::Error),
 }
 
 /// Whether the server has an interaction for `session_id` still taking input.

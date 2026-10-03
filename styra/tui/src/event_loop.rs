@@ -670,9 +670,25 @@ pub fn run(
                     )?;
                     match restarted {
                         Ok(()) => app.show_action_message("restarted with the new mounts"),
-                        Err(error) => app.show_action_message(format!(
-                            "could not restart with the new mounts ({error:#}); they apply when this Session next launches"
-                        )),
+                        // Logged as well as shown: the notice is one line, cut
+                        // to the terminal's width, and the cause is the part
+                        // at the end of it.
+                        Err(session::MountRestartError::Rejected(error)) => {
+                            app.push_log(LogEntry::error(format!(
+                                "the new mounts cannot be launched, so the interaction was not restarted: {error:#}"
+                            )));
+                            app.show_action_message(format!(
+                                "mounts not applied, still running on the old ones: {error:#}"
+                            ));
+                        }
+                        Err(session::MountRestartError::Failed(error)) => {
+                            app.push_log(LogEntry::error(format!(
+                                "could not restart with the new mounts: {error:#}"
+                            )));
+                            app.show_action_message(format!(
+                                "could not restart with the new mounts ({error:#}); they apply when this Session next launches"
+                            ));
+                        }
                     }
                 } else {
                     // A turn started before the restart could: leave it be.
