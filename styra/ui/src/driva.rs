@@ -1302,9 +1302,27 @@ fn setting_line(style: PaneStyle, marked: bool, label: &str, value: &str) -> Lin
     ])
 }
 
+/// `style` for a row that cannot be changed right now: dimmed throughout,
+/// with whatever else it said (a crossed-out ignored layer) kept.
+fn disabled_style(style: PaneStyle) -> PaneStyle {
+    let dim = |style: Style| style.fg(palette::INACTIVE).add_modifier(Modifier::DIM);
+    PaneStyle {
+        label: dim(style.label),
+        value: dim(style.value),
+        ..style
+    }
+}
+
 /// The settings one layer holds, in the same rows for both layers.
 fn pane_rows(app: &DrivaView, scope: LaunchScope) -> Vec<Line<'static>> {
-    let style = pane_style(app, scope);
+    let mounts_style = pane_style(app, scope);
+    // Everything above the mounts is out of reach on a live interaction, so it
+    // is drawn as disabled, matching its dimmed keys in the hints below.
+    let style = if app.can_edit_launch() {
+        mounts_style
+    } else {
+        disabled_style(mounts_style)
+    };
     let policy = app.launch.policy(scope);
     let mut rows = Vec::new();
 
@@ -1348,13 +1366,18 @@ fn pane_rows(app: &DrivaView, scope: LaunchScope) -> Vec<Line<'static>> {
     ));
 
     if policy.mounts.is_empty() {
-        rows.push(setting_line(style, false, "mounts", "none — m adds one"));
+        rows.push(setting_line(
+            mounts_style,
+            false,
+            "mounts",
+            "none — m adds one",
+        ));
         return rows;
     }
     let selected = app.launch.cursor(scope);
     for (index, mount) in policy.mounts.iter().enumerate() {
         rows.push(setting_line(
-            style,
+            mounts_style,
             index == selected,
             if index == 0 { "mounts" } else { "" },
             &launch_mount_label(mount),
@@ -1471,54 +1494,73 @@ fn render_pane(
 /// The keys, named against the pane they would act on. Two lines: what every
 /// pane answers to, then what is particular to the focused one.
 fn hint_lines(app: &DrivaView) -> Vec<Line<'static>> {
-    let muted = Style::default().fg(palette::ADDITIONAL_INFO);
-    if !app.can_edit_launch() {
-        return vec![
-            Line::from(Span::styled(
-                format!(
-                    "  ↑/↓ {} · m mount · x remove — changing a mount restarts the interaction",
-                    app.launch.scope.other().phrase()
-                ),
-                muted,
-            )),
-            Line::from(Span::styled(
-                if app.workspace_launch_pending > 0 {
-                    "  saving Workspace launch policy…"
-                } else {
-                    "  the rest of the policy is fixed while the interaction is live"
-                },
-                muted,
-            )),
-        ];
+    // On an idle interaction only the mount keys still act. The rest are shown
+    // anyway, dimmed, so the screen keeps one shape and says what is out of
+    // reach and why, rather than the keys silently disappearing.
+    let fixed = !app.can_edit_launch();
+    let enabled = Style::default().fg(palette::ADDITIONAL_INFO);
+    let disabled = Style::default()
+        .fg(palette::INACTIVE)
+        .add_modifier(Modifier::DIM);
+    let key =
+        |text: String, usable: bool| Span::styled(text, if usable { enabled } else { disabled });
+    let sep = || Span::styled(" · ", enabled);
+
+    let mut first = vec![
+        key(format!("  ↑/↓ {}", app.launch.scope.other().phrase()), true),
+        sep(),
+        key("m mount".into(), true),
+        sep(),
+        key("x remove".into(), true),
+        sep(),
+        key("T templates".into(), !fixed),
+        sep(),
+        key("w network".into(), !fixed),
+        sep(),
+        key("R workspace ro/rw".into(), !fixed),
+    ];
+    if fixed {
+        first.push(Span::styled(
+            " — changing a mount restarts the interaction",
+            Style::default().fg(palette::WARNING),
+        ));
     }
-    let mut lines = vec![Line::from(Span::styled(
-        format!(
-            "  ↑/↓ {} · m mount · x remove · T templates · w network · R workspace ro/rw",
-            app.launch.scope.other().phrase()
-        ),
-        muted,
-    ))];
-    lines.push(Line::from(Span::styled(
-        if app.workspace_launch_pending > 0 {
-            "  saving Workspace launch policy…".to_owned()
-        } else {
-            match app.launch.scope {
-                LaunchScope::Workspace => {
-                    "  changes are stored by the server and shared by every client".to_owned()
-                }
-                LaunchScope::Interaction => format!(
-                    "  I {} · U move up into it · D save as default",
-                    if app.launch.interaction.ignore_workspace {
-                        "inherit the Workspace"
-                    } else {
-                        "ignore the Workspace"
-                    }
+
+    let second = if app.workspace_launch_pending > 0 {
+        vec![Span::styled("  saving Workspace launch policy…", enabled)]
+    } else {
+        let mut spans = match app.launch.scope {
+            LaunchScope::Workspace => vec![key(
+                "  changes are stored by the server and shared by every client".into(),
+                true,
+            )],
+            LaunchScope::Interaction => vec![
+                key(
+                    format!(
+                        "  I {}",
+                        if app.launch.interaction.ignore_workspace {
+                            "inherit the Workspace"
+                        } else {
+                            "ignore the Workspace"
+                        }
+                    ),
+                    !fixed,
                 ),
-            }
-        },
-        muted,
-    )));
-    lines
+                sep(),
+                key("U move up into it".into(), !fixed),
+                sep(),
+                key("D save as default".into(), !fixed),
+            ],
+        };
+        if fixed {
+            spans.push(Span::styled(
+                " — dimmed: fixed while the interaction is live; S stops it",
+                disabled,
+            ));
+        }
+        spans
+    };
+    vec![Line::from(first), Line::from(second)]
 }
 
 /// The "add a mount" prompt, floating over the view it edits.
@@ -1651,6 +1693,145 @@ fn launch_mount_label(mount: &LaunchMount) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn view<'a>(
+        editable: bool,
+        workspace: &'a LaunchPolicy,
+        interaction: &'a LaunchPolicy,
+    ) -> DrivaView<'a> {
+        DrivaView {
+            chrome: PanelChrome {
+                focused: true,
+                workspace: None,
+                agent: "codex".into(),
+                model: "gpt".into(),
+                model_reported: false,
+                effort: None,
+                effort_reported: false,
+                status: "idle".into(),
+                status_tone: crate::chrome::StatusTone::Idle,
+                elapsed: None,
+                suffix: None,
+                session: None,
+            },
+            editable,
+            mounts_editable: true,
+            tab: DetailsTab::Details,
+            details_requested_scroll: 0,
+            launch: DrivaLaunch {
+                workspace,
+                interaction,
+                scope: LaunchScope::Interaction,
+                workspace_cursor: 0,
+                interaction_cursor: 0,
+                prompt: None,
+                driva: None,
+                planned: false,
+                requested_scroll: 0,
+            },
+            workspace: DrivaWorkspace {
+                id: None,
+                name: None,
+                given_name: None,
+                git_repository: None,
+                host_path: None,
+                server_path: None,
+                session_count: None,
+                age: None,
+                created_at_ms: None,
+                last_accessed_at_ms: None,
+                root: None,
+                working_directory: None,
+            },
+            activity: DrivaActivity {
+                status: if editable {
+                    DrivaStatus::Stopped
+                } else {
+                    DrivaStatus::Idle
+                },
+            },
+            selection_name: "codex".into(),
+            session_id: "s1",
+            session_name: None,
+            queued_count: 0,
+            last_message: None,
+            workspace_launch_pending: 0,
+            git_repository_prompt: None,
+            checkout: None,
+            branched_from: None,
+        }
+    }
+
+    fn dimmed(span: &Span<'_>) -> bool {
+        span.style.add_modifier.contains(Modifier::DIM)
+    }
+
+    /// The span of `lines` whose text contains `needle`.
+    fn span<'l>(lines: &'l [Line<'static>], needle: &str) -> &'l Span<'static> {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains(needle))
+            .unwrap_or_else(|| panic!("no span reads {needle:?} in {lines:?}"))
+    }
+
+    /// On an idle interaction the keys that cannot act are still shown —
+    /// dimmed, with the reason — rather than dropped from the hints.
+    #[test]
+    fn an_idle_interactions_fixed_keys_are_shown_disabled() {
+        let policy = LaunchPolicy::default();
+        let lines = hint_lines(&view(false, &policy, &policy));
+
+        for usable in ["m mount", "x remove"] {
+            assert!(!dimmed(span(&lines, usable)), "{usable} should be usable");
+        }
+        for fixed in [
+            "T templates",
+            "w network",
+            "R workspace",
+            "I ignore",
+            "U move up",
+            "D save",
+        ] {
+            assert!(dimmed(span(&lines, fixed)), "{fixed} should be disabled");
+        }
+        assert!(dimmed(span(&lines, "fixed while the interaction is live")));
+        span(&lines, "changing a mount restarts the interaction");
+    }
+
+    #[test]
+    fn nothing_is_disabled_while_the_whole_policy_is_editable() {
+        let policy = LaunchPolicy::default();
+        let lines = hint_lines(&view(true, &policy, &policy));
+
+        assert!(lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .all(|s| !dimmed(s)));
+        assert!(!text(lines).concat().contains("fixed while"));
+    }
+
+    /// The pane matches its hints: the settings above the mounts are dimmed,
+    /// the mounts the keys still reach are not.
+    #[test]
+    fn an_idle_interactions_pane_dims_all_but_its_mounts() {
+        let workspace = LaunchPolicy::default();
+        let interaction = LaunchPolicy {
+            mounts: vec![styra_protocol::LaunchMount {
+                source: PathBuf::from("/srv/data"),
+                destination: None,
+                writable: false,
+            }],
+            ..LaunchPolicy::default()
+        };
+        let idle = view(false, &workspace, &interaction);
+        let rows = pane_rows(&idle, LaunchScope::Interaction);
+
+        assert!(dimmed(span(&rows, "network")));
+        assert!(dimmed(span(&rows, "templates")));
+        assert!(!dimmed(span(&rows, "mounts")));
+        assert!(!dimmed(span(&rows, "/srv/data")));
+    }
 
     fn text(lines: Vec<Line<'static>>) -> Vec<String> {
         lines

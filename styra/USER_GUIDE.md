@@ -304,7 +304,8 @@ Interaction edits apply only to its next launch/resume unless promoted. Existing
 live sandboxes are immutable, with one exception: while the interaction is idle,
 `m` and `x` still work (on either layer), and Styra restarts the agent under the
 new mounts, resuming the same conversation. The rest of the policy stays fixed
-until the interaction is stopped.
+until the interaction is stopped (`S`); its settings and keys stay on screen,
+dimmed, to show they are disabled rather than gone.
 
 ## Git checkout association and linked worktrees
 
