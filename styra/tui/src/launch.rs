@@ -523,6 +523,11 @@ pub fn open_prompt(app: &mut App) {
     if !app.allow_mount_edit() {
         return;
     }
+    if app.mount_change_restarts() {
+        app.show_action_message(
+            "adding a mount restarts the interaction; the conversation resumes",
+        );
+    }
     // Mounts are normally adjacent to the Workspace already on screen. Start
     // there so adding one only needs the part of the path that differs.
     app.launch.prompt = Some(
@@ -559,13 +564,16 @@ pub fn confirm_prompt(app: &mut App) {
         }
         workspace_change(app, WorkspaceLaunchChange::AddMounts(vec![parsed]));
         app.note_mount_change();
-        return app.show_action_message(format!("added {label} to every launch in this Workspace"));
+        return show_mount_change(
+            app,
+            format!("added {label} to every launch in this Workspace"),
+        );
     }
     match app.launch.add_mount(parsed) {
         Ok(()) => {
             app.note_mount_change();
             let scope = app.launch.scope;
-            app.show_action_message(format!("added {label} to {}", scope.subject()));
+            show_mount_change(app, format!("added {label} to {}", scope.subject()));
         }
         Err(reason) => app.show_action_message(reason),
     }
@@ -589,22 +597,39 @@ pub fn remove_selected_mount(app: &mut App) {
         };
         workspace_change(app, WorkspaceLaunchChange::RemoveMount(removed.clone()));
         app.note_mount_change();
-        return app.show_action_message(format!(
-            "removed {} from every launch in this Workspace",
-            mount::label(&removed)
-        ));
+        return show_mount_change(
+            app,
+            format!(
+                "removed {} from every launch in this Workspace",
+                mount::label(&removed)
+            ),
+        );
     }
     match app.launch.remove_mount() {
         Ok(removed) => {
             app.note_mount_change();
-            app.show_action_message(format!(
-                "removed {} from {}",
-                mount::label(&removed),
-                scope.subject()
-            ));
+            show_mount_change(
+                app,
+                format!(
+                    "removed {} from {}",
+                    mount::label(&removed),
+                    scope.subject()
+                ),
+            );
         }
         Err(reason) => app.show_action_message(reason),
     }
+}
+
+/// Report a mount change, adding that the interaction is about to restart for
+/// it when it is: the busy notice that follows is easy to miss, and the change
+/// is why it happened.
+fn show_mount_change(app: &mut App, message: String) {
+    app.show_action_message(if app.restart_for_mounts {
+        format!("{message} — restarting the interaction to apply it")
+    } else {
+        message
+    });
 }
 
 pub fn select_next_mount(app: &mut App) {
@@ -1256,9 +1281,17 @@ mod tests {
         assert_eq!(app.launch.interaction.network, None);
         assert!(!app.restart_for_mounts);
 
+        // Said before the mount is typed, and again once it is added.
+        open_prompt(&mut app);
+        assert!(app.notices.iter().any(|message| message
+            .text
+            .contains("adding a mount restarts the interaction")));
         add_mount(&mut app, "/srv/data");
         assert_eq!(app.launch.interaction.mounts.len(), 1);
         assert!(app.restart_for_mounts);
+        assert!(app.notices.iter().any(|message| message
+            .text
+            .contains("restarting the interaction to apply it")));
 
         app.restart_for_mounts = false;
         remove_selected_mount(&mut app);
@@ -1300,6 +1333,10 @@ mod tests {
         add_mount(&mut stopped, "/srv/data");
         assert_eq!(stopped.launch.interaction.mounts.len(), 1);
         assert!(!stopped.restart_for_mounts);
+        assert!(stopped
+            .notices
+            .iter()
+            .all(|message| !message.text.contains("restart")));
     }
 
     #[test]

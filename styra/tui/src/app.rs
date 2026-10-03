@@ -1393,9 +1393,15 @@ impl App {
     /// the next launch picks it up anyway; an idle interaction's sandbox has
     /// to be restarted for it to apply, which the event loop does.
     pub fn note_mount_change(&mut self) {
-        if !self.can_edit_launch() && self.activity.status.is_idle() {
+        if self.mount_change_restarts() {
             self.restart_for_mounts = true;
         }
+    }
+
+    /// Whether changing a mount now restarts the interaction, which every
+    /// place a mount can be changed says before it is.
+    pub fn mount_change_restarts(&self) -> bool {
+        !self.can_edit_launch() && self.activity.status.is_idle()
     }
 
     /// Plain text for whatever the current view treats as "the selected

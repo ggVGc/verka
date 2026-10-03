@@ -204,14 +204,22 @@ pub fn render_references(frame: &mut Frame, references: ReferencesView<'_>, fram
 #[derive(Clone)]
 pub enum InsertPromptView<'a> {
     Typing(&'a str),
-    Grant(String),
+    /// The host path no mount carries, and whether granting it restarts the
+    /// interaction — true for an idle one, whose sandbox has to be relaunched
+    /// to take a new mount.
+    Grant {
+        host: String,
+        restarts: bool,
+    },
 }
 
 pub fn render_insert(frame: &mut Frame, insert: Option<InsertPromptView<'_>>, area: Rect) {
     match insert {
         None => {}
         Some(InsertPromptView::Typing(text)) => render_insert_typing(frame, text, area),
-        Some(InsertPromptView::Grant(host)) => render_insert_grant(frame, &host, area),
+        Some(InsertPromptView::Grant { host, restarts }) => {
+            render_insert_grant(frame, &host, restarts, area)
+        }
     }
 }
 
@@ -250,8 +258,8 @@ fn render_insert_typing(frame: &mut Frame, text: &str, area: Rect) {
     }
 }
 
-fn render_insert_grant(frame: &mut Frame, host: &str, area: Rect) {
-    let prompt = insert_floating(area, 5);
+fn render_insert_grant(frame: &mut Frame, host: &str, restarts: bool, area: Rect) {
+    let prompt = insert_floating(area, if restarts { 6 } else { 5 });
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::WARNING))
@@ -272,23 +280,31 @@ fn render_insert_grant(frame: &mut Frame, host: &str, area: Rect) {
         )
     };
     let muted = Style::default().fg(palette::MUTED_TEXT);
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             host.to_owned(),
             Style::default().fg(palette::TEXT),
         )),
         Line::default(),
-        Line::from(vec![
-            key("r"),
-            Span::styled(" readable  ", muted),
-            key("w"),
-            Span::styled(" writable  ", muted),
-            key("n"),
-            Span::styled(" insert without mounting  ", muted),
-            key("Esc"),
-            Span::styled(" cancel", muted),
-        ]),
     ];
+    // Said before the answer rather than after it: mounting is what restarts
+    // the agent, and `n` is the way to avoid that.
+    if restarts {
+        lines.push(Line::from(Span::styled(
+            "mounting restarts the interaction; the conversation resumes",
+            Style::default().fg(palette::WARNING),
+        )));
+    }
+    lines.push(Line::from(vec![
+        key("r"),
+        Span::styled(" readable  ", muted),
+        key("w"),
+        Span::styled(" writable  ", muted),
+        key("n"),
+        Span::styled(" insert without mounting  ", muted),
+        key("Esc"),
+        Span::styled(" cancel", muted),
+    ]));
     frame.render_widget(Clear, prompt);
     frame.render_widget(Paragraph::new(lines).block(block), prompt);
 }
@@ -320,6 +336,20 @@ mod tests {
 
     #[test]
     fn grant_prompt_names_the_host_path() {
-        assert!(rendered(InsertPromptView::Grant("/host/private".into())).contains("/host/private"));
+        let screen = rendered(InsertPromptView::Grant {
+            host: "/host/private".into(),
+            restarts: false,
+        });
+        assert!(screen.contains("/host/private"));
+        assert!(!screen.contains("restarts"));
+    }
+
+    #[test]
+    fn grant_prompt_warns_when_mounting_restarts_the_interaction() {
+        let screen = rendered(InsertPromptView::Grant {
+            host: "/host/private".into(),
+            restarts: true,
+        });
+        assert!(screen.contains("mounting restarts the interaction"));
     }
 }

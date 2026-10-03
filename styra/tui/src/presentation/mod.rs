@@ -485,9 +485,10 @@ fn draw_main(
     let input = (app.focus == Focus::Input && capture.is_none()).then(|| modal_input(app));
     let insert = app.insert.as_ref().map(|prompt| match prompt.state() {
         Insert::Typing(text) => styra_ui::overlays::InsertPromptView::Typing(text),
-        Insert::Grant(host) => {
-            styra_ui::overlays::InsertPromptView::Grant(host.display().to_string())
-        }
+        Insert::Grant(host) => styra_ui::overlays::InsertPromptView::Grant {
+            host: host.display().to_string(),
+            restarts: app.mount_change_restarts(),
+        },
     });
     let branch = app
         .branch_prompt

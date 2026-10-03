@@ -1475,7 +1475,7 @@ fn hint_lines(app: &DrivaView) -> Vec<Line<'static>> {
         return vec![
             Line::from(Span::styled(
                 format!(
-                    "  ↑/↓ {} · m mount · x remove — the idle interaction restarts to apply them",
+                    "  ↑/↓ {} · m mount · x remove — changing a mount restarts the interaction",
                     app.launch.scope.other().phrase()
                 ),
                 muted,
@@ -1536,15 +1536,23 @@ fn render_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
     // Which layer the mount lands in is the prompt's own business too: it is
     // opened from either pane and the path being typed says nothing about that.
     // On the bottom border rather than beside the syntax, which is already as
-    // wide as the box.
+    // wide as the box. So is the warning that an idle interaction is restarted
+    // to take the mount: it has to be read before Enter, not after.
+    let mut bottom = vec![Span::styled(
+        format!(" for {} ", app.launch.scope.phrase()),
+        Style::default().fg(palette::ACCENT),
+    )];
+    if !app.can_edit_launch() {
+        bottom.push(Span::styled(
+            "· adding restarts the interaction ",
+            Style::default().fg(palette::WARNING),
+        ));
+    }
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(" mount · source[:destination][:ro|rw] · Ctrl-W parent · Enter add · Esc cancel ")
-        .title_bottom(Line::from(Span::styled(
-            format!(" for {} ", app.launch.scope.phrase()),
-            Style::default().fg(palette::ACCENT),
-        )));
+        .title_bottom(Line::from(bottom));
     frame.render_widget(Clear, prompt);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
