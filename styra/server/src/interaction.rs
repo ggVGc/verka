@@ -681,27 +681,47 @@ impl Interaction {
             guard.take();
         }
     }
+
+    /// Stop the agent and wait for its sandbox to be gone, terminating it if
+    /// it does not leave on its own. Reports whether it is gone.
+    ///
+    /// [`Self::stop`] only asks: the process leaves a moment later, and until
+    /// it has, its sandbox still holds what a successor launched for the same
+    /// Session would reuse — the broker executable it runs from and the shell
+    /// socket beside it. A resume waits here first.
+    pub fn shut_down(&self) -> bool {
+        self.stop();
+        let Some(handle) = self.exec.as_ref() else {
+            return true;
+        };
+        // Give protocol agents a brief chance to honor stdin EOF. A stubborn
+        // sandbox is then terminated through Driva, and given the same again
+        // to go.
+        if !wait_finished(handle, SHUTDOWN_GRACE) {
+            let _ = self.updates.send(InteractionUpdate::Log(LogEntry::warn(
+                "agent did not exit after stdin closed; terminating its sandbox",
+            )));
+            self.execution_control.terminate();
+            return wait_finished(handle, SHUTDOWN_GRACE);
+        }
+        true
+    }
+}
+
+/// Wait up to `grace` for `handle`'s thread to finish, without joining it.
+fn wait_finished(handle: &JoinHandle<()>, grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    while !handle.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    handle.is_finished()
 }
 
 impl Drop for Interaction {
     fn drop(&mut self) {
-        self.stop();
-
-        // Give protocol agents a brief chance to honor stdin EOF. A stubborn
-        // sandbox is then terminated through Driva before any unbounded thread
-        // join can hold shutdown open forever.
-        if let Some(handle) = self.exec.as_ref() {
-            let deadline = Instant::now() + SHUTDOWN_GRACE;
-            while !handle.is_finished() && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            if !handle.is_finished() {
-                let _ = self.updates.send(InteractionUpdate::Log(LogEntry::warn(
-                    "agent did not exit after stdin closed; terminating its sandbox",
-                )));
-                self.execution_control.terminate();
-            }
-        }
+        // Bounded, so that no unbounded thread join below can hold shutdown
+        // open forever on a stubborn sandbox.
+        self.shut_down();
         if let Some(handle) = self.exec.take() {
             let _ = handle.join();
         }
@@ -1508,6 +1528,46 @@ mod tests {
         drop(interaction);
         assert!(terminated.load(Ordering::Acquire));
         assert!(started.elapsed() < Duration::from_secs(1));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A resume launched straight after a stop reuses the stopped sandbox's
+    /// broker path, so it needs the sandbox actually gone — not just asked to
+    /// go, which is all `stop` does. `shut_down` waits for that while the
+    /// interaction is still alive to be replaced, terminating if it must.
+    #[test]
+    fn shutting_down_waits_for_the_sandbox_to_be_gone() {
+        let dir =
+            std::env::temp_dir().join(format!("styra-shut-down-session-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let (polite, _updates) = Interaction::spawn(
+            workspace_spec(&dir),
+            Box::new(EchoBackend),
+            Journal::create(&dir).unwrap(),
+            "polite-session".into(),
+            dir.join("diagnostics.log"),
+        )
+        .unwrap();
+        assert!(polite.shut_down());
+        assert!(polite.exec.as_ref().unwrap().is_finished());
+
+        let terminated = Arc::new(AtomicBool::new(false));
+        let (stubborn, _updates) = Interaction::spawn(
+            workspace_spec(&dir),
+            Box::new(StubbornBackend {
+                terminated: Arc::clone(&terminated),
+            }),
+            Journal::create(&dir).unwrap(),
+            "stubborn-session".into(),
+            dir.join("diagnostics.log"),
+        )
+        .unwrap();
+        assert!(stubborn.shut_down());
+        assert!(terminated.load(Ordering::Acquire));
+        assert!(stubborn.exec.as_ref().unwrap().is_finished());
+
         std::fs::remove_dir_all(dir).ok();
     }
 

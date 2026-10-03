@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::activity::{Status, StopReason};
 use crate::app::{App, LaunchPolicy};
@@ -729,14 +729,6 @@ pub fn resume_and_send(
     }
 }
 
-/// How long a restart waits for the agent it has just stopped to actually go.
-///
-/// Stopping closes the agent's stdin and answers immediately; the process
-/// leaves on its own a moment later, and until it has the server refuses to
-/// resume the Session — so the wait is the restart's, not the operator's.
-/// Bounded, so an agent that sits on its stdin is reported rather than hung on.
-const RESTART_STOP_GRACE: Duration = Duration::from_secs(10);
-
 /// Stop the Session's agent and bring it straight back up, with no message to
 /// carry.
 ///
@@ -745,10 +737,12 @@ const RESTART_STOP_GRACE: Duration = Duration::from_secs(10);
 /// keeps the directory it was started in whatever the Session now records.
 /// Answers with the revived Session, which is the one the view should reopen
 /// on — its workspace is the checkout.
+///
+/// Stopping answers before the agent's sandbox has gone; the resume is what
+/// waits for it, on the server, which is the one that can see the process.
 pub fn restart(app: &App, client: &Client, live: &Attachment) -> Result<SessionInfo> {
     if let Attachment::Attached { .. } = live {
         client.stop_interaction(&app.session_id)?;
-        wait_until_stopped(client, &app.session_id);
     }
     client.resume_session(&ResumeSession {
         id: app.session_id.clone(),
@@ -789,19 +783,6 @@ pub fn restart_for_mounts(app: &mut App, client: &Client, live: &mut Attachment)
         cursor: info.updates_after,
     };
     Ok(())
-}
-
-/// Poll until `session_id` has no interaction still taking input, or until the
-/// grace period runs out. A server that cannot be asked is treated as stopped:
-/// the resume that follows reports the same fault better than a wait would.
-fn wait_until_stopped(client: &Client, session_id: &str) {
-    let deadline = Instant::now() + RESTART_STOP_GRACE;
-    loop {
-        if !accepting(client, session_id) || Instant::now() >= deadline {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
 }
 
 /// Whether the server has an interaction for `session_id` still taking input.

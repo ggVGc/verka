@@ -2096,15 +2096,29 @@ impl ServerState {
     }
 
     fn resume_session(&self, request: ResumeSession) -> Result<SessionInfo> {
-        if self
+        let previous = self
             .inner
             .interactions
             .lock()
             .expect("server interaction lock poisoned")
             .get(&request.id)
-            .is_some_and(|managed| managed.activity.activity().accepting())
-        {
-            anyhow::bail!("session {:?} already has a live interaction", request.id);
+            .cloned();
+        if let Some(previous) = previous {
+            if previous.activity.activity().accepting() {
+                anyhow::bail!("session {:?} already has a live interaction", request.id);
+            }
+            // Stopping marks an interaction stopped at once, but its sandbox
+            // leaves a moment later — and until it has, it is running the
+            // broker executable this launch is about to stage over (which
+            // fails as a busy text file) and holding the shell socket beside
+            // it. A resume straight after a stop is exactly what restarting
+            // an idle interaction under new mounts does, so wait it out here.
+            if !previous.interaction.shut_down() {
+                anyhow::bail!(
+                    "session {:?}'s previous agent has not exited yet; try again in a moment",
+                    request.id
+                );
+            }
         }
 
         let summary = self.stored_summary(&request.id)?;
