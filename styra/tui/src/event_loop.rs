@@ -1276,7 +1276,8 @@ pub fn run(
             Some(Request::Quit) => return Ok(RunOutcome::Quit),
             Some(Request::Workspace) => {
                 let mut workspaces = client.list_workspaces()?;
-                let Some(choice) = picker::run_workspace_picker(terminal, client, &mut workspaces)?
+                let Some(choice) =
+                    picker::run_workspace_picker(terminal, client, &mut workspaces, None)?
                 else {
                     continue;
                 };

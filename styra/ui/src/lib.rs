@@ -185,6 +185,7 @@ pub trait Ui {
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
+        offer: Option<&std::path::Path>,
     ) -> UiResult<RenderFeedback>;
 
     fn render_workspace_picker_name_prompt(
@@ -194,6 +195,7 @@ pub trait Ui {
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
+        offer: Option<&std::path::Path>,
         value: &str,
     ) -> UiResult<RenderFeedback>;
 
@@ -425,6 +427,7 @@ where
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
+        offer: Option<&std::path::Path>,
     ) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
             picker::render_workspace_picker(
@@ -434,6 +437,7 @@ where
                 interactions,
                 preview,
                 filter,
+                offer,
             );
             RenderFeedback::default()
         })
@@ -446,6 +450,7 @@ where
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
+        offer: Option<&std::path::Path>,
         value: &str,
     ) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
@@ -456,6 +461,7 @@ where
                 interactions,
                 preview,
                 filter,
+                offer,
             );
             picker::render_workspace_name_prompt(frame, value);
             RenderFeedback::default()
@@ -610,6 +616,7 @@ where
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
+        offer: Option<&std::path::Path>,
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_workspace_picker(
             self,
@@ -618,6 +625,7 @@ where
             interactions,
             preview,
             filter,
+            offer,
         )
     }
 
@@ -628,6 +636,7 @@ where
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
+        offer: Option<&std::path::Path>,
         value: &str,
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_workspace_picker_name_prompt(
@@ -637,6 +646,7 @@ where
             interactions,
             preview,
             filter,
+            offer,
             value,
         )
     }

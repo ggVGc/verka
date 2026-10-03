@@ -1,5 +1,6 @@
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use styra_protocol::{
@@ -581,10 +582,17 @@ fn read_session_name(
 ///
 /// Filtering narrows that same ordering rather than re-deriving it, so a
 /// Workspace does not move relative to its neighbours as characters are typed.
+///
+/// `offer` is a directory no Workspace covers — where Styra was started, when
+/// that is why the picker opened. The list then leads with a row offering to
+/// create a Workspace there, with the cursor on it, so Enter takes the offer
+/// and the arrows pass it by. Typing a filter is a search for an existing
+/// Workspace, so the row steps aside until the filter is cleared.
 pub fn run_workspace_picker(
     terminal: &mut dyn Ui,
     client: &Client,
     workspaces: &mut [WorkspaceSummary],
+    offer: Option<&Path>,
 ) -> Result<Option<WorkspaceChoice>> {
     // A server that cannot answer still leaves a useful list: without live
     // interactions to consult, the ordering falls back to recent access alone.
@@ -604,7 +612,12 @@ pub fn run_workspace_picker(
     let mut settle_from: Option<Instant> = None;
     let mut help = Help::default();
     loop {
-        if let Some(workspace) = workspaces.get(selected) {
+        // `selected` counts rows on screen, the offer included; this is the
+        // Workspace under the cursor, if the cursor is on one.
+        let shown_offer = offered(offer, &filter);
+        let offset = usize::from(shown_offer.is_some());
+        let cursor = selected.checked_sub(offset);
+        if let Some(workspace) = cursor.and_then(|index| workspaces.get(index)) {
             if preview_id != workspace.id {
                 preview_id.clone_from(&workspace.id);
                 preview_sessions.clear();
@@ -644,6 +657,7 @@ pub fn run_workspace_picker(
                 &interactions,
                 preview,
                 Some(&filter),
+                shown_offer,
             )?;
         }
         let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
@@ -658,8 +672,8 @@ pub fn run_workspace_picker(
         // The cursor stays on the Workspace it was on for as long as the
         // narrowing list still holds it; when it is typed away, the list reads
         // from the top.
-        let cursor_id = workspaces
-            .get(selected)
+        let cursor_id = cursor
+            .and_then(|index| workspaces.get(index))
             .map(|workspace| workspace.id.clone());
         let typed = match key {
             k if keys::WORKSPACES_CANCEL.matches(k) => {
@@ -693,28 +707,38 @@ pub fn run_workspace_picker(
         };
         if typed {
             workspaces = picker_workspaces(&all_workspaces, Some(&filter));
+            let offset = usize::from(offered(offer, &filter).is_some());
             selected = cursor_id
                 .and_then(|id| workspaces.iter().position(|workspace| workspace.id == id))
-                .unwrap_or(0);
+                .map_or(0, |index| index + offset);
             continue;
         }
         match key {
             k if keys::WORKSPACES_NEXT.matches(k) => {
-                selected = (selected + 1).min(workspaces.len().saturating_sub(1));
+                selected = (selected + 1).min((workspaces.len() + offset).saturating_sub(1));
             }
             k if keys::WORKSPACES_PREV.matches(k) => selected = selected.saturating_sub(1),
+            k if keys::WORKSPACES_OPEN.matches(k) && cursor.is_none() => {
+                return Ok(Some(WorkspaceChoice::CreateCurrentDirectory))
+            }
             k if keys::WORKSPACES_OPEN.matches(k) && !workspaces.is_empty() => {
                 return Ok(Some(WorkspaceChoice::Existing(
-                    workspaces[selected].clone(),
+                    workspaces[selected - offset].clone(),
                 )));
             }
-            k if keys::WORKSPACES_NEW.matches(k) && !workspaces.is_empty() => {
-                return Ok(Some(WorkspaceChoice::New(workspaces[selected].clone())));
+            k if keys::WORKSPACES_NEW.matches(k) && cursor.is_some() && !workspaces.is_empty() => {
+                return Ok(Some(WorkspaceChoice::New(
+                    workspaces[selected - offset].clone(),
+                )));
             }
             k if keys::WORKSPACES_CREATE.matches(k) => {
                 return Ok(Some(WorkspaceChoice::CreateCurrentDirectory))
             }
-            k if keys::WORKSPACES_RENAME.matches(k) && !workspaces.is_empty() => {
+            k if keys::WORKSPACES_RENAME.matches(k)
+                && cursor.is_some()
+                && !workspaces.is_empty() =>
+            {
+                let index = selected - offset;
                 if let Some(name) = read_workspace_name(
                     terminal,
                     &workspaces,
@@ -722,14 +746,15 @@ pub fn run_workspace_picker(
                     &interactions,
                     preview,
                     Some(&filter),
-                    workspaces[selected].name.as_deref().unwrap_or(""),
+                    shown_offer,
+                    workspaces[index].name.as_deref().unwrap_or(""),
                 )? {
                     let renamed = client.rename_workspace(
-                        &workspaces[selected].id,
+                        &workspaces[index].id,
                         (!name.trim().is_empty()).then_some(name.as_str()),
                     )?;
                     let id = renamed.id.clone();
-                    workspaces[selected] = renamed.clone();
+                    workspaces[index] = renamed.clone();
                     if let Some(index) = all_workspaces
                         .iter()
                         .position(|workspace| workspace.id == id)
@@ -743,6 +768,13 @@ pub fn run_workspace_picker(
     }
 }
 
+/// The directory the Workspace picker offers to create a Workspace for, while
+/// it is offering one: not while a filter is typed, since that is a search for
+/// a Workspace that already exists.
+fn offered<'a>(offer: Option<&'a Path>, filter: &str) -> Option<&'a Path> {
+    offer.filter(|_| filter.is_empty())
+}
+
 fn read_workspace_name(
     terminal: &mut dyn Ui,
     workspaces: &[WorkspaceSummary],
@@ -750,6 +782,7 @@ fn read_workspace_name(
     interactions: &[InteractionSummary],
     preview: presentation::SessionsPreview<'_>,
     filter: Option<&str>,
+    offer: Option<&Path>,
     initial: &str,
 ) -> Result<Option<String>> {
     let mut value = initial.to_owned();
@@ -760,6 +793,7 @@ fn read_workspace_name(
             interactions,
             preview,
             filter,
+            offer,
             &value,
         )?;
         let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {

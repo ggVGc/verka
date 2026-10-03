@@ -100,6 +100,7 @@ fn workspace_display_name(workspace: &WorkspaceSummary) -> String {
             .to_owned()
     })
 }
+use std::path::Path;
 use styra_protocol::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 
 /// Whether the picker has the selected session's conversation yet. Loading is
@@ -326,6 +327,10 @@ pub enum SessionsPreview<'a> {
 /// Render the top-level Workspace picker. Entering a Workspace leads to its
 /// separate Session picker, so the right-hand pane previews that next screen
 /// for the row under the cursor: the Workspace's Sessions.
+///
+/// `offer` is a directory no Workspace covers yet. When given, the list opens
+/// with a row offering to create one there, and `selected` counts that row as
+/// the first: `0` is the offer, `1` the first Workspace.
 pub fn render_workspace_picker(
     frame: &mut Frame,
     workspaces: &[WorkspaceSummary],
@@ -333,6 +338,7 @@ pub fn render_workspace_picker(
     interactions: &[InteractionSummary],
     preview: SessionsPreview<'_>,
     filter: Option<&str>,
+    offer: Option<&Path>,
 ) {
     let area = frame.area();
     let panes = Layout::default()
@@ -343,7 +349,7 @@ pub fn render_workspace_picker(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(workspace_picker_title(filter));
-    if workspaces.is_empty() {
+    if workspaces.is_empty() && offer.is_none() {
         let empty = if filter.is_some_and(|filter| !filter.is_empty()) {
             "  no Workspaces match the filter \u{b7} Esc clears it"
         } else {
@@ -353,11 +359,14 @@ pub fn render_workspace_picker(
         render_sessions_preview(frame, None, preview, interactions, panes[1]);
         return;
     }
-    let selected = selected.min(workspaces.len() - 1);
-    let items: Vec<ListItem> = workspaces
-        .iter()
-        .enumerate()
-        .map(|(index, workspace)| workspace_item(workspace, index == selected, interactions))
+    let offset = usize::from(offer.is_some());
+    let selected = selected.min(workspaces.len() + offset - 1);
+    let items: Vec<ListItem> = offer
+        .map(|directory| offer_item(directory, selected == 0))
+        .into_iter()
+        .chain(workspaces.iter().enumerate().map(|(index, workspace)| {
+            workspace_item(workspace, index + offset == selected, interactions)
+        }))
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
@@ -367,8 +376,56 @@ pub fn render_workspace_picker(
     let mut state = ListState::default();
     state.select(Some(selected));
     frame.render_stateful_widget(list, panes[0], &mut state);
-    let workspace = workspaces.get(selected);
-    render_sessions_preview(frame, workspace, preview, interactions, panes[1]);
+    match selected.checked_sub(offset) {
+        Some(index) => render_sessions_preview(
+            frame,
+            workspaces.get(index),
+            preview,
+            interactions,
+            panes[1],
+        ),
+        // A Workspace that does not exist yet has no Sessions to preview, so
+        // the pane says what Enter will do instead.
+        None => render_placeholder(
+            frame,
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(palette::INACTIVE))
+                .title(" sessions "),
+            panes[1],
+            "  Enter creates a Workspace for this directory and starts in it",
+        ),
+    }
+}
+
+/// The row offering a Workspace for a directory that has none, shaped like a
+/// Workspace row so the host path lines up with the ones beneath it.
+fn offer_item(directory: &Path, selected: bool) -> ListItem<'static> {
+    ListItem::new(Line::from(vec![
+        Span::styled(
+            if selected { "\u{2022} " } else { "  " },
+            Style::default().fg(if selected {
+                palette::SELECTION_MARKER
+            } else {
+                palette::ACCENT
+            }),
+        ),
+        Span::styled(
+            format!("{:<19} ", "+ new Workspace"),
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            // The width of the sessions, liveness and age columns together.
+            format!("{:<34}", "no Workspace here yet"),
+            Style::default().fg(palette::MUTED_TEXT),
+        ),
+        Span::styled(
+            directory.display().to_string(),
+            Style::default().fg(palette::TEXT),
+        ),
+    ]))
 }
 
 /// The Workspace picker's title says what the list cannot be read without:
@@ -908,14 +965,48 @@ mod tests {
         preview: SessionsPreview<'_>,
         filter: Option<&str>,
     ) -> String {
+        rendered_workspace_picker_with(workspaces, selected, interactions, preview, filter, None)
+    }
+
+    fn rendered_workspace_picker_with(
+        workspaces: &[WorkspaceSummary],
+        selected: usize,
+        interactions: &[InteractionSummary],
+        preview: SessionsPreview<'_>,
+        filter: Option<&str>,
+        offer: Option<&Path>,
+    ) -> String {
         let mut terminal =
             Terminal::new(TestBackend::new(WORKSPACE_PICKER_WIDTH as u16, 14)).unwrap();
         terminal
             .draw(|frame| {
-                render_workspace_picker(frame, workspaces, selected, interactions, preview, filter)
+                render_workspace_picker(
+                    frame,
+                    workspaces,
+                    selected,
+                    interactions,
+                    preview,
+                    filter,
+                    offer,
+                )
             })
             .unwrap();
         screen_text(terminal.backend().buffer())
+    }
+
+    fn rendered_offering_workspace_picker(
+        workspaces: &[WorkspaceSummary],
+        selected: usize,
+        offer: &Path,
+    ) -> String {
+        rendered_workspace_picker_with(
+            workspaces,
+            selected,
+            &[],
+            SessionsPreview::Ready(&[]),
+            None,
+            Some(offer),
+        )
     }
 
     #[test]
@@ -1037,6 +1128,48 @@ mod tests {
 
         let empty = rendered_workspace_picker(&workspaces, 0, &[], SessionsPreview::Ready(&[]));
         assert!(empty.contains("no sessions yet"), "{empty}");
+    }
+
+    /// Started in a directory no Workspace covers, the picker leads with an
+    /// offer to create one there — even when there are no Workspaces at all,
+    /// which used to leave only a hint about a control chord.
+    #[test]
+    fn workspace_picker_offers_a_workspace_for_an_uncovered_directory() {
+        let screen = rendered_offering_workspace_picker(&[], 0, Path::new("/home/op/fresh"));
+
+        let rows = workspace_rows(&screen);
+        let offer = rows
+            .iter()
+            .find(|row| row.contains("+ new Workspace"))
+            .unwrap_or_else(|| panic!("{screen}"));
+        assert!(offer.contains("/home/op/fresh"), "{screen}");
+        assert!(offer.contains('\u{2022}'), "the offer starts selected: {screen}");
+        assert!(!screen.contains("no Workspaces found"), "{screen}");
+        assert!(screen.contains("Enter creates a Workspace"), "{screen}");
+    }
+
+    /// The offer counts as the first row, so the existing Workspaces follow it
+    /// one row down and the cursor reaches them from there.
+    #[test]
+    fn the_offer_comes_before_existing_workspaces() {
+        let workspaces = vec![workspace_summary("w-1", "payments", 2)];
+
+        let screen =
+            rendered_offering_workspace_picker(&workspaces, 1, Path::new("/home/op/fresh"));
+
+        let rows = workspace_rows(&screen);
+        let offer = rows
+            .iter()
+            .position(|row| row.contains("+ new Workspace"))
+            .unwrap_or_else(|| panic!("{screen}"));
+        let payments = rows
+            .iter()
+            .position(|row| row.contains("payments"))
+            .unwrap_or_else(|| panic!("{screen}"));
+        assert!(offer < payments, "{screen}");
+        assert!(rows[payments].contains('\u{2022}'), "{screen}");
+        assert!(!rows[offer].contains('\u{2022}'), "{screen}");
+        assert!(screen.contains("sessions \u{b7} payments"), "{screen}");
     }
 
     fn interaction_summary(

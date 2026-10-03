@@ -309,7 +309,12 @@ fn main() -> Result<()> {
                 Some(term) => term,
                 None => RatatuiUi::new()?,
             };
-            let choice = match picker::run_workspace_picker(&mut term, &client, &mut workspaces) {
+            let choice = match picker::run_workspace_picker(
+                &mut term,
+                &client,
+                &mut workspaces,
+                Some(&current_directory),
+            ) {
                 Ok(Some(choice)) => choice,
                 Ok(None) => {
                     term.close()?;
