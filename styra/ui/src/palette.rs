@@ -116,6 +116,12 @@ pub const SELECTION_BACKGROUND: Color = Color::Rgb(48, 48, 48);
 /// navigator, so it stands above the last-message line beneath it.
 /// 234, `Pmenu`.
 pub const INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(28, 28, 28);
+/// The same lift with a faint rose in it, behind a stopped interaction, so
+/// the entries waiting on a decision read as a group down the list.
+pub const STOPPED_INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(40, 27, 30);
+/// The navigator's cursor row, a step above [`SELECTION_BACKGROUND`] so it
+/// stands clear of the lifted rows around it. 238.
+pub const INTERACTION_SELECTION_BACKGROUND: Color = Color::Rgb(68, 68, 68);
 /// Text on a continuation line. It is subdued without looking disabled.
 pub const SUBORDINATE_TEXT: Color = MUTED_TEXT;
 /// 228, `PreProc` / `MatchParen` text.

@@ -142,7 +142,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
     }
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(palette::SELECTION_BACKGROUND)
+            .bg(palette::INTERACTION_SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -169,6 +169,7 @@ fn row_item(row: &InteractionRow<'_>) -> ListItem<'static> {
         branch,
         status,
         current,
+        selected,
         loading,
         newly_idle,
         stop_reason,
@@ -285,8 +286,16 @@ fn row_item(row: &InteractionRow<'_>) -> ListItem<'static> {
         ));
     }
     // The tint is the line's own style, so it runs the full width of the row.
-    let mut lines =
-        vec![Line::from(main).style(Style::default().bg(palette::INTERACTION_ROW_BACKGROUND))];
+    // That style is drawn over the list's highlight, so the cursor's
+    // background has to be chosen here too.
+    let background = if *selected {
+        palette::INTERACTION_SELECTION_BACKGROUND
+    } else if matches!(status, InteractionStatus::Stopped(_)) {
+        palette::STOPPED_INTERACTION_ROW_BACKGROUND
+    } else {
+        palette::INTERACTION_ROW_BACKGROUND
+    };
+    let mut lines = vec![Line::from(main).style(Style::default().bg(background))];
     if let Some(text) = last_message {
         lines.push(Line::from(Span::styled(
             format!("    « {text}"),
@@ -405,6 +414,51 @@ mod tests {
 
         assert_eq!(buffer[(78, 1)].bg, palette::INTERACTION_ROW_BACKGROUND);
         assert_eq!(buffer[(78, 2)].bg, palette::RESET);
+    }
+
+    /// Stopped entries are tinted so they read as a group, and the cursor row
+    /// is drawn above every tint, since the row's own background would
+    /// otherwise cover the list's highlight.
+    #[test]
+    fn stopped_rows_are_tinted_and_the_cursor_row_stands_above_them() {
+        let row = |name: &'static str, status, selected| InteractionRow::Interaction {
+            name: name.into(),
+            provider: "claude",
+            branch: None,
+            status,
+            current: false,
+            selected,
+            loading: false,
+            newly_idle: false,
+            stop_reason: None,
+            rate_limited: None,
+            uncommitted: false,
+            completed: false,
+            sealed: false,
+            tags: &[],
+            last_message: None,
+        };
+        let view = InteractionNavigator {
+            scope: "Payments".into(),
+            all_workspaces: false,
+            completion_filter: "completed hidden".into(),
+            filter: None,
+            typing_filter: false,
+            rows: vec![
+                row("idle", InteractionStatus::Idle, false),
+                row("stopped", InteractionStatus::Stopped(StopTone::Paused), false),
+                row("cursor", InteractionStatus::Stopped(StopTone::Paused), true),
+            ],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &view, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(buffer[(78, 1)].bg, palette::INTERACTION_ROW_BACKGROUND);
+        assert_eq!(buffer[(78, 2)].bg, palette::STOPPED_INTERACTION_ROW_BACKGROUND);
+        assert_eq!(buffer[(78, 3)].bg, palette::INTERACTION_SELECTION_BACKGROUND);
     }
 
     /// The list is where an operator scanning several stopped agents decides
