@@ -281,13 +281,9 @@ impl Interaction {
         };
         let claude_stream = (protocol == crate::event::Protocol::ClaudeJsonl).then(|| {
             Arc::new(crate::claude_stream::ClaudeStream::new(
-                spec.profile
-                    .name
-                    .split_once(':')
-                    .and_then(|(_, rest)| rest.split_once('/'))
-                    .map(|(model, _)| model)
-                    .unwrap_or_default()
-                    .to_owned(),
+                Selection::parse(&spec.profile.name)
+                    .map(|selection| selection.model)
+                    .unwrap_or_default(),
             ))
         });
 

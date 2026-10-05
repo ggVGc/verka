@@ -361,8 +361,21 @@ impl Selection {
 
     /// Parse a profile name of the form `provider[:model][/effort]`, filling an
     /// omitted model or effort from the provider's declared defaults.
+    ///
+    /// A model id may itself contain `/` (`deepseek/deepseek-v4.1-flash`), so
+    /// the effort is what follows the *last* one. Without the catalog that
+    /// leaves `codex:vendor/model` ambiguous with a misspelt effort, as in
+    /// `claude:opus/turbo`; a whole name that is a catalog model is therefore
+    /// read as the model with the effort omitted, and anything else must end
+    /// in a known effort. An unlisted model with a `/` in it can still be
+    /// launched by naming its effort, which [`Selection::name`] always does.
     pub fn parse(name: &str) -> Result<Selection> {
-        let (head, effort) = match name.split_once('/') {
+        let names_catalog_model = name.split_once(':').is_some_and(|(provider, model)| {
+            Provider::parse(provider.trim())
+                .is_ok_and(|provider| provider.model(model.trim()).is_some())
+        });
+        let (head, effort) = match name.rsplit_once('/') {
+            Some(_) if names_catalog_model => (name, None),
             Some((head, effort)) => (head, Some(Effort::parse(effort.trim())?)),
             None => (name, None),
         };
@@ -650,6 +663,38 @@ mod tests {
         }
     }
 
+    /// A model id with a `/` in it: the effort is what follows the last one,
+    /// and a catalog model named alone takes the default effort rather than
+    /// having its own tail read as one. An unlisted id with a `/` is
+    /// launchable too, so long as its effort is named.
+    #[test]
+    fn a_model_id_may_contain_the_effort_separator() {
+        let deepseek = "deepseek/deepseek-v4.1-flash";
+        let pinned = Selection::parse(&format!("codex:{deepseek}/high")).unwrap();
+        assert_eq!(
+            (pinned.model.as_str(), pinned.effort),
+            (deepseek, Effort::High)
+        );
+        assert_eq!(pinned.name(), format!("codex:{deepseek}/high"));
+
+        let bare = Selection::parse(&format!("codex:{deepseek}")).unwrap();
+        assert_eq!(bare.model, deepseek);
+        assert_eq!(bare.effort, Provider::Codex.default_effort());
+
+        let unlisted = Selection::parse("codex:vendor/new-model/low").unwrap();
+        assert_eq!(
+            (unlisted.model.as_str(), unlisted.effort),
+            ("vendor/new-model", Effort::Low)
+        );
+        // Without the catalog to vouch for it, an unlisted id's tail is an
+        // effort, and a misspelt one is still refused by name.
+        let error = Selection::parse("codex:vendor/new-model").unwrap_err();
+        assert!(
+            error.to_string().contains("unknown reasoning effort"),
+            "{error}"
+        );
+    }
+
     /// A selection may not leave the model or effort unpinned: a shorter profile
     /// name takes the provider's declared defaults, and then names itself in
     /// full, so what a journal records is never "whatever the agent was set to".
@@ -812,13 +857,24 @@ mod tests {
             assert!(!provider.models().is_empty());
             assert!(provider.efforts().is_sorted(), "{provider:?} ladder order");
             for entry in provider.models() {
-                // A `Selection` round-trips through one string, so a model id
-                // may not carry the grammar's own separators.
+                // A `Selection` round-trips through one string, so every id
+                // must survive it — at every rung, and with the effort left
+                // off — even one that carries the grammar's own `/`.
                 for id in std::iter::once(&entry.id).chain(entry.aliases) {
-                    assert!(
-                        !id.contains(':') && !id.contains('/'),
-                        "{id} would not survive Selection::name"
-                    );
+                    for effort in provider.efforts() {
+                        let selection = Selection {
+                            provider,
+                            model: (*id).to_owned(),
+                            effort: *effort,
+                        };
+                        assert_eq!(
+                            Selection::parse(&selection.name()).unwrap(),
+                            selection,
+                            "{id} would not survive Selection::name"
+                        );
+                    }
+                    let bare = format!("{}:{id}", provider.as_str());
+                    assert_eq!(Selection::parse(&bare).unwrap().model, *id, "{bare}");
                 }
                 assert!(entry.efforts.is_sorted(), "{} ladder order", entry.id);
                 for effort in entry.efforts {

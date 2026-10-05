@@ -41,6 +41,10 @@ const MODELS: &[ModelSpec] = &[
         aliases: &["gpt-5.4"],
         efforts: LEGACY_EFFORTS,
     },
+    // Not an OpenAI model: codex reaches it through a model provider of its
+    // own, which the operator configures. Its ladder is unverified, so it is
+    // given the current one, as any unlisted id would be.
+    current("deepseek/deepseek-v4.1-flash"),
 ];
 
 /// A catalog entry on the current ladder.
