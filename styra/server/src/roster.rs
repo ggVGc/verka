@@ -219,6 +219,8 @@ impl Roster {
 fn current_summary(entry: &Entry) -> InteractionSummary {
     let mut summary = entry.summary.clone();
     summary.name = crate::journal::read_session_name(&entry.session_path).unwrap_or_default();
+    // A focus request was about the launch, which a restored row is long past.
+    summary.focus_requested = false;
     summary
 }
 
@@ -311,6 +313,7 @@ mod tests {
             auto_commit: false,
             events: 12,
             completed: CompletionState::Active,
+            focus_requested: false,
         }
     }
 

@@ -388,6 +388,7 @@ M.types.CreateSession = {
     { name = "message", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "name", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "contract", required = false, type = { kind = "optional", inner = { kind = "ref", name = "Contract" } } },
+    { name = "focus", required = false, type = { kind = "boolean" } },
   },
 }
 
@@ -775,6 +776,7 @@ M.types.InteractionSummary = {
     { name = "auto_commit", required = false, type = { kind = "boolean" } },
     { name = "events", required = false, type = { kind = "number", integer = true } },
     { name = "completed", required = false, type = { kind = "ref", name = "CompletionState" } },
+    { name = "focus_requested", required = false, type = { kind = "boolean" } },
   },
 }
 
@@ -2315,6 +2317,7 @@ end
 ---   message          string|null  (optional)
 ---   name             string|null  (optional)
 ---   contract         Contract|null  (optional)
+---   focus            boolean  (optional)
 function M.request.create_session(data)
   return M.build("create_session", data)
 end

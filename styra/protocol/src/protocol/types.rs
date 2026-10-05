@@ -953,6 +953,14 @@ pub struct InteractionSummary {
     /// it on, not anything a client does to this summary.
     #[serde(default)]
     pub completed: CompletionState,
+    /// True when this interaction was created with
+    /// [`crate::protocol::CreateSession::focus`]. A client showing another
+    /// interaction in the same Workspace switches to this one when it first
+    /// appears in the listing; one that was already listing it when the
+    /// client started does not, so the request is answered once rather than
+    /// on every refresh.
+    #[serde(default)]
+    pub focus_requested: bool,
 }
 
 /// Where a Session came from, when it was not launched fresh but branched

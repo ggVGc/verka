@@ -610,6 +610,10 @@ struct ManagedInteraction {
     launch: LaunchPolicy,
     /// The session's durable directory: its journal, metadata and queue.
     session_path: PathBuf,
+    /// Whether the client that created this interaction asked for it to be
+    /// focused: see [`InteractionSummary::focus_requested`]. Never set on a
+    /// resume, which is returning to work rather than starting it.
+    focus_requested: bool,
 }
 
 /// How often the quota log is asked whether a plan window has come back. A
@@ -755,6 +759,7 @@ impl ManagedInteraction {
             auto_commit: self.auto_commit.load(Ordering::Acquire),
             events: self.events.load(Ordering::Acquire),
             completed: *self.completed.lock().expect("completion lock poisoned"),
+            focus_requested: self.focus_requested,
         }
     }
 
@@ -1718,6 +1723,7 @@ impl ServerState {
                 .parent()
                 .unwrap_or(&self.inner.store_root)
                 .to_path_buf(),
+            focus_requested: request.focus,
         });
         let reported_selection = Arc::downgrade(&managed);
         let refused = Arc::downgrade(&managed);
@@ -2352,6 +2358,7 @@ impl ServerState {
             interrupt_requested: Arc::clone(&interrupt_requested),
             launch: request.launch.clone(),
             session_path: summary.path.clone(),
+            focus_requested: false,
         });
         let reported_selection = Arc::downgrade(&managed);
         let refused = Arc::downgrade(&managed);
@@ -5283,6 +5290,7 @@ mod tests {
                 auto_commit: false,
                 events: 0,
                 completed: CompletionState::Active,
+                focus_requested: false,
             },
         )]);
 

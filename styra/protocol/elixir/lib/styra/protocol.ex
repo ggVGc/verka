@@ -397,7 +397,8 @@ defmodule Styra.Protocol do
         %{name: "checkout_from", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "name", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
-        %{name: "contract", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Contract"}}}
+        %{name: "contract", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Contract"}}},
+        %{name: "focus", required: false, type: %{kind: :boolean}}
       ]
     },
 
@@ -784,7 +785,8 @@ defmodule Styra.Protocol do
         %{name: "auto_retry", required: false, type: %{kind: :boolean}},
         %{name: "auto_commit", required: false, type: %{kind: :boolean}},
         %{name: "events", required: false, type: %{kind: :number, integer: true}},
-        %{name: "completed", required: false, type: %{kind: :ref, name: "CompletionState"}}
+        %{name: "completed", required: false, type: %{kind: :ref, name: "CompletionState"}},
+        %{name: "focus_requested", required: false, type: %{kind: :boolean}}
       ]
     },
 
@@ -2189,6 +2191,7 @@ defmodule Styra.Protocol do
       * `message        `  string|null  (optional)
       * `name           `  string|null  (optional)
       * `contract       `  Contract|null  (optional)
+      * `focus          `  boolean  (optional)
     """
     def create_session(data), do: Styra.Protocol.build("create_session", data)
 

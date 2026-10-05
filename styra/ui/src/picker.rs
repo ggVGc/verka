@@ -1072,6 +1072,7 @@ mod tests {
             last_message: None,
             events: 0,
             completed: styra_protocol::CompletionState::Active,
+            focus_requested: false,
         }
     }
 

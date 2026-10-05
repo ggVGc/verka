@@ -38,6 +38,7 @@ fn main() -> anyhow::Result<()> {
         message: Some(prompt),
         name: None,
         contract: None,
+        focus: false,
     })?;
     println!("session {}", session.id);
 

@@ -414,6 +414,7 @@ pub fn create_session(
         message: seed.map(str::to_owned),
         name: None,
         contract: start.contract,
+        focus: false,
     })
 }
 

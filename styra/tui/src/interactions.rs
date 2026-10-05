@@ -51,6 +51,12 @@ pub struct LiveInteractions {
     /// Set while the filter is being typed, when every printable key is part
     /// of the term rather than a command on the list.
     typing_filter: bool,
+    /// Whether a listing has been taken yet. The first one is what was already
+    /// running when this client arrived, so nothing in it is newly arrived.
+    listed: bool,
+    /// An Interaction that arrived asking to be focused — see
+    /// [`InteractionSummary::focus_requested`] — and has not been acted on.
+    focus_claim: Option<InteractionSummary>,
 }
 
 /// The event list's tally of listed Interactions by activity, rendered on the
@@ -64,6 +70,7 @@ pub struct ActivityCounts {
 
 impl LiveInteractions {
     pub fn open(&mut self, mut items: Vec<InteractionSummary>, workspaces: Vec<WorkspaceSummary>) {
+        self.note_arrivals(&items);
         self.take_names(&mut items);
         sort_interactions(&mut items);
         self.items = items;
@@ -82,6 +89,7 @@ impl LiveInteractions {
     /// fleet is listed several times a second and is usually exactly as it
     /// was, so this is what keeps the poll from counting as news.
     pub fn refresh(&mut self, mut items: Vec<InteractionSummary>) -> bool {
+        self.note_arrivals(&items);
         let names_changed = self.take_names(&mut items);
         sort_interactions(&mut items);
         let changed = self.items != items || names_changed;
@@ -96,6 +104,27 @@ impl LiveInteractions {
             self.rest();
         }
         changed
+    }
+
+    /// Hold on to an Interaction in `items` that was not in the last listing
+    /// and asks to be focused. Only arrival counts: the request stays on the
+    /// row for as long as it is listed, and answering it on every refresh
+    /// would pin the operator to it.
+    fn note_arrivals(&mut self, items: &[InteractionSummary]) {
+        if self.listed {
+            if let Some(arrived) = items.iter().rev().find(|interaction| {
+                interaction.focus_requested
+                    && !self.items.iter().any(|listed| listed.id == interaction.id)
+            }) {
+                self.focus_claim = Some(arrived.clone());
+            }
+        }
+        self.listed = true;
+    }
+
+    /// The Interaction that most recently arrived asking to be focused, once.
+    pub fn take_focus_claim(&mut self) -> Option<InteractionSummary> {
+        self.focus_claim.take()
     }
 
     /// Record the name carried by a create, resume, load, or stored-session
@@ -848,6 +877,7 @@ mod tests {
             events: 0,
             branched_from: None,
             completed: CompletionState::Active,
+            focus_requested: false,
         }
     }
 
@@ -1042,6 +1072,38 @@ mod tests {
         let next = live.select_past_hidden("finished", None).unwrap();
 
         assert_eq!(next.id, "elsewhere");
+    }
+
+    /// A focus request is answered when its interaction first arrives, and
+    /// only then: not for rows already running when the client started, and
+    /// not again on the refreshes after.
+    #[test]
+    fn a_focus_request_is_claimed_once_on_arrival() {
+        let mut asking = interaction("asking", InteractionActivity::Running);
+        asking.focus_requested = true;
+        let mut live = LiveInteractions::default();
+        live.refresh(vec![asking.clone()]);
+        assert_eq!(live.take_focus_claim(), None, "it was already running");
+
+        let mut arrived = interaction("arrived", InteractionActivity::Running);
+        arrived.focus_requested = true;
+        live.refresh(vec![
+            asking.clone(),
+            interaction("quiet", InteractionActivity::Running),
+            arrived.clone(),
+        ]);
+        assert_eq!(
+            live.take_focus_claim().map(|claim| claim.id),
+            Some("arrived".into())
+        );
+        assert_eq!(live.take_focus_claim(), None);
+
+        live.refresh(vec![asking, arrived]);
+        assert_eq!(
+            live.take_focus_claim(),
+            None,
+            "still listed is not arriving"
+        );
     }
 
     #[test]

@@ -81,6 +81,12 @@ pub struct CreateSession {
     /// one call. Ignored when there is no seed message to frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contract: Option<Contract>,
+    /// Ask every client showing an interaction in this Workspace to switch to
+    /// the new one, as an editor does when it starts work the operator is
+    /// about to watch. Carried to clients as
+    /// [`InteractionSummary::focus_requested`].
+    #[serde(default)]
+    pub focus: bool,
 }
 
 /// Ask what a new session in this Workspace *would* be launched under, without
@@ -764,6 +770,7 @@ mod tests {
             message: None,
             name: None,
             contract: None,
+            focus: false,
         });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["data"]["selection"]["provider"], "claude");

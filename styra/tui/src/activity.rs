@@ -850,6 +850,7 @@ mod tests {
             events: 0,
             branched_from: None,
             completed: CompletionState::Active,
+            focus_requested: false,
         }
     }
 

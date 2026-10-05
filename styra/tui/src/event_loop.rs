@@ -639,6 +639,17 @@ pub fn run(
                 dirty |= app.interactions.refresh(interactions);
             }
         }
+        // An editor started work in the Workspace on screen and asked for it
+        // to be watched. A blank screen is left alone: it is the operator
+        // composing work of their own, not watching any.
+        if let Some(claimed) = app.interactions.take_focus_claim() {
+            if !app.session_id.is_empty()
+                && app.workspace.id.as_deref() == Some(claimed.workspace_id.as_str())
+            {
+                make_interaction_current(app, live, client, standing_launch, claimed);
+                dirty = true;
+            }
+        }
 
         if quota_refreshed.elapsed() >= QUOTA_REFRESH {
             quota_refreshed = Instant::now();

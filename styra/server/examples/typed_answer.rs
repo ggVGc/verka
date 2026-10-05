@@ -55,6 +55,7 @@ fn main() -> anyhow::Result<()> {
         // The server frames the seed message with the contract's instructions
         // and records the contract, so nothing below has to restate the shape.
         contract: Some(contract),
+        focus: false,
     })?;
     eprintln!("session {} asking for {}", session.id, contract.as_str());
 
