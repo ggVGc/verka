@@ -290,10 +290,8 @@ fn row_item(row: &InteractionRow<'_>) -> ListItem<'static> {
     // background has to be chosen here too.
     let background = if *selected {
         palette::INTERACTION_SELECTION_BACKGROUND
-    } else if matches!(status, InteractionStatus::Stopped(_)) {
-        palette::STOPPED_INTERACTION_ROW_BACKGROUND
     } else {
-        palette::INTERACTION_ROW_BACKGROUND
+        row_background(*status)
     };
     let mut lines = vec![Line::from(main).style(Style::default().bg(background))];
     if let Some(text) = last_message {
@@ -316,6 +314,19 @@ fn status_marker(status: InteractionStatus) -> (&'static str, ratatui::style::Co
         InteractionStatus::Error => ("x", palette::ERROR),
         // Not `x`, which an error is drawn as.
         InteractionStatus::Ended => ("-", palette::INACTIVE),
+    }
+}
+
+/// The tint behind an interaction's own line, a faint wash of its marker's hue.
+fn row_background(status: InteractionStatus) -> ratatui::style::Color {
+    match status {
+        InteractionStatus::Pending => palette::PENDING_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Running { .. } => palette::RUNNING_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Idle => palette::IDLE_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Background => palette::BACKGROUND_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Stopped(_) => palette::STOPPED_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Error => palette::ERROR_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Ended => palette::ENDED_INTERACTION_ROW_BACKGROUND,
     }
 }
 
@@ -412,15 +423,15 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(78, 1)].bg, palette::INTERACTION_ROW_BACKGROUND);
+        assert_eq!(buffer[(78, 1)].bg, palette::IDLE_INTERACTION_ROW_BACKGROUND);
         assert_eq!(buffer[(78, 2)].bg, palette::RESET);
     }
 
-    /// Stopped entries are tinted so they read as a group, and the cursor row
+    /// Each status tints its rows so they read as a group, and the cursor row
     /// is drawn above every tint, since the row's own background would
     /// otherwise cover the list's highlight.
     #[test]
-    fn stopped_rows_are_tinted_and_the_cursor_row_stands_above_them() {
+    fn rows_are_tinted_by_status_and_the_cursor_row_stands_above_them() {
         let row = |name: &'static str, status, selected| InteractionRow::Interaction {
             name: name.into(),
             provider: "claude",
@@ -446,7 +457,11 @@ mod tests {
             typing_filter: false,
             rows: vec![
                 row("idle", InteractionStatus::Idle, false),
-                row("stopped", InteractionStatus::Stopped(StopTone::Paused), false),
+                row(
+                    "stopped",
+                    InteractionStatus::Stopped(StopTone::Paused),
+                    false,
+                ),
                 row("cursor", InteractionStatus::Stopped(StopTone::Paused), true),
             ],
         };
@@ -456,9 +471,15 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(78, 1)].bg, palette::INTERACTION_ROW_BACKGROUND);
-        assert_eq!(buffer[(78, 2)].bg, palette::STOPPED_INTERACTION_ROW_BACKGROUND);
-        assert_eq!(buffer[(78, 3)].bg, palette::INTERACTION_SELECTION_BACKGROUND);
+        assert_eq!(buffer[(78, 1)].bg, palette::IDLE_INTERACTION_ROW_BACKGROUND);
+        assert_eq!(
+            buffer[(78, 2)].bg,
+            palette::STOPPED_INTERACTION_ROW_BACKGROUND
+        );
+        assert_eq!(
+            buffer[(78, 3)].bg,
+            palette::INTERACTION_SELECTION_BACKGROUND
+        );
     }
 
     /// The list is where an operator scanning several stopped agents decides

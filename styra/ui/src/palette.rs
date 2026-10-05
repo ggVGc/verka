@@ -115,12 +115,24 @@ pub const USER_MESSAGE_BACKGROUND: Color = Color::Rgb(18, 28, 21);
 /// 236, `CursorLine`.
 pub const SELECTION_BACKGROUND: Color = Color::Rgb(48, 48, 48);
 /// A slight lift behind an interaction's own line in the live-interactions
-/// navigator, so it stands above the last-message line beneath it.
-/// 234, `Pmenu`.
-pub const INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(28, 28, 28);
-/// The same lift with a faint rose in it, behind a stopped interaction, so
-/// the entries waiting on a decision read as a group down the list.
-pub const STOPPED_INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(40, 27, 30);
+/// navigator, so it stands above the last-message line beneath it. Each
+/// status carries a faint wash of its marker's hue, so the entries in one
+/// state read as a group down the list.
+///
+/// Waiting to start: the pale rose of [`INFO`].
+pub const PENDING_INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(36, 28, 28);
+/// Working: the amber of [`RUNNING`].
+pub const RUNNING_INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(36, 32, 14);
+/// Idle: the green of [`SUCCESS`].
+pub const IDLE_INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(16, 34, 18);
+/// Working in the background: the dusty rose of [`MUTED_WARNING`].
+pub const BACKGROUND_INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(34, 24, 24);
+/// Stopped, waiting on a decision: a faint rust.
+pub const STOPPED_INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(40, 20, 10);
+/// Failed: the red of [`ERROR`].
+pub const ERROR_INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(44, 14, 14);
+/// Ended: the stone of [`INACTIVE`].
+pub const ENDED_INTERACTION_ROW_BACKGROUND: Color = Color::Rgb(30, 29, 26);
 /// The navigator's cursor row, a step above [`SELECTION_BACKGROUND`] so it
 /// stands clear of the lifted rows around it. 238.
 pub const INTERACTION_SELECTION_BACKGROUND: Color = Color::Rgb(68, 68, 68);
