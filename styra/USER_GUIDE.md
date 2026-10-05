@@ -30,11 +30,10 @@ server directly. State defaults to `$XDG_STATE_HOME/styra` (or
 `$XDG_RUNTIME_DIR/styra/styra.sock`.
 
 A plain `styra` in a directory that already has a Workspace opens that
-Workspace. In a directory without one, it opens the Workspace list, and the
-first row offers to create a Workspace for the current directory. The cursor
-starts on that row, so `Enter` creates the Workspace and starts in it. To open
-an existing Workspace instead, move down to it or type to filter; the offer
-row is hidden while a filter is typed.
+Workspace. In a directory without one, it opens the Workspace list with a
+popup asking whether to create a Workspace for the current directory. `Enter`
+or `y` creates it and starts in it; `Esc` or `n` closes the popup, leaving the
+list to open an existing Workspace from.
 
 `--standalone` skips the socket entirely and runs the server in the client's own
 process. Its state lives separately at `$XDG_STATE_HOME/styra-standalone` (or

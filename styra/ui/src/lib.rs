@@ -196,7 +196,6 @@ pub trait Ui {
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
-        offer: Option<&std::path::Path>,
         value: &str,
     ) -> UiResult<RenderFeedback>;
 
@@ -439,8 +438,10 @@ where
                 interactions,
                 preview,
                 filter,
-                offer,
             );
+            if let Some(directory) = offer {
+                picker::render_workspace_offer(frame, directory);
+            }
             RenderFeedback::default()
         })
     }
@@ -452,7 +453,6 @@ where
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
-        offer: Option<&std::path::Path>,
         value: &str,
     ) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
@@ -463,7 +463,6 @@ where
                 interactions,
                 preview,
                 filter,
-                offer,
             );
             picker::render_workspace_name_prompt(frame, value);
             RenderFeedback::default()
@@ -638,7 +637,6 @@ where
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
-        offer: Option<&std::path::Path>,
         value: &str,
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_workspace_picker_name_prompt(
@@ -648,7 +646,6 @@ where
             interactions,
             preview,
             filter,
-            offer,
             value,
         )
     }
