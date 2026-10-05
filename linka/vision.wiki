@@ -4,3 +4,13 @@
 Project structure where the top-level is a list of features, which in turn are connected to executable verifications of those features, and then to implementations.
 Implementation is a direct consequence of the verification that needs to pass, and similarily for verification relative feature specification.
 This turns the traditional view of a project inside-out, where a developer often starts by looking through code and asking themselves "which features does this logic related to". It also allows doing that kind of reverse lookup if needed, however the feature-first view is more natural in general, I believe.
+
+
+
+== Long chains of branches ==
+Sometimes work happens in longs PR stacks, where several branches depend on the work in previous ones, intended to be merged one after the other.
+Often, additional work happens in an earlier branch after followups have been created, forcing a rebase chain upwards.
+With Linka, a branch and an "agentic work unit" are generally the same thing.
+When the rebase chain happens, git changes identity of followup commits, but the contents generally stay the same. Difficulty is often knowing what realy stayed the same, and forcing additional unnecessary review.
+With Linka, we can lock "witness"/review nodes to content hashes, so such rebasing can happen and Linka can tell us what actually needs additional reviewing (staleness), and what does not.
+
