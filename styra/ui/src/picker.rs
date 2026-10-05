@@ -119,6 +119,7 @@ pub enum Preview<'a> {
 /// to render.
 pub fn render_picker(
     frame: &mut Frame,
+    scope: &str,
     sessions: &[SessionSummary],
     selected: usize,
     order: SessionOrder,
@@ -136,6 +137,7 @@ pub fn render_picker(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(session_picker_title(
+            scope,
             order,
             filter,
             searching,
@@ -169,6 +171,7 @@ pub fn render_picker(
 }
 
 fn session_picker_title(
+    scope: &str,
     order: SessionOrder,
     filter: Option<&str>,
     searching: bool,
@@ -189,7 +192,7 @@ fn session_picker_title(
     // which way the list is sorted, and whether completed sessions are shown
     // — that the operator cannot get anywhere else.
     format!(
-        " styra · sessions{filter}{searching} · sort: {} · {completed} · ? keys ",
+        " {scope} · sessions{filter}{searching} · sort: {} · {completed} · ? keys ",
         order.label(),
     )
 }
@@ -776,6 +779,7 @@ mod tests {
             .draw(|frame| {
                 render_picker(
                     frame,
+                    "payments",
                     sessions,
                     selected,
                     SessionOrder::LastActivity,
@@ -815,7 +819,7 @@ mod tests {
             picker_summary("s-2", "claude", "3h ago"),
         ];
         let screen = rendered_picker(&sessions, 0);
-        assert!(screen.contains("styra · sessions"));
+        assert!(screen.contains("payments · sessions"), "{screen}");
         assert!(screen.contains("codex"));
         assert!(screen.contains("2m ago"));
         assert!(screen.contains("s-1"));
@@ -893,6 +897,7 @@ mod tests {
             .draw(|frame| {
                 render_picker(
                     frame,
+                    "styra",
                     &sessions,
                     0,
                     SessionOrder::LastActivity,
@@ -1190,6 +1195,7 @@ mod tests {
             .draw(|frame| {
                 render_picker(
                     frame,
+                    "styra",
                     &sessions,
                     1,
                     SessionOrder::LastActivity,

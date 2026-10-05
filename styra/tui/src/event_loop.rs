@@ -1330,9 +1330,14 @@ pub fn run(
                 // Starting fresh from this list enters the Workspace that was
                 // just chosen with no Session loaded, which is the same place
                 // entering a Workspace that has no history at all lands.
-                if let Some(choice) =
-                    picker::run_session_picker(terminal, client, &mut sessions, None, true)?
-                {
+                if let Some(choice) = picker::run_session_picker(
+                    terminal,
+                    client,
+                    &crate::workspace::display_name(&workspace),
+                    &mut sessions,
+                    None,
+                    true,
+                )? {
                     return Ok(RunOutcome::OpenWorkspace {
                         workspace: Box::new(workspace),
                         session_id: match choice {
@@ -1353,6 +1358,7 @@ pub fn run(
                 match picker::run_session_picker(
                     terminal,
                     client,
+                    app.workspace.name.as_deref().unwrap_or("styra"),
                     &mut sessions,
                     Some(&app.session_id),
                     true,

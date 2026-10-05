@@ -70,12 +70,16 @@ pub enum SessionChoice {
 /// on [`SessionChoice::New`]: browsing to attach a shell or to view a stored
 /// log has no Workspace to start work in, so there `n` is not a key at all.
 ///
+/// `scope` heads the title: the Workspace's name when the list is one
+/// Workspace's Sessions, so the operator can see whose history this is.
+///
 /// `?` shows the whole list of those keys. The picker's own title says only
 /// what the list cannot be read without — the filter, and the sort — because
 /// a strip of shortcuts along the top can never hold all of them anyway.
 pub fn run_session_picker(
     terminal: &mut dyn Ui,
     client: &Client,
+    scope: &str,
     sessions: &mut [styra_protocol::SessionSummary],
     current_id: Option<&str>,
     can_start_new: bool,
@@ -174,6 +178,7 @@ pub fn run_session_picker(
             render_help(terminal, Window::SessionPicker, &mut help)?;
         } else {
             terminal.render_session_picker(
+                scope,
                 &sessions,
                 selected,
                 picker_order(order),
@@ -318,6 +323,7 @@ pub fn run_session_picker(
                 if let Err(error) = client.set_session_completed(&id, completed) {
                     show_message(
                         terminal,
+                        scope,
                         &sessions,
                         selected,
                         order,
@@ -354,6 +360,7 @@ pub fn run_session_picker(
             k if keys::SESSIONS_RENAME.matches(k) && !sessions.is_empty() => {
                 if let Some(name) = read_session_name(
                     terminal,
+                    scope,
                     &sessions,
                     selected,
                     order,
@@ -377,6 +384,7 @@ pub fn run_session_picker(
                     Ok(converted) => return Ok(Some(SessionChoice::Open(converted.id))),
                     Err(error) => show_message(
                         terminal,
+                        scope,
                         &sessions,
                         selected,
                         order,
@@ -506,6 +514,7 @@ fn initial_session_selection(
 /// conversion) is seen rather than lost.
 fn show_message(
     terminal: &mut dyn Ui,
+    scope: &str,
     sessions: &[styra_protocol::SessionSummary],
     selected: usize,
     order: SessionOrder,
@@ -514,6 +523,7 @@ fn show_message(
 ) -> Result<()> {
     loop {
         terminal.render_session_picker_message(
+            scope,
             sessions,
             selected,
             picker_order(order),
@@ -534,6 +544,7 @@ fn show_message(
 
 fn read_session_name(
     terminal: &mut dyn Ui,
+    scope: &str,
     sessions: &[styra_protocol::SessionSummary],
     selected: usize,
     order: SessionOrder,
@@ -542,6 +553,7 @@ fn read_session_name(
     let mut value = initial.to_owned();
     loop {
         terminal.render_session_picker_name_prompt(
+            scope,
             sessions,
             selected,
             picker_order(order),

@@ -272,7 +272,14 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let mut term = RatatuiUi::new()?;
-            match picker::run_session_picker(&mut term, &client, &mut sessions, None, false) {
+            match picker::run_session_picker(
+                &mut term,
+                &client,
+                "styra",
+                &mut sessions,
+                None,
+                false,
+            ) {
                 Ok(Some(picker::SessionChoice::Open(id))) => {
                     terminal = Some(term);
                     Some(PathBuf::from(id))
@@ -635,7 +642,8 @@ fn browse_shells(client: &Client) -> Result<()> {
     }
 
     let mut terminal = RatatuiUi::new()?;
-    let choice = picker::run_session_picker(&mut terminal, client, &mut sessions, None, false);
+    let choice =
+        picker::run_session_picker(&mut terminal, client, "styra", &mut sessions, None, false);
     terminal.close()?;
     match choice? {
         Some(picker::SessionChoice::Open(session)) => attach_shell(client, &session),

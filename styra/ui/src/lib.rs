@@ -145,6 +145,7 @@ pub trait Ui {
 
     fn render_session_picker(
         &mut self,
+        scope: &str,
         sessions: &[styra_protocol::SessionSummary],
         selected: usize,
         order: picker::SessionOrder,
@@ -156,6 +157,7 @@ pub trait Ui {
 
     fn render_session_picker_message(
         &mut self,
+        scope: &str,
         sessions: &[styra_protocol::SessionSummary],
         selected: usize,
         order: picker::SessionOrder,
@@ -169,6 +171,7 @@ pub trait Ui {
 
     fn render_session_picker_name_prompt(
         &mut self,
+        scope: &str,
         sessions: &[styra_protocol::SessionSummary],
         selected: usize,
         order: picker::SessionOrder,
@@ -327,6 +330,7 @@ where
 
     fn render_session_picker(
         &mut self,
+        scope: &str,
         sessions: &[styra_protocol::SessionSummary],
         selected: usize,
         order: picker::SessionOrder,
@@ -336,6 +340,7 @@ where
         show_completed: bool,
     ) -> UiResult<RenderFeedback> {
         self.render_session_picker_with(
+            scope,
             sessions,
             selected,
             order,
@@ -349,6 +354,7 @@ where
 
     fn render_session_picker_message(
         &mut self,
+        scope: &str,
         sessions: &[styra_protocol::SessionSummary],
         selected: usize,
         order: picker::SessionOrder,
@@ -360,6 +366,7 @@ where
         message: &str,
     ) -> UiResult<RenderFeedback> {
         self.render_session_picker_with(
+            scope,
             sessions,
             selected,
             order,
@@ -373,6 +380,7 @@ where
 
     fn render_session_picker_name_prompt(
         &mut self,
+        scope: &str,
         sessions: &[styra_protocol::SessionSummary],
         selected: usize,
         order: picker::SessionOrder,
@@ -383,6 +391,7 @@ where
         value: &str,
     ) -> UiResult<RenderFeedback> {
         self.render_session_picker_with(
+            scope,
             sessions,
             selected,
             order,
@@ -396,6 +405,7 @@ where
 
     fn render_session_picker_with(
         &mut self,
+        scope: &str,
         sessions: &[styra_protocol::SessionSummary],
         selected: usize,
         order: picker::SessionOrder,
@@ -408,6 +418,7 @@ where
         self.draw(|frame| {
             picker::render_picker(
                 frame,
+                scope,
                 sessions,
                 selected,
                 order,
@@ -540,6 +551,7 @@ where
 
     fn render_session_picker(
         &mut self,
+        scope: &str,
         sessions: &[styra_protocol::SessionSummary],
         selected: usize,
         order: picker::SessionOrder,
@@ -550,6 +562,7 @@ where
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_session_picker(
             self,
+            scope,
             sessions,
             selected,
             order,
@@ -562,6 +575,7 @@ where
 
     fn render_session_picker_message(
         &mut self,
+        scope: &str,
         sessions: &[styra_protocol::SessionSummary],
         selected: usize,
         order: picker::SessionOrder,
@@ -574,6 +588,7 @@ where
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_session_picker_message(
             self,
+            scope,
             sessions,
             selected,
             order,
@@ -588,6 +603,7 @@ where
 
     fn render_session_picker_name_prompt(
         &mut self,
+        scope: &str,
         sessions: &[styra_protocol::SessionSummary],
         selected: usize,
         order: picker::SessionOrder,
@@ -599,6 +615,7 @@ where
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_session_picker_name_prompt(
             self,
+            scope,
             sessions,
             selected,
             order,
