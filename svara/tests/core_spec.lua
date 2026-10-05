@@ -60,8 +60,10 @@ local file = vim.fn.tempname() .. ".lua"
 vim.fn.writefile({ "local a = 1", "local b = 2", "local c = 3" }, file)
 vim.cmd.edit(file)
 vim.api.nvim_win_set_cursor(0, { 2, 0 })
-assert(core.viewing() == file .. ":2", core.viewing())
-assert(core.prompt_from_view("fix this", core.viewing()) == "fix this\n\nSource: " .. file .. ":2")
+assert(core.viewing() == file .. ":2:1", core.viewing())
+vim.api.nvim_win_set_cursor(0, { 2, 6 })
+assert(core.viewing() == file .. ":2:7", core.viewing())
+assert(core.prompt_from_view("fix this", core.viewing()) == "fix this\n\nSource: " .. file .. ":2:7")
 os.remove(file)
 
 server:close()

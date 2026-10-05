@@ -405,7 +405,8 @@ function M.info_lines(info)
   return rows_as_lines(rows)
 end
 
---- Where the operator is looking, as `path:line`, or nil.
+--- Where the operator is looking, as `path:line:column`, or nil. Both count
+--- from 1, as compilers and `grep -n` do.
 ---
 --- `:Svara` puts this after the prompt, because the prompt is almost
 --- always about the thing on screen and saying so beats making the operator
@@ -420,8 +421,8 @@ function M.viewing(window)
   if path == "" then
     return nil
   end
-  local line = vim.api.nvim_win_get_cursor(window)[1]
-  return string.format("%s:%d", path, line)
+  local cursor = vim.api.nvim_win_get_cursor(window)
+  return string.format("%s:%d:%d", path, cursor[1], cursor[2] + 1)
 end
 
 --- The prompt `:Svara` sends: what was typed, then what is being viewed.
