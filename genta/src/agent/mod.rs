@@ -18,8 +18,10 @@
 //! localization is arranged around that: it is a `Copy`, serializable value
 //! that a [`Selection`] records in a journal, that a picker enumerates through
 //! [`Provider::ALL`], and that downstream hosts match on to attach policy of
-//! their own (styra's model and effort catalogs are theirs, not ours). What
-//! moved into the provider modules is the implementation, not the identity.
+//! their own (which providers styra offers interactively, say). The model and
+//! effort catalogs are not such policy: they are facts about the agents, and
+//! [`Provider::models`] is their one statement. What moved into the provider
+//! modules is the implementation, not the identity.
 //!
 //! A note on the enum's doc comments: styra's client generator parses this
 //! file's type declarations and copies their doc comments into the Lua and
@@ -36,6 +38,8 @@ pub use self::codex::{codex, codex_appserver, codex_exec, codex_exec_command};
 pub use self::path::{resolve_executable, resolve_executable_on_path};
 
 pub(crate) use self::claude::claude_submission;
+
+pub use self::spec::ModelSpec;
 
 use self::codex::codex_submission;
 use self::spec::ProviderSpec;
@@ -142,16 +146,23 @@ impl Provider {
         self.spec().executable
     }
 
-    /// Models worth offering in a picker, most capable first.
+    /// Models worth offering in a picker, most capable first, each with the
+    /// effort ladder it accepts.
     ///
-    /// Not a closed set: both agents accept any model id they know, so a
-    /// [`Selection`] still carries a free-form string. What is *installed* — and
-    /// which ids the operator's account may use — is the agent's business, not
-    /// Genta's; an unknown model fails in the agent, where the authoritative
-    /// catalog lives. Each provider's catalog, and how it was drawn up, is
-    /// stated with that provider.
-    pub fn models(&self) -> &'static [&'static str] {
+    /// This is the one catalog: hosts build their pickers from it rather than
+    /// keeping their own. It is not a closed set, though: both agents accept any
+    /// model id they know, so a [`Selection`] still carries a free-form string.
+    /// What is *installed* — and which ids the operator's account may use — is
+    /// the agent's business, not Genta's; an unknown model fails in the agent,
+    /// where the authoritative catalog lives. Each provider's catalog, and how
+    /// it was drawn up, is stated with that provider.
+    pub fn models(&self) -> &'static [ModelSpec] {
         self.spec().models
+    }
+
+    /// The catalog entry for `model`, by id or alias.
+    pub fn model(&self, model: &str) -> Option<&'static ModelSpec> {
+        self.models().iter().find(|entry| entry.answers_to(model))
     }
 
     /// Whether this agent could be the one running `model`.
@@ -163,17 +174,59 @@ impl Provider {
     /// model reports included, and those name models this one cannot be
     /// running. An unlisted id is nobody's in particular and so is allowed.
     pub fn could_run(&self, model: &str) -> bool {
-        self.models().contains(&model)
+        self.model(model).is_some()
             || !Provider::ALL
                 .iter()
-                .any(|provider| provider.models().contains(&model))
+                .any(|provider| provider.model(model).is_some())
     }
 
-    /// The reasoning-effort levels this provider accepts, lowest first. The two
-    /// agents' ladders differ at the ends: codex has a `minimal` rung, Claude
-    /// Code a `max` one.
+    /// The provider's widest effort ladder, lowest first: the union of its
+    /// models' ladders, and what a model outside the catalog is assumed to
+    /// accept. A launch of a known model is judged by [`Provider::efforts_for`]
+    /// instead.
     pub fn efforts(&self) -> &'static [Effort] {
         self.spec().efforts
+    }
+
+    /// The reasoning-effort rungs `model` accepts, lowest first.
+    ///
+    /// Empty means the model takes no effort setting at all — Claude Sonnet 4.5
+    /// and Haiku 4.5 predate the parameter and reject it — which is a different
+    /// thing from a short ladder. See [`Provider::supports_effort`].
+    ///
+    /// A model outside the catalog gets the provider's widest ladder: an
+    /// unknown id is nobody's in particular, so it is under-constrained rather
+    /// than rejected, and the agent itself is the authority that will reject a
+    /// rung it does not have.
+    pub fn efforts_for(&self, model: &str) -> &'static [Effort] {
+        self.model(model)
+            .map_or(self.efforts(), |entry| entry.efforts)
+    }
+
+    /// Whether `model` takes a reasoning effort at all.
+    pub fn supports_effort(&self, model: &str) -> bool {
+        !self.efforts_for(model).is_empty()
+    }
+
+    /// The effort a launch of `model` takes when nothing named one.
+    ///
+    /// The declared default ([`Provider::default_effort`]) where the model has
+    /// that rung; otherwise the highest rung below it, so a model with a shorter
+    /// ladder is stepped down rather than pushed to an end of the scale it did
+    /// not ask for. A model that takes no effort at all still needs a value to
+    /// put in a [`Selection`], and the declared default is that placeholder.
+    pub fn default_effort_for(&self, model: &str) -> Effort {
+        let declared = self.default_effort();
+        let efforts = self.efforts_for(model);
+        if efforts.is_empty() || efforts.contains(&declared) {
+            return declared;
+        }
+        efforts
+            .iter()
+            .copied()
+            .rfind(|effort| *effort < declared)
+            .or_else(|| efforts.last().copied())
+            .unwrap_or(declared)
     }
 
     /// The model a [`Selection`] takes when a profile name omits one.
@@ -191,37 +244,45 @@ impl Provider {
         self.spec().default_effort
     }
 
-    /// The least expensive model this agent runs, for the incidental one-shot
-    /// errands a host does around a session rather than for the session's own
-    /// work — naming a branch from its first prompt, say.
+    /// The least expensive model this agent can launch correctly, for the
+    /// incidental one-shot errands a host does around a session rather than
+    /// for the session's own work — naming a branch from its first prompt, say.
     ///
     /// Such an errand is a sentence of text in and a few words out, so the
     /// small tier does it as well as the large one and at a fraction of the
     /// price. It is deliberately a separate question from
     /// [`Provider::default_model`]: an operator's unpinned *launch* should
-    /// still get a capable model.
+    /// still get a capable model. And it always takes an effort setting, since
+    /// every launch pins one — which can rule out the very cheapest model.
     pub fn cheapest_model(&self) -> &'static str {
         self.spec().cheapest_model
     }
 
-    /// The lowest reasoning effort this agent accepts, which is what those
-    /// same errands ask for. [`Provider::efforts`] is ordered lowest first, so
-    /// a ladder that gains a rung below the current floor moves this with it.
+    /// The lowest reasoning effort the errand model accepts, which is what
+    /// those same errands ask for.
     pub fn cheapest_effort(&self) -> Effort {
-        self.efforts()
+        self.cheapest_effort_for(self.cheapest_model())
+    }
+
+    /// The lowest effort `model` accepts. [`Provider::efforts_for`] is ordered
+    /// lowest first, so a ladder that gains a rung below the current floor
+    /// moves this with it. A model with no ladder falls back to its default
+    /// placeholder.
+    pub fn cheapest_effort_for(&self, model: &str) -> Effort {
+        self.efforts_for(model)
             .first()
             .copied()
-            .unwrap_or(Provider::default_effort(self))
+            .unwrap_or_else(|| self.default_effort_for(model))
     }
 }
 
 /// How much reasoning the model is asked to spend per turn.
 ///
-/// One vocabulary across providers, since the ladders coincide in the middle;
-/// [`Provider::efforts`] narrows it to what a given agent accepts. Passed to
-/// codex as its `model_reasoning_effort` config override and to Claude Code as
-/// `--effort`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// One vocabulary across providers, ordered lowest first, since the ladders
+/// coincide in the middle; [`Provider::efforts_for`] narrows it to what a given
+/// model accepts. Passed to codex as its `model_reasoning_effort` config
+/// override and to Claude Code as `--effort`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Effort {
     Minimal,
@@ -300,8 +361,21 @@ impl Selection {
 
     /// Parse a profile name of the form `provider[:model][/effort]`, filling an
     /// omitted model or effort from the provider's declared defaults.
+    ///
+    /// A model id may itself contain `/` (`deepseek/deepseek-v4.1-flash`), so
+    /// the effort is what follows the *last* one. Without the catalog that
+    /// leaves `codex:vendor/model` ambiguous with a misspelt effort, as in
+    /// `claude:opus/turbo`; a whole name that is a catalog model is therefore
+    /// read as the model with the effort omitted, and anything else must end
+    /// in a known effort. An unlisted model with a `/` in it can still be
+    /// launched by naming its effort, which [`Selection::name`] always does.
     pub fn parse(name: &str) -> Result<Selection> {
-        let (head, effort) = match name.split_once('/') {
+        let names_catalog_model = name.split_once(':').is_some_and(|(provider, model)| {
+            Provider::parse(provider.trim())
+                .is_ok_and(|provider| provider.model(model.trim()).is_some())
+        });
+        let (head, effort) = match name.rsplit_once('/') {
+            Some(_) if names_catalog_model => (name, None),
             Some((head, effort)) => (head, Some(Effort::parse(effort.trim())?)),
             None => (name, None),
         };
@@ -589,6 +663,38 @@ mod tests {
         }
     }
 
+    /// A model id with a `/` in it: the effort is what follows the last one,
+    /// and a catalog model named alone takes the default effort rather than
+    /// having its own tail read as one. An unlisted id with a `/` is
+    /// launchable too, so long as its effort is named.
+    #[test]
+    fn a_model_id_may_contain_the_effort_separator() {
+        let deepseek = "deepseek/deepseek-v4.1-flash";
+        let pinned = Selection::parse(&format!("codex:{deepseek}/high")).unwrap();
+        assert_eq!(
+            (pinned.model.as_str(), pinned.effort),
+            (deepseek, Effort::High)
+        );
+        assert_eq!(pinned.name(), format!("codex:{deepseek}/high"));
+
+        let bare = Selection::parse(&format!("codex:{deepseek}")).unwrap();
+        assert_eq!(bare.model, deepseek);
+        assert_eq!(bare.effort, Provider::Codex.default_effort());
+
+        let unlisted = Selection::parse("codex:vendor/new-model/low").unwrap();
+        assert_eq!(
+            (unlisted.model.as_str(), unlisted.effort),
+            ("vendor/new-model", Effort::Low)
+        );
+        // Without the catalog to vouch for it, an unlisted id's tail is an
+        // effort, and a misspelt one is still refused by name.
+        let error = Selection::parse("codex:vendor/new-model").unwrap_err();
+        assert!(
+            error.to_string().contains("unknown reasoning effort"),
+            "{error}"
+        );
+    }
+
     /// A selection may not leave the model or effort unpinned: a shorter profile
     /// name takes the provider's declared defaults, and then names itself in
     /// full, so what a journal records is never "whatever the agent was set to".
@@ -633,13 +739,16 @@ mod tests {
     #[test]
     fn the_declared_defaults_are_offered_by_their_provider() {
         for provider in Provider::ALL {
+            let model = provider.default_model();
             assert!(
-                provider.efforts().contains(&provider.default_effort()),
-                "{provider:?} cannot run its own default effort"
+                provider.model(model).is_some(),
+                "{provider:?} default model is outside its own catalog"
             );
             assert!(
-                provider.models().contains(&provider.default_model()),
-                "{provider:?} default model is outside its own catalog"
+                provider
+                    .efforts_for(model)
+                    .contains(&provider.default_effort()),
+                "{provider:?} cannot run its own default effort on its default model"
             );
         }
     }
@@ -650,12 +759,21 @@ mod tests {
     #[test]
     fn the_cheapest_model_is_offered_by_its_provider_and_is_not_the_default() {
         for provider in Provider::ALL {
+            let model = provider.cheapest_model();
             assert!(
-                provider.models().contains(&provider.cheapest_model()),
+                provider.model(model).is_some(),
                 "{provider:?} cheapest model is outside its own catalog"
             );
+            // Every launch pins an effort, so a model that rejects one cannot
+            // run an errand.
             assert!(
-                provider.efforts().contains(&provider.cheapest_effort()),
+                provider.supports_effort(model),
+                "{provider:?} routes errands to a model that takes no effort"
+            );
+            assert!(
+                provider
+                    .efforts_for(model)
+                    .contains(&provider.cheapest_effort()),
                 "{provider:?} cannot run its own cheapest effort"
             );
             assert_ne!(
@@ -730,28 +848,138 @@ mod tests {
         }
     }
 
-    /// Effort ladders are per-provider: only codex has `minimal`, only Claude
-    /// Code has `max`. A picker offers what the agent accepts.
+    /// Every catalog entry is launchable as written and stays within its
+    /// provider's widest ladder, so that ladder is a true fallback for an
+    /// unlisted id rather than a second, disagreeing statement.
     #[test]
-    fn each_provider_offers_the_effort_levels_it_accepts() {
-        assert!(Provider::Codex.efforts().contains(&Effort::Minimal));
-        assert!(!Provider::Codex.efforts().contains(&Effort::Max));
-        assert!(Provider::Claude.efforts().contains(&Effort::Max));
-        assert!(!Provider::Claude.efforts().contains(&Effort::Minimal));
+    fn every_catalog_entry_is_launchable_and_within_the_widest_ladder() {
         for provider in Provider::ALL {
             assert!(!provider.models().is_empty());
-            // Every suggestion must be launchable as written: a `Selection`
-            // round-trips through one string, so a model id may not carry the
-            // grammar's own separators.
-            for model in provider.models() {
+            assert!(provider.efforts().is_sorted(), "{provider:?} ladder order");
+            for entry in provider.models() {
+                // A `Selection` round-trips through one string, so every id
+                // must survive it — at every rung, and with the effort left
+                // off — even one that carries the grammar's own `/`.
+                for id in std::iter::once(&entry.id).chain(entry.aliases) {
+                    for effort in provider.efforts() {
+                        let selection = Selection {
+                            provider,
+                            model: (*id).to_owned(),
+                            effort: *effort,
+                        };
+                        assert_eq!(
+                            Selection::parse(&selection.name()).unwrap(),
+                            selection,
+                            "{id} would not survive Selection::name"
+                        );
+                    }
+                    let bare = format!("{}:{id}", provider.as_str());
+                    assert_eq!(Selection::parse(&bare).unwrap().model, *id, "{bare}");
+                }
+                assert!(entry.efforts.is_sorted(), "{} ladder order", entry.id);
+                for effort in entry.efforts {
+                    assert!(
+                        provider.efforts().contains(effort),
+                        "{} offers {effort:?}, outside {provider:?}'s widest ladder",
+                        entry.id
+                    );
+                }
+                // The default a picker opens on is one of the model's rungs.
+                let default = provider.default_effort_for(entry.id);
                 assert!(
-                    !model.contains(':') && !model.contains('/'),
-                    "{model} would not survive Selection::name"
+                    entry.efforts.is_empty() || entry.efforts.contains(&default),
+                    "{provider:?} {} opens on a rung it does not have",
+                    entry.id
                 );
             }
             for effort in provider.efforts() {
                 assert_eq!(Effort::parse(effort.as_str()).unwrap(), *effort);
             }
         }
+    }
+
+    /// The point of a per-model ladder: a rung one model has and another does
+    /// not is offered on the first and not the second, under the same
+    /// provider — and an alias is judged as the model it names.
+    #[test]
+    fn an_effort_ladder_belongs_to_the_model_not_the_agent() {
+        let claude = Provider::Claude;
+        assert!(claude.efforts_for("claude-opus-5").contains(&Effort::XHigh));
+        assert!(!claude
+            .efforts_for("claude-opus-4-6")
+            .contains(&Effort::XHigh));
+        assert_eq!(
+            claude.efforts_for("claude-opus-4-5"),
+            claude.efforts_for("claude-opus-4-5-20251101")
+        );
+
+        let codex = Provider::Codex;
+        assert!(codex.efforts_for("gpt-5.6-sol").contains(&Effort::Max));
+        assert!(!codex.efforts_for("gpt-5.5").contains(&Effort::Max));
+        assert!(!codex.efforts_for("gpt-5.4").contains(&Effort::Max));
+    }
+
+    /// Genta's `minimal` rung is on no current codex model, so nothing may
+    /// launch on it — including the errand path, which takes the lowest rung.
+    #[test]
+    fn codex_does_not_offer_a_minimal_effort() {
+        for provider in [Provider::Codex, Provider::CodexExec] {
+            assert!(!provider.efforts().contains(&Effort::Minimal));
+            assert_eq!(provider.cheapest_effort(), Effort::Low);
+        }
+    }
+
+    /// The two Claude models that predate the effort parameter are offered, but
+    /// take no effort — and so are never the errand model.
+    #[test]
+    fn the_models_without_an_effort_parameter_say_so() {
+        for model in [
+            "claude-sonnet-4-5-20250929",
+            "claude-haiku-4-5-20251001",
+            "claude-haiku-4-5",
+        ] {
+            assert!(!Provider::Claude.supports_effort(model), "{model}");
+            assert_eq!(
+                Provider::Claude.default_effort_for(model),
+                Provider::Claude.default_effort(),
+                "{model} still has a placeholder to put in a selection"
+            );
+        }
+    }
+
+    /// A shorter ladder that still has the declared default keeps it: the
+    /// default is only stepped down when the model lacks that rung.
+    #[test]
+    fn a_declared_default_stands_on_a_shorter_ladder_that_has_it() {
+        assert_eq!(
+            Provider::CodexExec.default_effort_for("gpt-5.5"),
+            Provider::CodexExec.default_effort()
+        );
+        assert_eq!(
+            Provider::Claude.default_effort_for("claude-opus-4-5-20251101"),
+            Provider::Claude.default_effort()
+        );
+        assert_eq!(
+            Provider::Claude.default_effort_for("claude-opus-5"),
+            Provider::Claude.default_effort()
+        );
+    }
+
+    /// An id newer than the catalog is under-constrained rather than refused:
+    /// the agent itself is the authority on its own catalog, and the id is
+    /// nobody's in particular.
+    #[test]
+    fn an_unknown_model_falls_back_to_the_widest_ladder() {
+        assert_eq!(
+            Provider::Claude.efforts_for("claude-opus-9"),
+            Provider::Claude.efforts()
+        );
+        assert_eq!(
+            Provider::Codex.efforts_for("gpt-7-nova"),
+            Provider::Codex.efforts()
+        );
+        assert!(Provider::Claude.could_run("claude-opus-9"));
+        assert!(!Provider::Claude.could_run("gpt-6.1-sol"));
+        assert!(!Provider::Codex.could_run("claude-haiku-4-5"));
     }
 }

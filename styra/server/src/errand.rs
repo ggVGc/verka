@@ -89,12 +89,10 @@ impl Errand {
             Provider::Codex | Provider::CodexExec => Provider::CodexExec,
             Provider::Claude => Provider::Claude,
         };
-        let model = crate::agent::cheapest_model_for(self.provider).to_owned();
-        let effort = crate::agent::cheapest_effort_for(provider, &model);
         Selection {
             provider,
-            model,
-            effort,
+            model: provider.cheapest_model().to_owned(),
+            effort: provider.cheapest_effort(),
         }
     }
 

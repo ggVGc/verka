@@ -737,9 +737,11 @@ impl App {
         // selection still carries one, because a `Selection` always does, but
         // it is a placeholder nothing sends and showing it would claim the
         // session is running at a rung the model has never heard of.
-        let effort =
-            styra_protocol::agent::supports_effort(self.selection.provider, &self.selection.model)
-                .then(|| self.selection.effort.as_str().to_owned());
+        let effort = self
+            .selection
+            .provider
+            .supports_effort(&self.selection.model)
+            .then(|| self.selection.effort.as_str().to_owned());
         LaunchLabel {
             agent: self.selection.provider.as_str().to_owned(),
             model: Some(self.selection.model.clone()),
@@ -1597,7 +1599,6 @@ fn split_link_location(destination: &str) -> (&str, Option<u32>) {
 mod tests {
     use super::*;
     use crate::activity::{EndReason, IdleReason, StopReason};
-    use styra_protocol::agent::efforts_for;
     use styra_protocol::event::{TokenUsage, TurnOutcome, TurnUsage};
     use styra_protocol::RawLine;
     use styra_protocol::{Answer, AnswerValue, FileLocation};
@@ -2366,7 +2367,7 @@ mod tests {
 
         // Typing the other agent's name and a rung reaches the whole triple.
         let model = Provider::Claude.default_model();
-        let effort = efforts_for(Provider::Claude, model)[0];
+        let effort = Provider::Claude.efforts_for(model)[0];
         for character in format!("claude:{model}/{}", effort.as_str()).chars() {
             launcher.type_query(Some(character));
         }

@@ -231,7 +231,7 @@ The launch picker selects a provider, model, and effort. Providers:
 Every selection pins a model and an effort, and which efforts are on offer is a
 property of the *model*, not of the agent: the picker offers each model crossed
 with the rungs that model itself accepts
-(`styra_protocol::agent::efforts_for`). Codex
+(`Provider::efforts_for`, from Genta's one model catalog). Codex
 passes the rung as `model_reasoning_effort`, Claude Code as `--effort`. The
 current codex models take `low` through `max`, the older `gpt-5.5` stops at
 `xhigh`; Claude models from Opus 4.7 onwards take `low` through `max`, the 4.6

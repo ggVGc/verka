@@ -16,9 +16,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
-use styra_protocol::agent::{
-    default_effort_for, efforts_for, models_for, supports_effort, Provider, Selection, PROVIDERS,
-};
+use styra_protocol::agent::{Provider, Selection, PROVIDERS};
 use styra_protocol::LogEntry;
 use styra_ui::fuzzy_list::FuzzyList;
 
@@ -93,7 +91,7 @@ fn confirm(app: &mut App, preferences_path: &Path) {
 /// one. For a model that takes no effort setting that rung is a placeholder no
 /// launch sends, so the label drops it rather than advertising it.
 pub fn label(selection: &Selection) -> String {
-    if supports_effort(selection.provider, &selection.model) {
+    if selection.provider.supports_effort(&selection.model) {
         selection.name()
     } else {
         format!("{}:{}", selection.provider.as_str(), selection.model)
@@ -262,18 +260,18 @@ impl Launcher {
 /// — a selection carries a rung whether or not the launch sends it, and
 /// [`label`] is what keeps that placeholder off the screen.
 fn triples(provider: Provider) -> Vec<Selection> {
-    models_for(provider)
+    provider
+        .models()
         .iter()
         .flat_map(|model| {
-            let efforts = efforts_for(provider, model);
-            let rungs: Vec<_> = if efforts.is_empty() {
-                vec![default_effort_for(provider, model)]
+            let rungs: Vec<_> = if model.efforts.is_empty() {
+                vec![provider.default_effort_for(model.id)]
             } else {
-                efforts.to_vec()
+                model.efforts.to_vec()
             };
             rungs.into_iter().map(move |effort| Selection {
                 provider,
-                model: (*model).to_owned(),
+                model: model.id.to_owned(),
                 effort,
             })
         })
@@ -320,10 +318,11 @@ mod tests {
         let launcher = opened("claude");
         let labels = launcher.labels();
         for provider in PROVIDERS {
-            for model in models_for(provider) {
+            for model in provider.models() {
                 assert!(
-                    labels.iter().any(|label| label.contains(model)),
-                    "{model} is not on offer: {labels:?}"
+                    labels.iter().any(|label| label.contains(model.id)),
+                    "{} is not on offer: {labels:?}",
+                    model.id
                 );
             }
         }
@@ -333,7 +332,7 @@ mod tests {
             .iter()
             .filter(|label| label.starts_with("claude:claude-opus-5/"))
             .count();
-        assert_eq!(opus, efforts_for(Provider::Claude, "claude-opus-5").len());
+        assert_eq!(opus, Provider::Claude.efforts_for("claude-opus-5").len());
         assert_eq!(
             labels
                 .iter()
@@ -415,7 +414,11 @@ mod tests {
     /// catalogs' order, and a model's rungs stay together beneath it.
     #[test]
     fn recently_selected_models_lead_the_list() {
-        let catalog = models_for(Provider::Claude);
+        let catalog: Vec<&str> = Provider::Claude
+            .models()
+            .iter()
+            .map(|model| model.id)
+            .collect();
         let recent = vec![catalog[catalog.len() - 1].to_owned(), catalog[1].to_owned()];
         let launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &recent, false);
 
@@ -593,6 +596,6 @@ mod tests {
             .filter(|(label, _)| label.starts_with("claude:claude-opus-5/"))
             .map(|(_, row)| row.effort)
             .collect();
-        assert_eq!(rungs, efforts_for(Provider::Claude, "claude-opus-5"));
+        assert_eq!(rungs, Provider::Claude.efforts_for("claude-opus-5"));
     }
 }
