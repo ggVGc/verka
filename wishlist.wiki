@@ -1,3 +1,4 @@
+- In input box: Quick inputs for things like parent branch, current branch, commit list etc.
 - Some way to produce a report from a session, which can be shared as a way to show an executable prototype of an idea, including the underlying interactions, correlated with the features and ideas present in the final prototype.
 - Reference an interaction, or a part of an interaction, in another one
 - After a planning session, get a list of tasks to do. Each of those tasks should be driven by Styra, executed in sequence, each branched from the planning session, so that each gets the context they need, but not the context from implementing the earlier tasks.
