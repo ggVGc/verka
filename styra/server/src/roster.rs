@@ -234,6 +234,9 @@ impl Roster {
 fn current_summary(entry: &Entry) -> InteractionSummary {
     let mut summary = entry.summary.clone();
     summary.name = crate::journal::read_session_name(&entry.session_path).unwrap_or_default();
+    // Tags are edited on the Session after the run that mirrored this row, so
+    // the mirrored copy is stale the moment the operator retags a stopped row.
+    summary.tags = crate::journal::read_session_tags(&entry.session_path).unwrap_or_default();
     // A focus request was about the launch, which a restored row is long past.
     summary.focus_requested = false;
     summary
@@ -426,6 +429,12 @@ mod tests {
             Roster::open(&root).restored()[0].name.as_deref(),
             Some("Renamed after restart")
         );
+
+        // Likewise tags: retagging a stopped row must show on the roster that
+        // is already open, not only after the next restart.
+        let roster = Roster::open(&root);
+        crate::journal::store_session_tags(&session, &["bug".into()]).unwrap();
+        assert_eq!(roster.restored()[0].tags, vec!["bug".to_owned()]);
 
         // Set from a live interaction, as `set_completed` does: written to the
         // Session's own metadata first, then mirrored onto the roster row.

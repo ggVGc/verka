@@ -537,6 +537,11 @@ pub fn read_session_name(path: &Path) -> Result<Option<String>> {
     Ok(read_stored_session_meta(path)?.name)
 }
 
+/// Read the operator-assigned tags for a stored Session.
+pub fn read_session_tags(path: &Path) -> Result<Vec<String>> {
+    Ok(read_stored_session_meta(path)?.tags)
+}
+
 /// Read the provider's native identity for a stored Session.
 pub fn read_provider_session_id(path: &Path) -> Result<Option<String>> {
     Ok(read_stored_session_meta(path)?.provider_session_id)
