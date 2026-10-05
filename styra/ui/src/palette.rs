@@ -128,6 +128,10 @@ pub const INTERACTION_SELECTION_BACKGROUND: Color = Color::Rgb(68, 68, 68);
 pub const SUBORDINATE_TEXT: Color = MUTED_TEXT;
 /// 228, `PreProc` / `MatchParen` text.
 pub const SELECTION_MARKER: Color = Color::Rgb(255, 255, 135);
+/// The dot marking the Interaction currently open in the main view. This is
+/// intentionally the terminal's bright yellow so it remains immediately
+/// visible alongside the navigator cursor and status icons.
+pub const CURRENT_INTERACTION_MARKER: Color = Color::Yellow;
 /// The focused Markdown link: visible without the hard yellow used for a row
 /// cursor, since it sits directly behind the link's own syntax styling. A
 /// dusty rose (95) under the rose of the link itself, in place of orgone's

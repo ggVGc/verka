@@ -193,7 +193,7 @@ fn row_item(row: &InteractionRow<'_>) -> ListItem<'static> {
         Span::styled(
             if *current { "• " } else { "  " },
             Style::default().fg(if *current {
-                palette::SELECTION_MARKER
+                palette::CURRENT_INTERACTION_MARKER
             } else {
                 palette::INACTIVE
             }),
