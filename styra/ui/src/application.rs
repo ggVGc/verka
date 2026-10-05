@@ -232,8 +232,9 @@ fn render_events(
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
             .split(event_area);
-        feedback.list_offset =
-            Some(event_list::render(frame, view.list, panes[0]).effective_offset);
+        let list = event_list::render(frame, view.list, panes[0]);
+        feedback.list_offset = Some(list.effective_offset);
+        feedback.list_row_offset = Some(list.effective_row_offset);
         let measured = event_list::render_entry_log(frame, entry_log, panes[1]);
         note_scroll(
             feedback,
@@ -260,8 +261,9 @@ fn render_events(
         } else {
             event_area
         };
-        feedback.list_offset =
-            Some(event_list::render(frame, view.list, list_area).effective_offset);
+        let list = event_list::render(frame, view.list, list_area);
+        feedback.list_offset = Some(list.effective_offset);
+        feedback.list_row_offset = Some(list.effective_row_offset);
     }
     if view.link_mode {
         tint_all_but_entries(frame, area);
@@ -299,7 +301,9 @@ fn render_files(
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(columns[0]);
-    feedback.list_offset = Some(event_list::render(frame, view.list, left[0]).effective_offset);
+    let list = event_list::render(frame, view.list, left[0]);
+    feedback.list_offset = Some(list.effective_offset);
+    feedback.list_row_offset = Some(list.effective_row_offset);
     let content_area = if let Some(preview_view) = view.preview {
         let right = Layout::default()
             .direction(Direction::Vertical)

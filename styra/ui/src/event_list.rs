@@ -107,6 +107,12 @@ pub struct EventListView<'a> {
     pub can_configure_launch: bool,
     pub selection_name: String,
     pub requested_offset: usize,
+    pub requested_row_offset: usize,
+    /// Signed rendered-row movement to apply to the requested anchor.
+    pub scroll_delta: i32,
+    /// Keep the selected entry on screen. Explicit viewport scrolling turns
+    /// this off so the view can move independently of the selection.
+    pub anchor_selection: bool,
     /// Whether an explicit move toward older entries permits scrolloff to
     /// reveal rows above the current viewport anchor. Live content updates do
     /// not set this: a row changing height must not look like navigation.
@@ -140,6 +146,7 @@ pub struct EntryRender<'a> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EventListFeedback {
     pub effective_offset: usize,
+    pub effective_row_offset: usize,
 }
 
 pub struct EntryLogView<'a> {
@@ -344,17 +351,45 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     // the selection reads as a single line rather than as a block.
     let mut state = ListState::default();
     let position = view.entries.iter().position(|entry| entry.selected);
-    let offset = list_offset_with_scrolloff(
-        view.requested_offset,
-        position,
-        &mut items,
-        viewport_height,
-        view.moved_backward,
-    );
+    let anchored_position = if view.anchor_selection {
+        position
+    } else {
+        None
+    };
+    let (offset, row_offset) = if view.anchor_selection {
+        (
+            list_offset_with_scrolloff(
+                view.requested_offset,
+                anchored_position,
+                &mut items,
+                viewport_height,
+                view.moved_backward,
+            ),
+            0,
+        )
+    } else {
+        normalize_scroll_anchor(
+            view.requested_offset,
+            view.requested_row_offset,
+            view.scroll_delta,
+            &mut items,
+            view.entries.len(),
+        )
+    };
     // Only what the viewport can show is built, and only that is handed over.
     // A session of any length therefore costs one screen of rendering per
     // frame rather than its whole history — see [`LazyItems::into_window`].
-    let mut items = items.into_window(offset, position);
+    let mut items = items.into_window(offset, anchored_position, row_offset);
+    if row_offset > 0 && offset < view.entries.len() {
+        items[0] = entry_item_slice(
+            &view.entries[offset],
+            width,
+            viewport_height,
+            row_offset,
+            usize::MAX,
+            entry_render,
+        );
+    }
     clip_boundary_entry(
         &mut items,
         &view.entries,
@@ -362,7 +397,14 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         viewport_height,
         width,
         entry_render,
+        row_offset,
     );
+    let visible_selection = view
+        .anchor_selection
+        .then(|| position)
+        .flatten()
+        .filter(|position| *position >= offset && *position < offset + items.len())
+        .map(|position| position - offset);
     let list = List::new(items).block(block);
     // Both indices are rebased onto the window, which begins at `offset`: to
     // ratatui this is the whole list, seen from the top.
@@ -373,13 +415,14 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     // never thrown away: the offset this render reports back is persisted, so
     // a zero here would scroll the interaction log to the top and keep it
     // there rather than flickering for one frame.
-    *state.selected_mut() = position.map(|position| position - offset);
+    *state.selected_mut() = visible_selection;
     *state.offset_mut() = 0;
     frame.render_stateful_widget(list, area, &mut state);
     EventListFeedback {
         // Back into the caller's numbering. Ratatui only ever moves the offset
         // forward from where it was put, so this stays within the window.
         effective_offset: offset + state.offset(),
+        effective_row_offset: row_offset,
     }
 }
 
@@ -398,6 +441,7 @@ fn clip_boundary_entry(
     viewport_height: usize,
     width: usize,
     entry_render: EntryRender<'_>,
+    first_row_offset: usize,
 ) {
     let mut remaining = viewport_height;
     let mut boundary = None;
@@ -422,7 +466,18 @@ fn clip_boundary_entry(
         } else {
             remaining
         };
-        items[position] = entry_item_with_max_rows(entry, width, max_rows, entry_render);
+        items[position] = if position == 0 && first_row_offset > 0 {
+            entry_item_slice(
+                entry,
+                width,
+                viewport_height,
+                first_row_offset,
+                max_rows,
+                entry_render,
+            )
+        } else {
+            entry_item_with_max_rows(entry, width, max_rows, entry_render)
+        };
     }
 }
 
@@ -465,11 +520,21 @@ impl LazyItems<'_> {
     /// The first item that does not fit whole is still included: it is the one
     /// [`clip_boundary_entry`] rebuilds to the rows actually left for it. So is
     /// anything up to the selection, which ratatui walks forward to.
-    fn into_window(mut self, start: usize, selected: Option<usize>) -> Vec<ListItem<'static>> {
+    fn into_window(
+        mut self,
+        start: usize,
+        selected: Option<usize>,
+        first_row_offset: usize,
+    ) -> Vec<ListItem<'static>> {
         let mut used = 0usize;
         let mut end = start;
         while end < Heights::len(&self) {
-            used = used.saturating_add(self.height(end));
+            let height = self.height(end);
+            used = used.saturating_add(if end == start {
+                height.saturating_sub(first_row_offset)
+            } else {
+                height
+            });
             end += 1;
             if used > self.viewport_height && selected.is_none_or(|selected| end > selected) {
                 break;
@@ -525,6 +590,88 @@ impl Heights for &[usize] {
 
     fn height(&mut self, index: usize) -> usize {
         self[index]
+    }
+}
+
+/// Resolve a signed rendered-row movement into an entry and a row within it.
+/// The last entry is the lower bound: the status tail still renders beneath
+/// it, but is not allowed to become a mostly-empty viewport anchor of its own.
+fn normalize_scroll_anchor(
+    requested_entry: usize,
+    requested_row: usize,
+    delta: i32,
+    heights: &mut impl Heights,
+    entry_count: usize,
+) -> (usize, usize) {
+    if entry_count == 0 {
+        return (0, 0);
+    }
+    let last = entry_count - 1;
+    let maximum = bottom_scroll_anchor(heights, entry_count, 5);
+    let mut entry = requested_entry.min(last);
+    let mut row = requested_row.min(heights.height(entry).saturating_sub(1));
+    if (entry, row) > maximum {
+        (entry, row) = maximum;
+    }
+
+    if delta >= 0 {
+        let mut remaining = delta as usize;
+        while remaining > 0 {
+            let available = heights.height(entry).saturating_sub(row + 1);
+            if remaining <= available {
+                row += remaining;
+                break;
+            }
+            if entry == last {
+                row += available;
+                break;
+            }
+            remaining = remaining.saturating_sub(available + 1);
+            entry += 1;
+            row = 0;
+        }
+    } else {
+        let mut remaining = delta.unsigned_abs() as usize;
+        while remaining > 0 {
+            if remaining <= row {
+                row -= remaining;
+                break;
+            }
+            if entry == 0 {
+                row = 0;
+                break;
+            }
+            remaining = remaining.saturating_sub(row + 1);
+            entry -= 1;
+            row = heights.height(entry).saturating_sub(1);
+        }
+    }
+    (entry, row).min(maximum)
+}
+
+/// Latest top-of-viewport anchor that leaves `minimum_lines` interaction
+/// lines on screen. When the interaction is shorter, its first line remains
+/// the latest possible anchor so every line stays visible.
+fn bottom_scroll_anchor(
+    heights: &mut impl Heights,
+    entry_count: usize,
+    minimum_lines: usize,
+) -> (usize, usize) {
+    if entry_count == 0 || minimum_lines == 0 {
+        return (0, 0);
+    }
+    let mut entry = entry_count - 1;
+    let mut remaining = minimum_lines;
+    loop {
+        let height = heights.height(entry);
+        if remaining <= height {
+            return (entry, height - remaining);
+        }
+        remaining -= height;
+        if entry == 0 {
+            return (0, 0);
+        }
+        entry -= 1;
     }
 }
 
@@ -823,6 +970,15 @@ fn entry_item_with_max_rows(
     max_rows: usize,
     render: EntryRender<'_>,
 ) -> ListItem<'static> {
+    ListItem::new(entry_rows_with_max_rows(entry, width, max_rows, render))
+}
+
+fn entry_rows_with_max_rows(
+    entry: &EventEntry<'_>,
+    width: usize,
+    max_rows: usize,
+    render: EntryRender<'_>,
+) -> Vec<Line<'static>> {
     let key = RowKey {
         version: entry.version,
         width,
@@ -836,11 +992,31 @@ fn entry_item_with_max_rows(
         link_highlight: entry.link_highlight,
         search: render.search.map(str::to_owned),
     };
-    let rows = ROW_CACHE.with(|cache| {
+    ROW_CACHE.with(|cache| {
         cache
             .borrow_mut()
             .get_or_insert_with(key, || build_entry_rows(entry, width, max_rows, render))
-    });
+    })
+}
+
+fn entry_item_slice(
+    entry: &EventEntry<'_>,
+    width: usize,
+    viewport_height: usize,
+    skip: usize,
+    take: usize,
+    render: EntryRender<'_>,
+) -> ListItem<'static> {
+    let rows = entry_rows_with_max_rows(
+        entry,
+        width,
+        viewport_height.saturating_sub(1).max(1),
+        render,
+    )
+    .into_iter()
+    .skip(skip)
+    .take(take)
+    .collect::<Vec<_>>();
     ListItem::new(rows)
 }
 
@@ -1768,6 +1944,8 @@ mod tests {
         events: &[AgentEvent],
         selected: usize,
         requested_offset: usize,
+        anchor_selection: bool,
+        scroll_delta: i32,
     ) -> (Vec<String>, usize) {
         let entries = events
             .iter()
@@ -1806,6 +1984,9 @@ mod tests {
             can_configure_launch: false,
             selection_name: "codex".into(),
             requested_offset,
+            requested_row_offset: 0,
+            scroll_delta,
+            anchor_selection,
             moved_backward: false,
             protocol: Protocol::default(),
             links: LinkDisplay::Compact,
@@ -1850,7 +2031,7 @@ mod tests {
     fn a_window_reports_its_offset_in_the_callers_numbering() {
         let events = numbered(500);
 
-        let (rows, offset) = scrolled_screen(&events, 300, 300);
+        let (rows, offset) = scrolled_screen(&events, 300, 300, true, 0);
 
         assert_eq!(offset, 300, "the offset the caller gave back is its own");
         assert!(
@@ -1870,7 +2051,7 @@ mod tests {
     fn a_list_shorter_than_the_viewport_still_shows_every_entry() {
         let events = numbered(4);
 
-        let (rows, offset) = scrolled_screen(&events, 0, 0);
+        let (rows, offset) = scrolled_screen(&events, 0, 0, true, 0);
 
         assert_eq!(offset, 0);
         for n in 0..4 {
@@ -1887,11 +2068,33 @@ mod tests {
     fn consecutive_anchors_show_consecutive_windows() {
         let events = numbered(200);
 
-        let (first, _) = scrolled_screen(&events, 100, 100);
-        let (second, _) = scrolled_screen(&events, 101, 101);
+        let (first, _) = scrolled_screen(&events, 100, 100, true, 0);
+        let (second, _) = scrolled_screen(&events, 101, 101, true, 0);
 
         assert!(first.iter().any(|row| row.contains("message 101")));
         assert!(second.iter().any(|row| row.contains("message 101")));
+    }
+
+    #[test]
+    fn an_unanchored_view_scrolls_away_from_the_selection() {
+        let events = numbered(200);
+
+        let (rows, offset) = scrolled_screen(&events, 0, 100, false, 0);
+
+        assert_eq!(offset, 100);
+        assert!(rows.iter().any(|row| row.contains("message 100")));
+        assert!(!rows.iter().any(|row| row.contains("message 0")));
+    }
+
+    #[test]
+    fn ten_line_scroll_moves_ten_single_line_entries() {
+        let events = numbered(30);
+
+        let (rows, offset) = scrolled_screen(&events, 0, 0, false, 10);
+
+        assert_eq!(offset, 10);
+        assert!(rows.iter().any(|row| row.contains("message 10")));
+        assert!(!rows.iter().any(|row| row.contains("message 9")));
     }
 
     /// One agent message, drawn with `search` typed into the `/` prompt.
@@ -1929,6 +2132,9 @@ mod tests {
             can_configure_launch: false,
             selection_name: "codex".into(),
             requested_offset: 0,
+            requested_row_offset: 0,
+            scroll_delta: 0,
+            anchor_selection: true,
             moved_backward: false,
             protocol: Protocol::default(),
             links: LinkDisplay::Compact,
@@ -2136,6 +2342,41 @@ mod tests {
         let offset = list_offset_with_scrolloff(5, Some(4), &mut &heights[..], 6, true);
 
         assert_eq!(offset, 2, "two rows of scrolloff above the selection");
+    }
+
+    #[test]
+    fn viewport_scroll_is_measured_in_rendered_rows_across_entries() {
+        // Four entries followed by the one-row status tail.
+        let heights = [3, 8, 5, 1, 1];
+
+        assert_eq!(
+            normalize_scroll_anchor(0, 0, 10, &mut &heights[..], 4),
+            (1, 7),
+            "ten rows crosses the three-row entry and advances seven into the next"
+        );
+        assert_eq!(
+            normalize_scroll_anchor(2, 1, -10, &mut &heights[..], 4),
+            (0, 2),
+            "upward movement uses the same rendered-row distance"
+        );
+        assert_eq!(
+            normalize_scroll_anchor(1, 7, 10, &mut &heights[..], 4),
+            (2, 1),
+            "the bottom keeps the final five rendered interaction rows visible"
+        );
+    }
+
+    #[test]
+    fn bottom_scroll_keeps_five_lines_or_the_whole_short_interaction() {
+        let long = [3, 8, 5, 1, 1];
+        assert_eq!(bottom_scroll_anchor(&mut &long[..], 4, 5), (2, 1));
+
+        let short = [1, 1, 1, 1];
+        assert_eq!(
+            normalize_scroll_anchor(0, 0, 10, &mut &short[..], 3),
+            (0, 0),
+            "all three interaction lines remain visible"
+        );
     }
 
     /// Counts which items the offset math asked about, so laziness can be

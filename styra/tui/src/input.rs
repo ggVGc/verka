@@ -300,6 +300,8 @@ pub fn handle_list_key(
                 app.entry_log.scroll.page_down()
             }
             k if EVENTS_PAGE_UP.matches(k) && app.entry_log.open => app.entry_log.scroll.page_up(),
+            k if EVENTS_SCROLL_DOWN.matches(k) => app.scroll_interaction_down(),
+            k if EVENTS_SCROLL_UP.matches(k) => app.scroll_interaction_up(),
             k if EVENTS_NEXT_ENTRY.matches(k) => app.select_next(),
             k if EVENTS_PREV_ENTRY.matches(k) => app.select_prev(),
             k if EVENTS_NEXT_LINE.matches(k) && app.link_highlight.is_some() => {
@@ -958,7 +960,8 @@ mod tests {
 
     /// With a preview open the arrows scroll it ten lines, as `j`/`k` do the
     /// full-screen one, and `PgUp`/`PgDn` scroll it by half of what it shows.
-    /// `J`/`K` are still how the selection moves.
+    /// Full-screen `J`/`K` still move between previews; in the event list they
+    /// scroll the interaction independently instead (covered below).
     #[test]
     fn arrows_scroll_an_open_preview_and_page_keys_move_half_of_it() {
         let root = tree("preview-arrows");
@@ -1002,7 +1005,17 @@ mod tests {
             assert_eq!(app.preview.scroll.offset, 0, "{view:?}: back to the top");
 
             press(&mut app, KeyCode::Char('J'));
-            assert_ne!(app.timeline.selected, selected, "{view:?}: J moves");
+            if view == View::Preview {
+                assert_ne!(app.timeline.selected, selected, "{view:?}: J moves");
+            } else {
+                assert_eq!(app.timeline.selected, selected, "{view:?}: J does not move");
+                assert_eq!(app.timeline.list_scroll_delta, 10, "{view:?}: J scrolls");
+                press(&mut app, KeyCode::Char('K'));
+                assert_eq!(
+                    app.timeline.list_scroll_delta, 0,
+                    "{view:?}: K scrolls back"
+                );
+            }
             app.select_first();
         }
         let _ = std::fs::remove_dir_all(root);

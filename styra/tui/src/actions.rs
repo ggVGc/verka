@@ -39,6 +39,8 @@ pub(crate) enum Action {
     GlobalCopyConversation,
     EventsPreviewScrollDown,
     EventsPreviewScrollUp,
+    EventsScrollDown,
+    EventsScrollUp,
     EventsNextEntry,
     EventsPrevEntry,
     EventsNextLine,
@@ -256,6 +258,12 @@ impl Action {
             Self::GlobalCopyConversation => "copy the whole conversation (any view)",
             Self::EventsPreviewScrollDown => "scroll the preview 10 lines down",
             Self::EventsPreviewScrollUp => "scroll the preview 10 lines up",
+            Self::EventsScrollDown => {
+                "scroll the interaction 10 lines down without moving the selection"
+            }
+            Self::EventsScrollUp => {
+                "scroll the interaction 10 lines up without moving the selection"
+            }
             Self::EventsNextEntry => "next entry",
             Self::EventsPrevEntry => "previous entry",
             Self::EventsNextLine => "next line, or next link while links are highlighted",

@@ -84,6 +84,7 @@ pub struct ScrollFeedback {
 pub struct RenderFeedback {
     pub scroll: Vec<ScrollFeedback>,
     pub list_offset: Option<usize>,
+    pub list_row_offset: Option<usize>,
 }
 
 /// An error raised by the terminal boundary.
@@ -313,6 +314,7 @@ where
                     viewport: 0,
                 }],
                 list_offset: None,
+                list_row_offset: None,
             }
         })
     }

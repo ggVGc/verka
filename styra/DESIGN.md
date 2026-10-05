@@ -595,7 +595,8 @@ The application is a single full-screen view with three regions:
 - **Event list (top).** One line per event: a type tag and its one-line summary.
   The list scrolls and auto-follows the tail while the newest entry is selected;
   moving the selection upward pins the view so incoming events do not yank it
-  away.
+  away. `J`/`K` scroll the viewport by ten rendered lines without moving that
+  selection, clamping at the bottom with at least five interaction lines visible.
 - **Message box (center overlay).** A floating single- or multi-line editor.
   Submitting sends the text to the agent (encoded by the profile) and appends a
   `UserMessage` entry to the list.
@@ -848,6 +849,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | --------------- | ----------------------------------------------------------- |
 | `j` / `↓`       | Select next entry                                           |
 | `k` / `↑`       | Select previous entry                                       |
+| `J` / `K`       | Scroll 10 lines down / up without changing selection       |
 | `Space`/`Enter` | Toggle expand/collapse of the selected entry                |
 | `o` / `c`       | Expand / collapse the selected entry explicitly             |
 | `C`             | Show only expanded conversation lines                       |

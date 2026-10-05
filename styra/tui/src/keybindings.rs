@@ -51,8 +51,10 @@ bindings! { EVENTS = "Events and previews";
         => Action::EventsPreviewScrollDown;
     EVENTS_PREVIEW_SCROLL_UP: [Key::code(KeyCode::Up)] ("preview open")
         => Action::EventsPreviewScrollUp;
-    EVENTS_NEXT_ENTRY: [Key::ch('J'), Key::code(KeyCode::Down)] => Action::EventsNextEntry;
-    EVENTS_PREV_ENTRY: [Key::ch('K'), Key::code(KeyCode::Up)] => Action::EventsPrevEntry;
+    EVENTS_SCROLL_DOWN: [Key::ch('J')] => Action::EventsScrollDown;
+    EVENTS_SCROLL_UP: [Key::ch('K')] => Action::EventsScrollUp;
+    EVENTS_NEXT_ENTRY: [Key::code(KeyCode::Down)] => Action::EventsNextEntry;
+    EVENTS_PREV_ENTRY: [Key::code(KeyCode::Up)] => Action::EventsPrevEntry;
     EVENTS_NEXT_LINE: [Key::ch('j')] => Action::EventsNextLine;
     EVENTS_PREV_LINE: [Key::ch('k')] => Action::EventsPrevLine;
     EVENTS_FIRST: [Key::ch('g')] => Action::EventsFirst;
@@ -504,7 +506,8 @@ mod reference_tests {
     fn a_bindings_label_is_made_of_its_own_keys() {
         assert_eq!(GLOBAL_FILES.action(), Action::GlobalFiles);
         assert_eq!(GLOBAL_FILES_ALIAS.action(), Action::GlobalFiles);
-        assert_eq!(EVENTS_NEXT_ENTRY.label(), "J/↓");
+        assert_eq!(EVENTS_SCROLL_DOWN.label(), "J");
+        assert_eq!(EVENTS_NEXT_ENTRY.label(), "↓");
         assert_eq!(EVENTS_TOGGLE_EXPAND.label(), "Space/Enter/o");
         assert_eq!(EDITOR_NEWLINE.label(), "alt-Enter");
         assert_eq!(

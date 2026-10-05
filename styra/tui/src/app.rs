@@ -981,10 +981,21 @@ impl App {
     // [`Timeline::select_forward`] for what "moved" means.
 
     fn moved(&mut self, moved: bool) {
+        self.timeline.anchor_selection = true;
+        self.timeline.list_row_offset = 0;
+        self.timeline.list_scroll_delta = 0;
         if moved {
             self.preview.scroll.reset();
             self.entry_log_follow_selection();
         }
+    }
+
+    pub fn scroll_interaction_down(&mut self) {
+        self.timeline.scroll_view_down();
+    }
+
+    pub fn scroll_interaction_up(&mut self) {
+        self.timeline.scroll_view_up();
     }
 
     /// Put the entry-log pane's cursor back on the list selection after that
@@ -1733,6 +1744,34 @@ mod tests {
         app.select_next_line();
         assert!(app.timeline.follow);
         assert_eq!(app.timeline.selected, app.timeline.entries.len() - 1);
+    }
+
+    #[test]
+    fn scrolling_the_interaction_does_not_move_its_selection() {
+        let mut app = app();
+        for n in 0..3 {
+            app.push_event(AgentEvent::AgentMessage {
+                text: format!("message {n}"),
+            });
+        }
+        let selected = app.timeline.selected;
+
+        app.scroll_interaction_up();
+        assert_eq!(app.timeline.selected, selected);
+        assert!(!app.timeline.anchor_selection);
+        assert_eq!(app.timeline.list_scroll_delta, -10);
+
+        app.timeline.list_offset = 1;
+        app.scroll_interaction_down();
+        assert_eq!(app.timeline.list_offset, 1, "only rendering resolves rows");
+        assert_eq!(app.timeline.list_scroll_delta, 0);
+        assert_eq!(app.timeline.selected, selected);
+
+        app.select_prev_line();
+        assert!(
+            app.timeline.anchor_selection,
+            "selection navigation reanchors"
+        );
     }
 
     #[test]

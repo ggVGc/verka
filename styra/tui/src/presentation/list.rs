@@ -91,6 +91,9 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         can_configure_launch: app.can_configure_launch(),
         selection_name: app.selection.name(),
         requested_offset: app.timeline.list_offset,
+        requested_row_offset: app.timeline.list_row_offset,
+        scroll_delta: app.timeline.list_scroll_delta,
+        anchor_selection: app.timeline.anchor_selection,
         moved_backward: app
             .timeline
             .rendered_selection

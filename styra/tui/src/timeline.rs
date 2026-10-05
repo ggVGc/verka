@@ -189,6 +189,14 @@ pub struct Timeline {
     /// accounts for wrapped and expanded row heights, so navigation can keep
     /// a vim-like margin above and below the selection.
     pub list_offset: usize,
+    /// Rendered row within [`Self::list_offset`] at the top of the viewport.
+    pub list_row_offset: usize,
+    /// Signed rendered-row movement waiting for the renderer, which alone
+    /// knows the wrapped heights needed to resolve it.
+    pub list_scroll_delta: i32,
+    /// Whether rendering should bring the selection back into view. Explicit
+    /// viewport scrolling clears this until selection navigation resumes.
+    pub anchor_selection: bool,
     /// Selection index used for the last rendered frame. Comparing it with
     /// `selected` distinguishes deliberate upward navigation from a live row
     /// merely changing height between frames.
@@ -205,12 +213,29 @@ impl Default for Timeline {
             show_minor: false,
             all_events: false,
             list_offset: 0,
+            list_row_offset: 0,
+            list_scroll_delta: 0,
+            anchor_selection: true,
             rendered_selection: None,
         }
     }
 }
 
 impl Timeline {
+    /// Scroll the rendered interaction by ten text rows without changing
+    /// which entry is selected.
+    pub fn scroll_view_down(&mut self) {
+        self.list_scroll_delta = self.list_scroll_delta.saturating_add(10);
+        self.anchor_selection = false;
+    }
+
+    /// Scroll the rendered interaction toward its beginning without changing
+    /// which entry is selected.
+    pub fn scroll_view_up(&mut self) {
+        self.list_scroll_delta = self.list_scroll_delta.saturating_sub(10);
+        self.anchor_selection = false;
+    }
+
     /// Append a row, giving it an identity no other row has or will have.
     ///
     /// The only way to build an [`Entry`]: ids come from here, so an entry
@@ -235,8 +260,7 @@ impl Timeline {
     // --- Filters -------------------------------------------------------------
 
     pub(crate) fn event_is_visible(&self, event: &AgentEvent) -> bool {
-        (self.show_minor || !event.is_minor())
-            && (self.all_events || event.is_conversation())
+        (self.show_minor || !event.is_minor()) && (self.all_events || event.is_conversation())
     }
 
     /// Whether an entry is shown in the list under the current filters.

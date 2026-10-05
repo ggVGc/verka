@@ -217,8 +217,11 @@ resumed.
 | `y` | copy the selected item to the clipboard |
 | `c` | show all events instead of the conversation only (events and transcript); the border then says `all events · minor shown` or `minor hidden` |
 
-In the event list: `j`/`k` moves by line, `J`/`K` (or the arrows, while no
-preview is open) moves by event,
+In the event list: `j`/`k` moves the selection by line, the arrows (while no
+preview is open) move it between events with details, and `J`/`K` scroll the
+interaction ten text lines without changing the selection.
+At the bottom, at least the final five interaction lines remain visible (or
+all of them when the interaction is shorter).
 `g`/`G` jumps first/last, and `Enter` on a `branch` marker opens the linked
 interaction (from either side of a branch). Otherwise, `Space`/`Enter`/`o`
 folds the selected event; `O` expands only it, `z R` expands all, `z M`
