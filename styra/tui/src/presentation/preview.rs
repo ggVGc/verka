@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 
+use styra_protocol::agent::SandboxLayout;
 use styra_protocol::event::AgentEvent;
 
 use super::list::ui_link_display;
@@ -51,6 +52,7 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
         entry_change: app
             .preview_entry()
             .and_then(|entry| change_view(app, entry.event())),
+        workspace_roots: workspace_roots(app),
         protocol: app.selection.provider.protocol(),
         target: match app.preview.target() {
             PreviewTarget::Selection => styra_ui::preview::PreviewTarget::Selection,
@@ -65,6 +67,19 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
         requested_scroll: app.preview.scroll.offset,
         fullscreen,
     }
+}
+
+/// Where the agent's reported paths can place the Workspace: inside its
+/// sandbox, or, for a path it gave on this host, the directory backing it.
+fn workspace_roots(app: &App) -> Vec<String> {
+    let mut roots = vec![SandboxLayout::default().workspace.display().to_string()];
+    if let Some(root) = app.workspace.root() {
+        let root = root.display().to_string();
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    roots
 }
 
 /// A file-change event as the preview draws it, or `None` for any other
@@ -241,6 +256,31 @@ mod tests {
         assert!(screen.contains("fix the retry backoff"), "{screen}");
         assert!(!screen.contains("delay * 2"));
         assert!(!screen.contains("no file changes during this turn"));
+    }
+
+    /// The Workspace root says nothing that differs between changed files,
+    /// so it is shortened and the rest of the path is what reads.
+    #[test]
+    fn a_changed_path_in_the_workspace_is_shown_from_the_workspace_on() {
+        let workspace = styra_protocol::agent::SandboxLayout::default().workspace;
+        let mut app = test_support::app("s1");
+        app.push_event(AgentEvent::UserMessage {
+            text: "fix the retry backoff".into(),
+        });
+        app.push_event(changed(
+            &workspace.join("src/retry.rs").display().to_string(),
+            "delay * 3",
+            "delay * 2",
+        ));
+        app.select_first();
+        app.preview.show();
+        let screen = test_support::screen_sized(&app, 120, 30);
+        let (preview_x, _) = screen.find("turn diff · C: command");
+        let (path_x, _) = screen.find("ws:src/retry.rs");
+        assert!(
+            path_x > preview_x,
+            "the shortened path is in the preview pane"
+        );
     }
 
     /// Any other entry is its own content, as before.

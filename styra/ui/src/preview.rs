@@ -17,6 +17,9 @@ use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode, Protocol}
 
 const DETAIL_INDENT: &str = "    ";
 
+/// Stands for the Workspace root at the start of a changed file's path.
+pub const WORKSPACE_SHORTHAND: &str = "ws:";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewTarget {
     Selection,
@@ -32,6 +35,10 @@ pub struct PreviewView<'a> {
     /// The entry itself, when it is a file change: drawn as one, from a diff
     /// the host may have placed in its file (see [`ChangeView::diff`]).
     pub entry_change: Option<ChangeView<'a>>,
+    /// The absolute paths the Workspace is known by — inside the agent's
+    /// sandbox and on this host. A changed file's path under one of them is
+    /// drawn from the Workspace on, after [`WORKSPACE_SHORTHAND`].
+    pub workspace_roots: Vec<String>,
     pub protocol: Protocol,
     pub target: PreviewTarget,
     pub links: LinkDisplay,
@@ -162,12 +169,12 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         }
         for change in changes {
             lines.push(Line::from(""));
-            lines.extend(change_lines(change));
+            lines.extend(change_lines(change, &view.workspace_roots));
         }
         return lines;
     }
     if let Some(change) = &view.entry_change {
-        lines.extend(change_lines(change));
+        lines.extend(change_lines(change, &view.workspace_roots));
         return lines;
     }
     let suspicious = suspicious_shell_success(entry.event);
@@ -184,17 +191,11 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
 /// file's code is highlighted in its own language and numbered. Unchanged
 /// context and file metadata are left out: the preview is for seeing what
 /// changed.
-fn change_lines(change: &ChangeView<'_>) -> Vec<Line<'static>> {
-    let color = message_text_color("files");
+fn change_lines(change: &ChangeView<'_>, workspace_roots: &[String]) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = change
         .paths
         .iter()
-        .map(|path| {
-            Line::from(Span::styled(
-                format!("{DETAIL_INDENT}{path}"),
-                Style::default().fg(color),
-            ))
-        })
+        .map(|path| changed_path_line(path, workspace_roots))
         .collect();
     match change.diff.as_deref().filter(|diff| !diff.is_empty()) {
         Some(diff) => {
@@ -215,6 +216,31 @@ fn change_lines(change: &ChangeView<'_>) -> Vec<Line<'static>> {
         ))),
     }
     lines
+}
+
+/// A changed file's path, its Workspace root, if it has one, shortened to a
+/// muted [`WORKSPACE_SHORTHAND`] so the part that differs between files
+/// stands out.
+fn changed_path_line(path: &str, workspace_roots: &[String]) -> Line<'static> {
+    let style = Style::default().fg(message_text_color("files"));
+    let relative = workspace_roots.iter().find_map(|root| {
+        let rest = path.strip_prefix(root.trim_end_matches('/'))?;
+        match rest.strip_prefix('/') {
+            Some(rest) => Some(rest),
+            None => rest.is_empty().then_some(rest),
+        }
+    });
+    match relative {
+        Some(relative) => Line::from(vec![
+            Span::raw(DETAIL_INDENT),
+            Span::styled(
+                WORKSPACE_SHORTHAND,
+                Style::default().fg(palette::MUTED_TEXT),
+            ),
+            Span::styled(relative.to_owned(), style),
+        ]),
+        None => Line::from(Span::styled(format!("{DETAIL_INDENT}{path}"), style)),
+    }
 }
 
 /// One event's presented detail blocks, a blank line between each.
@@ -308,4 +334,42 @@ pub fn preview_scroll_limit(lines: &[Line<'_>], width: u16, height: u16) -> u16 
         .line_count(width.max(1))
         .saturating_sub(usize::from(height))
         .min(usize::from(u16::MAX)) as u16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roots() -> Vec<String> {
+        vec!["/tmp/styra/workspace".into(), "/home/op/project/".into()]
+    }
+
+    #[test]
+    fn a_path_under_the_workspace_starts_with_a_muted_shorthand() {
+        for path in [
+            "/tmp/styra/workspace/src/retry.rs",
+            "/home/op/project/src/retry.rs",
+        ] {
+            let line = changed_path_line(path, &roots());
+            let texts: Vec<&str> = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            assert_eq!(texts, [DETAIL_INDENT, WORKSPACE_SHORTHAND, "src/retry.rs"]);
+            assert_eq!(line.spans[1].style.fg, Some(palette::MUTED_TEXT));
+            assert_eq!(line.spans[2].style.fg, Some(message_text_color("files")));
+        }
+    }
+
+    /// A sibling that only shares the root's leading characters is not in it,
+    /// and a path elsewhere is shown whole.
+    #[test]
+    fn a_path_outside_the_workspace_is_shown_whole() {
+        for path in ["/tmp/styra/workspace2/a.rs", "/etc/hosts", "src/a.rs"] {
+            let line = changed_path_line(path, &roots());
+            assert_eq!(line.spans.len(), 1, "{path}");
+            assert_eq!(line.spans[0].content, format!("{DETAIL_INDENT}{path}"));
+        }
+    }
 }
