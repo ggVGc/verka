@@ -98,6 +98,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
             .timeline
             .rendered_selection
             .is_some_and(|rendered| app.timeline.selected < rendered),
+        max_lines_above_selection: app.timeline.max_lines_above_selection,
         protocol: app.selection.provider.protocol(),
         links: ui_link_display(app.link_display),
         search: app.search.view(),

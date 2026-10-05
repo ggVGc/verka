@@ -984,6 +984,7 @@ impl App {
     // [`Timeline::select_forward`] for what "moved" means.
 
     fn moved(&mut self, moved: bool) {
+        self.timeline.max_lines_above_selection = None;
         self.timeline.anchor_selection = true;
         self.timeline.list_row_offset = 0;
         self.timeline.list_scroll_delta = 0;
@@ -1044,6 +1045,13 @@ impl App {
     pub fn select_last(&mut self) {
         let moved = self.timeline.select_last();
         self.moved(moved);
+    }
+
+    /// Select the newest entry of an interaction just opened from the live
+    /// roster, keeping at most five rendered lines of history above it.
+    pub(crate) fn select_last_on_interaction_open(&mut self) {
+        self.select_last();
+        self.timeline.max_lines_above_selection = Some(5);
     }
 
     /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.

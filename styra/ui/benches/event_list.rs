@@ -121,7 +121,11 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
         selection_name: "codex".into(),
         // Anchored where the selection is, as it would be after scrolling there.
         requested_offset: selected,
+        requested_row_offset: 0,
+        scroll_delta: 0,
+        anchor_selection: true,
         moved_backward: false,
+        max_lines_above_selection: None,
         protocol: Protocol::default(),
         links: LinkDisplay::Compact,
         search: SearchView {

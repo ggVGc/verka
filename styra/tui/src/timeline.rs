@@ -201,6 +201,9 @@ pub struct Timeline {
     /// `selected` distinguishes deliberate upward navigation from a live row
     /// merely changing height between frames.
     pub rendered_selection: Option<usize>,
+    /// A freshly opened interaction puts its newest selected entry near the
+    /// top of the viewport, leaving a small amount of immediate history above.
+    pub max_lines_above_selection: Option<usize>,
 }
 
 impl Default for Timeline {
@@ -217,6 +220,7 @@ impl Default for Timeline {
             list_scroll_delta: 0,
             anchor_selection: true,
             rendered_selection: None,
+            max_lines_above_selection: None,
         }
     }
 }

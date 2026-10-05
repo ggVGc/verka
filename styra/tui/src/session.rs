@@ -537,7 +537,7 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
     for sequenced in updates.updates {
         apply_update(&mut app, sequenced.update);
     }
-    app.select_last();
+    app.select_last_on_interaction_open();
     app.outbox.replace_queued(loaded.queued);
     let accepting = interaction.activity.accepting();
     let live = if accepting {

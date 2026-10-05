@@ -117,6 +117,11 @@ pub struct EventListView<'a> {
     /// reveal rows above the current viewport anchor. Live content updates do
     /// not set this: a row changing height must not look like navigation.
     pub moved_backward: bool,
+    /// On entering an interaction, place its selected newest entry close to
+    /// the top so its immediate history remains readable below it. This is a
+    /// rendered-line count, not an item count: wrapped entries count as the
+    /// lines they occupy.
+    pub max_lines_above_selection: Option<usize>,
     pub protocol: Protocol,
     pub links: LinkDisplay,
     /// The `/` search: what has been typed, and whether the prompt still has
@@ -356,7 +361,9 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     } else {
         None
     };
-    let (offset, row_offset) = if view.anchor_selection {
+    let (offset, row_offset) = if let Some(maximum) = view.max_lines_above_selection {
+        selection_top_anchor(position, &mut items, maximum)
+    } else if view.anchor_selection {
         (
             list_offset_with_scrolloff(
                 view.requested_offset,
@@ -424,6 +431,31 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         effective_offset: offset + state.offset(),
         effective_row_offset: row_offset,
     }
+}
+
+/// The latest viewport anchor that leaves no more than `maximum_lines` before
+/// the selected entry. The anchor can begin partway through a wrapped entry,
+/// which is why it returns both an item and a rendered-row offset.
+fn selection_top_anchor(
+    selected: Option<usize>,
+    heights: &mut impl Heights,
+    maximum_lines: usize,
+) -> (usize, usize) {
+    let Some(selected) = selected else {
+        return (0, 0);
+    };
+    let mut entry = selected;
+    let mut remaining = maximum_lines;
+    while entry > 0 {
+        let previous = entry - 1;
+        let height = heights.height(previous);
+        if height >= remaining {
+            return (previous, height - remaining);
+        }
+        remaining -= height;
+        entry = previous;
+    }
+    (0, 0)
 }
 
 /// Ratatui's `List` only renders complete items. If the next expanded entry is
@@ -1988,6 +2020,7 @@ mod tests {
             scroll_delta,
             anchor_selection,
             moved_backward: false,
+            max_lines_above_selection: None,
             protocol: Protocol::default(),
             links: LinkDisplay::Compact,
             search: SearchView {
@@ -2136,6 +2169,7 @@ mod tests {
             scroll_delta: 0,
             anchor_selection: true,
             moved_backward: false,
+            max_lines_above_selection: None,
             protocol: Protocol::default(),
             links: LinkDisplay::Compact,
             search,
@@ -2377,6 +2411,18 @@ mod tests {
             (0, 0),
             "all three interaction lines remain visible"
         );
+    }
+
+    #[test]
+    fn opening_an_interaction_leaves_at_most_five_rendered_lines_above_its_tail() {
+        // The eight-line entry immediately before the selected tail is clipped
+        // by three rows, leaving exactly its last five lines above the tail.
+        let heights = [3, 8, 1];
+        assert_eq!(selection_top_anchor(Some(2), &mut &heights[..], 5), (1, 3));
+
+        // A short interaction never loses its beginning merely to create the
+        // preferred position for its tail.
+        assert_eq!(selection_top_anchor(Some(1), &mut &[3, 1][..], 5), (0, 0));
     }
 
     /// Counts which items the offset math asked about, so laziness can be
