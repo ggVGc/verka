@@ -229,6 +229,7 @@ pub fn handle_list_key(
         // Newly idle work needs attention first; without one, `n` walks every
         // interaction still running.
         k if GLOBAL_NEXT_LIVE.matches(k) => return app.ask(Request::NextLiveInteraction),
+        k if GLOBAL_NEXT_WORKING.matches(k) => return app.ask(Request::NextWorkingInteraction),
         _ => {}
     }
     match app.view {
@@ -852,9 +853,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// N starts a new session, while plain `n` moves to another live one.
+    /// Ctrl-N starts a new session, while `N` moves among actively working
+    /// interactions and plain `n` follows newly idle work first.
     #[test]
-    fn uppercase_n_starts_a_new_session() {
+    fn interaction_shortcuts_distinguish_new_live_and_working() {
         let root = tree("live-step");
         let mut app = app(&root);
         app.enter_list();
@@ -872,11 +874,14 @@ mod tests {
             );
         };
 
-        press(&mut app, KeyCode::Char('N'), KeyModifiers::SHIFT);
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
         assert_eq!(app.take_request(), Some(Request::NewSession));
 
         press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
         assert_eq!(app.take_request(), Some(Request::NextLiveInteraction));
+
+        press(&mut app, KeyCode::Char('N'), KeyModifiers::SHIFT);
+        assert_eq!(app.take_request(), Some(Request::NextWorkingInteraction));
 
         let _ = std::fs::remove_dir_all(root);
     }

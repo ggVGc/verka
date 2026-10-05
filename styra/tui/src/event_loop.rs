@@ -337,12 +337,13 @@ fn open_url(app: &mut App, config: &dyn Configuration, url: &str) {
 
 /// Global actions which operate on the current interaction without dismissing
 /// its navigator. They fall through to the ordinary list-key handler below.
-/// `n` is among them: stepping to the next interaction keeps the list open on
-/// the interaction it lands on.
+/// `n` and Ctrl-N are among them: stepping keeps the list open on the
+/// interaction it lands on, while Ctrl-N starts a new interaction.
 fn interaction_navigator_passthrough(key: crossterm::event::KeyEvent) -> bool {
     keys::GLOBAL_FOCUS_MESSAGE.matches(key)
         || keys::GLOBAL_STOP.matches(key)
         || keys::GLOBAL_NEXT_LIVE.matches(key)
+        || keys::GLOBAL_NEW_SESSION.matches(key)
 }
 
 /// Load the interaction the navigator's cursor has moved onto, if it is not
@@ -1070,20 +1071,8 @@ pub fn run(
                 // Workspace rather than one per interaction. They move the
                 // cursor like j/k, so a skip across several groups costs no
                 // more loads than a step across one row.
-                // The step between live interactions moves the cursor for the
-                // same reason: one load, on the row it settles on.
-                k if keys::INTERACTIONS_NEXT_LIVE.matches(k) => {
-                    if app
-                        .interactions
-                        .cursor_to_next_live(&session_id, app.workspace.id.as_deref())
-                        .is_none()
-                    {
-                        app.show_action_message("no other interaction is running");
-                    }
-                    continue;
-                }
-                // The same step as ctrl-n, narrowed to interactions actually
-                // working rather than every live one — so it skips idle work.
+                // This skips idle work, so it only ever lands on an
+                // interaction currently doing work.
                 k if keys::INTERACTIONS_NEXT_WORKING.matches(k) => {
                     if app
                         .interactions
@@ -1401,6 +1390,17 @@ pub fn run(
                 };
                 make_interaction_current(app, live, client, standing_launch, next);
             }
+            Some(Request::NextWorkingInteraction) => {
+                if let Ok(interactions) = client.list_interactions() {
+                    app.interactions.refresh(interactions);
+                    interactions_refreshed = Instant::now();
+                }
+                let Some(next) = app.interactions.next_active(&app.session_id) else {
+                    app.show_action_message("no other interaction is actively working");
+                    continue;
+                };
+                make_interaction_current(app, live, client, standing_launch, next);
+            }
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
             // Naming the branch asks the model for a topic and the checkout
             // copies the repository out, which together take long enough to
@@ -1623,10 +1623,13 @@ mod tests {
     }
 
     #[test]
-    fn stopping_is_a_navigator_passthrough_action() {
+    fn global_actions_pass_through_the_navigator() {
         let press = |character| crossterm::event::KeyEvent::from(KeyCode::Char(character));
         assert!(interaction_navigator_passthrough(press('S')));
         assert!(interaction_navigator_passthrough(press('i')));
+        assert!(interaction_navigator_passthrough(
+            crossterm::event::KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL,)
+        ));
         assert!(!interaction_navigator_passthrough(press('l')));
     }
 

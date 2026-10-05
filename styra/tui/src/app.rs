@@ -396,6 +396,9 @@ pub enum Request {
     /// Make a newly idle interaction current when one is unseen; otherwise,
     /// make the next live interaction current in navigator order.
     NextLiveInteraction,
+    /// Make the next actively working interaction current, skipping idle
+    /// interactions that are waiting for the operator.
+    NextWorkingInteraction,
     /// Return to the blank start screen without stopping the current interaction.
     NewSession,
     /// Give a Session a Git branch and linked workspace of its own: `W` asks

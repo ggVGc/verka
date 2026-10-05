@@ -16,6 +16,7 @@ pub(crate) enum Action {
     GlobalStop,
     GlobalBranch,
     GlobalNextLive,
+    GlobalNextWorking,
     GlobalNewSession,
     GlobalLauncher,
     GlobalShell,
@@ -144,7 +145,6 @@ pub(crate) enum Action {
     InteractionsPrev,
     InteractionsNextWorkspace,
     InteractionsPrevWorkspace,
-    InteractionsNextLive,
     InteractionsNextWorking,
     InteractionsPrevWorking,
     InteractionsNextIdle,
@@ -235,6 +235,7 @@ impl Action {
             Self::GlobalStop => "stop the interaction",
             Self::GlobalBranch => "branch from history through, or only, the selected entry",
             Self::GlobalNextLive => "step to the next interaction that is still running",
+            Self::GlobalNextWorking => "step to the next interaction actively working",
             Self::GlobalNewSession => "new session where this one works",
             Self::GlobalLauncher => "choose agent, model and effort for an idle agent turn",
             Self::GlobalShell => "open session shell in a new terminal",
@@ -377,7 +378,6 @@ impl Action {
             Self::InteractionsPrevWorkspace => {
                 "first interaction of the previous Workspace, in All"
             }
-            Self::InteractionsNextLive => "next interaction that is still running",
             Self::InteractionsNextWorking => {
                 "next interaction actively working, skipping idle ones"
             }

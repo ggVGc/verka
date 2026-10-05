@@ -114,13 +114,12 @@ transcript, details, files, answer, preview) stack over the event list, and
 | `W` (existing session) | create and associate a linked workspace and branch, then restart the interaction in it; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `s` / `S` | interrupt the active turn / stop its interaction |
-| `n` / `N` | go to a newly idle interaction, or the next running one / start a new session in the current Session's checkout when it has one |
+| `n` / `N` / `Ctrl+N` | go to a newly idle interaction, or the next running one / cycle actively running interactions / start a new session in the current Session's checkout when it has one |
 | `B` | branch from history through, or only, the selected entry; opens the branch and leaves the source running |
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
-| `Ctrl+N` | step to the next interaction that is still running |
 | `Ctrl+L` | choose provider, model, and effort (one list, typed at) |
 | `Ctrl+G` | turn auto-commit on/off for this interaction (also in the message editor) |
 

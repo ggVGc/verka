@@ -19,7 +19,8 @@ bindings! { GLOBAL = "Global";
     GLOBAL_STOP: [Key::ch('S')] => Action::GlobalStop;
     GLOBAL_BRANCH: [Key::ch('B')] => Action::GlobalBranch;
     GLOBAL_NEXT_LIVE: [Key::ch('n')] => Action::GlobalNextLive;
-    GLOBAL_NEW_SESSION: [Key::ch('N')] => Action::GlobalNewSession;
+    GLOBAL_NEXT_WORKING: [Key::ch('N')] => Action::GlobalNextWorking;
+    GLOBAL_NEW_SESSION: [Key::ctrl('n')] => Action::GlobalNewSession;
     GLOBAL_LAUNCHER: [Key::ch('l')] => Action::GlobalLauncher;
     GLOBAL_SHELL: [Key::ch('!')] => Action::GlobalShell;
     GLOBAL_DIRECTORY: [Key::ch('~')] => Action::GlobalDirectory;
@@ -202,7 +203,6 @@ bindings! { INTERACTIONS = "Interactions";
         => Action::InteractionsNextWorkspace;
     INTERACTIONS_PREV_WORKSPACE: [Key::ch('K')]
         => Action::InteractionsPrevWorkspace;
-    INTERACTIONS_NEXT_LIVE: [Key::ctrl('n')] => Action::InteractionsNextLive;
     INTERACTIONS_NEXT_WORKING: [Key::ch('N'), Key::code(KeyCode::Tab)]
         => Action::InteractionsNextWorking;
     INTERACTIONS_PREV_WORKING: [Key::code(KeyCode::BackTab)]
@@ -534,7 +534,7 @@ mod reference_tests {
     /// terminals disagree about reporting the modifier for punctuation.
     #[test]
     fn shift_is_ignored_so_capitals_and_punctuation_still_match() {
-        assert!(GLOBAL_NEW_SESSION.matches(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT)));
+        assert!(GLOBAL_NEXT_WORKING.matches(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT)));
         assert!(GLOBAL_DIRECTORY.matches(KeyEvent::new(KeyCode::Char('~'), KeyModifiers::SHIFT)));
     }
 }
