@@ -716,7 +716,10 @@ impl ManagedInteraction {
         if let Some(effort) = effort
             .and_then(|effort| crate::agent::Effort::parse(effort).ok())
             .filter(|effort| {
-                crate::agent::efforts_for(selection.provider, &selection.model).contains(effort)
+                selection
+                    .provider
+                    .efforts_for(&selection.model)
+                    .contains(effort)
             })
         {
             selection.effort = effort;
@@ -2105,12 +2108,12 @@ impl ServerState {
     fn list_models(&self) -> Vec<ModelSummary> {
         let mut models = Vec::new();
         for provider in crate::agent::PROVIDERS {
-            for model in crate::agent::models_for(provider) {
+            for model in provider.models() {
                 models.push(ModelSummary {
                     provider,
-                    model: (*model).to_owned(),
-                    efforts: crate::agent::efforts_for(provider, model).to_vec(),
-                    default_effort: crate::agent::default_effort_for(provider, model),
+                    model: model.id.to_owned(),
+                    efforts: model.efforts.to_vec(),
+                    default_effort: provider.default_effort_for(model.id),
                 });
             }
         }
@@ -3818,7 +3821,10 @@ fn replayed_selection(updates: &[SequencedUpdate], stored: &Selection) -> Select
             .as_deref()
             .and_then(|effort| crate::agent::Effort::parse(effort).ok())
             .filter(|effort| {
-                crate::agent::efforts_for(stored.provider, &selection.model).contains(effort)
+                stored
+                    .provider
+                    .efforts_for(&selection.model)
+                    .contains(effort)
             })
         {
             selection.effort = effort;

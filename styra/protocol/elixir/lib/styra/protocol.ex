@@ -876,10 +876,10 @@ defmodule Styra.Protocol do
 
     # How much reasoning the model is asked to spend per turn.
     #
-    # One vocabulary across providers, since the ladders coincide in the middle;
-    # `Provider::efforts` narrows it to what a given agent accepts. Passed to
-    # codex as its `model_reasoning_effort` config override and to Claude Code as
-    # `--effort`.
+    # One vocabulary across providers, ordered lowest first, since the ladders
+    # coincide in the middle; `Provider::efforts_for` narrows it to what a given
+    # model accepts. Passed to codex as its `model_reasoning_effort` config
+    # override and to Claude Code as `--effort`.
     "Effort" => %{
       kind: :enum,
       tagging: %{style: :external},
@@ -3179,10 +3179,10 @@ defmodule Styra.Protocol.Effort do
 
   How much reasoning the model is asked to spend per turn.
 
-  One vocabulary across providers, since the ladders coincide in the middle;
-  `Provider::efforts` narrows it to what a given agent accepts. Passed to
-  codex as its `model_reasoning_effort` config override and to Claude Code as
-  `--effort`.
+  One vocabulary across providers, ordered lowest first, since the ladders
+  coincide in the middle; `Provider::efforts_for` narrows it to what a given
+  model accepts. Passed to codex as its `model_reasoning_effort` config
+  override and to Claude Code as `--effort`.
   """
 
   @spellings [

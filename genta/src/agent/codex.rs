@@ -7,7 +7,7 @@
 //! other, so each still states every field it has — see
 //! [`ProviderSpec`](super::spec::ProviderSpec).
 
-use super::spec::{ProviderOps, ProviderSpec};
+use super::spec::{ModelSpec, ProviderOps, ProviderSpec};
 use super::{profile_name, Effort, MessageFormat, MountSpec, Profile, Provider, SandboxLayout};
 use crate::event::Protocol;
 use anyhow::{bail, Result};
@@ -21,22 +21,55 @@ const EXECUTABLE: &str = "codex";
 
 /// Models worth offering in a picker, most capable first. Shared by both codex
 /// providers: the catalog is the agent's, and both launch the same agent.
-const MODELS: &[&str] = &[
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-6-astra",
+///
+/// The models the installed codex catalog marks `visibility: list` (read out
+/// of codex-cli 0.156.1 on 2026-09-24), newest tier first. The hidden ones are
+/// deliberately absent: `gpt-5.4` and `codex-auto-review` are not offered to
+/// operators at all, and the `gpt-daybreak-*` pair are cyber-specialty
+/// variants rather than general coding models.
+const MODELS: &[ModelSpec] = &[
+    current("gpt-6-astra"),
+    current("gpt-6-sol"),
+    current("gpt-6.1-sol"),
+    current("gpt-6.1-luna"),
+    current("gpt-5.6-sol"),
+    current("gpt-5.6-terra"),
+    current("gpt-5.6-luna"),
+    ModelSpec {
+        id: "gpt-5.5",
+        // Hidden from the picker (see above), but on the same legacy ladder.
+        aliases: &["gpt-5.4"],
+        efforts: LEGACY_EFFORTS,
+    },
 ];
 
-/// Codex's effort ladder, lowest first. It has a `minimal` rung Claude Code
-/// does not, and lacks Claude Code's `max`.
+/// A catalog entry on the current ladder.
+const fn current(id: &'static str) -> ModelSpec {
+    ModelSpec {
+        id,
+        aliases: &[],
+        efforts: EFFORTS,
+    }
+}
+
+/// The current codex ladder, as every `gpt-6*` and `gpt-5.6-*` model declares
+/// it, and so the provider's widest one. Genta's `minimal` rung is on none of
+/// them.
+///
+/// Incomplete in one known way: the catalog gives `gpt-6-astra`, `gpt-6-sol`,
+/// `gpt-5.6-sol`, and `gpt-5.6-terra` a sixth rung above `max`, `ultra`, which
+/// [`Effort`] cannot spell. Until it can, those models are offered one rung
+/// short rather than offered a rung they would reject.
 const EFFORTS: &[Effort] = &[
-    Effort::Minimal,
     Effort::Low,
     Effort::Medium,
     Effort::High,
     Effort::XHigh,
+    Effort::Max,
 ];
+
+/// The ladder the legacy codex models kept: no `max`.
+const LEGACY_EFFORTS: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High, Effort::XHigh];
 
 /// The least expensive codex model, for the incidental errands a host runs
 /// around a session rather than for the session's own work.

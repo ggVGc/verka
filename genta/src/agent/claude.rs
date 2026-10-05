@@ -1,6 +1,6 @@
 //! Claude Code: the multi-turn `stream-json` provider.
 
-use super::spec::{ProviderOps, ProviderSpec};
+use super::spec::{ModelSpec, ProviderOps, ProviderSpec};
 use super::{profile_name, Effort, MessageFormat, MountSpec, Profile, Provider, SandboxLayout};
 use crate::event::Protocol;
 use anyhow::Result;
@@ -11,28 +11,53 @@ use std::path::Path;
 ///
 /// Every model listed `Active` in Anthropic's model-status table
 /// (<https://platform.claude.com/docs/en/about-claude/model-deprecations>), read
-/// on 2026-07-27, in that table's order — tier by tier, newest first. Two
+/// on 2026-09-29, in that table's order — tier by tier, newest first. Two
 /// knowingly-excluded classes: `claude-opus-4-1-20250805` is `Deprecated` there
-/// (retires 2026-08-05), and `claude-mythos-5` is reachable only through
-/// Project Glasswing, so offering it to every operator would suggest an agent
-/// most cannot launch. Full ids rather than the `opus`/`sonnet` aliases, so a
-/// journal records the exact model a session ran on even after an alias moves
-/// to a newer release.
-const MODELS: &[&str] = &[
-    "claude-fable-5",
-    "claude-opus-5",
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-opus-4-6",
-    "claude-opus-4-5-20251101",
-    "claude-sonnet-5",
-    "claude-sonnet-4-6",
-    "claude-sonnet-4-5-20250929",
-    "claude-haiku-4-5-20251001",
+/// (retires 2026-08-05), and the `claude-mythos-*` tier is reachable only
+/// through Project Glasswing, so offering it to every operator would suggest an
+/// agent most cannot launch. Full ids rather than the `opus`/`sonnet` aliases,
+/// so a journal records the exact model a session ran on even after an alias
+/// moves to a newer release.
+const MODELS: &[ModelSpec] = &[
+    model("claude-fable-5-1", EFFORTS),
+    model("claude-fable-5", EFFORTS),
+    model("claude-opus-5-5", EFFORTS),
+    model("claude-opus-5", EFFORTS),
+    model("claude-opus-4-8", EFFORTS),
+    model("claude-opus-4-7", EFFORTS),
+    model("claude-opus-4-6", EFFORTS_WITHOUT_XHIGH),
+    ModelSpec {
+        id: "claude-opus-4-5-20251101",
+        aliases: &["claude-opus-4-5"],
+        efforts: EFFORTS_CLASSIC,
+    },
+    model("claude-sonnet-5-5", EFFORTS),
+    model("claude-sonnet-5", EFFORTS),
+    model("claude-sonnet-4-6", EFFORTS_WITHOUT_XHIGH),
+    // Sonnet 4.5 and Haiku 4.5 predate the effort parameter and reject it.
+    ModelSpec {
+        id: "claude-sonnet-4-5-20250929",
+        aliases: &["claude-sonnet-4-5"],
+        efforts: &[],
+    },
+    ModelSpec {
+        id: "claude-haiku-4-5-20251001",
+        aliases: &["claude-haiku-4-5"],
+        efforts: &[],
+    },
 ];
 
-/// Claude Code's effort ladder, lowest first. It has a `max` rung codex does
-/// not, and lacks codex's `minimal`.
+/// A catalog entry known only by its own id.
+const fn model(id: &'static str, efforts: &'static [Effort]) -> ModelSpec {
+    ModelSpec {
+        id,
+        aliases: &[],
+        efforts,
+    }
+}
+
+/// The full Claude Code ladder, as every model from Opus 4.7 onwards accepts
+/// it, and so the provider's widest one.
 const EFFORTS: &[Effort] = &[
     Effort::Low,
     Effort::Medium,
@@ -41,12 +66,23 @@ const EFFORTS: &[Effort] = &[
     Effort::Max,
 ];
 
+/// The 4.6-generation ladder. `xhigh` arrived with Opus 4.7 and sits between
+/// `high` and `max`, so these models have the two ends but not it.
+const EFFORTS_WITHOUT_XHIGH: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High, Effort::Max];
+
+/// The 4.5-generation ladder, from before `xhigh` and `max`.
+const EFFORTS_CLASSIC: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High];
+
 static OPS: Ops = Ops;
 
-/// The catalog leads with `claude-fable-5`, but that tier is priced above Opus,
-/// so an operator who named no model gets `claude-opus-5` instead — see
+/// The catalog leads with the Fable tier, but that tier is priced above Opus,
+/// so an operator who named no model gets `claude-opus-5-5` instead — see
 /// [`Provider::default_model`](super::Provider::default_model) for why the
 /// default is declared rather than read off the front of the catalog.
+///
+/// The errand model is not the cheapest one Claude Code runs. That is Haiku
+/// 4.5, which takes no effort setting, and every launch pins one; so it is the
+/// cheapest model that can be launched *correctly*.
 pub(super) static SPEC: ProviderSpec = ProviderSpec {
     name: "claude",
     executable: "claude",
@@ -55,7 +91,7 @@ pub(super) static SPEC: ProviderSpec = ProviderSpec {
     efforts: EFFORTS,
     default_model: "claude-opus-5-5",
     default_effort: Effort::Medium,
-    cheapest_model: "claude-haiku-4-5-20251001",
+    cheapest_model: "claude-sonnet-5-5",
     ops: &OPS,
 };
 
@@ -194,7 +230,7 @@ mod tests {
         let profile = builtin("claude", &SandboxLayout::default()).unwrap();
 
         assert_eq!(
-            profile.name, "claude:claude-opus-5/high",
+            profile.name, "claude:claude-opus-5-5/medium",
             "a bare name still pins"
         );
         assert_eq!(profile.protocol, Protocol::ClaudeJsonl);
@@ -253,27 +289,26 @@ mod tests {
     /// it rather than silently landing on a newer model.
     #[test]
     fn the_claude_catalog_offers_full_model_ids() {
-        for model in Provider::Claude.models() {
+        for entry in Provider::Claude.models() {
             assert!(
-                model.starts_with("claude-"),
-                "{model} is not a full model id"
+                entry.id.starts_with("claude-"),
+                "{} is not a full model id",
+                entry.id
             );
         }
-        assert!(Provider::Claude.models().contains(&"claude-opus-5"));
+        assert!(Provider::Claude.model("claude-opus-5").is_some());
         // Anthropic lists this one as deprecated, and Mythos is reachable only
         // through Project Glasswing — neither belongs in a catalog offered to
         // every operator.
-        assert!(!Provider::Claude
-            .models()
-            .contains(&"claude-opus-4-1-20250805"));
-        assert!(!Provider::Claude.models().contains(&"claude-mythos-5"));
+        assert!(Provider::Claude.model("claude-opus-4-1-20250805").is_none());
+        assert!(Provider::Claude.model("claude-mythos-5").is_none());
     }
 
     #[test]
     fn claude_model_is_selected_by_the_profile_suffix() {
         let profile = builtin("claude:opus", &SandboxLayout::default()).unwrap();
         assert_eq!(
-            profile.name, "claude:opus/high",
+            profile.name, "claude:opus/medium",
             "the missing effort defaults"
         );
         let model = profile

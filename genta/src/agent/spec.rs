@@ -19,14 +19,40 @@ use crate::event::Protocol;
 use anyhow::Result;
 use std::path::Path;
 
+/// One model a provider offers, and the reasoning-effort rungs it accepts.
+///
+/// The effort ladder is a per-model property, not a per-provider one: a picker
+/// built on one ladder for the whole agent offers rungs a given model rejects —
+/// `xhigh` on Claude Opus 4.6 (that rung arrived with 4.7), `max` on GPT-5.5,
+/// an effort of any kind on Haiku 4.5. So each catalog entry states its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModelSpec {
+    /// The id passed to the agent and recorded in a [`Selection`](super::Selection).
+    pub id: &'static str,
+    /// Other ids this entry speaks for: an undated alias of a dated id, or a
+    /// model kept out of the picker that shares this one's ladder. Recognised,
+    /// never offered.
+    pub aliases: &'static [&'static str],
+    /// The rungs this model accepts, lowest first. Empty means the model takes
+    /// no effort setting at all, which is a different thing from a short
+    /// ladder.
+    pub efforts: &'static [Effort],
+}
+
+impl ModelSpec {
+    /// Whether `model` names this entry, by its id or one of its aliases.
+    pub fn answers_to(&self, model: &str) -> bool {
+        self.id == model || self.aliases.contains(&model)
+    }
+}
+
 /// Everything one provider declares about itself.
 ///
 /// Reached only through `Provider::spec`; the accessors on
 /// [`Provider`](super::Provider) are the public shape of these fields, so the
-/// struct itself stays crate-private. Hosts that keep their own per-provider
-/// policy (styra's model and effort catalogs, say) key it off the `Provider`
-/// enum rather than extending this table, which is what keeps their policy
-/// theirs.
+/// struct itself stays crate-private. This is the one catalog of models and
+/// effort ladders: hosts keep only their own policy (styra's choice of which
+/// providers are interactive, say) and read the catalog from here.
 pub(crate) struct ProviderSpec {
     /// The provider's name in a profile string; see
     /// [`Selection`](super::Selection).
@@ -36,15 +62,19 @@ pub(crate) struct ProviderSpec {
     /// The wire protocol this provider speaks, and thus the decoder and
     /// presentation rules its journal is read with.
     pub protocol: Protocol,
-    /// Models worth offering in a picker, most capable first.
-    pub models: &'static [&'static str],
-    /// The reasoning-effort levels this provider accepts, lowest first.
+    /// Models worth offering in a picker, most capable first, each with its own
+    /// effort ladder.
+    pub models: &'static [ModelSpec],
+    /// The provider's widest effort ladder, lowest first: every listed model's
+    /// ladder lies within it, and a model the catalog does not list is assumed
+    /// to have all of it.
     pub efforts: &'static [Effort],
     /// The model an unpinned selection takes.
     pub default_model: &'static str,
     /// The reasoning effort an unpinned selection takes.
     pub default_effort: Effort,
-    /// The least expensive model, for incidental one-shot errands.
+    /// The least expensive model that takes an effort setting, for incidental
+    /// one-shot errands.
     pub cheapest_model: &'static str,
     /// The parts that build or mutate rather than state a constant.
     pub ops: &'static dyn ProviderOps,

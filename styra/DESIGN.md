@@ -261,9 +261,10 @@ Both parts reach each agent its own way — codex as `-c model=…` and
 and `--effort`.
 
 Which efforts are *valid* is a property of the model rather than of the agent,
-so Styra publishes the ladders per model in `styra_protocol::agent`
-(`efforts_for`, `default_effort_for`, `cheapest_effort_for`, `supports_effort`)
-rather than reading Genta's one-ladder-per-provider `Provider::efforts`. The
+so Genta's catalog states a ladder per model (`Provider::models`, each a
+`ModelSpec`), with `Provider::efforts_for`, `default_effort_for`,
+`cheapest_effort_for` and `supports_effort` answering per model; Styra keeps no
+catalog of its own and reads that one. The
 ends differ within a single agent: `xhigh` is a rung on Claude Opus 4.7 and not
 on 4.6, `max` is one on `gpt-5.6-sol` and not on `gpt-5.5`, and Sonnet 4.5 and
 Haiku 4.5 take no effort setting at all — an empty ladder, which is not the same

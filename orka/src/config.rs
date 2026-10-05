@@ -75,8 +75,9 @@ pub struct AgentConfig {
     /// what produced the work.
     #[serde(default)]
     pub model: Option<String>,
-    /// The reasoning effort attempts run at (`minimal`, `low`, `medium`, `high`,
-    /// `xhigh`), defaulting the same way as `model`.
+    /// The reasoning effort attempts run at, defaulting the same way as
+    /// `model`. Judged against the model's own ladder in Genta's catalog
+    /// (current codex models take `low` through `max`).
     #[serde(default)]
     pub effort: Option<String>,
     /// A fully literal command, for agents without an Orka profile.
@@ -260,12 +261,12 @@ impl Config {
                     Some(effort) => Effort::parse(effort)?,
                     None => provider.default_effort(),
                 };
-                if !provider.efforts().contains(&effort) {
+                let efforts = provider.efforts_for(model);
+                if !efforts.contains(&effort) {
                     bail!(
-                        "agent.effort {:?} is not accepted by codex; known levels: {}",
+                        "agent.effort {:?} is not accepted by codex {model}; known levels: {}",
                         effort.as_str(),
-                        provider
-                            .efforts()
+                        efforts
                             .iter()
                             .map(|effort| effort.as_str())
                             .collect::<Vec<_>>()
@@ -398,7 +399,7 @@ mod tests {
             .any(|argument| argument == r#"model_reasoning_effort="high""#));
 
         let pinned: Config = toml::from_str(&format!(
-            "[agent]\nkind = \"codex\"\nmodel = \"gpt-5.6-luna\"\neffort = \"minimal\"\n{base}"
+            "[agent]\nkind = \"codex\"\nmodel = \"gpt-5.6-luna\"\neffort = \"low\"\n{base}"
         ))
         .unwrap();
         let command = pinned.policy().unwrap().command;
@@ -407,7 +408,7 @@ mod tests {
             .any(|argument| argument == r#"model="gpt-5.6-luna""#));
         assert!(command
             .iter()
-            .any(|argument| argument == r#"model_reasoning_effort="minimal""#));
+            .any(|argument| argument == r#"model_reasoning_effort="low""#));
     }
 
     #[test]
@@ -425,16 +426,20 @@ mod tests {
             .to_string()
             .contains("unknown reasoning effort"));
 
-        // A level Genta names but codex does not accept.
-        let unaccepted: Config = toml::from_str(&format!(
-            "[agent]\nkind = \"codex\"\neffort = \"max\"\n{base}"
-        ))
-        .unwrap();
-        assert!(unaccepted
-            .policy()
-            .unwrap_err()
-            .to_string()
-            .contains("not accepted by codex"));
+        // A level Genta names but no codex model accepts, and one this model
+        // lacks though others have it.
+        for agent in [
+            "effort = \"minimal\"",
+            "model = \"gpt-5.5\"\neffort = \"max\"",
+        ] {
+            let unaccepted: Config =
+                toml::from_str(&format!("[agent]\nkind = \"codex\"\n{agent}\n{base}")).unwrap();
+            assert!(unaccepted
+                .policy()
+                .unwrap_err()
+                .to_string()
+                .contains("not accepted by codex"));
+        }
 
         // A literal command has no profile to pin a model on.
         let literal: Config = toml::from_str(&format!(
