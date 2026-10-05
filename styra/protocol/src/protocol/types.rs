@@ -378,7 +378,8 @@ pub struct AttributedMount {
 /// The same question the mount list answers, for the other half of what
 /// crosses into the sandbox: a variable an operator does not recognize is
 /// either the sandbox's own doing, a capability forwarding it from the host,
-/// or something the profile, a template or the shell broker asked for.
+/// or something the profile, the operator's user config, a template or the
+/// shell broker asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VariableOrigin {
@@ -391,6 +392,8 @@ pub enum VariableOrigin {
     Base,
     /// Granted by the agent profile.
     Profile,
+    /// Set by the operator for every sandbox, in their Styra user config.
+    User,
     /// Granted by one of the selected Driva templates.
     Template,
     /// Set for the sandbox broker that runs the session's tmux shell.
@@ -404,6 +407,7 @@ impl VariableOrigin {
             Self::Sandbox => "sandbox default",
             Self::Base => "forwarded from the host",
             Self::Profile => "agent profile",
+            Self::User => "user config",
             Self::Template => "templates",
             Self::Broker => "broker control",
         }

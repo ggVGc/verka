@@ -259,6 +259,22 @@ that report is what is shown. A value that is still only what the selection
 asked for (before the agent's report, or Claude Code's effort, which it never
 reports) is dimmed.
 
+### Environment for every sandbox
+
+Variables listed under `[environment]` in `$XDG_CONFIG_HOME/styra/config.toml`
+(or `$HOME/.config/styra/config.toml`) are set in every interaction's sandbox:
+
+```toml
+[environment]
+CARGO_TERM_COLOR = "always"
+RUSTUP_HOME = "~/.rustup"   # ~ is the host home, as in a template
+```
+
+They override the agent profile's own variables and are overridden by a
+template selected for the launch. The file is read at each launch, so an edit
+applies to the next interaction without restarting the server. The Driva view
+lists them under "user config".
+
 ### Naming a file to the agent
 
 `Ctrl+F` in the message box opens a path prompt over it. `Tab` completes against

@@ -1397,7 +1397,8 @@ defmodule Styra.Protocol do
     # The same question the mount list answers, for the other half of what
     # crosses into the sandbox: a variable an operator does not recognize is
     # either the sandbox's own doing, a capability forwarding it from the host,
-    # or something the profile, a template or the shell broker asked for.
+    # or something the profile, the operator's user config, a template or the
+    # shell broker asked for.
     "VariableOrigin" => %{
       kind: :enum,
       tagging: %{style: :external},
@@ -1406,6 +1407,7 @@ defmodule Styra.Protocol do
         %{name: "sandbox", payload: %{kind: :unit}},
         %{name: "base", payload: %{kind: :unit}},
         %{name: "profile", payload: %{kind: :unit}},
+        %{name: "user", payload: %{kind: :unit}},
         %{name: "template", payload: %{kind: :unit}},
         %{name: "broker", payload: %{kind: :unit}}
       ]
@@ -4023,13 +4025,15 @@ defmodule Styra.Protocol.VariableOrigin do
   The same question the mount list answers, for the other half of what
   crosses into the sandbox: a variable an operator does not recognize is
   either the sandbox's own doing, a capability forwarding it from the host,
-  or something the profile, a template or the shell broker asked for.
+  or something the profile, the operator's user config, a template or the
+  shell broker asked for.
   """
 
   @spellings [
     {:sandbox, "sandbox"},
     {:base, "base"},
     {:profile, "profile"},
+    {:user, "user"},
     {:template, "template"},
     {:broker, "broker"}
   ]
@@ -4073,6 +4077,11 @@ defmodule Styra.Protocol.VariableOrigin do
   Granted by the agent profile.
   """
   def profile, do: "profile"
+
+  @doc ~S"""
+  Set by the operator for every sandbox, in their Styra user config.
+  """
+  def user, do: "user"
 
   @doc ~S"""
   Granted by one of the selected Driva templates.

@@ -68,6 +68,10 @@ pub struct InteractionSpec {
     /// carrying no policy of their own, so they join the profile's own mounts
     /// rather than forming a separate layer the way a template does.
     pub extra_mounts: Vec<MountSpec>,
+    /// Variables the operator set for every sandbox in their user config (see
+    /// [`crate::user_config`]). They override the profile's own and are in turn
+    /// overridden by a template the operator selected for this launch.
+    pub user_environment: BTreeMap<OsString, OsString>,
     /// Named Driva template(s) the operator selected, merged and resolved
     /// against the host filesystem, layered additively on top of the
     /// profile's own mounts, environment, and network policy.
@@ -958,6 +962,11 @@ fn layered_environment(spec: &InteractionSpec) -> Vec<(OsString, OsString, Varia
             )
         })
         .collect();
+    variables.extend(
+        spec.user_environment
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone(), VariableOrigin::User)),
+    );
     if let Some(template) = &spec.template {
         variables.extend(
             template
@@ -1238,6 +1247,7 @@ mod tests {
             base: driva::BaseConfig::default(),
             temporary_mounts: Vec::new(),
             extra_mounts: Vec::new(),
+            user_environment: BTreeMap::new(),
             template: None,
             broker: None,
         }
@@ -1901,6 +1911,47 @@ mod tests {
                 .environment
                 .get(&OsString::from("TERM")),
             Some(&OsString::from("dumb"))
+        );
+    }
+
+    /// The operator's user-config variables sit between the profile and a
+    /// template: they override what the profile sets and yield to what a
+    /// template selected for this launch sets.
+    #[test]
+    fn user_config_variables_layer_between_profile_and_template() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let mut spec = workspace_spec(&dir);
+        spec.user_environment = BTreeMap::from([
+            (OsString::from("TERM"), OsString::from("xterm")),
+            (OsString::from("EDITOR"), OsString::from("vi")),
+            (OsString::from("PAGER"), OsString::from("less")),
+        ]);
+        spec.template = Some(ResolvedTemplate {
+            mounts: Vec::new(),
+            environment: BTreeMap::from([(OsString::from("PAGER"), OsString::from("cat"))]),
+            network: false,
+            capabilities: Vec::new(),
+        });
+
+        let options = capture(&spec).unwrap();
+        let variable = |name: &str| {
+            options
+                .environment
+                .iter()
+                .find(|variable| variable.name == name)
+                .unwrap_or_else(|| panic!("{name} is not reported"))
+                .clone()
+        };
+
+        assert_eq!(variable("EDITOR").origin, VariableOrigin::User);
+        assert_eq!(variable("TERM").origin, VariableOrigin::User);
+        assert_eq!(variable("TERM").value, "xterm");
+        assert_eq!(variable("PAGER").origin, VariableOrigin::Template);
+        assert_eq!(variable("PAGER").value, "cat");
+        let request = build_request(&spec);
+        assert_eq!(
+            request.environment.get(&OsString::from("EDITOR")),
+            Some(&OsString::from("vi"))
         );
     }
 

@@ -19,7 +19,8 @@ use crate::protocol::{
 };
 use crate::transport::MAX_REQUEST_BYTES;
 use anyhow::{Context, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::OsString;
 use std::io::{BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -85,6 +86,10 @@ struct ServerInner {
     /// the conversations the operator never closed rather than starting empty.
     /// Holds the rows a previous run left; see [`crate::roster`].
     roster: crate::roster::Roster,
+    /// The operator's Styra user config, read at each launch for the
+    /// environment every sandbox gets. `None` for a test server, which must
+    /// not pick up whatever the developer running it has configured.
+    user_config: Option<PathBuf>,
 }
 
 /// The server owns every process represented by its interaction map. When the
@@ -1456,6 +1461,7 @@ impl ServerState {
             store_root,
             Some(socket),
             None,
+            crate::user_config::default_path(),
         )
     }
 
@@ -1467,6 +1473,7 @@ impl ServerState {
             store_root,
             None,
             Some(lock),
+            crate::user_config::default_path(),
         )
     }
 
@@ -1474,7 +1481,7 @@ impl ServerState {
     /// other part of the server is the real one, so what a test drives here is
     /// the launch logic itself and not a reimplementation of it.
     pub fn with_git(git: Arc<dyn crate::git::Git>, store_root: PathBuf) -> Self {
-        Self::with_socket(git, store_root, None, None)
+        Self::with_socket(git, store_root, None, None, None)
     }
 
     fn with_socket(
@@ -1482,6 +1489,7 @@ impl ServerState {
         store_root: PathBuf,
         socket: Option<PathBuf>,
         standalone_lock: Option<std::fs::File>,
+        user_config: Option<PathBuf>,
     ) -> Self {
         // With no socket to sit beside, the brokers go to the per-user runtime
         // directory when there is one and into the store otherwise, so a
@@ -1508,6 +1516,7 @@ impl ServerState {
                 _standalone_lock: standalone_lock,
                 workspace_metadata: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
+                user_config,
             }),
         };
         // A plan window coming back is the server's business even while no
@@ -1519,6 +1528,11 @@ impl ServerState {
 
     pub fn store_root(&self) -> &Path {
         &self.inner.store_root
+    }
+
+    /// The environment the operator's user config adds to every sandbox.
+    fn user_environment(&self) -> Result<BTreeMap<OsString, OsString>> {
+        crate::user_config::environment(self.inner.user_config.as_deref())
     }
 
     /// If a client asked the server to shut down, remove the socket and exit.
@@ -1650,6 +1664,7 @@ impl ServerState {
             base: base.clone(),
             temporary_mounts: Vec::new(),
             extra_mounts,
+            user_environment: self.user_environment()?,
             template,
             broker: Some(self.prepare_broker(&id, tmux)?),
         };
@@ -2047,6 +2062,7 @@ impl ServerState {
             base: base.clone(),
             temporary_mounts: Vec::new(),
             extra_mounts,
+            user_environment: self.user_environment()?,
             template,
             broker: Some(self.describe_broker(PENDING_SESSION_ID, tmux)),
         };
@@ -2273,6 +2289,7 @@ impl ServerState {
             base: base.clone(),
             temporary_mounts: Vec::new(),
             extra_mounts,
+            user_environment: self.user_environment()?,
             template,
             broker: Some(self.prepare_broker(&request.id, tmux)?),
         };

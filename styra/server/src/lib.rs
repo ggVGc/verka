@@ -92,5 +92,6 @@ pub mod quota;
 pub mod roster;
 pub mod server;
 pub mod tooling;
+pub mod user_config;
 pub mod workspace;
 pub mod worktree;

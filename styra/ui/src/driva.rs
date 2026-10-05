@@ -648,6 +648,7 @@ fn environment_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
     // them by that run would repeat every heading.
     for origin in [
         VariableOrigin::Profile,
+        VariableOrigin::User,
         VariableOrigin::Template,
         VariableOrigin::Broker,
         VariableOrigin::Base,

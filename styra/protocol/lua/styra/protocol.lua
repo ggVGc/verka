@@ -1387,7 +1387,8 @@ M.types.FloorKind = {
 --- The same question the mount list answers, for the other half of what
 --- crosses into the sandbox: a variable an operator does not recognize is
 --- either the sandbox's own doing, a capability forwarding it from the host,
---- or something the profile, a template or the shell broker asked for.
+--- or something the profile, the operator's user config, a template or the
+--- shell broker asked for.
 M.types.VariableOrigin = {
   kind = "enum",
   tagging = { style = "external" },
@@ -1396,6 +1397,7 @@ M.types.VariableOrigin = {
     { name = "sandbox", payload = { kind = "unit" } },
     { name = "base", payload = { kind = "unit" } },
     { name = "profile", payload = { kind = "unit" } },
+    { name = "user", payload = { kind = "unit" } },
     { name = "template", payload = { kind = "unit" } },
     { name = "broker", payload = { kind = "unit" } },
   },
@@ -1830,12 +1832,13 @@ M.FloorKind = {
   DIRECTORY = "directory",
 }
 
-M.enums.VariableOrigin = { "sandbox", "base", "profile", "template", "broker" }
+M.enums.VariableOrigin = { "sandbox", "base", "profile", "user", "template", "broker" }
 --- Wire spellings of `VariableOrigin`.
 M.VariableOrigin = {
   SANDBOX = "sandbox",
   BASE = "base",
   PROFILE = "profile",
+  USER = "user",
   TEMPLATE = "template",
   BROKER = "broker",
 }

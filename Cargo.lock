@@ -2678,6 +2678,7 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "toml",
  "transcription",
  "uuid",
 ]
