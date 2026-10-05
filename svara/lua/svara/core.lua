@@ -149,7 +149,8 @@ end
 --- The directory is the editor's working directory unless told otherwise, and
 --- the Workspace is whichever one covers it — the question `:Svara` exists to
 --- avoid making the operator answer. `prompt` is the first turn, sent as the
---- session comes up.
+--- session comes up. A Styra already showing that Workspace switches to the
+--- new interaction, since starting it from the editor is asking to watch it.
 ---@param prompt string
 ---@param options? { directory?: string, selection?: string|table, name?: string, contract?: string, socket?: string, timeout?: integer }
 ---@return table? session_info
@@ -179,6 +180,7 @@ function M.start(prompt, options)
     message = prompt,
     name = options.name,
     contract = options.contract,
+    focus = true,
   })
 end
 

@@ -251,6 +251,9 @@ do
   -- With nothing configured, the model comes from the Workspace's newest
   -- Session rather than from a default this plugin would have to invent.
   assert(requested[3].data.selection.model == "claude-opus-5")
+  -- Started from the editor to be watched, so a Styra showing the Workspace
+  -- is asked to switch to it.
+  assert(requested[3].data.focus == true)
 
   -- The Workspace is the one question the command exists to avoid asking, so
   -- a directory outside every Workspace fails there and sends nothing more.

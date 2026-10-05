@@ -470,10 +470,11 @@ end
 ---
 --- The selection is a profile name or a table; see `M.selection`. `message`
 --- is the first turn, sent as the session comes up, and `contract` is the
---- shape that turn's answer is asked to come back in.
+--- shape that turn's answer is asked to come back in. `focus` asks every Styra
+--- showing an interaction in that Workspace to switch to the new one.
 ---@param workspace_id string
 ---@param selection string|table
----@param options? { launch?: table, message?: string, name?: string, contract?: string }
+---@param options? { launch?: table, message?: string, name?: string, contract?: string, focus?: boolean }
 function Client:create_session(workspace_id, selection, options)
   local id, err = text_argument(workspace_id, "the Workspace id")
   if not id then
@@ -498,6 +499,7 @@ function Client:create_session(workspace_id, selection, options)
     message = options.message,
     name = options.name,
     contract = contract,
+    focus = options.focus,
   }, protocol.Response.SESSION_CREATED)
 end
 

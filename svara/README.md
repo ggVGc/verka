@@ -68,7 +68,8 @@ disassociates the Git checkout, and is sent as an explicit null —
 
 **Sessions.** `styra:sessions(workspace_id)`, `styra:session(id, { raw })`,
 `styra:create_session(workspace_id, selection, { launch, message, name,
-contract })`, `styra:resume_session(id, { selection, launch })`,
+contract, focus })` — `focus` asks a Styra showing that Workspace to switch
+to the new interaction, as `:SvaraNew` does — `styra:resume_session(id, { selection, launch })`,
 `styra:rename_session(id, name)` — `nil` clears it —
 `styra:branch_session(id, { at_ms, history, provider })`,
 `styra:convert_session_provider(id)`, `styra:provider_raw(id)`,
