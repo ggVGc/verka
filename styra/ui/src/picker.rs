@@ -335,11 +335,7 @@ pub fn render_workspace_picker(
     preview: SessionsPreview<'_>,
     filter: Option<&str>,
 ) {
-    let area = frame.area();
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
+    let panes = workspace_picker_panes(frame.area());
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
@@ -372,14 +368,35 @@ pub fn render_workspace_picker(
     render_sessions_preview(frame, workspace, preview, interactions, panes[1]);
 }
 
+/// The Workspace picker's two panes: the list on the left, the selected
+/// Workspace's Sessions on the right.
+fn workspace_picker_panes(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area)
+}
+
 /// The question Styra asks when started in a directory no Workspace covers,
-/// overlaid on the Workspace list it falls back to if the answer is no.
+/// overlaid on the Workspace list it falls back to if the answer is no. The
+/// screen beneath is washed down as it is behind the message box, so the
+/// question is plainly what has the keys.
 pub fn render_workspace_offer(frame: &mut Frame, directory: &Path) {
-    let area = frame.area();
-    let width = area.width.saturating_sub(8).min(72);
+    frame.render_widget(
+        Block::default().style(
+            Style::default()
+                .fg(palette::MODAL_BACKDROP)
+                .add_modifier(Modifier::DIM),
+        ),
+        frame.area(),
+    );
+    let area = workspace_picker_panes(frame.area())[0];
+    let width = area.width.saturating_sub(4).min(72);
     let popup = Rect::new(
         area.x + (area.width.saturating_sub(width)) / 2,
-        area.y + area.height.saturating_sub(5) / 2,
+        // Pinned near the top, where the eye starts, however tall the screen:
+        // clear of the list's title, with a row of air above it.
+        area.y + 2.min(area.height.saturating_sub(5)),
         width,
         5.min(area.height),
     );
@@ -397,7 +414,7 @@ pub fn render_workspace_offer(frame: &mut Frame, directory: &Path) {
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                "Enter/y create \u{b7} Esc/n choose an existing Workspace",
+                "Enter/y create \u{b7} Esc/n pick an existing one",
                 Style::default().fg(palette::MUTED_TEXT),
             )),
         ])
@@ -1105,6 +1122,23 @@ mod tests {
         assert!(screen.contains("Create a Workspace"), "{screen}");
         assert!(screen.contains("/home/op/fresh"), "{screen}");
         assert!(!screen.contains("+ new Workspace"), "{screen}");
+        // It sits over the list, not across the Sessions pane beside it.
+        for line in screen_lines(&screen, WORKSPACE_PICKER_WIDTH) {
+            if let Some(column) = line.find("Create a Workspace") {
+                assert!(column < WORKSPACE_PICKER_WIDTH / 2, "{screen}");
+            }
+        }
+        // It opens near the top of the screen, whatever the terminal's height.
+        assert!(
+            screen_lines(&screen, WORKSPACE_PICKER_WIDTH)[2].contains("No Workspace here"),
+            "{screen}"
+        );
+        // What is beneath it recedes, as it does behind the message box.
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer[(WORKSPACE_PICKER_WIDTH as u16 - 2, 0)].fg,
+            palette::MODAL_BACKDROP
+        );
     }
 
     fn interaction_summary(
