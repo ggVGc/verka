@@ -851,6 +851,21 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) 
             }));
             mark_stopped(app, live, StopReason::Paused);
         }
+    } else if matches!(
+        &app.activity.status,
+        Status::Stopped(StopReason::ServerRestarted)
+    ) {
+        // A row restored after a server restart has no process to stop, but
+        // `S` is still an explicit operator stop. The server records that on
+        // its roster so every client sees the ordinary paused state.
+        if let Err(error) = client.stop_interaction(&app.session_id) {
+            app.push_log(LogEntry::error(format!("pause failed: {error:#}")));
+        } else {
+            app.push_log(LogEntry::info(
+                "interaction paused; send a new message to start again",
+            ));
+            mark_stopped(app, live, StopReason::Paused);
+        }
     } else {
         app.enter_list();
     }

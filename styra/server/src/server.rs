@@ -3468,7 +3468,11 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::StopInteraction { id } => {
-                self.interaction(&id)?.stop();
+                if self.inner.roster.pause(&id) {
+                    self.publish_roster();
+                } else {
+                    self.interaction(&id)?.stop();
+                }
                 Ok(Response::Accepted)
             }
             Request::SetSessionCompleted { id, completed } => {

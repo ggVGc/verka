@@ -157,6 +157,21 @@ impl Roster {
         true
     }
 
+    /// Record that the operator stopped a row restored from a previous
+    /// server. There is no process left to signal, but `Paused` is still the
+    /// more useful current answer once the operator has explicitly stopped
+    /// it.
+    pub fn pause(&self, id: &str) -> bool {
+        let mut restored = self.lock();
+        let Some(entry) = restored.get_mut(id) else {
+            return false;
+        };
+        entry.summary.activity = InteractionActivity::Stopped;
+        entry.summary.activity_reason = Some(InteractionActivityReason::Paused);
+        entry.summary.activity_since_ms = crate::journal::now_ms();
+        true
+    }
+
     /// Drop a restored row: the operator closed it, or this run has revived
     /// the Session and owns a live Interaction for it instead.
     pub fn forget(&self, id: &str) {
@@ -429,6 +444,24 @@ mod tests {
         );
         std::fs::remove_dir_all(root).ok();
         std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn an_operator_can_pause_a_restored_row() {
+        let root = store("pause");
+        let session = root.join("session-pause");
+        std::fs::create_dir_all(&session).unwrap();
+        Roster::open(&root).publish(vec![(session, summary("session-pause"))]);
+
+        let roster = Roster::open(&root);
+        assert!(roster.pause("session-pause"));
+        let restored = roster.restored();
+        assert_eq!(restored[0].activity, InteractionActivity::Stopped);
+        assert_eq!(
+            restored[0].activity_reason,
+            Some(InteractionActivityReason::Paused)
+        );
+        std::fs::remove_dir_all(root).ok();
     }
 
     /// A run that inherits rows and opens none of its own must not drop the
