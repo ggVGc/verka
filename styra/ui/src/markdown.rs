@@ -414,7 +414,10 @@ fn render_links<'a>(
     for ((span, selected), underlined) in spans.iter_mut().zip(&selected).zip(&underlined) {
         if *underlined {
             if is_code_span(span) {
-                span.style = span.style.bg(palette::ENTRY_CODE_BACKGROUND);
+                span.style = span
+                    .style
+                    .fg(palette::ENTRY_CODE)
+                    .bg(palette::ENTRY_CODE_BACKGROUND);
             }
             span.style = span.style.add_modifier(Modifier::UNDERLINED);
         }
@@ -916,6 +919,7 @@ mod tests {
                 .map(|span| (span.style.fg, span.style.bg))
         };
         let code = Some(palette::INLINE_CODE);
+        let entry = Some(palette::ENTRY_CODE);
 
         assert_eq!(
             style("Provider::x()"),
@@ -923,11 +927,11 @@ mod tests {
         );
         assert_eq!(
             style("Cargo.toml"),
-            Some((code, Some(palette::ENTRY_CODE_BACKGROUND)))
+            Some((entry, Some(palette::ENTRY_CODE_BACKGROUND)))
         );
         assert_eq!(
             style("app.rs"),
-            Some((code, Some(palette::ENTRY_CODE_BACKGROUND)))
+            Some((entry, Some(palette::ENTRY_CODE_BACKGROUND)))
         );
     }
 

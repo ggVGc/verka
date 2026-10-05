@@ -59,12 +59,14 @@ pub const SPECIAL: Color = Color::Rgb(255, 135, 175);
 pub const MUTED_WARNING: Color = Color::Rgb(170, 128, 128);
 /// 233, `SignColumn`.
 pub const CODE_BACKGROUND: Color = Color::Rgb(18, 18, 18);
-/// Inline Markdown code: the terminal's own yellow on its own black, as
-/// before the orgone port.
-pub const INLINE_CODE: Color = Color::Yellow;
+/// Inline Markdown code that is neither a link nor a file reference: orgone's
+/// `String` peach (223), on the terminal's own black, so a quoted term reads
+/// apart from the yellow of the code that can be followed.
+pub const INLINE_CODE: Color = Color::Rgb(255, 215, 175);
 pub const INLINE_CODE_BACKGROUND: Color = Color::Black;
-/// Inline code that is also a link or a file reference keeps the code's
-/// yellow, on orgone's `DiffChange` red, so it reads apart from plain code.
+/// Inline code that is also a link or a file reference: the terminal's own
+/// yellow, as before the orgone port, on orgone's `DiffChange` red.
+pub const ENTRY_CODE: Color = Color::Yellow;
 pub const ENTRY_CODE_BACKGROUND: Color = Color::Rgb(57, 31, 37);
 
 /// A warm stone gray. `Color::DarkGray` renders too dark to read comfortably
