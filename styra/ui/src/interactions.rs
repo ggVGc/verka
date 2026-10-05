@@ -5,7 +5,7 @@ use crate::palette;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 use std::borrow::Cow;
 
@@ -132,36 +132,93 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
     let mut items = view.rows.iter().map(row_item).collect::<Vec<_>>();
     if items.is_empty() {
         if let Some(filter) = view.filter.filter(|filter| !filter.is_empty()) {
-            items.push(ListItem::new(Line::from(Span::styled(
+            items.push(vec![Line::from(Span::styled(
                 format!("  no interaction matches {filter}"),
                 Style::default()
                     .fg(palette::MUTED_TEXT)
                     .add_modifier(Modifier::DIM),
-            ))));
+            ))]);
         }
     }
-    let list = List::new(items).block(block).highlight_style(
-        Style::default()
-            .bg(palette::INTERACTION_SELECTION_BACKGROUND)
-            .add_modifier(Modifier::BOLD),
-    );
-    let mut state = ListState::default();
-    state.select(
-        view.rows
-            .iter()
-            .position(|row| matches!(row, InteractionRow::Interaction { selected: true, .. })),
-    );
-    frame.render_stateful_widget(list, area, &mut state);
+    let selected = view
+        .rows
+        .iter()
+        .position(|row| matches!(row, InteractionRow::Interaction { selected: true, .. }));
+    // The list is laid out by line rather than by row, so a row with a message
+    // line that does not fit is drawn as far as it goes instead of leaving the
+    // foot of the pane empty, as `List` would.
+    let lines = items
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, item)| {
+            item.into_iter()
+                .map(move |line| (Some(index) == selected, line))
+        })
+        .collect::<Vec<_>>();
+    let inner = block.inner(area);
+    let viewport = usize::from(inner.height);
+    // Scrolled no further than it takes to bring the cursor's row fully into
+    // view, so the list stays anchored at its top while the cursor is there.
+    let offset = selected
+        .map(|selected| {
+            let start = view.rows[..selected].iter().map(row_height).sum::<usize>();
+            let end = start + row_height(&view.rows[selected]);
+            end.saturating_sub(viewport).min(start)
+        })
+        .unwrap_or(0);
+    let above = offset;
+    let below = lines.len().saturating_sub(offset + viewport);
+    let mut block = block;
+    if above > 0 {
+        block = block.title(more_lines("↑", above).right_aligned());
+    }
+    if below > 0 {
+        block = block.title_bottom(more_lines("↓", below).right_aligned());
+    }
+    frame.render_widget(block, area);
+    let highlight = Style::default()
+        .bg(palette::INTERACTION_SELECTION_BACKGROUND)
+        .add_modifier(Modifier::BOLD);
+    for (row, (selected, line)) in lines.into_iter().skip(offset).take(viewport).enumerate() {
+        let line_area = Rect {
+            y: inner.y + row as u16,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(line, line_area);
+        if selected {
+            frame.buffer_mut().set_style(line_area, highlight);
+        }
+    }
 }
 
-fn row_item(row: &InteractionRow<'_>) -> ListItem<'static> {
+/// The note on the pane's border that the list runs on past its edge.
+fn more_lines(arrow: &str, count: usize) -> Line<'static> {
+    let noun = if count == 1 { "line" } else { "lines" };
+    Line::from(Span::styled(
+        format!(" {arrow} {count} more {noun} "),
+        Style::default().fg(palette::MUTED_TEXT),
+    ))
+}
+
+fn row_height(row: &InteractionRow<'_>) -> usize {
+    match row {
+        InteractionRow::Interaction {
+            last_message: Some(_),
+            ..
+        } => 2,
+        _ => 1,
+    }
+}
+
+fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
     if let InteractionRow::Workspace(name) = row {
-        return ListItem::new(Line::from(Span::styled(
+        return vec![Line::from(Span::styled(
             format!(" {name}"),
             Style::default()
                 .fg(palette::WORKSPACE_NAME)
                 .add_modifier(Modifier::BOLD),
-        )));
+        ))];
     }
     let InteractionRow::Interaction {
         name,
@@ -300,7 +357,7 @@ fn row_item(row: &InteractionRow<'_>) -> ListItem<'static> {
             Style::default().fg(palette::SUBORDINATE_TEXT),
         )));
     }
-    ListItem::new(lines)
+    lines
 }
 
 fn status_marker(status: InteractionStatus) -> (&'static str, ratatui::style::Color) {
@@ -575,6 +632,63 @@ mod tests {
             }],
         };
         assert!(rendered(&view).contains("repair checkout · claude · RATE LIMITED (five_hour)"));
+    }
+
+    fn many_rows(selected: usize) -> InteractionNavigator<'static> {
+        InteractionNavigator {
+            scope: "Payments".into(),
+            all_workspaces: false,
+            completion_filter: "completed hidden".into(),
+            filter: None,
+            typing_filter: false,
+            rows: (0..8)
+                .map(|index| InteractionRow::Interaction {
+                    name: format!("task {index}").into(),
+                    provider: "claude",
+                    branch: None,
+                    status: InteractionStatus::Idle,
+                    current: false,
+                    selected: index == selected,
+                    loading: false,
+                    newly_idle: false,
+                    stop_reason: None,
+                    rate_limited: None,
+                    uncommitted: false,
+                    completed: false,
+                    sealed: false,
+                    tags: &[],
+                    last_message: Some("done"),
+                })
+                .collect(),
+        }
+    }
+
+    /// A row whose message line does not fit is drawn as far as it goes, so
+    /// the pane is filled to its foot, and the border says how much is left.
+    #[test]
+    fn a_list_longer_than_the_pane_fills_it_and_says_how_much_is_below() {
+        let screen = rendered(&many_rows(0));
+        let lines = screen
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(80)
+            .map(|line| line.iter().collect::<String>())
+            .collect::<Vec<_>>();
+        // Ten lines inside the border: five rows of two lines each.
+        assert!(lines[9].contains("task 4"), "{screen}");
+        assert!(lines[10].contains("« done"), "{screen}");
+        assert!(lines[11].contains("↓ 6 more lines"), "{screen}");
+        assert!(!lines[0].contains("more line"), "{screen}");
+    }
+
+    #[test]
+    fn the_list_scrolls_to_keep_the_cursor_in_view() {
+        let screen = rendered(&many_rows(7));
+        assert!(screen.contains("task 7"), "{screen}");
+        assert!(screen.contains("« done"), "{screen}");
+        assert!(!screen.contains("task 2 "), "{screen}");
+        assert!(screen.contains("↑ 6 more lines"), "{screen}");
+        assert!(!screen.contains("↓"), "{screen}");
     }
 
     #[test]
