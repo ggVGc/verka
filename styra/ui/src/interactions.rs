@@ -362,7 +362,7 @@ fn status_marker(status: InteractionStatus) -> (&'static str, ratatui::style::Co
         InteractionStatus::Running { events } => (running_indicator(events), theme::RUNNING),
         InteractionStatus::Idle => ("o", theme::SUCCESS),
         InteractionStatus::Background => ("*", theme::MUTED_WARNING),
-        InteractionStatus::Stopped(why) => ("#", why.color()),
+        InteractionStatus::Stopped(_why) => ("#", theme::STOP_ICON),
         // Not `!`, which marks work left uncommitted on the same row.
         InteractionStatus::Error => ("x", theme::ERROR),
         // Not `x`, which an error is drawn as.

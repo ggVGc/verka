@@ -90,6 +90,8 @@ pub const STOP_SERVER_RESTARTED: Color = palette::MAUVE;
 /// Stopped without saying why.
 pub const STOP_UNKNOWN: Color = INACTIVE;
 
+pub const STOP_ICON: Color = INACTIVE;
+
 /// A restrained cue behind operator-authored rows, separating prompts from
 /// agent output without turning the log into chat bubbles. Paired with
 /// [`USER_TEXT`].
