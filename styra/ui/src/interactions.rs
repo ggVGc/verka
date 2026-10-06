@@ -300,7 +300,7 @@ fn row_item(
             return vec![Line::from(vec![
                 Span::styled(workspace_edge, group_style),
                 Span::styled(
-                    format!(" {name}/"),
+                    format!("{name}/"),
                     Style::default().fg(theme::DIRECTORY_NAME),
                 ),
             ])];
@@ -667,7 +667,7 @@ mod tests {
             screen[2].starts_with("││  ●  alone · feature · claude"),
             "{screen:#?}"
         );
-        assert!(screen[3].starts_with("││  checkout/"), "{screen:#?}");
+        assert!(screen[3].starts_with("││ checkout/"), "{screen:#?}");
         assert!(
             screen[4].starts_with("││  ├─  ●  first · claude "),
             "{screen:#?}"
@@ -679,7 +679,7 @@ mod tests {
 
         assert!(screen[5].starts_with("││  │      « preview"), "{screen:#?}");
         assert!(screen[7].starts_with("││         « preview"), "{screen:#?}");
-        assert!(screen[8].starts_with("││  other/"), "{screen:#?}");
+        assert!(screen[8].starts_with("││ other/"), "{screen:#?}");
         assert!(
             screen[9].starts_with("││  └─  ●  third · claude"),
             "{screen:#?}"
@@ -700,7 +700,7 @@ mod tests {
             screen[1].starts_with("│ ●  alone · feature · claude"),
             "{screen:#?}"
         );
-        assert!(screen[2].starts_with("│ checkout/"), "{screen:#?}");
+        assert!(screen[2].starts_with("│checkout/"), "{screen:#?}");
         assert!(
             screen[3].starts_with("│ └─  ●  first · claude "),
             "{screen:#?}"
