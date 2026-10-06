@@ -163,6 +163,20 @@ impl Client {
         }
     }
 
+    /// The linked worktrees Styra knows of, in one Workspace or in every one,
+    /// each with the Sessions that record it.
+    pub fn list_worktrees(
+        &self,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<crate::protocol::WorktreeSummary>> {
+        match self.request(Request::ListWorktrees {
+            workspace_id: workspace_id.map(str::to_owned),
+        })? {
+            Response::Worktrees(value) => Ok(value),
+            other => unexpected("worktrees", other),
+        }
+    }
+
     /// Convert a stored Session's native transcript to the other interactive
     /// provider's format and return the new sibling Session it was written
     /// to. The source Session's history is untouched, but it is sealed: the

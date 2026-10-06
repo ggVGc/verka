@@ -871,6 +871,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `/`             | In the Session picker, filter by Session name or first prompt (`Esc` abandons) |
 | `S`             | Stop the Interaction and return to a blank Session screen   |
 | `V`             | Choose a Workspace, then browse its Sessions                |
+| `w`             | Choose a Session by the worktree it works in (not in details) |
 | `q`             | Quit (prompts if the session is still running)              |
 
 ### Input-focus keys

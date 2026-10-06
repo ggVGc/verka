@@ -233,6 +233,10 @@ pub fn handle_list_key(
         // The raw view keeps `v` for switching to the provider's own record.
         k if GLOBAL_OVERVIEW.matches(k) && app.view != View::Raw => return app.toggle_overview(),
         k if GLOBAL_WORKSPACES.matches(k) => return app.ask(Request::Workspace),
+        // Details keeps `w` for the network toggle it already meant there.
+        k if GLOBAL_WORKTREES.matches(k) && app.view != View::Driva => {
+            return app.ask(Request::Worktrees)
+        }
         k if GLOBAL_SESSION_WORKTREE.matches(k) && !app.session_id.is_empty() => {
             return app.ask(Request::CreateWorktree { message: None })
         }

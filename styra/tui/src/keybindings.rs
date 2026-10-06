@@ -28,6 +28,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_OVERVIEW: [Key::ch('v')] ("not in raw") => Action::GlobalOverview;
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
     GLOBAL_WORKSPACES: [Key::ch('V')] => Action::GlobalWorkspaces;
+    GLOBAL_WORKTREES: [Key::ch('w')] ("not in details") => Action::GlobalWorktrees;
     GLOBAL_SESSION_WORKTREE: [Key::ch('W')] ("existing session")
         => Action::GlobalSessionWorktree;
     GLOBAL_TAGS: [Key::ch('T')] => Action::GlobalTags;
@@ -298,6 +299,21 @@ bindings! { WORKSPACE_PICKER = "Workspaces";
     WORKSPACES_CANCEL: [Key::code(KeyCode::Esc)] => Action::WorkspacesCancel;
 }
 
+bindings! { WORKTREE_PICKER = "Worktrees";
+    // Typed at, as the Workspace list is: letters are the query, and the
+    // commands are on Enter, Esc, Tab, the arrows and control chords.
+    WORKTREES_FILTER: [] as "any letter" => Action::WorktreesFilter;
+    WORKTREES_HELP: [Key::ch('?')] => Action::WorktreesHelp;
+    WORKTREES_NEXT: [Key::code(KeyCode::Down), Key::ctrl('j')] => Action::WorktreesNext;
+    WORKTREES_PREV: [Key::code(KeyCode::Up), Key::ctrl('k')] => Action::WorktreesPrev;
+    WORKTREES_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::WorktreesPageDown;
+    WORKTREES_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::WorktreesPageUp;
+    WORKTREES_DELETE_WORD: [Key::ctrl('w')] => Action::WorktreesDeleteWord;
+    WORKTREES_SCOPE: [Key::code(KeyCode::Tab)] => Action::WorktreesScope;
+    WORKTREES_OPEN: [Key::code(KeyCode::Enter)] => Action::WorktreesOpen;
+    WORKTREES_CANCEL: [Key::code(KeyCode::Esc)] => Action::WorktreesCancel;
+}
+
 bindings! { LAUNCHER = "Launch";
     // The list is typed at, so every printable key is a letter of the query
     // and none of them can also be a command. What is left is Enter, Esc, the
@@ -359,6 +375,7 @@ pub(crate) enum Window {
     Tags,
     SessionPicker,
     WorkspacePicker,
+    WorktreePicker,
     Launcher,
     TemplatePicker,
 }
@@ -384,6 +401,7 @@ impl Window {
             Self::Tags => "tags",
             Self::SessionPicker => "sessions",
             Self::WorkspacePicker => "Workspaces",
+            Self::WorktreePicker => "worktrees",
             Self::Launcher => "launch",
             Self::TemplatePicker => "Driva templates",
         }
@@ -407,6 +425,7 @@ impl Window {
             Self::Tags => &[TAGS, GLOBAL],
             Self::SessionPicker => &[SESSION_PICKER],
             Self::WorkspacePicker => &[WORKSPACE_PICKER],
+            Self::WorktreePicker => &[WORKTREE_PICKER],
             Self::Launcher => &[LAUNCHER],
             Self::TemplatePicker => &[TEMPLATE_PICKER],
         }
@@ -431,7 +450,7 @@ mod reference_tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
 
-    const WINDOWS: [Window; 17] = [
+    const WINDOWS: [Window; 18] = [
         Window::Events,
         Window::Raw,
         Window::Log,
@@ -447,6 +466,7 @@ mod reference_tests {
         Window::Tags,
         Window::SessionPicker,
         Window::WorkspacePicker,
+        Window::WorktreePicker,
         Window::Launcher,
         Window::TemplatePicker,
     ];
@@ -480,6 +500,7 @@ mod reference_tests {
         for window in [
             Window::SessionPicker,
             Window::WorkspacePicker,
+            Window::WorktreePicker,
             Window::Launcher,
             Window::TemplatePicker,
         ] {

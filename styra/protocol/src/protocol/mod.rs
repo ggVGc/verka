@@ -19,7 +19,7 @@ pub use types::{
     InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
     LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
     SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary,
-    WorktreeCleanup,
+    WorktreeCleanup, WorktreeSession, WorktreeSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -365,6 +365,19 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace_id: Option<String>,
     },
+    /// List the linked Git worktrees Styra knows of, each with the Sessions
+    /// that record it. Changes nothing: it is what an operator asks before
+    /// deciding what [`Request::CleanWorktrees`] should take, or to find which
+    /// conversation a directory under their worktree parent came from.
+    ///
+    /// Covers every checkout a Session records, including a branch whose
+    /// directory was cleaned up, and every directory in the Workspace's
+    /// worktree parent that no Session records. Scoped to one Workspace, or to
+    /// every one when no id is given.
+    ListWorktrees {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_id: Option<String>,
+    },
     /// Convert a stored Session's native provider transcript (Codex rollout or
     /// Claude project JSONL) to the other interactive provider's format,
     /// using Genta's session conversion. The source Session and its native
@@ -586,6 +599,7 @@ pub enum Response {
     SessionResumed(SessionInfo),
     SessionWorktreeCreated,
     WorktreesCleaned(Vec<CleanedWorktree>),
+    Worktrees(Vec<WorktreeSummary>),
     SessionConverted(SessionSummary),
     SessionBranched(SessionSummary),
     SessionRenamed(SessionSummary),
@@ -710,6 +724,32 @@ mod tests {
         assert_eq!(json["type"], "worktrees_cleaned");
         assert_eq!(json["data"][0]["branch"], "styra/tidy-up-s-1");
         assert_eq!(json["data"][0]["outcome"]["outcome"], "uncommitted");
+        assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
+    }
+
+    #[test]
+    fn listing_worktrees_names_a_workspace_or_none() {
+        assert_eq!(
+            serde_json::from_str::<Request>(r#"{"operation":"list_worktrees","data":{}}"#).unwrap(),
+            Request::ListWorktrees { workspace_id: None }
+        );
+
+        let response = Response::Worktrees(vec![WorktreeSummary {
+            workspace_id: "workspace-1".into(),
+            worktree: Some(PathBuf::from("/state/worktrees/tidy-up-s-1")),
+            branch: Some("styra/tidy-up-s-1".into()),
+            exists: true,
+            sessions: vec![WorktreeSession {
+                id: "s-1".into(),
+                name: None,
+                completed: CompletionState::Completed,
+                live: false,
+            }],
+        }]);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["type"], "worktrees");
+        assert_eq!(json["data"][0]["sessions"][0]["id"], "s-1");
+        assert_eq!(json["data"][0]["sessions"][0]["completed"], "completed");
         assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
     }
 

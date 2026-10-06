@@ -99,6 +99,13 @@ M.types.Request = {
         { name = "workspace_id", required = false, type = { kind = "optional", inner = { kind = "string" } } },
       },
     } },
+    { name = "list_worktrees", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "workspace_id", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+      },
+    } },
     { name = "convert_session_provider", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -314,6 +321,7 @@ M.types.Response = {
     { name = "session_resumed", payload = { kind = "newtype", type = { kind = "ref", name = "SessionInfo" } } },
     { name = "session_worktree_created", payload = { kind = "unit" } },
     { name = "worktrees_cleaned", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "CleanedWorktree" } } } },
+    { name = "worktrees", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "WorktreeSummary" } } } },
     { name = "session_converted", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "session_branched", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "session_renamed", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
@@ -700,6 +708,23 @@ M.types.CleanedWorktree = {
   },
 }
 
+--- One linked worktree Styra knows of, and the Sessions that work in it — see
+--- `crate::protocol::Request::ListWorktrees`.
+---
+--- A worktree is listed once however many Sessions record it, because Sessions
+--- can be launched from one another's checkout: what the operator is asking
+--- is which conversations touched these files, and the answer is a list.
+M.types.WorktreeSummary = {
+  kind = "struct",
+  fields = {
+    { name = "workspace_id", required = true, type = { kind = "string" } },
+    { name = "worktree", required = false, type = { kind = "optional", inner = { kind = "string", path = true } } },
+    { name = "branch", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "exists", required = true, type = { kind = "boolean" } },
+    { name = "sessions", required = true, type = { kind = "list", item = { kind = "ref", name = "WorktreeSession" } } },
+  },
+}
+
 --- A stored session, enough to display and select it from a list — see
 --- `crate::journal::list_sessions`.
 M.types.SessionSummary = {
@@ -979,6 +1004,17 @@ M.types.WorktreeCleanup = {
         { name = "message", required = true, type = { kind = "string" } },
       },
     } },
+  },
+}
+
+--- One Session working in a `WorktreeSummary`.
+M.types.WorktreeSession = {
+  kind = "struct",
+  fields = {
+    { name = "id", required = true, type = { kind = "string" } },
+    { name = "name", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "completed", required = true, type = { kind = "ref", name = "CompletionState" } },
+    { name = "live", required = true, type = { kind = "boolean" } },
   },
 }
 
@@ -1571,7 +1607,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1589,6 +1625,7 @@ M.Request = {
   RESUME_SESSION = "resume_session",
   CREATE_SESSION_WORKTREE = "create_session_worktree",
   CLEAN_WORKTREES = "clean_worktrees",
+  LIST_WORKTREES = "list_worktrees",
   CONVERT_SESSION_PROVIDER = "convert_session_provider",
   BRANCH_SESSION = "branch_session",
   RENAME_SESSION = "rename_session",
@@ -1623,7 +1660,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
@@ -1641,6 +1678,7 @@ M.Response = {
   SESSION_RESUMED = "session_resumed",
   SESSION_WORKTREE_CREATED = "session_worktree_created",
   WORKTREES_CLEANED = "worktrees_cleaned",
+  WORKTREES = "worktrees",
   SESSION_CONVERTED = "session_converted",
   SESSION_BRANCHED = "session_branched",
   SESSION_RENAMED = "session_renamed",
@@ -2406,6 +2444,22 @@ end
 ---   workspace_id  string|null  (optional)
 function M.request.clean_worktrees(data)
   return M.build("clean_worktrees", data)
+end
+
+--- List the linked Git worktrees Styra knows of, each with the Sessions
+--- that record it. Changes nothing: it is what an operator asks before
+--- deciding what `Request::CleanWorktrees` should take, or to find which
+--- conversation a directory under their worktree parent came from.
+---
+--- Covers every checkout a Session records, including a branch whose
+--- directory was cleaned up, and every directory in the Workspace's
+--- worktree parent that no Session records. Scoped to one Workspace, or to
+--- every one when no id is given.
+---
+--- Fields of `data`:
+---   workspace_id  string|null  (optional)
+function M.request.list_worktrees(data)
+  return M.build("list_worktrees", data)
 end
 
 --- Convert a stored Session's native provider transcript (Codex rollout or

@@ -409,7 +409,7 @@ pub fn run_session_picker(
 
 /// Draw the reference for `window` over the picker, and record how far it can
 /// actually scroll — the renderer is the only thing that knows the height.
-fn render_help(terminal: &mut dyn Ui, window: Window, help: &mut Help) -> Result<()> {
+pub(crate) fn render_help(terminal: &mut dyn Ui, window: Window, help: &mut Help) -> Result<()> {
     let rows = presentation::help_rows(window);
     let feedback = terminal.render_help(
         window.name(),
@@ -429,7 +429,7 @@ fn render_help(terminal: &mut dyn Ui, window: Window, help: &mut Help) -> Result
 
 /// Handle a key while the reference is open, reporting whether it owned it.
 /// The reference is modal, so it owns every key until it is closed.
-fn handle_help_key(help: &mut Help, key: KeyEvent) -> bool {
+pub(crate) fn handle_help_key(help: &mut Help, key: KeyEvent) -> bool {
     if !help.is_open() {
         return false;
     }

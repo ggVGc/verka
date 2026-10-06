@@ -46,13 +46,14 @@ mod tail;
 mod terminal;
 mod timeline;
 mod workspace;
+mod worktree_picker;
 
 use app::{App, LaunchPolicy};
 use cli::{Cli, CliCommand};
 use config::Defaults;
 use event_loop::RunOutcome;
 use session::Attachment;
-use styra_protocol::{LogEntry, WorkspaceSummary, WorktreeCleanup};
+use styra_protocol::{CompletionState, LogEntry, WorkspaceSummary, WorktreeCleanup};
 use styra_server::Client;
 use styra_ui::{RatatuiUi, Ui};
 
@@ -250,6 +251,9 @@ fn main() -> Result<()> {
                 Some(session) => attach_shell(&client, session),
                 None => browse_shells(&client),
             }
+        }
+        Some(CliCommand::Worktrees { all }) => {
+            return list_worktrees(&client, cli.workspace.as_deref(), *all)
         }
         Some(CliCommand::CleanWorktrees { all }) => {
             return clean_worktrees(&client, cli.workspace.as_deref(), *all)
@@ -653,29 +657,89 @@ fn attach_shell(client: &Client, session: &str) -> Result<()> {
     })
 }
 
+/// Print every worktree Styra knows of in scope, each followed by the
+/// sessions that work in it.
+///
+/// Scoped the same way as [`clean_worktrees`].
+fn list_worktrees(client: &Client, workspace: Option<&Path>, all: bool) -> Result<()> {
+    let Some(scope) = worktree_scope(client, workspace, all, "list")? else {
+        return Ok(());
+    };
+    let worktrees = client.list_worktrees(scope.as_deref())?;
+    if worktrees.is_empty() {
+        println!("No session has a worktree");
+        return Ok(());
+    }
+    for worktree in &worktrees {
+        let location = match &worktree.worktree {
+            Some(path) if worktree.exists => path.display().to_string(),
+            Some(path) => format!("{} (missing)", path.display()),
+            None => "(no checkout; branch only)".to_owned(),
+        };
+        match &worktree.branch {
+            Some(branch) => println!("{location} [{branch}]"),
+            None => println!("{location}"),
+        }
+        if all {
+            println!("  workspace {}", worktree.workspace_id);
+        }
+        if worktree.sessions.is_empty() {
+            println!("  no session records it");
+        }
+        for session in &worktree.sessions {
+            let state = match (session.live, session.completed) {
+                (true, _) => "live",
+                (false, CompletionState::Active) => "active",
+                (false, CompletionState::Completed) => "completed",
+                (false, CompletionState::Abandoned) => "abandoned",
+                (false, CompletionState::Sealed) => "sealed",
+            };
+            match &session.name {
+                Some(name) => println!("  {name} ({}) {state}", session.id),
+                None => println!("  {} {state}", session.id),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The Workspace a worktree command covers: `Some(None)` for every one, or
+/// `None` when the directory belongs to no Workspace and that has been said.
+///
+/// A directory that belongs to no Workspace has no sessions and is not made
+/// into one: creating a Workspace is what starting a session does, not what
+/// looking after one does.
+fn worktree_scope(
+    client: &Client,
+    workspace: Option<&Path>,
+    all: bool,
+    verb: &str,
+) -> Result<Option<Option<String>>> {
+    if all {
+        return Ok(Some(None));
+    }
+    let directory = session::resolve_workspace(workspace)?;
+    match session::find_workspace_for_host(&client.list_workspaces()?, &directory) {
+        Some(workspace) => Ok(Some(Some(workspace.id))),
+        None => {
+            println!(
+                "{} is not inside a Styra Workspace; pass --all to {verb} every Workspace",
+                directory.display()
+            );
+            Ok(None)
+        }
+    }
+}
+
 /// Delete the worktrees of completed sessions that have nothing uncommitted,
 /// and say what happened to each one.
 ///
 /// Scoped to the Workspace covering the working directory — the same one an
 /// ordinary launch would enter — unless `all` widens it to every Workspace the
-/// server knows. A directory that belongs to no Workspace has no sessions to
-/// clean and is not made into one: creating a Workspace is what starting a
-/// session does, not what tidying up after one does.
+/// server knows — see [`worktree_scope`].
 fn clean_worktrees(client: &Client, workspace: Option<&Path>, all: bool) -> Result<()> {
-    let scope = if all {
-        None
-    } else {
-        let directory = session::resolve_workspace(workspace)?;
-        let Some(workspace) =
-            session::find_workspace_for_host(&client.list_workspaces()?, &directory)
-        else {
-            println!(
-                "{} is not inside a Styra Workspace; pass --all to clean every Workspace",
-                directory.display()
-            );
-            return Ok(());
-        };
-        Some(workspace.id)
+    let Some(scope) = worktree_scope(client, workspace, all, "clean")? else {
+        return Ok(());
     };
     let cleaned = client.clean_worktrees(scope.as_deref())?;
     if cleaned.is_empty() {

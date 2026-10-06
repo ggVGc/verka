@@ -20,6 +20,7 @@ styra --stop                  # stop the daemon and its live interactions
 styra --standalone            # run the server in this process, with no daemon
 styra shell                   # choose and attach to a live sandbox shell
 styra shell --session ID      # attach to that live session's shell
+styra worktrees               # list worktrees and the sessions working in each
 styra clean-worktrees         # delete the worktrees of finished, committed sessions
 styra clean-worktrees --all   # the same, across every Workspace
 ```
@@ -130,6 +131,7 @@ transcript, details, files, answer, preview) stack over the event list, and
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
 | `v` | overview: every running and idle interaction as a grid of tiles |
+| `w` (not in details) | worktrees and the sessions in each; `Enter` opens the selected session |
 | `Ctrl+L` | choose provider, model, and effort (one list, typed at) |
 | `Ctrl+G` | turn auto-commit on/off for this interaction (also in the message editor) |
 
@@ -212,6 +214,14 @@ Workspace on a new interaction, skipping its live work and Session list;
 `Ctrl+C` creates a Workspace for the current directory; `Ctrl+R` changes the
 selected Workspace's display name, and submitting a blank name restores its
 directory-name fallback. `?` still opens the key reference.
+
+`w` opens the worktree list: one row per session working in a linked
+checkout, named by the checkout, with the path, branch and Workspace of the
+selected row spelled out beneath. It is typed at like the Workspace list —
+every printable key filters it over checkout, branch and session name — and
+`Enter` opens the selected session, entering its Workspace if it is another
+one. `Tab` switches between this Workspace and every Workspace, and the list
+opens on the session you are viewing.
 
 A Session you did not name yourself is named after what you asked for — a
 short phrase like `Fix flaky checkout test`, summarised from your first prompt
@@ -406,6 +416,24 @@ A linked checkout is always of the whole repository, so a Workspace naming a
 directory below the checkout root gets the root: the agent sees more of the
 tree this way, not less. Merging the branch back afterwards is yours to do, on
 the host, with ordinary Git — Styra never merges or deletes a branch.
+
+### Seeing which checkouts exist
+
+`styra worktrees` lists every checkout Styra knows of, each followed by the
+Sessions that work in it, so you can tell which conversation a directory came
+from before you clean anything up:
+
+```sh
+styra worktrees         # the Workspace covering the current directory
+styra worktrees --all   # every Workspace the server knows
+```
+
+Sessions launched from one another's checkout are listed together under it,
+with whether each is live, active, completed, abandoned or sealed. A Session whose
+checkout was cleaned up is listed under its branch alone, and a directory in
+the worktree parent that no Session records is listed with no Sessions under
+it. Listing changes nothing. Inside the interface, `w` shows the same list and
+jumps to the session you pick.
 
 ### Cleaning up the checkouts you are done with
 

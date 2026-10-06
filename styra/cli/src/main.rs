@@ -41,6 +41,12 @@ enum Command {
         #[arg(long)]
         workspace: String,
     },
+    /// List the linked worktrees Styra knows of, with the sessions working in
+    /// each, as JSON. Every Workspace unless one is named.
+    Worktrees {
+        #[arg(long)]
+        workspace: Option<String>,
+    },
     /// Send one message to a live session.
     Send {
         session: String,
@@ -99,6 +105,12 @@ fn main() -> Result<()> {
         Command::Sessions { workspace } => print_response(exchange(
             &socket,
             Request::ListSessions {
+                workspace_id: workspace,
+            },
+        )?)?,
+        Command::Worktrees { workspace } => print_response(exchange(
+            &socket,
+            Request::ListWorktrees {
                 workspace_id: workspace,
             },
         )?)?,

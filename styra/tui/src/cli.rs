@@ -65,6 +65,15 @@ pub enum CliCommand {
         #[arg(long)]
         session: Option<String>,
     },
+    /// List the Git worktrees Styra knows of, and the sessions working in
+    /// each. Includes branches whose checkout was cleaned up, and directories
+    /// in the worktree parent that no session records. Changes nothing.
+    Worktrees {
+        /// List every Workspace, not only the one covering the current
+        /// directory.
+        #[arg(long)]
+        all: bool,
+    },
     /// Delete the Git worktrees of completed sessions whose checkouts have
     /// nothing uncommitted in them, keeping their branches. Each such session
     /// is left recording its branch alone, and resuming it checks that branch

@@ -413,6 +413,8 @@ pub enum Request {
     /// Make the interaction with this id current, as choosing its tile in the
     /// overview does, and return to its event list.
     ShowInteraction(String),
+    /// Choose a Session by the worktree it works in.
+    Worktrees,
     /// Make a newly idle interaction current when one is unseen; otherwise,
     /// make the next live interaction current in navigator order.
     NextLiveInteraction,

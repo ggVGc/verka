@@ -858,6 +858,46 @@ impl WorktreeCleanup {
     }
 }
 
+/// One linked worktree Styra knows of, and the Sessions that work in it — see
+/// [`crate::protocol::Request::ListWorktrees`].
+///
+/// A worktree is listed once however many Sessions record it, because Sessions
+/// can be launched from one another's checkout: what the operator is asking
+/// is which conversations touched these files, and the answer is a list.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeSummary {
+    /// The Workspace whose worktree directory it belongs to.
+    pub workspace_id: String,
+    /// Where the checkout is on the host. `None` for a branch whose checkout
+    /// was cleaned up: the Sessions below still record it, and resuming one
+    /// checks it out again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<PathBuf>,
+    /// The branch the checkout has out, as the Sessions record it. `None` for
+    /// a directory in the Workspace's worktree parent that no Session records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Whether the directory is on disk. A Session's record can outlive a
+    /// checkout removed by hand, which is worth saying rather than hiding.
+    pub exists: bool,
+    /// The Sessions that record this checkout, newest first. Empty for a
+    /// directory nothing records any more.
+    pub sessions: Vec<WorktreeSession>,
+}
+
+/// One Session working in a [`WorktreeSummary`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeSession {
+    pub id: String,
+    /// Its operator-facing name, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Whether the operator has finished with it.
+    pub completed: CompletionState,
+    /// Whether an interaction is live in it on this server right now.
+    pub live: bool,
+}
+
 /// An interaction the server is currently running (this process's live sessions),
 /// enough to list it and to reattach a client to it. Distinct from
 /// [`SessionSummary`], which describes a session persisted in the store

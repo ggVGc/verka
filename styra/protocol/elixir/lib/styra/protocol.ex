@@ -109,6 +109,13 @@ defmodule Styra.Protocol do
             %{name: "workspace_id", required: false, type: %{kind: :optional, inner: %{kind: :string}}}
           ]
         }},
+        %{name: "list_worktrees", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "workspace_id", required: false, type: %{kind: :optional, inner: %{kind: :string}}}
+          ]
+        }},
         %{name: "convert_session_provider", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -324,6 +331,7 @@ defmodule Styra.Protocol do
         %{name: "session_resumed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionInfo"}}},
         %{name: "session_worktree_created", payload: %{kind: :unit}},
         %{name: "worktrees_cleaned", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "CleanedWorktree"}}}},
+        %{name: "worktrees", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "WorktreeSummary"}}}},
         %{name: "session_converted", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_branched", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_renamed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
@@ -710,6 +718,23 @@ defmodule Styra.Protocol do
       ]
     },
 
+    # One linked worktree Styra knows of, and the Sessions that work in it — see
+    # `crate::protocol::Request::ListWorktrees`.
+    #
+    # A worktree is listed once however many Sessions record it, because Sessions
+    # can be launched from one another's checkout: what the operator is asking
+    # is which conversations touched these files, and the answer is a list.
+    "WorktreeSummary" => %{
+      kind: :struct,
+      fields: [
+        %{name: "workspace_id", required: true, type: %{kind: :string}},
+        %{name: "worktree", required: false, type: %{kind: :optional, inner: %{kind: :string, path: true}}},
+        %{name: "branch", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "exists", required: true, type: %{kind: :boolean}},
+        %{name: "sessions", required: true, type: %{kind: :list, item: %{kind: :ref, name: "WorktreeSession"}}}
+      ]
+    },
+
     # A stored session, enough to display and select it from a list — see
     # `crate::journal::list_sessions`.
     "SessionSummary" => %{
@@ -989,6 +1014,17 @@ defmodule Styra.Protocol do
             %{name: "message", required: true, type: %{kind: :string}}
           ]
         }}
+      ]
+    },
+
+    # One Session working in a `WorktreeSummary`.
+    "WorktreeSession" => %{
+      kind: :struct,
+      fields: [
+        %{name: "id", required: true, type: %{kind: :string}},
+        %{name: "name", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "completed", required: true, type: %{kind: :ref, name: "CompletionState"}},
+        %{name: "live", required: true, type: %{kind: :boolean}}
       ]
     },
 
@@ -1606,6 +1642,7 @@ defmodule Styra.Protocol do
     "resume_session",
     "create_session_worktree",
     "clean_worktrees",
+    "list_worktrees",
     "convert_session_provider",
     "branch_session",
     "rename_session",
@@ -2305,6 +2342,26 @@ defmodule Styra.Protocol do
     def clean_worktrees!(data), do: Styra.Protocol.build!("clean_worktrees", data)
 
     @doc ~S"""
+    List the linked Git worktrees Styra knows of, each with the Sessions
+    that record it. Changes nothing: it is what an operator asks before
+    deciding what `Request::CleanWorktrees` should take, or to find which
+    conversation a directory under their worktree parent came from.
+
+    Covers every checkout a Session records, including a branch whose
+    directory was cleaned up, and every directory in the Workspace's
+    worktree parent that no Session records. Scoped to one Workspace, or to
+    every one when no id is given.
+
+    Fields of `data`:
+
+      * `workspace_id`  string|null  (optional)
+    """
+    def list_worktrees(data), do: Styra.Protocol.build("list_worktrees", data)
+
+    @doc "`list_worktrees/1`, raising on a request the server would refuse."
+    def list_worktrees!(data), do: Styra.Protocol.build!("list_worktrees", data)
+
+    @doc ~S"""
     Convert a stored Session's native provider transcript (Codex rollout or
     Claude project JSONL) to the other interactive provider's format,
     using Genta's session conversion. The source Session and its native
@@ -2751,6 +2808,7 @@ defmodule Styra.Protocol.Response do
     {:session_resumed, "session_resumed"},
     {:session_worktree_created, "session_worktree_created"},
     {:worktrees_cleaned, "worktrees_cleaned"},
+    {:worktrees, "worktrees"},
     {:session_converted, "session_converted"},
     {:session_branched, "session_branched"},
     {:session_renamed, "session_renamed"},
@@ -2827,6 +2885,8 @@ defmodule Styra.Protocol.Response do
   def session_worktree_created, do: "session_worktree_created"
 
   def worktrees_cleaned, do: "worktrees_cleaned"
+
+  def worktrees, do: "worktrees"
 
   def session_converted, do: "session_converted"
 

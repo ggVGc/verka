@@ -1376,6 +1376,46 @@ pub fn run(
                     None => {}
                 }
             }
+            // Listed here rather than inside the picker so that a server that
+            // cannot answer — one older than the request — is a logged line
+            // and not the end of the client.
+            Some(Request::Worktrees) => {
+                let worktrees = match client.list_worktrees(Some(&workspace_id)) {
+                    Ok(worktrees) => worktrees,
+                    Err(error) => {
+                        app.push_log(LogEntry::error(format!(
+                            "could not list worktrees: {error:#}"
+                        )));
+                        continue;
+                    }
+                };
+                let Some(choice) = crate::worktree_picker::run_worktree_picker(
+                    terminal,
+                    client,
+                    worktrees,
+                    &workspace_id,
+                    &app.session_id,
+                )?
+                else {
+                    continue;
+                };
+                // With every Workspace listed the Session may be in another
+                // one, which has to be entered for the view to follow it.
+                if choice.workspace_id != workspace_id {
+                    if let Some(workspace) = client
+                        .list_workspaces()?
+                        .into_iter()
+                        .find(|workspace| workspace.id == choice.workspace_id)
+                    {
+                        return Ok(RunOutcome::OpenWorkspace {
+                            workspace: Box::new(workspace),
+                            session_id: Some(choice.session_id),
+                            open_interactions: false,
+                        });
+                    }
+                }
+                return Ok(RunOutcome::OpenSession(choice.session_id));
+            }
             Some(Request::Interactions) => {
                 let interactions = client.list_interactions()?;
                 if interactions.is_empty() {

@@ -11,7 +11,7 @@ use crate::protocol::{
     Answer, CheckoutState, CleanedWorktree, CompletionState, Contract, DrivaOptions,
     InteractionActivity, InteractionActivityReason, InteractionSummary, InteractionUpdate,
     LaunchMount, LaunchPolicy, LogEntry, ModelSummary, QueuedMessage, SendMessage, SessionOrigin,
-    SessionSummary, TemplateSummary, WorktreeCleanup,
+    SessionSummary, TemplateSummary, WorktreeCleanup, WorktreeSession, WorktreeSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
@@ -1414,6 +1414,80 @@ impl ServerState {
             }
         }
         Ok(cleaned)
+    }
+
+    /// Every linked worktree a Session records, with the Sessions that record
+    /// it, and every directory in a Workspace's worktree parent that none does.
+    ///
+    /// Read-only, so unlike [`Self::clean_worktrees`] it never prepares the
+    /// worktree parent: a Workspace that never made one simply has nothing to
+    /// list. Checkouts are matched by directory, or by branch once the
+    /// directory has been cleaned up, because Sessions launched from one
+    /// another's checkout record the same one.
+    fn list_worktrees(&self, workspace_id: Option<&str>) -> Result<Vec<WorktreeSummary>> {
+        let workspaces = match workspace_id {
+            Some(id) => vec![crate::workspace::get(&self.inner.store_root, id)?],
+            None => crate::workspace::list(&self.inner.store_root)?,
+        };
+        let mut listed = Vec::new();
+        for workspace in workspaces {
+            let mut worktrees: Vec<WorktreeSummary> = Vec::new();
+            for session in journal::list_workspace_sessions(&self.inner.store_root, &workspace.id)?
+            {
+                let Some(checkout) =
+                    self.session_checkout(&session.path, &workspace.id, &session.id)?
+                else {
+                    continue;
+                };
+                let entry = WorktreeSession {
+                    live: self.live_in_checkout(&session.id),
+                    id: session.id,
+                    name: session.name,
+                    completed: session.completed,
+                };
+                let same = |listed: &&mut WorktreeSummary| match &checkout.path {
+                    Some(path) => listed.worktree.as_ref() == Some(path),
+                    None => {
+                        listed.worktree.is_none() && listed.branch == Some(checkout.branch.clone())
+                    }
+                };
+                match worktrees.iter_mut().find(same) {
+                    Some(listed) => listed.sessions.push(entry),
+                    None => worktrees.push(WorktreeSummary {
+                        workspace_id: workspace.id.clone(),
+                        exists: checkout.path.as_deref().is_some_and(Path::is_dir),
+                        worktree: checkout.path,
+                        branch: Some(checkout.branch),
+                        sessions: vec![entry],
+                    }),
+                }
+            }
+            // Directories nothing records: left by a Session since deleted, or
+            // by a launch that failed after Git made the checkout.
+            let parent = crate::workspace::worktrees_dir(&self.inner.store_root, &workspace.id);
+            let mut unrecorded = std::fs::read_dir(&parent)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .filter(|path| {
+                    !worktrees
+                        .iter()
+                        .any(|listed| listed.worktree.as_ref() == Some(path))
+                })
+                .collect::<Vec<_>>();
+            unrecorded.sort();
+            worktrees.extend(unrecorded.into_iter().map(|path| WorktreeSummary {
+                workspace_id: workspace.id.clone(),
+                worktree: Some(path),
+                branch: None,
+                exists: true,
+                sessions: Vec::new(),
+            }));
+            listed.extend(worktrees);
+        }
+        Ok(listed)
     }
 
     /// The checkouts of this Workspace's Sessions that are still being worked
@@ -3488,6 +3562,9 @@ impl ServerState {
             Request::CleanWorktrees { workspace_id } => Ok(Response::WorktreesCleaned(
                 self.clean_worktrees(workspace_id.as_deref())?,
             )),
+            Request::ListWorktrees { workspace_id } => Ok(Response::Worktrees(
+                self.list_worktrees(workspace_id.as_deref())?,
+            )),
             Request::ConvertSessionProvider { id } => Ok(Response::SessionConverted(
                 self.convert_session_provider(&id)?,
             )),
@@ -5124,6 +5201,93 @@ mod tests {
         let mut kept = vec![dirty, shared];
         kept.sort();
         assert_eq!(said_about, kept);
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// Each checkout is listed once with every Session that records it, a
+    /// cleaned-up one by its branch, and a directory nothing records with no
+    /// Sessions at all — and listing changes none of it.
+    #[test]
+    fn listing_worktrees_groups_the_sessions_that_share_a_checkout() {
+        let store = temp_path("list-worktrees-store");
+        let host = temp_path("list-worktrees-host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let state = ServerState::with_git(git.clone(), store.clone());
+        let workspace = crate::workspace::create(&store, &host, None).unwrap();
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
+        let session = || {
+            let (journal, id) =
+                Journal::create_in_workspace(&store, &workspace.id, &profile, &selection, None)
+                    .unwrap();
+            let path = journal.path().parent().unwrap().to_path_buf();
+            drop(journal);
+            (id, path)
+        };
+        let (owner, owner_path) = session();
+        state.create_session_worktree(&owner).unwrap();
+        let checkout = journal::read_session_checkout(&owner_path)
+            .unwrap()
+            .unwrap();
+        // Launched from the owner's checkout, so recording the same one.
+        let (sharer, sharer_path) = session();
+        journal::store_session_checkout(&sharer_path, &checkout).unwrap();
+        journal::store_session_completed(&sharer_path, CompletionState::Completed).unwrap();
+        // Finished and cleaned up: a branch with no directory.
+        let (cleaned, cleaned_path) = session();
+        state.create_session_worktree(&cleaned).unwrap();
+        journal::store_session_completed(&cleaned_path, CompletionState::Completed).unwrap();
+        state.clean_worktrees(None).unwrap();
+        let cleaned_branch = journal::read_session_checkout(&cleaned_path)
+            .unwrap()
+            .unwrap()
+            .branch;
+        // One with no worktree at all is not listed.
+        let (_plain, _) = session();
+        let stray = crate::workspace::worktrees_dir(&store, &workspace.id).join("stray");
+        std::fs::create_dir_all(&stray).unwrap();
+
+        let listed = state.list_worktrees(Some(&workspace.id)).unwrap();
+
+        let ids = |summary: &WorktreeSummary| {
+            let mut ids = summary
+                .sessions
+                .iter()
+                .map(|session| session.id.clone())
+                .collect::<Vec<_>>();
+            ids.sort();
+            ids
+        };
+        assert_eq!(listed.len(), 3, "{listed:#?}");
+        let shared = listed
+            .iter()
+            .find(|summary| summary.worktree == checkout.path)
+            .expect("the shared checkout is listed");
+        let mut both = vec![owner.clone(), sharer.clone()];
+        both.sort();
+        assert_eq!(ids(shared), both);
+        assert_eq!(shared.branch.as_ref(), Some(&checkout.branch));
+        assert!(shared.exists);
+        let gone = listed
+            .iter()
+            .find(|summary| summary.worktree.is_none())
+            .expect("the cleaned-up branch is listed");
+        assert_eq!(gone.branch.as_ref(), Some(&cleaned_branch));
+        assert_eq!(ids(gone), vec![cleaned.clone()]);
+        assert!(!gone.exists);
+        let unrecorded = listed
+            .iter()
+            .find(|summary| summary.worktree.as_ref() == Some(&stray))
+            .expect("a directory nothing records is listed");
+        assert!(unrecorded.sessions.is_empty());
+        assert_eq!(unrecorded.branch, None);
+        assert!(stray.is_dir(), "listing removes nothing");
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();

@@ -44,6 +44,7 @@ pub mod search;
 pub mod text_prompt;
 pub mod theme;
 pub mod transcript;
+pub mod worktrees;
 
 /// A stable identity for layout feedback that application navigation consumes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -199,6 +200,11 @@ pub trait Ui {
         offer: Option<&std::path::Path>,
     ) -> UiResult<RenderFeedback>;
 
+    fn render_worktree_picker(
+        &mut self,
+        view: &worktrees::WorktreePickerView<'_>,
+    ) -> UiResult<RenderFeedback>;
+
     fn render_workspace_picker_name_prompt(
         &mut self,
         workspaces: &[styra_protocol::WorkspaceSummary],
@@ -333,6 +339,16 @@ where
     fn render_launcher(&mut self, view: &launcher::LauncherView) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
             launcher::render_launcher(frame, view, frame.area());
+            RenderFeedback::default()
+        })
+    }
+
+    fn render_worktree_picker(
+        &mut self,
+        view: &worktrees::WorktreePickerView<'_>,
+    ) -> UiResult<RenderFeedback> {
+        self.draw(|frame| {
+            worktrees::render_worktree_picker(frame, view);
             RenderFeedback::default()
         })
     }
@@ -556,6 +572,13 @@ where
 
     fn render_launcher(&mut self, view: &launcher::LauncherView) -> UiResult<RenderFeedback> {
         TerminalUi::render_launcher(self, view)
+    }
+
+    fn render_worktree_picker(
+        &mut self,
+        view: &worktrees::WorktreePickerView<'_>,
+    ) -> UiResult<RenderFeedback> {
+        TerminalUi::render_worktree_picker(self, view)
     }
 
     fn render_session_picker(
