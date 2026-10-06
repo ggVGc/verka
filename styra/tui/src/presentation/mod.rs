@@ -535,6 +535,9 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
         app.timeline.list_scroll_delta = 0;
         app.timeline.rendered_selection = Some(app.timeline.selected);
     }
+    if let Some(offset) = feedback.navigator_offset {
+        app.interactions.scroll_offset = offset;
+    }
     for scroll in &feedback.scroll {
         match &scroll.panel {
             styra_ui::PanelId::Help => app.help.note_limit(scroll.limit),

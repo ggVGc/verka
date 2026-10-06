@@ -31,6 +31,10 @@ pub const RUNNING_STATUS: Color = RUNNING;
 pub const QUOTA_WARNING: Color = palette::TERMINAL_YELLOW;
 /// A workspace heading in the live-interactions navigator.
 pub const WORKSPACE_NAME: Color = palette::GOLD;
+/// A worktree heading under a workspace heading in the navigator: in the hue
+/// a row's branch is drawn in, since the heading stands for the branch its
+/// rows no longer name.
+pub const DIRECTORY_NAME: Color = ACCENT;
 /// An interaction's `#tags`: apart from the status flags that share their
 /// row.
 pub const INTERACTION_TAG: Color = palette::PEACH;
@@ -38,9 +42,9 @@ pub const INTERACTION_TAG: Color = palette::PEACH;
 /// notice on its pane's border.
 pub const UNCOMMITTED: Color = palette::AMBER_YELLOW;
 /// The spinner of a running turn, in the navigator and the log: the loudest
-/// hue on its row without glaring, and apart from the yellow that means work
-/// left uncommitted.
-pub const RUNNING: Color = UNCOMMITTED;
+/// hue on its row, a step brighter than the yellow that means work left
+/// uncommitted.
+pub const RUNNING: Color = palette::BRIGHT_AMBER;
 pub const ERROR: Color = palette::TERMINAL_RED;
 /// `Special`.
 pub const SPECIAL: Color = palette::PINK;
@@ -90,7 +94,45 @@ pub const STOP_SERVER_RESTARTED: Color = palette::MAUVE;
 /// Stopped without saying why.
 pub const STOP_UNKNOWN: Color = INACTIVE;
 
-pub const STOP_ICON: Color = INACTIVE;
+/// Behind every other interaction in the navigator, barely off the
+/// terminal's own background.
+pub const ALTERNATE_ROW_BACKGROUND: Color = palette::FAINT_GRAY;
+/// Behind the navigator's cursor row: a faint warm orange, a step above
+/// [`ALTERNATE_ROW_BACKGROUND`].
+pub const SELECTED_ROW_BACKGROUND: Color = palette::FAINT_ORANGE;
+/// The prompt of a running navigator row: [`TEXT`] leaning toward [`RUNNING`].
+pub const RUNNING_INTERACTION_TEXT: Color = palette::YELLOW_WHITE;
+/// The prompt of an idle navigator row: [`TEXT`] leaning toward [`SUCCESS`].
+pub const IDLE_INTERACTION_TEXT: Color = palette::GREEN_WHITE;
+/// The name on the navigator's cursor row, whatever its status, and the text
+/// of the event list's selected entry: apart from the colors around them.
+pub const SELECTED_INTERACTION_TEXT: Color = palette::SOFT_CYAN;
+/// The block behind the status marker at the head of a navigator row, a
+/// subdued tint of the marker's own hue.
+///
+/// Waiting to start: [`INFO`].
+pub const PENDING_STATUS_BACKGROUND: Color = palette::PALE_PINK_TINT;
+/// Working: [`RUNNING`].
+pub const RUNNING_STATUS_BACKGROUND: Color = palette::AMBER_TINT;
+/// Idle: [`SUCCESS`].
+pub const IDLE_STATUS_BACKGROUND: Color = palette::GREEN_TINT;
+/// Working in the background: [`MUTED_WARNING`].
+pub const BACKGROUND_STATUS_BACKGROUND: Color = palette::MUTED_ROSE_TINT;
+/// Stopped: [`INACTIVE`], the same block whichever stop's hue the marker is in.
+pub const STOPPED_STATUS_BACKGROUND: Color = palette::STONE_TINT;
+/// Failed: [`ERROR`].
+pub const ERROR_STATUS_BACKGROUND: Color = palette::RED_TINT;
+/// Ended: [`INACTIVE`].
+pub const ENDED_STATUS_BACKGROUND: Color = palette::STONE_TINT;
+/// The same blocks lit up on the navigator's cursor row, which is marked by
+/// nothing else.
+pub const PENDING_STATUS_HIGHLIGHT: Color = palette::PALE_PINK_TINT_BRIGHT;
+pub const RUNNING_STATUS_HIGHLIGHT: Color = palette::AMBER_TINT_BRIGHT;
+pub const IDLE_STATUS_HIGHLIGHT: Color = palette::GREEN_TINT_BRIGHT;
+pub const BACKGROUND_STATUS_HIGHLIGHT: Color = palette::MUTED_ROSE_TINT_BRIGHT;
+pub const STOPPED_STATUS_HIGHLIGHT: Color = palette::STONE_TINT_BRIGHT;
+pub const ERROR_STATUS_HIGHLIGHT: Color = palette::RED_TINT_BRIGHT;
+pub const ENDED_STATUS_HIGHLIGHT: Color = palette::STONE_TINT_BRIGHT;
 
 /// A restrained cue behind operator-authored rows, separating prompts from
 /// agent output without turning the log into chat bubbles. Paired with
@@ -98,36 +140,10 @@ pub const STOP_ICON: Color = INACTIVE;
 pub const USER_MESSAGE_BACKGROUND: Color = palette::DARK_GREEN_TINT;
 /// `CursorLine`.
 pub const SELECTION_BACKGROUND: Color = palette::DARK_GRAY;
-/// A slight lift behind an interaction's own line in the live-interactions
-/// navigator, so it stands above the last-message line beneath it. Each
-/// status carries a faint wash of its marker's hue, so the entries in one
-/// state read as a group down the list.
-///
-/// Waiting to start: the pale rose of [`INFO`].
-pub const PENDING_INTERACTION_ROW_BACKGROUND: Color = palette::DARK_ROSE_TINT;
-/// Working: the amber of [`RUNNING`].
-pub const RUNNING_INTERACTION_ROW_BACKGROUND: Color = palette::DARK_AMBER_TINT;
-/// Idle: the green of [`SUCCESS`].
-pub const IDLE_INTERACTION_ROW_BACKGROUND: Color = palette::DARK_GREEN_TINT_DEEP;
-/// Working in the background: the dusty rose of [`MUTED_WARNING`].
-pub const BACKGROUND_INTERACTION_ROW_BACKGROUND: Color = palette::MUTED_ROSE_TINT;
-/// Stopped, waiting on a decision.
-pub const STOPPED_INTERACTION_ROW_BACKGROUND: Color = palette::DARK_RUST_TINT;
-/// Failed: the red of [`ERROR`].
-pub const ERROR_INTERACTION_ROW_BACKGROUND: Color = palette::DARK_RED_TINT;
-/// Ended: the stone of [`INACTIVE`].
-pub const ENDED_INTERACTION_ROW_BACKGROUND: Color = palette::DARK_STONE_TINT;
-/// The navigator's cursor row, a step above [`SELECTION_BACKGROUND`] so it
-/// stands clear of the lifted rows around it.
-pub const INTERACTION_SELECTION_BACKGROUND: Color = palette::MEDIUM_GRAY;
 /// Text on a continuation line. It is subdued without looking disabled.
 pub const SUBORDINATE_TEXT: Color = MUTED_TEXT;
 /// `PreProc` / `MatchParen` text.
 pub const SELECTION_MARKER: Color = palette::BRIGHT_YELLOW;
-/// The dot marking the Interaction currently open in the main view. This is
-/// intentionally the terminal's bright yellow so it remains immediately
-/// visible alongside the navigator cursor and status icons.
-pub const CURRENT_INTERACTION_MARKER: Color = palette::TERMINAL_YELLOW;
 /// The focused Markdown link: visible without the hard yellow used for a row
 /// cursor, since it sits directly behind the link's own syntax styling.
 pub const LINK_HIGHLIGHT_BACKGROUND: Color = palette::MUTED_WINE;

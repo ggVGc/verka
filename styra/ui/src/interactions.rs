@@ -10,9 +10,11 @@ use ratatui::Frame;
 use std::borrow::Cow;
 use styra_protocol::CompletionState;
 
-/// A quarter-filled circle turning one step per event: solid enough to catch
-/// the eye in a long list, where a single braille dot is easily missed.
-const RUNNING_INDICATOR: [&str; 4] = ["◐", "◓", "◑", "◒"];
+/// Three dots, the heavy one moving rightward one step per event and wrapping
+/// back to the left. It fills the whole status block, so a running row reads
+/// apart from every other state's single marker, and it holds still when the
+/// agent goes quiet.
+const RUNNING_INDICATOR: [&str; 3] = ["•··", "·•·", "··•"];
 
 /// The spinner frame for a running turn that has seen `events` events. The
 /// navigator row and the conversation's running tail draw the same one.
@@ -33,15 +35,20 @@ pub enum InteractionStatus {
 
 pub enum InteractionRow<'a> {
     Workspace(Cow<'a, str>),
+    /// The directory several interactions in one workspace share, heading the
+    /// rows for them, which follow it with `grouped` set.
+    Directory(Cow<'a, str>),
     Interaction {
         name: Cow<'a, str>,
+        /// The row sits under a [`InteractionRow::Directory`] heading, and is
+        /// indented beneath it.
+        grouped: bool,
         provider: &'a str,
         /// The Git branch checked out for this interaction. `None` means the
         /// interaction is not associated with a Git checkout; a detached
         /// checkout is passed as the descriptive text `detached head`.
         branch: Option<&'a str>,
         status: InteractionStatus,
-        current: bool,
         selected: bool,
         loading: bool,
         newly_idle: bool,
@@ -78,8 +85,16 @@ pub struct InteractionNavigator<'a> {
     pub filter: Option<&'a str>,
     /// Whether the filter is still being typed, so it is drawn with a caret.
     pub typing_filter: bool,
+    /// The first line shown last frame. [`render`] keeps it unless the cursor
+    /// comes within [`SCROLL_MARGIN`] rows of an edge, and returns the line it
+    /// actually drew from.
+    pub requested_offset: usize,
     pub rows: Vec<InteractionRow<'a>>,
 }
+
+/// How many rows the view keeps between the cursor and its top or bottom edge
+/// before it scrolls, where the list has rows there to show.
+const SCROLL_MARGIN: usize = 2;
 
 pub fn height(view: &InteractionNavigator<'_>, available: u16) -> u16 {
     let message_rows = view
@@ -101,7 +116,7 @@ pub fn height(view: &InteractionNavigator<'_>, available: u16) -> u16 {
         .min(available)
 }
 
-pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
+pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) -> usize {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT))
@@ -129,7 +144,34 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
         }
         _ => block,
     };
-    let mut items = view.rows.iter().map(row_item).collect::<Vec<_>>();
+    // Every other interaction under a heading is drawn on a faint stripe, so
+    // the eye can follow a row across the pane and down to its message line.
+    // The cursor's row is drawn on a slightly lighter tint in its place.
+    let mut striped = false;
+    let mut items = view
+        .rows
+        .iter()
+        .map(|row| {
+            let mut item = row_item(row, view.all_workspaces);
+            match row {
+                InteractionRow::Workspace(_) | InteractionRow::Directory(_) => striped = false,
+                InteractionRow::Interaction { selected, .. } => {
+                    let background = if *selected {
+                        Some(theme::SELECTED_ROW_BACKGROUND)
+                    } else {
+                        striped.then_some(theme::ALTERNATE_ROW_BACKGROUND)
+                    };
+                    if let Some(background) = background {
+                        for line in &mut item {
+                            line.style = line.style.bg(background);
+                        }
+                    }
+                    striped = !striped;
+                }
+            }
+            item
+        })
+        .collect::<Vec<_>>();
     if items.is_empty() {
         if let Some(filter) = view.filter.filter(|filter| !filter.is_empty()) {
             items.push(vec![Line::from(Span::styled(
@@ -147,25 +189,10 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
     // The list is laid out by line rather than by row, so a row with a message
     // line that does not fit is drawn as far as it goes instead of leaving the
     // foot of the pane empty, as `List` would.
-    let lines = items
-        .into_iter()
-        .enumerate()
-        .flat_map(|(index, item)| {
-            item.into_iter()
-                .map(move |line| (Some(index) == selected, line))
-        })
-        .collect::<Vec<_>>();
+    let lines = items.into_iter().flatten().collect::<Vec<_>>();
     let inner = block.inner(area);
     let viewport = usize::from(inner.height);
-    // Scrolled no further than it takes to bring the cursor's row fully into
-    // view, so the list stays anchored at its top while the cursor is there.
-    let offset = selected
-        .map(|selected| {
-            let start = view.rows[..selected].iter().map(row_height).sum::<usize>();
-            let end = start + row_height(&view.rows[selected]);
-            end.saturating_sub(viewport).min(start)
-        })
-        .unwrap_or(0);
+    let offset = scroll_offset(view, selected, viewport, lines.len());
     let above = offset;
     let below = lines.len().saturating_sub(offset + viewport);
     let mut block = block;
@@ -176,20 +203,48 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
         block = block.title_bottom(more_lines("↓", below).right_aligned());
     }
     frame.render_widget(block, area);
-    let highlight = Style::default()
-        .bg(theme::INTERACTION_SELECTION_BACKGROUND)
-        .add_modifier(Modifier::BOLD);
-    for (row, (selected, line)) in lines.into_iter().skip(offset).take(viewport).enumerate() {
+    for (row, line) in lines.into_iter().skip(offset).take(viewport).enumerate() {
         let line_area = Rect {
             y: inner.y + row as u16,
             height: 1,
             ..inner
         };
         frame.render_widget(line, line_area);
-        if selected {
-            frame.buffer_mut().set_style(line_area, highlight);
-        }
     }
+    offset
+}
+
+/// The first line to draw. The view stays where it was while the cursor moves
+/// inside it, and scrolls only as far as it takes to keep [`SCROLL_MARGIN`]
+/// rows showing past the cursor, fewer where the pane is too short for them.
+fn scroll_offset(
+    view: &InteractionNavigator<'_>,
+    selected: Option<usize>,
+    viewport: usize,
+    total: usize,
+) -> usize {
+    // The foot of the pane is never left empty while there is list to fill it.
+    let last = total.saturating_sub(viewport);
+    let mut offset = view.requested_offset.min(last);
+    let Some(selected) = selected else {
+        return offset;
+    };
+    let lines = |rows: &[InteractionRow<'_>]| rows.iter().map(row_height).sum::<usize>();
+    let start = lines(&view.rows[..selected]);
+    let end = start + row_height(&view.rows[selected]);
+    let mut margin = SCROLL_MARGIN;
+    let (above, below) = loop {
+        let above = lines(&view.rows[selected.saturating_sub(margin)..selected]);
+        let below = lines(&view.rows[selected + 1..(selected + 1 + margin).min(view.rows.len())]);
+        if margin == 0 || above + (end - start) + below <= viewport {
+            break (above, below);
+        }
+        margin -= 1;
+    };
+    // The top edge is applied last, so a row taller than the pane shows its
+    // first line rather than its last.
+    offset = offset.max((end + below).saturating_sub(viewport));
+    offset.min(start - above)
 }
 
 /// The note on the pane's border that the list runs on past its edge.
@@ -211,21 +266,37 @@ fn row_height(row: &InteractionRow<'_>) -> usize {
     }
 }
 
-fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
-    if let InteractionRow::Workspace(name) = row {
-        return vec![Line::from(Span::styled(
-            format!(" {name}"),
-            Style::default()
-                .fg(theme::WORKSPACE_NAME)
-                .add_modifier(Modifier::BOLD),
-        ))];
+/// `under_workspaces` says whether the list is drawn under Workspace
+/// headings, which every row then steps in beneath.
+fn row_item(row: &InteractionRow<'_>, under_workspaces: bool) -> Vec<Line<'static>> {
+    // Each heading's rows are stepped in past where its name starts, so which
+    // heading a row belongs to reads from the left edge. The Workspace
+    // headings, the outermost, sit against the edge itself.
+    let step = |levels: usize| " ".repeat(2 * levels);
+    let workspace_level = usize::from(under_workspaces);
+    match row {
+        InteractionRow::Workspace(name) => {
+            return vec![Line::from(Span::styled(
+                name.to_string(),
+                Style::default()
+                    .fg(theme::WORKSPACE_NAME)
+                    .add_modifier(Modifier::BOLD),
+            ))];
+        }
+        InteractionRow::Directory(name) => {
+            return vec![Line::from(Span::styled(
+                format!(" {}{name}/", step(workspace_level)),
+                Style::default().fg(theme::DIRECTORY_NAME),
+            ))];
+        }
+        InteractionRow::Interaction { .. } => {}
     }
     let InteractionRow::Interaction {
         name,
+        grouped,
         provider,
         branch,
         status,
-        current,
         selected,
         loading,
         newly_idle,
@@ -241,20 +312,27 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
         unreachable!()
     };
     let (marker, color) = status_marker(*status);
-    // The marker sits on the row's own background; a running spinner is told
-    // apart by its glyph and color, not by a patch behind it.
-    let marker_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+    // The marker sits on a faint block of its own hue at the head of the row,
+    // so the state reads from the color down the left edge of the list and
+    // from the shape up close. The cursor lights its row's block up, so the
+    // status still reads under it.
+    let marker_style = Style::default()
+        .fg(color)
+        .bg(status_background(*status, *selected))
+        .add_modifier(Modifier::BOLD);
     let running = matches!(status, InteractionStatus::Running { .. });
+    let indent = step(workspace_level + usize::from(*grouped));
     let mut main = vec![
+        Span::raw(indent.clone()),
+        // The running indicator is already as wide as the block.
         Span::styled(
-            if *current { "• " } else { "  " },
-            Style::default().fg(if *current {
-                theme::CURRENT_INTERACTION_MARKER
+            if running {
+                marker.to_owned()
             } else {
-                theme::INACTIVE
-            }),
+                format!(" {marker} ")
+            },
+            marker_style,
         ),
-        Span::styled(marker.to_string(), marker_style),
         Span::raw(" "),
     ];
     // Work left uncommitted is flagged ahead of the prompt, where the eye
@@ -267,17 +345,22 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    // A working agent's prompt is bold too, so its row still stands out when
-    // the eye lands between spinner steps.
-    let name_style = Style::default().fg(theme::TEXT);
-    main.push(Span::styled(
-        name.to_string(),
-        if running {
-            name_style.add_modifier(Modifier::BOLD)
-        } else {
-            name_style
-        },
-    ));
+    // The prompt is never dimmed, so it stays apart from the gray message line
+    // beneath it; a working or idle agent's leans slightly toward its marker's
+    // hue instead. The cursor's prompt is a soft cyan and bold, apart from
+    // every other row's, whatever its status.
+    let name_style = if *selected {
+        Style::default()
+            .fg(theme::SELECTED_INTERACTION_TEXT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(match status {
+            InteractionStatus::Running { .. } => theme::RUNNING_INTERACTION_TEXT,
+            InteractionStatus::Idle => theme::IDLE_INTERACTION_TEXT,
+            _ => theme::TEXT,
+        })
+    };
+    main.push(Span::styled(name.to_string(), name_style));
     // Tags belong to the prompt they label, so they follow it directly.
     if !tags.is_empty() {
         main.push(Span::styled(
@@ -285,7 +368,8 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
             Style::default().fg(theme::INTERACTION_TAG),
         ));
     }
-    if let Some(branch) = branch {
+    // A grouped row's worktree heading already says where it works.
+    if let Some(branch) = branch.filter(|_| !*grouped) {
         main.push(Span::styled(
             format!(" · {branch}"),
             Style::default().fg(theme::ACCENT),
@@ -338,18 +422,10 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
-    // The tint is the line's own style, so it runs the full width of the row.
-    // That style is drawn over the list's highlight, so the cursor's
-    // background has to be chosen here too.
-    let background = if *selected {
-        theme::INTERACTION_SELECTION_BACKGROUND
-    } else {
-        row_background(*status)
-    };
-    let mut lines = vec![Line::from(main).style(Style::default().bg(background))];
+    let mut lines = vec![Line::from(main)];
     if let Some(text) = last_message {
         lines.push(Line::from(Span::styled(
-            format!("    « {text}"),
+            format!("{indent}    « {text}"),
             Style::default().fg(theme::SUBORDINATE_TEXT),
         )));
     }
@@ -358,28 +434,37 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
 
 fn status_marker(status: InteractionStatus) -> (&'static str, ratatui::style::Color) {
     match status {
-        InteractionStatus::Pending => (".", theme::INFO),
+        // Each status has its own shape, so the list reads without its colors.
+        InteractionStatus::Pending => ("●", theme::INFO),
         InteractionStatus::Running { events } => (running_indicator(events), theme::RUNNING),
-        InteractionStatus::Idle => ("o", theme::SUCCESS),
-        InteractionStatus::Background => ("*", theme::MUTED_WARNING),
-        InteractionStatus::Stopped(_why) => ("#", theme::STOP_ICON),
+        InteractionStatus::Idle => ("●", theme::SUCCESS),
+        InteractionStatus::Background => ("◎", theme::MUTED_WARNING),
+        // Not `#`, which starts the row's tags. In the hue of how it stopped,
+        // as its reason is, so the reason reads from the left edge too.
+        InteractionStatus::Stopped(tone) => ("■", tone.color()),
         // Not `!`, which marks work left uncommitted on the same row.
-        InteractionStatus::Error => ("x", theme::ERROR),
-        // Not `x`, which an error is drawn as.
-        InteractionStatus::Ended => ("-", theme::INACTIVE),
+        InteractionStatus::Error => ("✗", theme::ERROR),
+        InteractionStatus::Ended => ("–", theme::INACTIVE),
     }
 }
 
-/// The tint behind an interaction's own line, a faint wash of its marker's hue.
-fn row_background(status: InteractionStatus) -> ratatui::style::Color {
-    match status {
-        InteractionStatus::Pending => theme::PENDING_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Running { .. } => theme::RUNNING_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Idle => theme::IDLE_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Background => theme::BACKGROUND_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Stopped(_) => theme::STOPPED_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Error => theme::ERROR_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Ended => theme::ENDED_INTERACTION_ROW_BACKGROUND,
+/// The block behind a row's status marker: faint, or lit up under the cursor.
+fn status_background(status: InteractionStatus, selected: bool) -> ratatui::style::Color {
+    match (status, selected) {
+        (InteractionStatus::Pending, false) => theme::PENDING_STATUS_BACKGROUND,
+        (InteractionStatus::Pending, true) => theme::PENDING_STATUS_HIGHLIGHT,
+        (InteractionStatus::Running { .. }, false) => theme::RUNNING_STATUS_BACKGROUND,
+        (InteractionStatus::Running { .. }, true) => theme::RUNNING_STATUS_HIGHLIGHT,
+        (InteractionStatus::Idle, false) => theme::IDLE_STATUS_BACKGROUND,
+        (InteractionStatus::Idle, true) => theme::IDLE_STATUS_HIGHLIGHT,
+        (InteractionStatus::Background, false) => theme::BACKGROUND_STATUS_BACKGROUND,
+        (InteractionStatus::Background, true) => theme::BACKGROUND_STATUS_HIGHLIGHT,
+        (InteractionStatus::Stopped(_), false) => theme::STOPPED_STATUS_BACKGROUND,
+        (InteractionStatus::Stopped(_), true) => theme::STOPPED_STATUS_HIGHLIGHT,
+        (InteractionStatus::Error, false) => theme::ERROR_STATUS_BACKGROUND,
+        (InteractionStatus::Error, true) => theme::ERROR_STATUS_HIGHLIGHT,
+        (InteractionStatus::Ended, false) => theme::ENDED_STATUS_BACKGROUND,
+        (InteractionStatus::Ended, true) => theme::ENDED_STATUS_HIGHLIGHT,
     }
 }
 
@@ -391,7 +476,9 @@ mod tests {
     fn rendered(view: &InteractionNavigator<'_>) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         terminal
-            .draw(|frame| render(frame, view, frame.area()))
+            .draw(|frame| {
+                render(frame, view, frame.area());
+            })
             .unwrap();
         terminal
             .backend()
@@ -411,14 +498,15 @@ mod tests {
             completion_filter: "completed hidden".into(),
             filter: None,
             typing_filter: false,
+            requested_offset: 0,
             rows: vec![
                 InteractionRow::Workspace("Payments".into()),
                 InteractionRow::Interaction {
                     name: "repair checkout".into(),
+                    grouped: false,
                     provider: "codex",
                     branch: Some("fix"),
                     status: InteractionStatus::Running { events: 2 },
-                    current: true,
                     selected: true,
                     loading: false,
                     newly_idle: true,
@@ -434,62 +522,27 @@ mod tests {
         let screen = rendered(&view);
         assert!(screen.contains("Payments"), "{screen}");
         assert!(
-            screen.contains("◑ repair checkout #bug #urgent · fix · codex"),
+            screen.contains("repair checkout #bug #urgent · fix · codex"),
             "{screen}"
         );
         assert!(screen.contains("· NEWLY IDLE"), "{screen}");
-        assert!(screen.contains("« The checks are green."), "{screen}");
+        assert!(screen.contains("The checks are green."), "{screen}");
         assert_eq!(height(&view, 12), 5);
     }
 
+    /// Each heading's rows are stepped in past where its name starts: under
+    /// a Workspace heading, which sits against the edge, and again under a
+    /// directory heading within it,
+    /// where they also drop the branch the heading already gives.
     #[test]
-    fn the_interaction_line_is_tinted_across_the_row_and_its_message_is_not() {
-        let tags = Vec::new();
-        let view = InteractionNavigator {
-            scope: "All".into(),
-            all_workspaces: true,
-            completion_filter: "completed hidden".into(),
-            filter: None,
-            typing_filter: false,
-            rows: vec![InteractionRow::Interaction {
-                name: "repair checkout".into(),
-                provider: "codex",
-                branch: None,
-                status: InteractionStatus::Idle,
-                current: false,
-                selected: false,
-                loading: false,
-                newly_idle: false,
-                stop_reason: None,
-                rate_limited: None,
-                uncommitted: false,
-                completion: CompletionState::Active,
-                tags: &tags,
-                last_message: Some("The checks are green."),
-            }],
-        };
-        let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
-        terminal
-            .draw(|frame| render(frame, &view, frame.area()))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-
-        assert_eq!(buffer[(78, 1)].bg, theme::IDLE_INTERACTION_ROW_BACKGROUND);
-        assert_eq!(buffer[(78, 2)].bg, theme::RESET);
-    }
-
-    /// Each status tints its rows so they read as a group, and the cursor row
-    /// is drawn above every tint, since the row's own background would
-    /// otherwise cover the list's highlight.
-    #[test]
-    fn rows_are_tinted_by_status_and_the_cursor_row_stands_above_them() {
-        let row = |name: &'static str, status, selected| InteractionRow::Interaction {
+    fn rows_are_indented_under_their_headings() {
+        let row = |name: &'static str, grouped| InteractionRow::Interaction {
             name: name.into(),
+            grouped,
             provider: "claude",
-            branch: None,
-            status,
-            current: false,
-            selected,
+            branch: Some("feature"),
+            status: InteractionStatus::Idle,
+            selected: false,
             loading: false,
             newly_idle: false,
             stop_reason: None,
@@ -499,68 +552,61 @@ mod tests {
             tags: &[],
             last_message: None,
         };
-        let view = InteractionNavigator {
-            scope: "Payments".into(),
-            all_workspaces: false,
-            completion_filter: "completed hidden".into(),
-            filter: None,
-            typing_filter: false,
+        let lines = |view: &InteractionNavigator<'_>| {
+            rendered(view)
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(80)
+                .map(|line| line.iter().collect::<String>())
+                .collect::<Vec<_>>()
+        };
+
+        let all = InteractionNavigator {
+            all_workspaces: true,
             rows: vec![
-                row("idle", InteractionStatus::Idle, false),
-                row(
-                    "stopped",
-                    InteractionStatus::Stopped(StopTone::Paused),
-                    false,
-                ),
-                row("cursor", InteractionStatus::Stopped(StopTone::Paused), true),
+                InteractionRow::Workspace("Payments".into()),
+                row("alone", false),
+                InteractionRow::Directory("checkout".into()),
+                row("first", true),
+                row("second", true),
             ],
+            ..many_rows(0)
         };
-        let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
-        terminal
-            .draw(|frame| render(frame, &view, frame.area()))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-
-        assert_eq!(buffer[(78, 1)].bg, theme::IDLE_INTERACTION_ROW_BACKGROUND);
-        assert_eq!(
-            buffer[(78, 2)].bg,
-            theme::STOPPED_INTERACTION_ROW_BACKGROUND
+        let screen = lines(&all);
+        assert!(screen[1].starts_with("│Payments"), "{screen:#?}");
+        assert!(
+            screen[2].starts_with("│   ●  alone · feature · claude"),
+            "{screen:#?}"
         );
-        assert_eq!(
-            buffer[(78, 3)].bg,
-            theme::INTERACTION_SELECTION_BACKGROUND
+        assert!(screen[3].starts_with("│   checkout/"), "{screen:#?}");
+        assert!(
+            screen[4].starts_with("│     ●  first · claude "),
+            "{screen:#?}"
         );
-    }
+        assert!(
+            screen[5].starts_with("│     ●  second · claude "),
+            "{screen:#?}"
+        );
 
-    /// The list is where an operator scanning several stopped agents decides
-    /// which one to go back to, so the checkout each of them left behind has
-    /// to be readable from the row.
-    #[test]
-    fn a_stopped_interaction_says_it_left_work_uncommitted() {
-        let view = InteractionNavigator {
-            scope: "Payments".into(),
-            all_workspaces: false,
-            completion_filter: "completed hidden".into(),
-            filter: None,
-            typing_filter: false,
-            rows: vec![InteractionRow::Interaction {
-                name: "repair checkout".into(),
-                provider: "claude",
-                branch: None,
-                status: InteractionStatus::Idle,
-                current: false,
-                selected: false,
-                loading: false,
-                newly_idle: false,
-                stop_reason: None,
-                rate_limited: None,
-                uncommitted: true,
-                completion: CompletionState::Active,
-                tags: &[],
-                last_message: None,
-            }],
+        // In Workspace scope there is no Workspace heading to step in under.
+        let one = InteractionNavigator {
+            rows: vec![
+                row("alone", false),
+                InteractionRow::Directory("checkout".into()),
+                row("first", true),
+            ],
+            ..many_rows(0)
         };
-        assert!(rendered(&view).contains("! repair checkout · claude"));
+        let screen = lines(&one);
+        assert!(
+            screen[1].starts_with("│ ●  alone · feature · claude"),
+            "{screen:#?}"
+        );
+        assert!(screen[2].starts_with("│ checkout/"), "{screen:#?}");
+        assert!(
+            screen[3].starts_with("│   ●  first · claude "),
+            "{screen:#?}"
+        );
     }
 
     /// A stopped entry is one the operator has to decide whether to resume,
@@ -573,12 +619,13 @@ mod tests {
             completion_filter: "completed hidden".into(),
             filter: None,
             typing_filter: false,
+            requested_offset: 0,
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
+                grouped: false,
                 provider: "claude",
                 branch: None,
                 status: InteractionStatus::Stopped(StopTone::Paused),
-                current: false,
                 selected: false,
                 loading: false,
                 newly_idle: false,
@@ -590,7 +637,7 @@ mod tests {
                 last_message: None,
             }],
         };
-        assert!(rendered(&view).contains("# repair checkout · claude · paused"));
+        assert!(rendered(&view).contains("repair checkout · claude · paused"));
     }
 
     /// An interaction idling because a plan window refused it looks exactly
@@ -604,12 +651,13 @@ mod tests {
             completion_filter: "completed hidden".into(),
             filter: None,
             typing_filter: false,
+            requested_offset: 0,
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
+                grouped: false,
                 provider: "claude",
                 branch: None,
                 status: InteractionStatus::Idle,
-                current: false,
                 selected: false,
                 loading: false,
                 newly_idle: false,
@@ -631,13 +679,14 @@ mod tests {
             completion_filter: "completed hidden".into(),
             filter: None,
             typing_filter: false,
+            requested_offset: 0,
             rows: (0..8)
                 .map(|index| InteractionRow::Interaction {
                     name: format!("task {index}").into(),
+                    grouped: false,
                     provider: "claude",
                     branch: None,
                     status: InteractionStatus::Idle,
-                    current: false,
                     selected: index == selected,
                     loading: false,
                     newly_idle: false,
@@ -665,19 +714,70 @@ mod tests {
             .collect::<Vec<_>>();
         // Ten lines inside the border: five rows of two lines each.
         assert!(lines[9].contains("task 4"), "{screen}");
-        assert!(lines[10].contains("« done"), "{screen}");
-        assert!(lines[11].contains("↓ 6 more lines"), "{screen}");
+        assert!(lines[10].contains("done"), "{screen}");
+        assert!(lines[11].contains("6 more lines"), "{screen}");
         assert!(!lines[0].contains("more line"), "{screen}");
     }
 
     #[test]
     fn the_list_scrolls_to_keep_the_cursor_in_view() {
         let screen = rendered(&many_rows(7));
-        assert!(screen.contains("task 7"), "{screen}");
-        assert!(screen.contains("« done"), "{screen}");
+        let lines = screen
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(80)
+            .map(|line| line.iter().collect::<String>())
+            .collect::<Vec<_>>();
+        assert!(lines[9].contains("task 7"), "{screen}");
+        assert!(lines[10].contains("done"), "{screen}");
         assert!(!screen.contains("task 2 "), "{screen}");
-        assert!(screen.contains("↑ 6 more lines"), "{screen}");
-        assert!(!screen.contains("↓"), "{screen}");
+        assert!(lines[0].contains("6 more lines"), "{screen}");
+        assert!(!lines[11].contains("more line"), "{screen}");
+    }
+
+    /// The line [`render`] draws [`many_rows`] from, in a pane ten lines tall
+    /// inside its border: five two-line rows.
+    fn drawn_offset(selected: usize, requested_offset: usize) -> usize {
+        let view = InteractionNavigator {
+            requested_offset,
+            ..many_rows(selected)
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        let mut offset = None;
+        terminal
+            .draw(|frame| offset = Some(render(frame, &view, frame.area())))
+            .unwrap();
+        offset.unwrap()
+    }
+
+    /// The cursor walks the rows in view without moving them.
+    #[test]
+    fn the_cursor_moves_freely_inside_the_view() {
+        for selected in 0..=2 {
+            assert_eq!(drawn_offset(selected, 0), 0, "row {selected}");
+        }
+        // Rows 2 to 6 in view, the cursor anywhere between their margins.
+        assert_eq!(drawn_offset(4, 4), 4);
+    }
+
+    /// Two rows are kept between the cursor and the edge it is moving toward,
+    /// so the operator sees what comes next before reaching it.
+    #[test]
+    fn the_view_scrolls_two_rows_before_the_cursor_reaches_an_edge() {
+        // Down from the top: row 3 is the first with fewer than two rows below.
+        assert_eq!(drawn_offset(3, 0), 2);
+        // Up from the bottom, where rows 3 to 7 are in view.
+        assert_eq!(drawn_offset(5, 6), 6);
+        assert_eq!(drawn_offset(4, 6), 4);
+    }
+
+    /// At the ends of the list there are no rows to keep in the margin, so
+    /// the view stops there instead of running past the list.
+    #[test]
+    fn the_view_stops_at_the_ends_of_the_list() {
+        assert_eq!(drawn_offset(0, 6), 0);
+        assert_eq!(drawn_offset(7, 0), 6);
+        assert_eq!(drawn_offset(7, 100), 6);
     }
 
     /// Each way of being finished with a Session has its own badge, so one
@@ -715,56 +815,5 @@ mod tests {
         assert!(!screen.contains("COMPLETED"), "{screen}");
         assert!(!screen.contains("ABANDONED"), "{screen}");
         assert!(!screen.contains("SEALED"), "{screen}");
-    }
-
-    #[test]
-    fn current_and_cursor_are_independent() {
-        let view = InteractionNavigator {
-            scope: "Payments".into(),
-            all_workspaces: false,
-            completion_filter: "completed hidden".into(),
-            filter: None,
-            typing_filter: false,
-            rows: vec![
-                InteractionRow::Interaction {
-                    name: "shown below".into(),
-                    provider: "claude",
-                    branch: None,
-                    status: InteractionStatus::Idle,
-                    current: true,
-                    selected: false,
-                    loading: false,
-                    newly_idle: false,
-                    stop_reason: None,
-                    rate_limited: None,
-                    uncommitted: false,
-                    completion: CompletionState::Active,
-                    tags: &[],
-                    last_message: None,
-                },
-                InteractionRow::Interaction {
-                    name: "being loaded".into(),
-                    provider: "codex",
-                    branch: None,
-                    status: InteractionStatus::Pending,
-                    current: false,
-                    selected: true,
-                    loading: true,
-                    newly_idle: false,
-                    stop_reason: None,
-                    rate_limited: None,
-                    uncommitted: false,
-                    completion: CompletionState::Active,
-                    tags: &[],
-                    last_message: None,
-                },
-            ],
-        };
-        let screen = rendered(&view);
-        assert!(screen.contains("• o shown below"), "{screen}");
-        assert!(
-            screen.contains(". being loaded · codex · loading…"),
-            "{screen}"
-        );
     }
 }

@@ -36,6 +36,14 @@ pub const GOLD: Color = Color::Rgb(230, 200, 120);
 pub const PEACH: Color = Color::Rgb(255, 215, 175);
 /// A clear amber yellow (221), the one mark asking for action.
 pub const AMBER_YELLOW: Color = Color::Rgb(230, 200, 95);
+/// A brighter, warmer yellow (221 proper), lit up against [`AMBER_YELLOW`].
+pub const BRIGHT_AMBER: Color = Color::Rgb(255, 215, 95);
+/// [`WHITE`] with a touch of yellow.
+pub const YELLOW_WHITE: Color = Color::Rgb(255, 245, 205);
+/// [`WHITE`] with a touch of green.
+pub const GREEN_WHITE: Color = Color::Rgb(225, 250, 225);
+/// A soft, light cyan: [`WHITE`] leaning well toward blue-green.
+pub const SOFT_CYAN: Color = Color::Rgb(175, 225, 230);
 /// 211, `Special`.
 pub const PINK: Color = Color::Rgb(255, 135, 175);
 /// The warning hue a step down, kept bright enough to read.
@@ -64,24 +72,36 @@ pub const MAUVE: Color = Color::Rgb(205, 160, 215);
 /// A restrained cue behind operator-authored rows, separating prompts from
 /// agent output without turning the log into chat bubbles.
 pub const DARK_GREEN_TINT: Color = Color::Rgb(18, 28, 21);
+/// Between [`NEAR_BLACK`] and [`DARK_GRAY`], closer to the former.
+pub const FAINT_GRAY: Color = Color::Rgb(28, 28, 28);
+/// [`AMBER_ORANGE`] an eighth of the way up from [`NEAR_BLACK`].
+pub const FAINT_ORANGE: Color = Color::Rgb(43, 33, 25);
 /// 236, `CursorLine`.
 pub const DARK_GRAY: Color = Color::Rgb(48, 48, 48);
-/// A faint wash of [`ROSE`] behind a pending interaction's row.
-pub const DARK_ROSE_TINT: Color = Color::Rgb(36, 28, 28);
-/// A faint wash of [`AMBER_YELLOW`] behind a running interaction's row.
-pub const DARK_AMBER_TINT: Color = Color::Rgb(36, 32, 14);
-/// A faint wash of green behind an idle interaction's row.
-pub const DARK_GREEN_TINT_DEEP: Color = Color::Rgb(16, 34, 18);
-/// A faint wash of [`MUTED_ROSE`] behind a backgrounded interaction's row.
-pub const MUTED_ROSE_TINT: Color = Color::Rgb(34, 24, 24);
-/// A faint rust behind a stopped interaction's row.
-pub const DARK_RUST_TINT: Color = Color::Rgb(40, 20, 10);
-/// A faint wash of red behind a failed interaction's row.
-pub const DARK_RED_TINT: Color = Color::Rgb(44, 14, 14);
-/// A faint wash of stone behind an ended interaction's row.
-pub const DARK_STONE_TINT: Color = Color::Rgb(30, 29, 26);
-/// 238.
-pub const MEDIUM_GRAY: Color = Color::Rgb(68, 68, 68);
+/// [`PALE_PINK`] a fifth of the way up from [`NEAR_BLACK`].
+pub const PALE_PINK_TINT: Color = Color::Rgb(70, 61, 61);
+/// [`AMBER_YELLOW`] a fifth of the way up from [`NEAR_BLACK`].
+pub const AMBER_TINT: Color = Color::Rgb(65, 58, 35);
+/// A green a fifth of the way up from [`NEAR_BLACK`].
+pub const GREEN_TINT: Color = Color::Rgb(30, 60, 34);
+/// [`MUTED_ROSE`] a fifth of the way up from [`NEAR_BLACK`].
+pub const MUTED_ROSE_TINT: Color = Color::Rgb(51, 42, 42);
+/// [`STONE`] a fifth of the way up from [`NEAR_BLACK`].
+pub const STONE_TINT: Color = Color::Rgb(53, 51, 47);
+/// A red a fifth of the way up from [`NEAR_BLACK`].
+pub const RED_TINT: Color = Color::Rgb(64, 24, 24);
+/// [`PALE_PINK`] nearly half the way up from [`NEAR_BLACK`].
+pub const PALE_PINK_TINT_BRIGHT: Color = Color::Rgb(125, 107, 107);
+/// [`AMBER_YELLOW`] nearly half the way up from [`NEAR_BLACK`].
+pub const AMBER_TINT_BRIGHT: Color = Color::Rgb(113, 100, 53);
+/// A green nearly half the way up from [`NEAR_BLACK`].
+pub const GREEN_TINT_BRIGHT: Color = Color::Rgb(45, 110, 52);
+/// [`MUTED_ROSE`] nearly half the way up from [`NEAR_BLACK`].
+pub const MUTED_ROSE_TINT_BRIGHT: Color = Color::Rgb(86, 68, 68);
+/// [`STONE`] nearly half the way up from [`NEAR_BLACK`].
+pub const STONE_TINT_BRIGHT: Color = Color::Rgb(90, 86, 77);
+/// A red nearly half the way up from [`NEAR_BLACK`].
+pub const RED_TINT_BRIGHT: Color = Color::Rgb(120, 36, 36);
 /// 228, `PreProc` / `MatchParen` text.
 pub const BRIGHT_YELLOW: Color = Color::Rgb(255, 255, 135);
 /// A dusty rose (95) under the rose of the link itself, in place of orgone's

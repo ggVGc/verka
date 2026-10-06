@@ -57,6 +57,10 @@ pub struct LiveInteractions {
     /// An Interaction that arrived asking to be focused — see
     /// [`InteractionSummary::focus_requested`] — and has not been acted on.
     focus_claim: Option<InteractionSummary>,
+    /// The first line the navigator showed when last drawn. The cursor moves
+    /// freely within the view and only scrolls it near an edge, so where the
+    /// view sits has to be remembered between frames.
+    pub scroll_offset: usize,
 }
 
 /// The event list's tally of listed Interactions by activity, rendered on the
@@ -218,17 +222,18 @@ impl LiveInteractions {
 
     /// The visible indices in the order [`crate::presentation::interactions`] draws
     /// them: in All scope the entries are grouped under their Workspace
-    /// heading, so j/k has to walk that order rather than the raw item order.
+    /// heading, and in either scope those sharing a directory under its, so
+    /// j/k has to walk that order rather than the raw item order.
     ///
     /// A stopped entry stays where it belongs, in its own Workspace's group and
     /// in item order: its row says that it stopped and why, which is enough to
     /// tell it apart from the work that can still be talked to.
     pub fn display_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
-        let visible = self.visible_indices(workspace_id);
-        if self.only_current_workspace {
-            return visible;
-        }
-        grouped_by_workspace(&self.items, visible)
+        grouped_by_workspace(
+            &self.items,
+            &self.workspaces,
+            self.visible_indices(workspace_id),
+        )
     }
 
     /// Every Interaction the `n`/`N` steps may visit, in display order. In
@@ -241,13 +246,21 @@ impl LiveInteractions {
     /// on behind the filter is revealed rather than skipped.
     fn step_order(&self, workspace_id: Option<&str>) -> Vec<usize> {
         if self.only_current_workspace {
-            return (0..self.items.len())
-                .filter(|index| {
-                    workspace_id.is_some_and(|id| self.items[*index].workspace_id == id)
-                })
-                .collect();
+            return grouped_by_workspace(
+                &self.items,
+                &self.workspaces,
+                (0..self.items.len())
+                    .filter(|index| {
+                        workspace_id.is_some_and(|id| self.items[*index].workspace_id == id)
+                    })
+                    .collect(),
+            );
         }
-        grouped_by_workspace(&self.items, (0..self.items.len()).collect())
+        grouped_by_workspace(
+            &self.items,
+            &self.workspaces,
+            (0..self.items.len()).collect(),
+        )
     }
 
     /// The first Interaction in `order` after `from` that `candidate` accepts,
@@ -813,24 +826,47 @@ fn first_live_where(
 }
 
 /// `visible` re-ordered so each Workspace's entries are contiguous, in the
-/// order the Workspaces themselves first appear: what [`crate::presentation::interactions`]
-/// draws under its Workspace headings, and so what walking the list has to
-/// follow rather than the creation-sorted item order.
-fn grouped_by_workspace(interactions: &[InteractionSummary], visible: Vec<usize>) -> Vec<usize> {
-    let mut ordered = Vec::with_capacity(visible.len());
-    for leader in &visible {
-        if ordered.contains(leader) {
-            continue;
-        }
-        let workspace_id = &interactions[*leader].workspace_id;
-        ordered.extend(
-            visible
-                .iter()
-                .copied()
-                .filter(|index| interactions[*index].workspace_id == *workspace_id),
-        );
-    }
+/// order the Workspaces themselves first appear. Within a Workspace those in
+/// its main checkout come first, and the rest are kept together by the
+/// directory they work in, in the order the directories first appear: what
+/// [`crate::presentation::interactions`] draws under its Workspace and
+/// directory headings, and so what walking the list has to follow rather than
+/// the creation-sorted item order.
+fn grouped_by_workspace(
+    interactions: &[InteractionSummary],
+    workspaces: &[WorkspaceSummary],
+    visible: Vec<usize>,
+) -> Vec<usize> {
+    let first = |same: &dyn Fn(&InteractionSummary) -> bool| {
+        visible.iter().position(|index| same(&interactions[*index]))
+    };
+    let mut ordered = visible.clone();
+    // The sort is stable, so each group keeps the item order.
+    ordered.sort_by_cached_key(|index| {
+        let interaction = &interactions[*index];
+        let workspace = first(&|other| other.workspace_id == interaction.workspace_id);
+        let directory = if in_main_checkout(interaction, workspaces) {
+            None
+        } else {
+            first(&|other| other.workspace == interaction.workspace)
+        };
+        (workspace, directory)
+    });
     ordered
+}
+
+/// Whether `interaction` works in its Workspace's own checkout — on its main
+/// branch, typically — rather than in a worktree made for it. Before Git has
+/// been asked where it works, that is whether it works in the Workspace
+/// directory: Styra makes its worktrees outside it.
+pub fn in_main_checkout(interaction: &InteractionSummary, workspaces: &[WorkspaceSummary]) -> bool {
+    match &interaction.checkout {
+        Some(checkout) => !checkout.linked(),
+        None => workspaces
+            .iter()
+            .find(|workspace| workspace.id == interaction.workspace_id)
+            .is_none_or(|workspace| interaction.workspace.starts_with(&workspace.host_path)),
+    }
 }
 
 /// Newest first, by creation time alone. What an Interaction is doing changes
@@ -1558,6 +1594,56 @@ mod tests {
         live.toggle_workspace_scope();
         assert!(!live.only_current_workspace);
         assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
+    }
+
+    /// Interactions working in the same worktree are drawn together under
+    /// its heading, after those in the Workspace's main checkout, so j/k walks
+    /// them in that order too, in either scope.
+    #[test]
+    fn navigation_follows_the_directory_grouped_display_order() {
+        let in_worktree = |id: &str| {
+            let mut interaction = interaction(id, InteractionActivity::Pending);
+            interaction.workspace = PathBuf::from("/worktrees/feature");
+            interaction.checkout = Some(styra_protocol::CheckoutState {
+                worktree: PathBuf::from("/worktrees/feature"),
+                repository: PathBuf::from("/workspace"),
+                branch: Some("feature".into()),
+            });
+            interaction
+        };
+        let mut other = interaction("other", InteractionActivity::Pending);
+        other.workspace_id = "other-workspace".into();
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                in_worktree("feature-1"),
+                interaction("main-1", InteractionActivity::Pending),
+                other,
+                in_worktree("feature-2"),
+                interaction("main-2", InteractionActivity::Pending),
+            ],
+            vec![],
+        );
+        let ordered = |live: &LiveInteractions| {
+            live.display_indices(Some("workspace"))
+                .into_iter()
+                .map(|index| live.items[index].id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ordered(&live),
+            ["main-1", "main-2", "feature-1", "feature-2", "other"]
+        );
+        assert_eq!(
+            live.next("main-2", Some("workspace")).unwrap().id,
+            "feature-1"
+        );
+
+        live.toggle_workspace_scope();
+        assert_eq!(
+            ordered(&live),
+            ["main-1", "main-2", "feature-1", "feature-2"]
+        );
     }
 
     #[test]

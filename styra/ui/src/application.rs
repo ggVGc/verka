@@ -222,7 +222,7 @@ fn render_events(
                 Constraint::Min(1),
             ])
             .split(interaction_area);
-        interactions::render(frame, navigator, panes[0]);
+        feedback.navigator_offset = Some(interactions::render(frame, navigator, panes[0]));
         panes[1]
     } else {
         interaction_area

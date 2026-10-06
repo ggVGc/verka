@@ -86,6 +86,8 @@ pub struct RenderFeedback {
     pub scroll: Vec<ScrollFeedback>,
     pub list_offset: Option<usize>,
     pub list_row_offset: Option<usize>,
+    /// The line the interactions navigator was drawn from, when it was drawn.
+    pub navigator_offset: Option<usize>,
 }
 
 /// An error raised by the terminal boundary.
@@ -318,6 +320,7 @@ where
                 }],
                 list_offset: None,
                 list_row_offset: None,
+                navigator_offset: None,
             }
         })
     }

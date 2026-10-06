@@ -1676,6 +1676,14 @@ pub fn summary_line(
             Style::default(),
         ),
     };
+    // The cursor's text in the soft cyan the live list draws its cursor's in,
+    // so the two lists mark their selection alike. The tag and the result
+    // mark keep their own colors, so what the entry is still reads.
+    let summary_style = if entry.selected {
+        summary_style.fg(theme::SELECTED_INTERACTION_TEXT)
+    } else {
+        summary_style
+    };
     let mut spans = vec![
         Span::raw(row_lead),
         Span::styled(
@@ -2232,6 +2240,40 @@ mod tests {
             rows.concat().contains("/re▌ · 1 more character"),
             "{rows:?}"
         );
+    }
+
+    /// The selected entry's text is drawn in the live list's cursor color,
+    /// and its tag keeps its own so what the entry is still reads.
+    #[test]
+    fn the_selected_entry_text_is_soft_cyan() {
+        let event = AgentEvent::AgentMessage {
+            text: "the checks are green".into(),
+        };
+        let fg = |selected: bool, content: &str| {
+            let entry = EventEntry {
+                event: &event,
+                version: version(),
+                expanded: false,
+                has_detail: false,
+                contract: None,
+                selected,
+                link_highlight: None,
+            };
+            summary_line(&entry, false, false, true, Protocol::default())
+                .spans
+                .into_iter()
+                .find(|span| span.content.contains(content))
+                .and_then(|span| span.style.fg)
+        };
+        assert_eq!(
+            fg(true, "the checks are green"),
+            Some(theme::SELECTED_INTERACTION_TEXT)
+        );
+        assert_ne!(
+            fg(false, "the checks are green"),
+            Some(theme::SELECTED_INTERACTION_TEXT)
+        );
+        assert_ne!(fg(true, "«"), Some(theme::SELECTED_INTERACTION_TEXT));
     }
 
     #[test]
