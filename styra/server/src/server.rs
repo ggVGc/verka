@@ -677,6 +677,21 @@ fn awaiting_window(
     refused_by.cloned()
 }
 
+/// Refuse to branch a Session whose interaction is still working. Its history
+/// has nothing settled to copy yet: the branch would take the work cut off
+/// mid-turn — a subagent started and never finished — while the source went on
+/// with it regardless.
+fn ensure_branchable(id: &str, activity: InteractionActivity) -> Result<()> {
+    let working = match activity {
+        InteractionActivity::Running => "a turn is running",
+        InteractionActivity::Background => "background work is running",
+        InteractionActivity::Pending | InteractionActivity::Stopped => return Ok(()),
+    };
+    anyhow::bail!(
+        "session {id:?} is still working ({working}); wait for it to finish or stop it before branching"
+    )
+}
+
 /// Why the turn that just ended stopped, most specific answer first: a refused
 /// window is why it ran nothing at all, an interrupt is why it stopped short,
 /// an error is why it gave up, and otherwise it finished.
@@ -2687,6 +2702,9 @@ impl ServerState {
                 to_provider.as_str()
             );
         }
+        if let Ok(source) = self.interaction(id) {
+            ensure_branchable(id, source.activity.activity())?;
+        }
         // A conversion seals the source below, and a sealed Session has
         // nothing running in it. Killed before anything is read, so the
         // transcript and journal copied are final and the agent cannot go on
@@ -4388,6 +4406,21 @@ mod tests {
         let idle = activity.get();
         assert_eq!(idle.activity, InteractionActivity::Pending);
         assert!(idle.since_ms > started, "a real change dates itself");
+    }
+
+    /// An interaction still working — a turn, or background work after one —
+    /// cannot be branched; one waiting for input or stopped can.
+    #[test]
+    fn only_an_interaction_at_rest_can_be_branched() {
+        for working in [
+            InteractionActivity::Running,
+            InteractionActivity::Background,
+        ] {
+            let error = ensure_branchable("source", working).unwrap_err();
+            assert!(error.to_string().contains("still working"), "{error:#}");
+        }
+        assert!(ensure_branchable("source", InteractionActivity::Pending).is_ok());
+        assert!(ensure_branchable("source", InteractionActivity::Stopped).is_ok());
     }
 
     /// A background set reported empty answers for the state it was asked
