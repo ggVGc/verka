@@ -1383,7 +1383,9 @@ pub fn run(
                     app.interactions.refresh(interactions);
                     interactions_refreshed = Instant::now();
                 }
-                let next = app.interactions.next_attention_or_live(&app.session_id);
+                let next = app
+                    .interactions
+                    .next_attention_or_live(&app.session_id, app.workspace.id.as_deref());
                 let Some(next) = next else {
                     app.show_action_message("no other interaction is running");
                     continue;
@@ -1395,7 +1397,10 @@ pub fn run(
                     app.interactions.refresh(interactions);
                     interactions_refreshed = Instant::now();
                 }
-                let Some(next) = app.interactions.next_active(&app.session_id) else {
+                let Some(next) = app
+                    .interactions
+                    .next_active(&app.session_id, app.workspace.id.as_deref())
+                else {
                     app.show_action_message("no other interaction is actively working");
                     continue;
                 };

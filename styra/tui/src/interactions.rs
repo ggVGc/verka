@@ -231,15 +231,34 @@ impl LiveInteractions {
         grouped_by_workspace(&self.items, visible)
     }
 
-    /// The next Interaction that went idle unseen, from `from` onward in
-    /// display order, wrapping past the end of the list: repeated presses walk
-    /// every one of them and come back rather than stopping at the last.
+    /// Every Interaction the `n`/`N` steps may visit, in display order. In
+    /// Workspace scope that is only the current Workspace's: the operator has
+    /// narrowed the list to it, and stepping out of it would undo that. In All
+    /// scope it is every one, grouped as the list draws them.
     ///
-    /// Deliberately not filtered by the navigator's Workspace scope. The
-    /// notification count is of every unseen one on the server, so every one it
-    /// counts has to be reachable from it.
-    pub fn next_idle_unseen(&self, from: &str) -> Option<InteractionSummary> {
-        let order = grouped_by_workspace(&self.items, (0..self.items.len()).collect());
+    /// Unlike [`Self::display_indices`] this ignores the completion setting
+    /// and the `/` filter: each step picks its own candidates, and one it lands
+    /// on behind the filter is revealed rather than skipped.
+    fn step_order(&self, workspace_id: Option<&str>) -> Vec<usize> {
+        if self.only_current_workspace {
+            return (0..self.items.len())
+                .filter(|index| {
+                    workspace_id.is_some_and(|id| self.items[*index].workspace_id == id)
+                })
+                .collect();
+        }
+        grouped_by_workspace(&self.items, (0..self.items.len()).collect())
+    }
+
+    /// The first Interaction in `order` after `from` that `candidate` accepts,
+    /// wrapping past the end, so repeated presses walk every one of them and
+    /// come back rather than stopping at the last. `from` itself never is.
+    fn step_from(
+        &self,
+        order: &[usize],
+        from: &str,
+        candidate: impl Fn(&InteractionSummary) -> bool,
+    ) -> Option<InteractionSummary> {
         let start = order
             .iter()
             .position(|index| self.items[*index].id == from)
@@ -251,52 +270,54 @@ impl LiveInteractions {
             .skip(start)
             .take(order.len())
             .map(|index| &self.items[*index])
-            .find(|interaction| {
-                interaction.id != from && is_idle(interaction) && interaction.idle_unseen
-            })
+            .find(|interaction| interaction.id != from && candidate(interaction))
             .cloned()
+    }
+
+    /// The next Interaction that went idle unseen, from `from` onward in
+    /// display order, wrapping past the end of the list.
+    ///
+    /// In All scope this reaches every unseen one on the server, which is what
+    /// the notification count counts; in Workspace scope only those in the
+    /// current Workspace — see [`Self::step_order`].
+    pub fn next_idle_unseen(
+        &self,
+        from: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        self.step_from(&self.step_order(workspace_id), from, |interaction| {
+            is_idle(interaction) && interaction.idle_unseen
+        })
     }
 
     /// The next Interaction that is still live — one the agent can still be
     /// handed a turn — from `from` in display order, wrapping past the end of
     /// the list so repeated presses walk the whole working set and come back.
     ///
-    /// Like [`Self::next_idle_unseen`] this ignores the navigator's Workspace
-    /// scope: the operator is asking for the work that is running, wherever it
-    /// happens to be running.  Completed Interactions are not candidates, for
-    /// the same reason the navigator hides them.
-    pub fn next_live(&self, from: &str) -> Option<InteractionSummary> {
-        let order = grouped_by_workspace(&self.items, (0..self.items.len()).collect());
-        let start = order
-            .iter()
-            .position(|index| self.items[*index].id == from)
-            .map(|position| position + 1)
-            .unwrap_or_default();
-        order
-            .iter()
-            .cycle()
-            .skip(start)
-            .take(order.len())
-            .map(|index| &self.items[*index])
-            .find(|interaction| {
-                interaction.id != from
-                    && interaction.activity.accepting()
-                    && !interaction.completed.is_done()
-            })
-            .cloned()
+    /// Scoped as [`Self::next_idle_unseen`] is. Completed Interactions are not
+    /// candidates, for the same reason the navigator hides them.
+    pub fn next_live(&self, from: &str, workspace_id: Option<&str>) -> Option<InteractionSummary> {
+        self.step_from(&self.step_order(workspace_id), from, |interaction| {
+            interaction.activity.accepting() && !interaction.completed.is_done()
+        })
     }
 
     /// The next destination for the global `n` shortcut. An interaction that
     /// became idle while unseen takes precedence over the ordinary live-work
     /// walk; absent one, the walk retains its display-order behavior.
-    pub fn next_attention_or_live(&self, from: &str) -> Option<InteractionSummary> {
-        self.next_idle_unseen(from).or_else(|| self.next_live(from))
+    pub fn next_attention_or_live(
+        &self,
+        from: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        self.next_idle_unseen(from, workspace_id)
+            .or_else(|| self.next_live(from, workspace_id))
     }
 
     /// Move the cursor onto the next live Interaction, as a j/k move does, so
-    /// the jump loads only where it comes to rest. Reveals All scope for the
-    /// same reason unseen idle work does: live work must not be unreachable
-    /// because of the filter the navigator happens to be showing.
+    /// the jump loads only where it comes to rest. The step stays within the
+    /// navigator's scope, but reveals one hidden behind the `/` filter: live
+    /// work must not be unreachable because of a search.
     ///
     /// The step starts from the cursor, so presses quicker than the settle
     /// keep walking rather than landing on the same row each time.
@@ -305,66 +326,62 @@ impl LiveInteractions {
         current: &str,
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        let next = self.next_live(self.cursor(current))?;
-        if self.only_current_workspace && Some(next.workspace_id.as_str()) != workspace_id {
-            self.only_current_workspace = false;
-        }
-        self.reveal_past_filter(&next);
-        self.move_cursor_to(next.id.clone(), current);
-        Some(next)
+        let next = self.next_live(self.cursor(current), workspace_id)?;
+        self.cursor_to(next, current)
     }
 
     /// The next Interaction that is actually working — Running or Background —
     /// from `from` in display order, wrapping past the end of the list. Unlike
     /// [`Self::next_live`] this skips ones idle and waiting on the operator, so
-    /// the step only ever lands on work in progress.
-    pub fn next_active(&self, from: &str) -> Option<InteractionSummary> {
-        self.step_active(from, false)
+    /// the step only ever lands on work in progress. Scoped as
+    /// [`Self::next_live`] is.
+    pub fn next_active(
+        &self,
+        from: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        self.step_active(from, workspace_id, false)
     }
 
     /// [`Self::next_active`] walking the other way: the previous working
     /// Interaction in display order, wrapping past the start of the list.
-    pub fn previous_active(&self, from: &str) -> Option<InteractionSummary> {
-        self.step_active(from, true)
+    pub fn previous_active(
+        &self,
+        from: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        self.step_active(from, workspace_id, true)
     }
 
-    fn step_active(&self, from: &str, backwards: bool) -> Option<InteractionSummary> {
-        let mut order = grouped_by_workspace(&self.items, (0..self.items.len()).collect());
+    fn step_active(
+        &self,
+        from: &str,
+        workspace_id: Option<&str>,
+        backwards: bool,
+    ) -> Option<InteractionSummary> {
+        let mut order = self.step_order(workspace_id);
         if backwards {
             order.reverse();
         }
-        let start = order
-            .iter()
-            .position(|index| self.items[*index].id == from)
-            .map(|position| position + 1)
-            .unwrap_or_default();
-        order
-            .iter()
-            .cycle()
-            .skip(start)
-            .take(order.len())
-            .map(|index| &self.items[*index])
-            .find(|interaction| {
-                interaction.id != from
-                    && matches!(
-                        interaction.activity,
-                        styra_protocol::InteractionActivity::Running
-                            | styra_protocol::InteractionActivity::Background
-                    )
-            })
-            .cloned()
+        self.step_from(&order, from, |interaction| {
+            matches!(
+                interaction.activity,
+                styra_protocol::InteractionActivity::Running
+                    | styra_protocol::InteractionActivity::Background
+            )
+        })
     }
 
     /// Move the cursor onto the next actively working Interaction, as a j/k
-    /// move does, so the jump loads only where it comes to rest. Reveals All
-    /// scope for the same reason [`Self::cursor_to_next_live`] does.
+    /// move does, so the jump loads only where it comes to rest. Scoped and
+    /// revealed as [`Self::cursor_to_next_live`] is.
     pub fn cursor_to_next_active(
         &mut self,
         current: &str,
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        let next = self.next_active(self.cursor(current))?;
-        self.cursor_to_active(next, current, workspace_id)
+        let next = self.next_active(self.cursor(current), workspace_id)?;
+        self.cursor_to(next, current)
     }
 
     /// [`Self::cursor_to_next_active`] walking the other way.
@@ -373,19 +390,15 @@ impl LiveInteractions {
         current: &str,
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        let previous = self.previous_active(self.cursor(current))?;
-        self.cursor_to_active(previous, current, workspace_id)
+        let previous = self.previous_active(self.cursor(current), workspace_id)?;
+        self.cursor_to(previous, current)
     }
 
-    fn cursor_to_active(
+    fn cursor_to(
         &mut self,
         target: InteractionSummary,
         current: &str,
-        workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        if self.only_current_workspace && Some(target.workspace_id.as_str()) != workspace_id {
-            self.only_current_workspace = false;
-        }
         self.reveal_past_filter(&target);
         self.move_cursor_to(target.id.clone(), current);
         Some(target)
@@ -1188,9 +1201,9 @@ mod tests {
             vec![],
         );
 
-        assert_eq!(live.next_idle_unseen("current").unwrap().id, "unseen");
-        assert_eq!(live.next_idle_unseen("unseen").unwrap().id, "later");
-        assert_eq!(live.next_idle_unseen("later").unwrap().id, "unseen");
+        assert_eq!(live.next_idle_unseen("current", None).unwrap().id, "unseen");
+        assert_eq!(live.next_idle_unseen("unseen", None).unwrap().id, "later");
+        assert_eq!(live.next_idle_unseen("later", None).unwrap().id, "unseen");
     }
 
     /// The step between running interactions walks every live one — waiting on
@@ -1211,9 +1224,9 @@ mod tests {
         );
 
         // The step follows the list's order, wrapping at its end.
-        assert_eq!(live.next_live("current").unwrap().id, "waiting");
-        assert_eq!(live.next_live("waiting").unwrap().id, "background");
-        assert_eq!(live.next_live("background").unwrap().id, "current");
+        assert_eq!(live.next_live("current", None).unwrap().id, "waiting");
+        assert_eq!(live.next_live("waiting", None).unwrap().id, "background");
+        assert_eq!(live.next_live("background", None).unwrap().id, "current");
     }
 
     #[test]
@@ -1230,7 +1243,10 @@ mod tests {
             vec![],
         );
 
-        assert_eq!(live.next_attention_or_live("current").unwrap().id, "idle");
+        assert_eq!(
+            live.next_attention_or_live("current", None).unwrap().id,
+            "idle"
+        );
 
         live.items
             .iter_mut()
@@ -1238,7 +1254,7 @@ mod tests {
             .unwrap()
             .idle_unseen = false;
         assert_eq!(
-            live.next_attention_or_live("current").unwrap().id,
+            live.next_attention_or_live("current", None).unwrap().id,
             "next-live"
         );
     }
@@ -1259,8 +1275,8 @@ mod tests {
             vec![],
         );
 
-        assert_eq!(live.next_active("current").unwrap().id, "background");
-        assert_eq!(live.next_active("background").unwrap().id, "current");
+        assert_eq!(live.next_active("current", None).unwrap().id, "background");
+        assert_eq!(live.next_active("background", None).unwrap().id, "current");
     }
 
     /// With nothing else actively working there is nowhere to step to: an
@@ -1277,7 +1293,7 @@ mod tests {
             vec![],
         );
 
-        assert!(live.next_active("current").is_none());
+        assert!(live.next_active("current", None).is_none());
     }
 
     /// With nothing else running there is nowhere to step to: the interaction
@@ -1294,13 +1310,54 @@ mod tests {
             vec![],
         );
 
-        assert!(live.next_live("current").is_none());
+        assert!(live.next_live("current", None).is_none());
     }
 
-    /// Running work elsewhere is still running work, so the step reveals All
-    /// rather than refusing to leave the Workspace being shown.
+    /// In Workspace scope the steps stay in the current Workspace: the
+    /// operator narrowed the list to it, so work elsewhere is not a
+    /// destination, and the scope is left as it was.
     #[test]
-    fn the_live_step_reveals_all_workspaces_to_reach_a_running_interaction() {
+    fn steps_in_workspace_scope_stay_in_the_current_workspace() {
+        let mut elsewhere = interaction("elsewhere", InteractionActivity::Running);
+        elsewhere.workspace_id = "other-workspace".into();
+        let mut unseen_elsewhere = interaction("unseen-elsewhere", InteractionActivity::Pending);
+        unseen_elsewhere.workspace_id = "other-workspace".into();
+        unseen_elsewhere.idle_unseen = true;
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("current", InteractionActivity::Running),
+                elsewhere,
+                unseen_elsewhere,
+                interaction("here", InteractionActivity::Running),
+            ],
+            vec![],
+        );
+        live.toggle_workspace_scope();
+        let scope = Some("workspace");
+
+        assert_eq!(
+            live.next_attention_or_live("current", scope).unwrap().id,
+            "here"
+        );
+        assert_eq!(
+            live.next_attention_or_live("here", scope).unwrap().id,
+            "current"
+        );
+        assert_eq!(live.next_active("current", scope).unwrap().id, "here");
+        assert_eq!(live.previous_active("current", scope).unwrap().id, "here");
+
+        let next = live.cursor_to_next_live("current", scope).unwrap();
+        assert_eq!(next.id, "here");
+        assert!(live.only_current_workspace);
+        // Moved like a j/k step, so the load waits for the cursor to rest.
+        assert_eq!(live.cursor("current"), "here");
+    }
+
+    /// With the rest of the current Workspace stopped there is nowhere to
+    /// step in Workspace scope, though there is in All.
+    #[test]
+    fn steps_in_workspace_scope_do_not_leave_it_for_lack_of_work() {
         let mut elsewhere = interaction("elsewhere", InteractionActivity::Running);
         elsewhere.workspace_id = "other-workspace".into();
         let mut live = LiveInteractions::default();
@@ -1311,16 +1368,14 @@ mod tests {
             ],
             vec![],
         );
+
+        assert_eq!(
+            live.next_live("current", Some("workspace")).unwrap().id,
+            "elsewhere"
+        );
         live.toggle_workspace_scope();
-
-        let next = live
-            .cursor_to_next_live("current", Some("workspace"))
-            .unwrap();
-
-        assert_eq!(next.id, "elsewhere");
-        assert!(!live.only_current_workspace);
-        // Moved like a j/k step, so the load waits for the cursor to rest.
-        assert_eq!(live.cursor("current"), "elsewhere");
+        assert!(live.next_live("current", Some("workspace")).is_none());
+        assert!(live.next_active("current", Some("workspace")).is_none());
     }
 
     /// Presses quicker than the settle must keep walking the live set, so
@@ -1357,10 +1412,10 @@ mod tests {
             ],
             vec![],
         );
-        let forward = live.next_active("current").unwrap().id;
-        let backward = live.previous_active("current").unwrap().id;
+        let forward = live.next_active("current", None).unwrap().id;
+        let backward = live.previous_active("current", None).unwrap().id;
         assert_ne!(forward, backward);
-        assert_eq!(live.previous_active(&forward).unwrap().id, "current");
+        assert_eq!(live.previous_active(&forward, None).unwrap().id, "current");
 
         let back = live.cursor_to_previous_active("current", None).unwrap().id;
         assert_eq!(back, backward);
@@ -1385,7 +1440,7 @@ mod tests {
             vec![],
         );
 
-        assert!(live.next_idle_unseen("current").is_none());
+        assert!(live.next_idle_unseen("current", None).is_none());
     }
 
     /// Loading an Interaction replaces the whole screen, so a cursor crossing

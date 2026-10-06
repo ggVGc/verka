@@ -193,7 +193,9 @@ the opening words of the prompt name it instead, as before.
 `n` first goes to an interaction that newly went idle, wherever it is. If none
 are waiting, it steps through every interaction still running — waiting on you
 or mid-turn, seen or unseen — in list order, wrapping at the end. Stopped and
-completed interactions are skipped.
+completed interactions are skipped. `N` likewise steps through the interactions
+actively working. While the live-interaction list is scoped to the current
+Workspace (`w`), both stay within that Workspace.
 
 The tag editor lists every tag already used by a Session, across Workspaces.
 Type to fuzzy-filter the list (`Esc` clears the filter), move with the arrows
