@@ -783,6 +783,7 @@ M.types.InteractionSummary = {
     { name = "completed", required = false, type = { kind = "ref", name = "CompletionState" } },
     { name = "focus_requested", required = false, type = { kind = "boolean" } },
     { name = "origin", required = false, type = { kind = "optional", inner = { kind = "ref", name = "SessionOrigin" } } },
+    { name = "restored", required = false, type = { kind = "boolean" } },
   },
 }
 

@@ -11,10 +11,11 @@
 //! So the list is mirrored into the store beside the quota log, and read back
 //! on the way up. What comes back is the rows, not the agents: the processes
 //! died with the server that owned them, and nothing here restarts them. A
-//! restored row is therefore [`InteractionActivity::Stopped`] with
-//! [`InteractionActivityReason::ServerRestarted`], whatever it was doing when
-//! the previous run ended — which is both what is true and what tells the
-//! operator that resuming the Session is what would bring the agent back.
+//! restored row that was still live is therefore [`InteractionActivity::Stopped`]
+//! with [`InteractionActivityReason::ServerRestarted`] — which is both what is
+//! true and what tells the operator that resuming the Session is what would
+//! bring the agent back. A row that had already stopped keeps its own reason:
+//! the restart took nothing from it.
 //! Completion is not one of the things a restart can overwrite this way: it is
 //! a property of the Session (see [`crate::protocol::SessionSummary::completed`]),
 //! not a reason a row is stopped, so it is read fresh off the Session's stored
@@ -87,13 +88,14 @@ impl Roster {
             // operator a conversation they cannot open.
             .filter(|entry| entry.session_path.is_dir())
             .map(|mut entry| {
-                entry.summary.activity = InteractionActivity::Stopped;
-                // A branch nothing has run yet lost no agent to the restart,
-                // so it keeps saying what it is.
-                if entry.summary.activity_reason != Some(InteractionActivityReason::Branched) {
+                // A row already stopped lost no agent to the restart, so it
+                // keeps the reason it stopped for.
+                if entry.summary.activity != InteractionActivity::Stopped {
+                    entry.summary.activity = InteractionActivity::Stopped;
                     entry.summary.activity_reason =
                         Some(InteractionActivityReason::ServerRestarted);
                 }
+                entry.summary.restored = true;
                 // Deliberately not restored, for the reason the quota log does
                 // not restore its announcements: a notification is owed to the
                 // operator of the run that raised it, and this is not that run.
@@ -362,6 +364,7 @@ mod tests {
             completed: CompletionState::Active,
             focus_requested: false,
             origin: None,
+            restored: false,
         }
     }
 
@@ -529,6 +532,26 @@ mod tests {
             .collect();
         ids.sort();
         assert_eq!(ids, vec!["session-c", "session-d"]);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_row_already_stopped_keeps_its_reason_across_a_restart() {
+        let root = store("already-stopped");
+        let session = root.join("session-stopped");
+        std::fs::create_dir_all(&session).unwrap();
+        let mut row = summary("session-stopped");
+        row.activity = InteractionActivity::Stopped;
+        row.activity_reason = Some(InteractionActivityReason::Interrupted);
+        Roster::open(&root).publish(vec![(session, row)]);
+
+        let restored = Roster::open(&root).restored();
+        assert_eq!(restored[0].activity, InteractionActivity::Stopped);
+        assert_eq!(
+            restored[0].activity_reason,
+            Some(InteractionActivityReason::Interrupted)
+        );
+        assert!(restored[0].restored);
         std::fs::remove_dir_all(root).ok();
     }
 

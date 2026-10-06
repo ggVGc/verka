@@ -1058,6 +1058,7 @@ mod tests {
             completed: CompletionState::Active,
             focus_requested: false,
             origin: None,
+            restored: false,
         }
     }
 

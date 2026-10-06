@@ -771,6 +771,7 @@ impl ManagedInteraction {
             completed: *self.completed.lock().expect("completion lock poisoned"),
             focus_requested: self.focus_requested,
             origin: stored.and_then(|summary| summary.origin),
+            restored: false,
         }
     }
 
@@ -2846,6 +2847,7 @@ impl ServerState {
             completed: branched.completed,
             focus_requested: false,
             origin: branched.origin.clone(),
+            restored: false,
         };
         self.inner.roster.adopt(branched.path.clone(), row);
         self.publish_roster();
@@ -5408,6 +5410,7 @@ mod tests {
                 completed: CompletionState::Active,
                 focus_requested: false,
                 origin: None,
+                restored: false,
             },
         )]);
 

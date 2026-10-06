@@ -792,7 +792,8 @@ defmodule Styra.Protocol do
         %{name: "events", required: false, type: %{kind: :number, integer: true}},
         %{name: "completed", required: false, type: %{kind: :ref, name: "CompletionState"}},
         %{name: "focus_requested", required: false, type: %{kind: :boolean}},
-        %{name: "origin", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "SessionOrigin"}}}
+        %{name: "origin", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "SessionOrigin"}}},
+        %{name: "restored", required: false, type: %{kind: :boolean}}
       ]
     },
 

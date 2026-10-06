@@ -1047,13 +1047,9 @@ fn has_live_interaction(workspace: &WorkspaceSummary, interactions: &[Interactio
 /// server run. Those rows have no update stream, so their preview must be read
 /// from the stored Session journal instead.
 fn session_has_live_interaction(id: &str, interactions: &[InteractionSummary]) -> bool {
-    interactions.iter().any(|interaction| {
-        interaction.id == id
-            && !matches!(
-                interaction.activity_reason.as_ref(),
-                Some(styra_protocol::InteractionActivityReason::ServerRestarted)
-            )
-    })
+    interactions
+        .iter()
+        .any(|interaction| interaction.id == id && !interaction.restored)
 }
 
 #[cfg(test)]
@@ -1112,6 +1108,7 @@ mod tests {
             completed: CompletionState::Active,
             focus_requested: false,
             origin: None,
+            restored: false,
         }
     }
 
@@ -1190,7 +1187,7 @@ mod tests {
         let live = interaction("live", InteractionActivity::Pending);
         let stopped_here = interaction("stopped-here", InteractionActivity::Stopped);
         let mut restored = interaction("restored", InteractionActivity::Stopped);
-        restored.activity_reason = Some(styra_protocol::InteractionActivityReason::ServerRestarted);
+        restored.restored = true;
         let interactions = vec![live, stopped_here, restored];
 
         assert!(session_has_live_interaction("live", &interactions));

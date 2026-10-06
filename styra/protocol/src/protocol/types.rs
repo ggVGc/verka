@@ -975,6 +975,10 @@ pub struct InteractionSummary {
     /// launched fresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SessionOrigin>,
+    /// True for a row a previous server run left open. No agent and no
+    /// update stream stand behind it; its history is the stored Session's.
+    #[serde(default)]
+    pub restored: bool,
 }
 
 /// Where a Session came from, when it was not launched fresh but branched

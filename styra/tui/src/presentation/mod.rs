@@ -790,6 +790,7 @@ mod tests {
             completed: styra_protocol::CompletionState::Active,
             focus_requested: false,
             origin: None,
+            restored: false,
         }
     }
 
