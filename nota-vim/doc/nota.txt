@@ -89,9 +89,9 @@ their own repository and branch context.
 
 :NotaSuggest [text]                                          *:NotaSuggest*
         Commit this worktree's uncommitted edits to the selected review as a
-        suggestion, with [text] as its comment. Without [text], open an
-        editable Markdown draft. Fails when no review is selected. See
-        |nota-suggest|.
+        suggestion, with [text] as its comment, and undo them in the
+        checkout. Without [text], open an editable Markdown draft. Fails
+        when no review is selected. See |nota-suggest|.
 
 ==============================================================================
 5. Mappings                                                  *nota-mappings*
@@ -136,17 +136,19 @@ Nota represents suggestions as ordinary Git commits on the review branch.
 The quick way is to edit files in your own checkout and run: >vim
         :NotaSuggest Handle the missing value explicitly.
 <
-This commits your uncommitted edits to tracked files (staged or not) onto
+This moves your uncommitted edits to tracked files (staged or not) onto
 the review selected with |:NotaStart|, |:NotaShow|, or |:NotaBranch|, without
-falling back to the checked-out branch. Your checkout, index, and edits are
-left as they are. Each edited file is committed with its current content, so
-you can keep editing and run |:NotaSuggest| again: the next suggestion holds
-only what changed since. Untracked files are not included; write modified
-buffers first. Nota refuses edits that would undo changes the review already
-made to the same files, such as another reviewer's suggestion you do not
-have locally, and refuses when the review branch is checked out in this
-worktree; commit there with Git instead. Without text, |:NotaSuggest| opens a
-draft like |nota-draft|; the edits are taken when you |:write| it.
+falling back to the checked-out branch. The edits are merged onto the review
+as a patch against your HEAD, so they keep the review's earlier changes and
+suggestions. Once committed, the edited files are reset to HEAD in your
+checkout and index, and their buffers reloaded: the edits now live in the
+review, and the next |:NotaSuggest| holds only what you edit after it.
+Untracked files are not included; write modified buffers first. Nota
+refuses edits that conflict with the review, including changes on lines
+next to ones the review changed, and refuses when the review branch is
+checked out in this worktree; commit there with Git instead. Without text,
+|:NotaSuggest| opens a draft like |nota-draft|; the edits are taken when you
+|:write| it.
 
 Alternatively, create a separate worktree, edit there, and commit: >sh
         git worktree add ../my-review nota/my-review

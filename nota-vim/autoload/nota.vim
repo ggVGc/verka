@@ -178,10 +178,27 @@ function! s:unsaved(repository) abort
   endfor
 endfunction
 
-" Commit the worktree's uncommitted edits to the review branch. Each file
-" edited since HEAD takes its worktree content, so a later suggestion carries
-" only what changed since the last one. Edits that would undo the review's own
-" changes to those files are refused.
+" Reload unmodified buffers whose files changed on disk, without prompting.
+function! s:reload(repository) abort
+  let l:prefix = a:repository . '/'
+  let l:autoread = &autoread
+  set autoread
+  try
+    for l:buffer in getbufinfo({'bufloaded': 1})
+      if getbufvar(l:buffer.bufnr, '&buftype') ==# ''
+            \ && stridx(fnamemodify(l:buffer.name, ':p'), l:prefix) == 0
+        execute 'silent! checktime ' . l:buffer.bufnr
+      endif
+    endfor
+  finally
+    let &autoread = l:autoread
+  endtry
+endfunction
+
+" Commit the worktree's uncommitted edits to the review branch, then undo
+" them in the checkout and index: they now live in the review. The edits are
+" merged onto the review as a patch against HEAD, so they keep the review's
+" earlier changes; conflicting edits are refused.
 function! s:add_suggestion(context, text) abort
   let l:text = substitute(a:text, '\_s*$', '', '')
   if l:text !~# '\S'
@@ -194,7 +211,7 @@ function! s:add_suggestion(context, text) abort
   endif
   call s:unsaved(l:repository)
   let l:tip = s:git(l:repository, ['rev-parse', '--verify', l:ref . '^{commit}'])[0]
-  let l:files = {'paths': tempname(), 'guard': tempname(), 'index': tempname(),
+  let l:files = {'paths': tempname(), 'patch': tempname(), 'index': tempname(),
         \ 'message': tempname()}
   try
     call s:git(l:repository, ['diff', 'HEAD', '--name-only', '-z', '--no-renames',
@@ -202,22 +219,17 @@ function! s:add_suggestion(context, text) abort
     if getfsize(l:files.paths) <= 0
       call s:fail('no uncommitted edits to suggest')
     endif
+    call s:git(l:repository, ['diff', 'HEAD', '--binary', '--full-index', '--no-renames',
+          \ '--no-ext-diff', '--no-color', '--no-relative', '--src-prefix=a/',
+          \ '--dst-prefix=b/', '--output=' . l:files.patch])
     call s:git_index(l:files.index, l:repository, ['read-tree', l:tip])
-    call s:git_index(l:files.index, l:repository, ['--literal-pathspecs', 'add', '-A',
-          \ '--pathspec-from-file=' . l:files.paths, '--pathspec-file-nul'])
-    " The edited files must still contain what the review changed in them.
-    call s:git(l:repository, ['diff', '-U0', '--binary', '--full-index', '--no-ext-diff',
-          \ '--no-color', '--no-relative', '--src-prefix=a/', '--dst-prefix=b/',
-          \ 'HEAD', l:tip, '--output=' . l:files.guard])
-    if getfsize(l:files.guard) > 0
-      try
-        call s:git_index(l:files.index, l:repository, ['apply', '--cached', '--check',
-              \ '--reverse', '--unidiff-zero', l:files.guard])
-      catch /^nota:/
-        call s:fail('your edits would undo changes the review made to the same files:'
-              \ . substitute(v:exception, '^nota:', '', ''))
-      endtry
-    endif
+    try
+      call s:git_index(l:files.index, l:repository,
+            \ ['apply', '--cached', '--3way', l:files.patch])
+    catch /^nota:/
+      call s:fail('your edits conflict with the review:'
+            \ . substitute(v:exception, '^nota:', '', ''))
+    endtry
     let l:tree = s:git_index(l:files.index, l:repository, ['write-tree'])[0]
     if l:tree ==# s:git(l:repository, ['rev-parse', l:tip . '^{tree}'])[0]
       call s:fail('the review already contains these edits')
@@ -225,12 +237,16 @@ function! s:add_suggestion(context, text) abort
     call writefile(split(l:text, "\n", 1), l:files.message)
     let l:commit = s:git(l:repository,
           \ ['commit-tree', l:tree, '-p', l:tip, '-F', l:files.message])[0]
+    call s:git(l:repository, ['update-ref', l:ref, l:commit, l:tip])
+    call s:git(l:repository, ['--literal-pathspecs', 'restore', '--source=HEAD',
+          \ '--staged', '--worktree', '--pathspec-from-file=' . l:files.paths,
+          \ '--pathspec-file-nul'])
   finally
     for l:file in values(l:files)
       call delete(l:file)
     endfor
   endtry
-  call s:git(l:repository, ['update-ref', l:ref, l:commit, l:tip])
+  call s:reload(l:repository)
   echomsg 'Nota: ' . strpart(l:commit, 0, 12) . '  suggestion'
   return 1
 endfunction

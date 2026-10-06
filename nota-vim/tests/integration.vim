@@ -175,15 +175,17 @@ try
   NotaBranch
   call assert_equal(0, nota#command('show', []))
 
-  " Suggestions commit uncommitted edits to the selected review only.
+  " Suggestions move uncommitted edits to the selected review only.
   call setline(1, ['one', 'two', 'THREE'])
   write
   call assert_equal(0, nota#command('suggest', ['No review selected.']))
   NotaBranch nota/first
   let s:tip = s:git(s:repository, ['rev-parse', 'nota/first'])
-  " The review changed the first line; edits without it would undo that.
-  call assert_equal(0, nota#command('suggest', ['Undoes the review.']))
-  call setline(1, 'suggested')
+  " The review changed the first line; a different change to it conflicts.
+  call setline(1, 'ONE')
+  write
+  call assert_equal(0, nota#command('suggest', ['Conflicts with the review.']))
+  call setline(1, 'one')
   call assert_equal(0, nota#command('suggest', ['Unsaved edits.']))
   call assert_equal(s:tip, s:git(s:repository, ['rev-parse', 'nota/first']))
   write
@@ -191,25 +193,33 @@ try
   call assert_match('Shout the last line', s:message(s:repository, 'nota/first'))
   call assert_equal("file.txt\nstaged.txt",
         \ s:git(s:repository, ['diff-tree', '--name-only', '-r', '--no-commit-id', 'nota/first']))
+  call assert_equal(['suggested', 'two', 'THREE'],
+        \ split(s:git(s:repository, ['show', 'nota/first:file.txt']), "\n"))
+  " The suggested edits are undone in the checkout, index, and buffer.
+  call assert_equal('', s:git(s:repository, ['status', '--porcelain']))
+  call assert_equal(['one', 'two', 'three'], getline(1, '$'))
+  call assert_false(&modified)
   call assert_equal(0, nota#command('suggest', ['Nothing new.']))
-  " Edits kept after a suggestion are not suggested again.
-  call setline(2, 'TWO')
-  write
+  " Later suggestions carry only their own edits.
+  call writefile(['added'], s:repository . '/added.txt')
+  call s:git(s:repository, ['add', 'added.txt'])
   NotaSuggest
   call assert_equal('acwrite', &buftype)
   call setline(1, ['Shout the middle line', '', 'Details.'])
   write
   call assert_match('Shout the middle line\n\nDetails.', s:message(s:repository, 'nota/first'))
-  call assert_equal("-two\n+TWO", s:git(s:repository,
-        \ ['diff', '-U0', 'nota/first~', 'nota/first', '--', 'file.txt'])->split("\n")[-2:]->join("\n"))
-  call assert_equal(['suggested', 'TWO', 'THREE'],
+  call assert_equal('added.txt',
+        \ s:git(s:repository, ['diff-tree', '--name-only', '-r', '--no-commit-id', 'nota/first']))
+  call assert_equal(['suggested', 'two', 'THREE'],
         \ split(s:git(s:repository, ['show', 'nota/first:file.txt']), "\n"))
+  call assert_false(filereadable(s:repository . '/added.txt'))
+  call assert_equal('', s:git(s:repository, ['status', '--porcelain']))
   NotaShow
   call assert_match('suggestion Shout the middle line', join(getline(1, '$'), "\n"))
   close
-  call setline(1, ['one', 'two', 'three'])
-  write
   NotaBranch
+  let s:status = s:git(s:repository, ['status', '--porcelain'])
+  let s:index = s:git(s:repository, ['write-tree'])
   " Unnamed buffers use :pwd.
   enew
   execute 'cd ' . fnameescape(s:repository)
