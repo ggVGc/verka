@@ -9,26 +9,12 @@ the review record.
 Nota does not maintain a separate review database. Git supplies immutable
 entry identities, ordering, concurrency detection, history, and distribution.
 
-## Provider boundary
+## Subjects
 
-Nota resolves a provider-specific reference before starting a review:
-
-```rust
-pub trait ReviewProvider {
-    fn resolve_subject(&self, reference: &str) -> Result<ReviewSubject>;
-}
-
-pub struct ReviewSubject {
-    pub repository: PathBuf,
-    pub revision: String,
-    pub title: String,
-}
-```
-
-The Git provider resolves a Git revision in a repository. Integrations resolve
-their own domain identities before calling Nota; for example, Orka resolves a
-Linka candidate to its exact Git artifact and then uses the ordinary Git
-provider. Nota never interprets the external identity.
+A review's subject is a Git revision in a repository, which Nota resolves to an
+exact commit. Integrations resolve their own domain identities to a revision
+before calling Nota; for example, Orka resolves a Linka candidate to its exact
+Git artifact. Nota never interprets the external identity.
 
 Follow-up creation is deliberately outside the prototype interface. It can be
 added as a separate capability when Nota first needs to materialise a review
@@ -69,7 +55,7 @@ apply cleanly.
 ## Commands
 
 ```text
-nota start git <revision> [--repository <path>] [--branch <name>]
+nota start <revision> [--repository <path>] [--branch <name>]
 nota note <message> [--repository <path>]
 nota show [--repository <path>]
 ```

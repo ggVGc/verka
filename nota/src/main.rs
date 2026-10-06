@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nota::{add_note, load_review, start_review, GitProvider, ReviewEntryKind, SystemGit};
+use nota::{add_note, load_review, start_review, ReviewEntryKind, SystemGit};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -15,10 +15,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Start a review branch at an exact provider-supplied subject.
+    /// Start a review branch at a Git revision.
     Start {
-        #[command(subcommand)]
-        provider: StartProvider,
+        revision: String,
+        #[arg(long, default_value = ".")]
+        repository: PathBuf,
+        #[arg(long)]
+        branch: Option<String>,
     },
     /// Add and commit one Markdown review note.
     Note {
@@ -33,18 +36,6 @@ enum Command {
     },
 }
 
-#[derive(Subcommand)]
-enum StartProvider {
-    /// Resolve an ordinary Git revision.
-    Git {
-        revision: String,
-        #[arg(long, default_value = ".")]
-        repository: PathBuf,
-        #[arg(long)]
-        branch: Option<String>,
-    },
-}
-
 fn main() {
     if let Err(error) = run(Cli::parse()) {
         eprintln!("error: {error:#}");
@@ -54,19 +45,12 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Start { provider } => {
-            let started = match provider {
-                StartProvider::Git {
-                    revision,
-                    repository,
-                    branch,
-                } => start_review(
-                    &SystemGit,
-                    &GitProvider::new(&SystemGit, repository),
-                    &revision,
-                    branch.as_deref(),
-                )?,
-            };
+        Command::Start {
+            revision,
+            repository,
+            branch,
+        } => {
+            let started = start_review(&SystemGit, &repository, &revision, branch.as_deref())?;
             println!("review   {}", started.branch);
             println!("subject  {}", started.subject);
             println!("marker   {}", started.marker);

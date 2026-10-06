@@ -12,7 +12,7 @@ use linka::{
     Author, CandidateId, CandidateRecord, CandidateStore, GitVcs, NodeId, ProducerEvidence, Store,
     SubmissionConflict, VerificationOutcome, VerificationSubmission, WorkSnapshot,
 };
-use nota::{GitProvider, Review, StartedReview, SystemGit};
+use nota::{Review, StartedReview, SystemGit};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -344,9 +344,12 @@ impl<'a> Reviews<'a> {
     }
 
     fn start_nota(&self, record: ReviewRecord) -> Result<Started> {
-        let provider = GitProvider::new(&SystemGit, self.linka.project_root());
-        let review =
-            nota::start_review(&SystemGit, &provider, &record.subject, Some(&record.branch))?;
+        let review = nota::start_review(
+            &SystemGit,
+            &self.linka.project_root(),
+            &record.subject,
+            Some(&record.branch),
+        )?;
         Ok(Started { record, review })
     }
 

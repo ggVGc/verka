@@ -20,8 +20,7 @@ concurrency detection, history, and distribution, so there is no store layer.
 
 Implemented:
 
-- `ReviewProvider` / `ReviewSubject`, with a Git-revision provider.
-- `start_review`, `add_note`, `load_review`, `load_review_ref`.
+- `start_review` (at a Git revision), `add_note`, `load_review`, `load_review_ref`.
 - Exactly two entry kinds, `Note` and `Suggestion`, discriminated by whether
   every changed path lies under `.nota/notes/`.
 - Validation on load: a suggestion must have a non-empty message, must change

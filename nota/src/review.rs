@@ -1,5 +1,4 @@
 use crate::git::Git;
-use crate::ReviewProvider;
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -43,17 +42,17 @@ struct Marker {
     subject: String,
 }
 
-/// Resolve a subject and create its append-only review branch. The empty
-/// marker commit is created without changing any checkout.
+/// Create an append-only review branch for `revision` in the repository
+/// containing `path`. The empty marker commit is created without changing any
+/// checkout.
 pub fn start_review(
     git: &dyn Git,
-    provider: &dyn ReviewProvider,
-    reference: &str,
+    path: &Path,
+    revision: &str,
     branch: Option<&str>,
 ) -> Result<StartedReview> {
-    let subject = provider.resolve_subject(reference)?;
-    let repository = git.repository_root(&subject.repository)?;
-    let subject_revision = git.resolve_commit(&repository, &subject.revision)?;
+    let repository = git.repository_root(path)?;
+    let subject_revision = git.resolve_commit(&repository, revision)?;
     let branch = branch
         .map(str::to_string)
         .unwrap_or_else(|| format!("nota/review-{}", ulid::Ulid::new()));
@@ -61,9 +60,8 @@ pub fn start_review(
     if git.branch_exists(&repository, &branch)? {
         bail!("review branch `{branch}` already exists");
     }
-    let title = subject.title.lines().next().unwrap_or("subject").trim();
     let message = format!(
-        "Start review of {title}\n\n{REVIEW_TRAILER} {branch}\n{SUBJECT_TRAILER} {subject_revision}\n"
+        "Start review of {revision}\n\n{REVIEW_TRAILER} {branch}\n{SUBJECT_TRAILER} {subject_revision}\n"
     );
     let marker = git.commit_empty(&repository, &subject_revision, &message)?;
     git.create_branch(&repository, &branch, &marker)?;

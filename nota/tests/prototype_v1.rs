@@ -1,8 +1,5 @@
 use anyhow::{bail, Context, Result};
-use nota::{
-    add_note, load_review, load_review_ref, start_review, Git, GitProvider, ReviewEntryKind,
-    ReviewProvider,
-};
+use nota::{add_note, load_review, load_review_ref, start_review, Git, ReviewEntryKind};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -195,31 +192,23 @@ fn root() -> PathBuf {
 
 /// Start a review of `main` on `branch` and check that branch out.
 fn review_on(git: &FakeGit, branch: &str) {
-    start_review(git, &GitProvider::new(git, root()), "HEAD", Some(branch)).unwrap();
+    start_review(git, &root(), "HEAD", Some(branch)).unwrap();
     git.switch(branch);
 }
 
 #[test]
-fn git_provider_resolves_an_exact_commit() {
+fn a_review_started_inside_the_repository_resolves_an_exact_commit() {
     let git = FakeGit::new();
-    let subject = GitProvider::new(&git, root().join("src"))
-        .resolve_subject("HEAD")
-        .unwrap();
-    assert_eq!(subject.repository, root());
-    assert_eq!(subject.revision, git.tip("main"));
+    let started = start_review(&git, &root().join("src"), "HEAD", Some("nota/review-one")).unwrap();
+    assert_eq!(started.repository, root());
+    assert_eq!(started.subject, git.tip("main"));
 }
 
 #[test]
 fn review_branch_records_notes_and_ordinary_project_commits_as_suggestions() {
     let git = FakeGit::new();
     let subject = git.tip("main");
-    let started = start_review(
-        &git,
-        &GitProvider::new(&git, root()),
-        "HEAD",
-        Some("nota/review-one"),
-    )
-    .unwrap();
+    let started = start_review(&git, &root(), "HEAD", Some("nota/review-one")).unwrap();
 
     assert_eq!(started.subject, subject);
     assert_eq!(git.tip("nota/review-one"), started.marker);
