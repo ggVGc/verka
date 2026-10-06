@@ -21,7 +21,10 @@ concurrency detection, history, and distribution.
 Implemented:
 
 - A smaller `ReviewStore` trait (`start_review`, `current_review`, `add_note`,
-  `load_review`) with one implementation, `GitTrailerStore`.
+  `load_review`, `list_reviews`) with one implementation, `GitTrailerStore`.
+- A derived index of local review branches with exact-subject filtering,
+  validated entry counts, and per-branch diagnostics (`nota list`, including
+  JSON output).
 - Exactly two entry kinds, `Note` and `Suggestion`. A note is an empty commit
   with a `Nota-Note` trailer; any other entry is a suggestion.
 - Validation on load: a note must change no files; a suggestion must have a
@@ -31,8 +34,8 @@ Implemented:
 
 Not implemented — the sections below describe these, and no code provides them:
 
-- The full `ReviewStore` interface below, review queries, and backend
-  selection.
+- The full `ReviewStore` interface below, queries beyond exact subject matching,
+  and backend selection.
 - `update_entry`; entries are append-only Git commits and are never revised in
   place.
 - Suggested edits as structured proposals carrying an expected original range.
@@ -40,8 +43,8 @@ Not implemented — the sections below describe these, and no code provides them
   Git conflict is the only staleness signal.
 - Reply, resolution-transition, and follow-up-request entry kinds, and any
   resolved/actionable state.
-- The cross-backend contract test suite. The prototype has one test file
-  covering the Git behaviour it actually has.
+- The cross-backend contract test suite. The prototype tests the Git behaviour
+  it actually has, including CLI discovery in real repositories.
 
 ## Purpose
 
