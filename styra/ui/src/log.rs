@@ -1,4 +1,4 @@
-use crate::palette;
+use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -38,15 +38,15 @@ pub fn render(
 
 fn line(entry: &LogEntryView<'_>) -> Line<'static> {
     let (label, color) = match entry.level {
-        LogLevel::Info => ("info ", palette::MUTED_TEXT),
-        LogLevel::Warn => ("warn ", palette::WARNING),
-        LogLevel::Error => ("error", palette::ERROR),
+        LogLevel::Info => ("info ", theme::MUTED_TEXT),
+        LogLevel::Warn => ("warn ", theme::WARNING),
+        LogLevel::Error => ("error", theme::ERROR),
     };
     Line::from(vec![
         Span::styled(
             format!("{label} "),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(entry.message.to_owned(), Style::default().fg(palette::TEXT)),
+        Span::styled(entry.message.to_owned(), Style::default().fg(theme::TEXT)),
     ])
 }

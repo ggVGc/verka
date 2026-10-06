@@ -2,7 +2,7 @@
 //! [`crate::app::App`] because each overlays before (or instead of) any loaded
 //! session, so they render from their own borrowed data rather than app state.
 
-use crate::palette;
+use crate::theme;
 use crate::text_prompt::{self, TextPrompt};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -63,7 +63,7 @@ fn render_placeholder(frame: &mut Frame, block: Block<'static>, area: Rect, text
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             text.to_owned(),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         )))
         .block(block),
         area,
@@ -72,22 +72,22 @@ fn render_placeholder(frame: &mut Frame, block: Block<'static>, area: Rect, text
 
 fn tag_color(tag: &str) -> ratatui::style::Color {
     match tag {
-        "agent" => palette::AGENT_TAG,
-        "user" => palette::USER_TAG,
-        "shell" => palette::SHELL_TAG,
-        "tool" => palette::SPECIAL,
-        "plan" | "files" => palette::INFO,
-        "branch" => palette::ACCENT,
-        "error" | "malformed" => palette::ERROR,
-        _ => palette::ADDITIONAL_INFO,
+        "agent" => theme::AGENT_TAG,
+        "user" => theme::USER_TAG,
+        "shell" => theme::SHELL_TAG,
+        "tool" => theme::SPECIAL,
+        "plan" | "files" => theme::INFO,
+        "branch" => theme::ACCENT,
+        "error" | "malformed" => theme::ERROR,
+        _ => theme::ADDITIONAL_INFO,
     }
 }
 
 fn message_text_color(tag: &str) -> ratatui::style::Color {
     match tag {
-        "agent" => palette::AGENT_TEXT,
-        "user" => palette::USER_TEXT,
-        _ => palette::TEXT,
+        "agent" => theme::AGENT_TEXT,
+        "user" => theme::USER_TEXT,
+        _ => theme::TEXT,
     }
 }
 
@@ -135,7 +135,7 @@ pub fn render_picker(
         .split(area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         .title(session_picker_title(
             scope,
             order,
@@ -160,7 +160,7 @@ pub fn render_picker(
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(palette::SELECTION_BACKGROUND)
+            .bg(theme::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -223,7 +223,7 @@ fn render_session_log_preview(
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::INACTIVE))
+        .border_style(Style::default().fg(theme::INACTIVE))
         .title(
             id.map(|id| format!(" conversation · {id} "))
                 .unwrap_or_else(|| " conversation ".into()),
@@ -301,7 +301,7 @@ pub fn render_message_popup(frame: &mut Frame, title: &str, message: &str) {
         Paragraph::new(message.to_owned()).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(palette::ERROR))
+                .border_style(Style::default().fg(theme::ERROR))
                 .title(format!(" {title} · press any key ")),
         ),
         popup,
@@ -341,7 +341,7 @@ pub fn render_workspace_picker(
     let panes = workspace_picker_panes(frame.area());
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         .title(workspace_picker_title(filter));
     if workspaces.is_empty() {
         let empty = if filter.is_some_and(|filter| !filter.is_empty()) {
@@ -361,7 +361,7 @@ pub fn render_workspace_picker(
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(palette::SELECTION_BACKGROUND)
+            .bg(theme::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -388,7 +388,7 @@ pub fn render_workspace_offer(frame: &mut Frame, directory: &Path) {
     frame.render_widget(
         Block::default().style(
             Style::default()
-                .fg(palette::MODAL_BACKDROP)
+                .fg(theme::MODAL_BACKDROP)
                 .add_modifier(Modifier::DIM),
         ),
         frame.area(),
@@ -408,23 +408,23 @@ pub fn render_workspace_offer(frame: &mut Frame, directory: &Path) {
         Paragraph::new(vec![
             Line::from(Span::styled(
                 "Create a Workspace for this directory?",
-                Style::default().fg(palette::TEXT),
+                Style::default().fg(theme::TEXT),
             )),
             Line::from(Span::styled(
                 directory.display().to_string(),
                 Style::default()
-                    .fg(palette::ACCENT)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 "Enter/y create \u{b7} Esc/n pick an existing one",
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             )),
         ])
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(palette::ACCENT))
+                .border_style(Style::default().fg(theme::ACCENT))
                 .title(" No Workspace here "),
         ),
         popup,
@@ -456,34 +456,34 @@ fn workspace_item(
         Span::styled(
             if selected { "\u{2022} " } else { "  " },
             Style::default().fg(if selected {
-                palette::SELECTION_MARKER
+                theme::SELECTION_MARKER
             } else {
-                palette::ACCENT
+                theme::ACCENT
             }),
         ),
         Span::styled(
             format!("{name:<19} "),
             Style::default()
-                .fg(palette::ACCENT)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:>3} sessions  ", workspace.session_count),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ),
         Span::styled(
             format!("{:<9}", live_label(live)),
             Style::default()
-                .fg(palette::LIVE_MARKER)
+                .fg(theme::LIVE_MARKER)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:<10} ", workspace.age),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ),
         Span::styled(
             workspace.host_path.display().to_string(),
-            Style::default().fg(palette::TEXT),
+            Style::default().fg(theme::TEXT),
         ),
     ]))
 }
@@ -524,7 +524,7 @@ fn render_sessions_preview(
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::INACTIVE))
+        .border_style(Style::default().fg(theme::INACTIVE))
         .title(title);
     let sessions = match preview {
         SessionsPreview::Loading => {
@@ -559,19 +559,19 @@ fn preview_session_item(session: &SessionSummary, live: bool) -> ListItem<'stati
     ListItem::new(Line::from(vec![
         Span::styled(
             if live { "\u{25cf} " } else { "  " },
-            Style::default().fg(palette::LIVE_MARKER),
+            Style::default().fg(theme::LIVE_MARKER),
         ),
         Span::styled(
             format!("{:<8} ", session.selection.provider.as_str()),
-            Style::default().fg(palette::ACCENT),
+            Style::default().fg(theme::ACCENT),
         ),
         Span::styled(
             format!("{display_name:<20} "),
-            Style::default().fg(palette::TEXT),
+            Style::default().fg(theme::TEXT),
         ),
         Span::styled(
             session.age.clone(),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ),
     ]))
 }
@@ -591,11 +591,11 @@ pub fn render_template_picker(
     let area = frame.area();
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         .title(" styra · Driva templates · ? keys ")
         .title_bottom(Line::from(Span::styled(
             " layered in the order chosen; a later template wins on conflict ",
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         )));
     if templates.is_empty() {
         render_placeholder(frame, block, area, "  no Driva templates are available");
@@ -615,18 +615,18 @@ pub fn render_template_picker(
                 Span::styled(
                     if index == cursor { "• " } else { "  " },
                     Style::default().fg(if index == cursor {
-                        palette::SELECTION_MARKER
+                        theme::SELECTION_MARKER
                     } else {
-                        palette::ACCENT
+                        theme::ACCENT
                     }),
                 ),
                 Span::styled(
                     marker,
                     Style::default()
                         .fg(if position.is_some() {
-                            palette::WARNING
+                            theme::WARNING
                         } else {
-                            palette::INACTIVE
+                            theme::INACTIVE
                         })
                         .add_modifier(Modifier::BOLD),
                 ),
@@ -634,22 +634,22 @@ pub fn render_template_picker(
                     format!("{:<16} ", template.name),
                     Style::default()
                         .fg(if position.is_some() {
-                            palette::ACCENT
+                            theme::ACCENT
                         } else {
-                            palette::MUTED_TEXT
+                            theme::MUTED_TEXT
                         })
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     template.description.clone(),
-                    Style::default().fg(palette::TEXT),
+                    Style::default().fg(theme::TEXT),
                 ),
             ]))
         })
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(palette::SELECTION_BACKGROUND)
+            .bg(theme::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -663,12 +663,12 @@ pub fn render_template_picker(
 pub fn render_template_picker_loading(frame: &mut Frame) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         .title(" styra · Driva templates · Esc cancel ");
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             "  loading Driva templates…",
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         )))
         .block(block),
         frame.area(),
@@ -693,45 +693,45 @@ fn session_item(
         Span::styled(
             tree_marker(depth, selected),
             Style::default().fg(if selected {
-                palette::SELECTION_MARKER
+                theme::SELECTION_MARKER
             } else {
-                palette::TEXT
+                theme::TEXT
             }),
         ),
         Span::styled(
             display_name.to_owned(),
             Style::default()
-                .fg(palette::TEXT)
+                .fg(theme::TEXT)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" · {provider}"),
-            Style::default().fg(palette::ACCENT),
+            Style::default().fg(theme::ACCENT),
         ),
         Span::styled(
             format!(" · {age}"),
-            Style::default().fg(palette::ADDITIONAL_INFO),
+            Style::default().fg(theme::ADDITIONAL_INFO),
         ),
     ];
     if session.completed == styra_protocol::CompletionState::Sealed {
         spans.push(Span::styled(
             " · SEALED",
             Style::default()
-                .fg(palette::SUCCESS)
+                .fg(theme::SUCCESS)
                 .add_modifier(Modifier::BOLD),
         ));
     } else if session.completed == styra_protocol::CompletionState::Completed {
         spans.push(Span::styled(
             " · COMPLETED",
             Style::default()
-                .fg(palette::SUCCESS)
+                .fg(theme::SUCCESS)
                 .add_modifier(Modifier::BOLD),
         ));
     } else if session.completed == styra_protocol::CompletionState::Abandoned {
         spans.push(Span::styled(
             " · ABANDONED",
             Style::default()
-                .fg(palette::STOP_ABANDONED)
+                .fg(theme::STOP_ABANDONED)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -1149,7 +1149,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         assert_eq!(
             buffer[(WORKSPACE_PICKER_WIDTH as u16 - 2, 0)].fg,
-            palette::MODAL_BACKDROP
+            theme::MODAL_BACKDROP
         );
     }
 
@@ -1231,7 +1231,7 @@ mod tests {
         };
         let row_has_selection_backdrop = |y: u16| {
             (0..buffer.area.width).any(|x| {
-                buffer.cell((x, y)).unwrap().style().bg == Some(palette::SELECTION_BACKGROUND)
+                buffer.cell((x, y)).unwrap().style().bg == Some(theme::SELECTION_BACKGROUND)
             })
         };
 

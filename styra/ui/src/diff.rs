@@ -19,7 +19,7 @@
 
 use crate::code::with_gutter;
 use crate::markdown::syntax_highlighted_code_lines;
-use crate::palette;
+use crate::theme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -65,12 +65,12 @@ pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> 
                 .map(|(_, path)| path)
                 .unwrap_or(rest);
             language = language_of(named).or(language);
-            lines.push(header(if compact { named } else { line }, palette::ACCENT));
+            lines.push(header(if compact { named } else { line }, theme::ACCENT));
         } else if line.starts_with("@@") {
             flush(&mut lines, &mut hunk, &language);
             in_hunk = true;
             next = hunk_range(line).map(|(old, _, new, _)| (old, new));
-            lines.push(header(line, palette::ACCENT));
+            lines.push(header(line, theme::ACCENT));
         } else if !in_hunk || is_file_marker(line) {
             // Everything between a file header and its first hunk describes
             // the file rather than changing it. A diff with neither header —
@@ -83,7 +83,7 @@ pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> 
                 hunk.push((line, None));
             } else if !compact {
                 flush(&mut lines, &mut hunk, &language);
-                lines.push(header(line, palette::TEXT));
+                lines.push(header(line, theme::TEXT));
             }
         } else if !is_code(line) {
             // `\ No newline at end of file`, which is no line of either file.
@@ -192,7 +192,7 @@ fn flush(
                 Some(number) => format!("{number:>width$} "),
                 None => " ".repeat(width + 1),
             };
-            Span::styled(text, Style::default().fg(palette::INACTIVE))
+            Span::styled(text, Style::default().fg(theme::INACTIVE))
         })
     };
     let code: Vec<String> = hunk
@@ -220,9 +220,9 @@ fn flush(
         None => {
             for (&(line, at), code) in hunk.iter().zip(code) {
                 let color = match line.chars().next() {
-                    Some('+') => palette::SUCCESS,
-                    Some('-') => palette::ERROR,
-                    _ => palette::TEXT,
+                    Some('+') => theme::SUCCESS,
+                    Some('-') => theme::ERROR,
+                    _ => theme::TEXT,
                 };
                 let mut spans: Vec<Span<'static>> = number(at).into_iter().collect();
                 spans.push(sign(line));
@@ -241,13 +241,13 @@ fn sign(line: &str) -> Span<'static> {
         Some('+') => Span::styled(
             "+",
             Style::default()
-                .fg(palette::SUCCESS)
+                .fg(theme::SUCCESS)
                 .add_modifier(Modifier::BOLD),
         ),
         Some('-') => Span::styled(
             "-",
             Style::default()
-                .fg(palette::ERROR)
+                .fg(theme::ERROR)
                 .add_modifier(Modifier::BOLD),
         ),
         _ => Span::raw(" "),
@@ -275,9 +275,9 @@ mod tests {
 
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[1].spans[0].content.as_ref(), "-");
-        assert_eq!(lines[1].spans[0].style.fg, Some(palette::ERROR));
+        assert_eq!(lines[1].spans[0].style.fg, Some(theme::ERROR));
         assert_eq!(lines[2].spans[0].content.as_ref(), "+");
-        assert_eq!(lines[2].spans[0].style.fg, Some(palette::SUCCESS));
+        assert_eq!(lines[2].spans[0].style.fg, Some(theme::SUCCESS));
         assert!(lines[2].spans.len() > 3, "tokenized: {:?}", lines[2].spans);
         assert_eq!(text(&lines[2]), "+fn new() -> u32 { 2 }");
     }
@@ -306,7 +306,7 @@ mod tests {
             ]
         );
         // Text has no grammar, so it keeps the plain green line.
-        assert_eq!(lines[2].spans[1].style.fg, Some(palette::SUCCESS));
+        assert_eq!(lines[2].spans[1].style.fg, Some(theme::SUCCESS));
         assert!(lines[5].spans.len() > 3, "{:?}", lines[5].spans);
     }
 

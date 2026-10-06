@@ -1,7 +1,7 @@
 //! Typed-answer presentation, independent of application controllers.
 
 use crate::chrome::{panel_block, PanelChrome};
-use crate::palette;
+use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -91,12 +91,12 @@ fn value_lines(value: &AnswerValue, selected: usize) -> Vec<Line<'static>> {
 fn file_spans(file: &FileLocation) -> Vec<Span<'static>> {
     let mut spans = vec![Span::styled(
         file.located(),
-        Style::default().fg(palette::ACCENT),
+        Style::default().fg(theme::ACCENT),
     )];
     if !file.description.is_empty() {
         spans.push(Span::styled(
             format!("  {}", file.description),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     }
     spans
@@ -104,16 +104,16 @@ fn file_spans(file: &FileLocation) -> Vec<Span<'static>> {
 
 fn selectable(selected: bool, mut spans: Vec<Span<'static>>) -> Line<'static> {
     let style = if selected {
-        Style::default().bg(palette::SELECTION_BACKGROUND)
+        Style::default().bg(theme::SELECTION_BACKGROUND)
     } else {
         Style::default()
     };
     let mut output = vec![Span::styled(
         if selected { "▍ " } else { "  " },
         Style::default().fg(if selected {
-            palette::SELECTION_MARKER
+            theme::SELECTION_MARKER
         } else {
-            palette::INACTIVE
+            theme::INACTIVE
         }),
     )];
     output.append(&mut spans);
@@ -128,12 +128,12 @@ fn unsatisfied_lines(answer: &Answer) -> Vec<Line<'static>> {
                 .clone()
                 .unwrap_or_else(|| "the reply did not satisfy the contract".into()),
             Style::default()
-                .fg(palette::WARNING)
+                .fg(theme::WARNING)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "the agent replied:",
-            Style::default().fg(palette::ADDITIONAL_INFO),
+            Style::default().fg(theme::ADDITIONAL_INFO),
         )),
         Line::default(),
     ];

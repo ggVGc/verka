@@ -7,7 +7,7 @@ use crate::diff::diff_block_lines;
 use crate::event_list::{summary_line, suspicious_shell_success, wrap_rendered, EventEntry};
 use crate::footer::message_text_color;
 use crate::markdown::{markdown_block_render, EntryIndex, LinkDisplay};
-use crate::palette;
+use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -116,10 +116,10 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
             Some(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(palette::INACTIVE))
+                    .border_style(Style::default().fg(theme::INACTIVE))
                     .title(Span::styled(
                         title,
-                        Style::default().fg(palette::MUTED_TEXT),
+                        Style::default().fg(theme::MUTED_TEXT),
                     )),
             ),
         )
@@ -149,7 +149,7 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
     let Some(entry) = &view.entry else {
         return vec![Line::from(Span::styled(
             "  no entry selected",
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ))];
     };
     let mut lines = vec![summary_line(
@@ -164,7 +164,7 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 format!("{DETAIL_INDENT}no file changes during this turn"),
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             )));
         }
         for change in changes {
@@ -212,7 +212,7 @@ fn change_lines(change: &ChangeView<'_>, workspace_roots: &[String]) -> Vec<Line
         }
         None => lines.push(Line::from(Span::styled(
             format!("{DETAIL_INDENT}no diff reported"),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ))),
     }
     lines
@@ -235,7 +235,7 @@ fn changed_path_line(path: &str, workspace_roots: &[String]) -> Line<'static> {
             Span::raw(DETAIL_INDENT),
             Span::styled(
                 WORKSPACE_SHORTHAND,
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             ),
             Span::styled(relative.to_owned(), style),
         ]),
@@ -357,7 +357,7 @@ mod tests {
                 .map(|span| span.content.as_ref())
                 .collect();
             assert_eq!(texts, [DETAIL_INDENT, WORKSPACE_SHORTHAND, "src/retry.rs"]);
-            assert_eq!(line.spans[1].style.fg, Some(palette::MUTED_TEXT));
+            assert_eq!(line.spans[1].style.fg, Some(theme::MUTED_TEXT));
             assert_eq!(line.spans[2].style.fg, Some(message_text_color("files")));
         }
     }

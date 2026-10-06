@@ -13,7 +13,7 @@
 //! [`score`] — unless the list was opened with [`FuzzyList::keeping_order`],
 //! in which case the query only narrows and the caller's order stands.
 
-use crate::palette;
+use crate::theme;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -274,27 +274,27 @@ pub struct FuzzyListView<'a> {
 /// with their matched letters marked.
 pub fn render_fuzzy_list(frame: &mut Frame, view: &FuzzyListView, area: Rect) {
     let border_style = if view.focused {
-        Style::default().fg(palette::ACCENT)
+        Style::default().fg(theme::ACCENT)
     } else {
-        Style::default().fg(palette::INACTIVE)
+        Style::default().fg(theme::INACTIVE)
     };
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(Span::styled(
             view.title.to_owned(),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     // The query rides the bottom border rather than taking a row of its own:
     // the box is already as tall as the rows it has, and a list that shrinks
     // by one the moment it is typed at hides the very row being hunted.
     if view.list.is_filtering() {
         block = block.title_bottom(Line::from(vec![
-            Span::styled(" /", Style::default().fg(palette::MUTED_TEXT)),
+            Span::styled(" /", Style::default().fg(theme::MUTED_TEXT)),
             Span::styled(
                 format!("{} ", view.list.query),
                 Style::default()
-                    .fg(palette::ACCENT)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -303,7 +303,7 @@ pub fn render_fuzzy_list(frame: &mut Frame, view: &FuzzyListView, area: Rect) {
         block = block.title_bottom(
             Line::from(Span::styled(
                 view.hint.to_owned(),
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             ))
             .right_aligned(),
         );
@@ -319,7 +319,7 @@ pub fn render_fuzzy_list(frame: &mut Frame, view: &FuzzyListView, area: Rect) {
         let note = ListItem::new(Line::from(Span::styled(
             format!("  {note}"),
             Style::default()
-                .fg(palette::MUTED_TEXT)
+                .fg(theme::MUTED_TEXT)
                 .add_modifier(Modifier::DIM),
         )));
         frame.render_widget(List::new(vec![note]).block(block), area);
@@ -334,9 +334,9 @@ pub fn render_fuzzy_list(frame: &mut Frame, view: &FuzzyListView, area: Rect) {
             let mut spans = vec![Span::styled(
                 if row == selected { "• " } else { "  " },
                 Style::default().fg(if row == selected {
-                    palette::SELECTION_MARKER
+                    theme::SELECTION_MARKER
                 } else {
-                    palette::TEXT
+                    theme::TEXT
                 }),
             )];
             spans.extend(marked(&view.rows[found.index], &found.positions));
@@ -345,7 +345,7 @@ pub fn render_fuzzy_list(frame: &mut Frame, view: &FuzzyListView, area: Rect) {
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(palette::SELECTION_BACKGROUND)
+            .bg(theme::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -364,13 +364,13 @@ pub fn marked(row: &str, positions: &[usize]) -> Vec<Span<'static>> {
             if !plain.is_empty() {
                 spans.push(Span::styled(
                     std::mem::take(&mut plain),
-                    Style::default().fg(palette::TEXT),
+                    Style::default().fg(theme::TEXT),
                 ));
             }
             spans.push(Span::styled(
                 character.to_string(),
                 Style::default()
-                    .fg(palette::ACCENT)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ));
         } else {
@@ -378,7 +378,7 @@ pub fn marked(row: &str, positions: &[usize]) -> Vec<Span<'static>> {
         }
     }
     if !plain.is_empty() {
-        spans.push(Span::styled(plain, Style::default().fg(palette::TEXT)));
+        spans.push(Span::styled(plain, Style::default().fg(theme::TEXT)));
     }
     spans
 }
@@ -670,7 +670,7 @@ mod tests {
             .buffer()
             .content()
             .iter()
-            .filter(|cell| cell.fg == palette::ACCENT && cell.modifier.contains(Modifier::BOLD))
+            .filter(|cell| cell.fg == theme::ACCENT && cell.modifier.contains(Modifier::BOLD))
             .map(|cell| cell.symbol())
             .collect();
         assert!(

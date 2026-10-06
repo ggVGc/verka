@@ -20,7 +20,7 @@
 //! mount, the profile's credential mounts, the broker's control mount.
 
 use crate::chrome::{panel_block, PanelChrome};
-use crate::palette;
+use crate::theme;
 use crate::text_prompt::{self, TextPrompt};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -271,9 +271,9 @@ fn render_tabs(frame: &mut Frame, selected: DetailsTab, area: Rect) {
         return;
     }
     let active = Style::default()
-        .fg(palette::ACCENT)
+        .fg(theme::ACCENT)
         .add_modifier(Modifier::BOLD);
-    let inactive = Style::default().fg(palette::ADDITIONAL_INFO);
+    let inactive = Style::default().fg(theme::ADDITIONAL_INFO);
     let tab = |name, current| {
         Span::styled(
             format!(" {} ", name),
@@ -408,7 +408,7 @@ fn render_scrolled_overview(
                 format!("  ↑ {offset} line(s) above · PgUp")
             },
             Style::default()
-                .fg(palette::ACCENT)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ))),
         Rect {
@@ -497,7 +497,7 @@ fn render_sandbox(
                 "  ▾ {} more line(s) · PgDn/PgUp",
                 usize::from(limit.saturating_sub(offset))
             ),
-            Style::default().fg(palette::ADDITIONAL_INFO),
+            Style::default().fg(theme::ADDITIONAL_INFO),
         ));
     }
     frame.render_widget(
@@ -573,16 +573,16 @@ fn floor_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
         Line::from(Span::styled(
             "sandbox floor — the backend's own, under every mount",
             Style::default()
-                .fg(palette::ACCENT)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )),
     ];
     lines.extend(options.floor.iter().enumerate().map(|(index, entry)| {
         let (label, colour) = match entry.kind {
-            FloorKind::Tmpfs => ("tmp ", palette::INFO),
-            FloorKind::Directory => ("dir ", palette::INFO),
-            FloorKind::RootFs => ("ro  ", palette::MUTED_TEXT),
-            FloorKind::Proc | FloorKind::Devices => ("sys ", palette::MUTED_TEXT),
+            FloorKind::Tmpfs => ("tmp ", theme::INFO),
+            FloorKind::Directory => ("dir ", theme::INFO),
+            FloorKind::RootFs => ("ro  ", theme::MUTED_TEXT),
+            FloorKind::Proc | FloorKind::Devices => ("sys ", theme::MUTED_TEXT),
         };
         let mut detail = match &entry.source {
             Some(source) => format!("{} — {}", source.display(), entry.kind.description()),
@@ -604,7 +604,7 @@ fn floor_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
             ),
             Span::styled(
                 format!("{:<20} {detail}", entry.path.display().to_string()),
-                Style::default().fg(palette::TEXT),
+                Style::default().fg(theme::TEXT),
             ),
         ])
     }));
@@ -639,7 +639,7 @@ fn environment_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
         Line::from(Span::styled(
             "environment — all of it; the sandbox starts with none",
             Style::default()
-                .fg(palette::ACCENT)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )),
     ];
@@ -664,15 +664,15 @@ fn environment_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
         }
         lines.push(Line::from(Span::styled(
             format!("  {}", origin.label()),
-            Style::default().fg(palette::ADDITIONAL_INFO),
+            Style::default().fg(theme::ADDITIONAL_INFO),
         )));
         lines.extend(variables.map(|variable| {
             Line::from(vec![
                 Span::styled(
                     format!("    {} ", variable.name),
-                    Style::default().fg(palette::MUTED_TEXT),
+                    Style::default().fg(theme::MUTED_TEXT),
                 ),
-                Span::styled(variable.value.clone(), Style::default().fg(palette::TEXT)),
+                Span::styled(variable.value.clone(), Style::default().fg(theme::TEXT)),
             ])
         }));
     }
@@ -695,7 +695,7 @@ fn sandbox_prefix_lines(app: &DrivaView, options: Option<&DrivaOptions>) -> Vec<
     if app.launch.planned {
         lines.push(Line::from(Span::styled(
             "  planned — applied when the next interaction starts",
-            Style::default().fg(palette::WARNING),
+            Style::default().fg(theme::WARNING),
         )));
         lines.push(Line::from(""));
     }
@@ -722,7 +722,7 @@ fn sandbox_prefix_lines(app: &DrivaView, options: Option<&DrivaOptions>) -> Vec<
                 "mounts"
             },
             Style::default()
-                .fg(palette::ACCENT)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )),
     ]);
@@ -843,7 +843,7 @@ fn private_root_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
         Line::from(Span::styled(
             "private root — read-only, no host home or data paths",
             Style::default()
-                .fg(palette::ACCENT)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )),
     ];
@@ -860,14 +860,14 @@ fn private_root_groups(options: &DrivaOptions) -> Vec<Vec<Line<'static>>> {
         .map(|capability| {
             let mut group = vec![Line::from(Span::styled(
                 format!("  {} — {}", capability.name, capability.description),
-                Style::default().fg(palette::ADDITIONAL_INFO),
+                Style::default().fg(theme::ADDITIONAL_INFO),
             ))];
             for entry in &capability.entries {
                 group.push(Line::from(vec![
                     Span::styled(
                         "    ro  ",
                         Style::default()
-                            .fg(palette::MUTED_TEXT)
+                            .fg(theme::MUTED_TEXT)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
@@ -877,7 +877,7 @@ fn private_root_groups(options: &DrivaOptions) -> Vec<Vec<Line<'static>>> {
                             }
                             None => entry.path.display().to_string(),
                         },
-                        Style::default().fg(palette::TEXT),
+                        Style::default().fg(theme::TEXT),
                     ),
                 ]));
             }
@@ -886,12 +886,12 @@ fn private_root_groups(options: &DrivaOptions) -> Vec<Vec<Line<'static>>> {
                     Span::styled(
                         "    env ",
                         Style::default()
-                            .fg(palette::MUTED_TEXT)
+                            .fg(theme::MUTED_TEXT)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         capability.environment.join(" "),
-                        Style::default().fg(palette::TEXT),
+                        Style::default().fg(theme::TEXT),
                     ),
                 ]));
             }
@@ -1152,7 +1152,7 @@ fn section_line(title: &str) -> Line<'static> {
     Line::from(Span::styled(
         title.to_owned(),
         Style::default()
-            .fg(palette::ACCENT)
+            .fg(theme::ACCENT)
             .add_modifier(Modifier::BOLD),
     ))
 }
@@ -1161,9 +1161,9 @@ fn detail_field_line(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("  {label:<13} "),
-            Style::default().fg(palette::ADDITIONAL_INFO),
+            Style::default().fg(theme::ADDITIONAL_INFO),
         ),
-        Span::styled(value.to_owned(), Style::default().fg(palette::TEXT)),
+        Span::styled(value.to_owned(), Style::default().fg(theme::TEXT)),
     ])
 }
 
@@ -1183,7 +1183,7 @@ fn grouped_mount_lines(mounts: &[AttributedMount]) -> Vec<Line<'static>> {
             current = Some(attributed.origin);
             lines.push(Line::from(Span::styled(
                 format!("  {}", attributed.origin.label()),
-                Style::default().fg(palette::ADDITIONAL_INFO),
+                Style::default().fg(theme::ADDITIONAL_INFO),
             )));
         }
         lines.push(mount_line(&attributed.mount));
@@ -1261,25 +1261,25 @@ fn pane_style(app: &DrivaView, scope: LaunchScope) -> PaneStyle {
     let focused = app.launch.scope == scope;
     let ignored = scope == LaunchScope::Workspace && app.launch.interaction.ignore_workspace;
     let mut value = if focused {
-        Style::default().fg(palette::TEXT)
+        Style::default().fg(theme::TEXT)
     } else {
-        Style::default().fg(palette::MUTED_TEXT)
+        Style::default().fg(theme::MUTED_TEXT)
     };
     if ignored {
         value = Style::default()
-            .fg(palette::INACTIVE)
+            .fg(theme::INACTIVE)
             .add_modifier(Modifier::CROSSED_OUT);
     }
     PaneStyle {
         label: if focused {
             Style::default()
-                .fg(palette::ACCENT)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(palette::INACTIVE)
+            Style::default().fg(theme::INACTIVE)
         },
         value,
-        marker: Style::default().fg(palette::WARNING),
+        marker: Style::default().fg(theme::WARNING),
         cursor: focused,
     }
 }
@@ -1306,7 +1306,7 @@ fn setting_line(style: PaneStyle, marked: bool, label: &str, value: &str) -> Lin
 /// `style` for a row that cannot be changed right now: dimmed throughout,
 /// with whatever else it said (a crossed-out ignored layer) kept.
 fn disabled_style(style: PaneStyle) -> PaneStyle {
-    let dim = |style: Style| style.fg(palette::INACTIVE).add_modifier(Modifier::DIM);
+    let dim = |style: Style| style.fg(theme::INACTIVE).add_modifier(Modifier::DIM);
     PaneStyle {
         label: dim(style.label),
         value: dim(style.value),
@@ -1459,9 +1459,9 @@ fn render_pane(
     }
     let focused = app.launch.scope == scope;
     let title = Style::default().fg(if focused {
-        palette::ACCENT
+        theme::ACCENT
     } else {
-        palette::INACTIVE
+        theme::INACTIVE
     });
     let spans = vec![
         Span::styled(if focused { " ▸ " } else { "   " }, title),
@@ -1478,15 +1478,15 @@ fn render_pane(
                 LaunchScope::Workspace => " · every launch here ",
                 LaunchScope::Interaction => " · over the Workspace policy ",
             },
-            Style::default().fg(palette::ADDITIONAL_INFO),
+            Style::default().fg(theme::ADDITIONAL_INFO),
         ),
     ];
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if focused {
-            palette::ACCENT
+            theme::ACCENT
         } else {
-            palette::INACTIVE
+            theme::INACTIVE
         }))
         .title(Line::from(spans));
     frame.render_widget(Paragraph::new(rows).block(block), area);
@@ -1499,9 +1499,9 @@ fn hint_lines(app: &DrivaView) -> Vec<Line<'static>> {
     // anyway, dimmed, so the screen keeps one shape and says what is out of
     // reach and why, rather than the keys silently disappearing.
     let fixed = !app.can_edit_launch();
-    let enabled = Style::default().fg(palette::ADDITIONAL_INFO);
+    let enabled = Style::default().fg(theme::ADDITIONAL_INFO);
     let disabled = Style::default()
-        .fg(palette::INACTIVE)
+        .fg(theme::INACTIVE)
         .add_modifier(Modifier::DIM);
     let key =
         |text: String, usable: bool| Span::styled(text, if usable { enabled } else { disabled });
@@ -1523,7 +1523,7 @@ fn hint_lines(app: &DrivaView) -> Vec<Line<'static>> {
     if fixed {
         first.push(Span::styled(
             " — changing a mount restarts the interaction",
-            Style::default().fg(palette::WARNING),
+            Style::default().fg(theme::WARNING),
         ));
     }
 
@@ -1576,12 +1576,12 @@ fn render_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
     // to take the mount: it has to be read before Enter, not after.
     let mut bottom = vec![Span::styled(
         format!(" for {} ", app.launch.scope.phrase()),
-        Style::default().fg(palette::ACCENT),
+        Style::default().fg(theme::ACCENT),
     )];
     if !app.can_edit_launch() {
         bottom.push(Span::styled(
             "· adding restarts the interaction ",
-            Style::default().fg(palette::WARNING),
+            Style::default().fg(theme::WARNING),
         ));
     }
     let prompt = TextPrompt::new(
@@ -1610,10 +1610,10 @@ fn driva_field_line(label: &str, value: &str) -> Line<'static> {
         Span::styled(
             format!("  {label:<8} "),
             Style::default()
-                .fg(palette::ACCENT)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(value.to_owned(), Style::default().fg(palette::TEXT)),
+        Span::styled(value.to_owned(), Style::default().fg(theme::TEXT)),
     ])
 }
 
@@ -1625,8 +1625,8 @@ fn mount_line(mount: &Mount) -> Line<'static> {
             access,
         } => {
             let (label, color) = match access {
-                MountAccess::ReadWrite => ("rw", palette::WARNING),
-                MountAccess::ReadOnly => ("ro", palette::MUTED_TEXT),
+                MountAccess::ReadWrite => ("rw", theme::WARNING),
+                MountAccess::ReadOnly => ("ro", theme::MUTED_TEXT),
             };
             Line::from(vec![
                 Span::styled(
@@ -1635,7 +1635,7 @@ fn mount_line(mount: &Mount) -> Line<'static> {
                 ),
                 Span::styled(
                     format!("{} → {}", source.display(), destination.display()),
-                    Style::default().fg(palette::TEXT),
+                    Style::default().fg(theme::TEXT),
                 ),
             ])
         }
@@ -1643,12 +1643,12 @@ fn mount_line(mount: &Mount) -> Line<'static> {
             Span::styled(
                 "    tmp ",
                 Style::default()
-                    .fg(palette::INFO)
+                    .fg(theme::INFO)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 destination.display().to_string(),
-                Style::default().fg(palette::TEXT),
+                Style::default().fg(theme::TEXT),
             ),
         ]),
         Mount::Overlay {
@@ -1658,12 +1658,12 @@ fn mount_line(mount: &Mount) -> Line<'static> {
             Span::styled(
                 "    ovl ",
                 Style::default()
-                    .fg(palette::SPECIAL)
+                    .fg(theme::SPECIAL)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("{} → {}", source.display(), destination.display()),
-                Style::default().fg(palette::TEXT),
+                Style::default().fg(theme::TEXT),
             ),
         ]),
     }

@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::palette;
+use crate::theme;
 
 /// What the meter draws: where the level is now, where it has been, and how
 /// much the input is being boosted on its way to the file.
@@ -64,7 +64,7 @@ pub fn render(frame: &mut Frame, view: &RecordingView) {
     frame.render_widget(
         Block::default().style(
             Style::default()
-                .fg(palette::MODAL_BACKDROP)
+                .fg(theme::MODAL_BACKDROP)
                 .add_modifier(Modifier::DIM),
         ),
         frame.area(),
@@ -77,8 +77,8 @@ pub fn render(frame: &mut Frame, view: &RecordingView) {
     // box that says "recording" over a device that has not answered is the
     // one thing this view exists to stop saying.
     let (title, tone) = match &view.captured {
-        Some(captured) => (format!(" ● recording · {captured} "), palette::ERROR),
-        None => (" ○ opening the input… ".to_owned(), palette::MUTED_WARNING),
+        Some(captured) => (format!(" ● recording · {captured} "), theme::ERROR),
+        None => (" ○ opening the input… ".to_owned(), theme::MUTED_WARNING),
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -86,11 +86,11 @@ pub fn render(frame: &mut Frame, view: &RecordingView) {
         .title(Span::styled(title, Style::default().fg(tone)))
         .title(Span::styled(
             format!(" boost ×{} ", gain(view.gain)),
-            Style::default().fg(palette::ACCENT),
+            Style::default().fg(theme::ACCENT),
         ))
         .title_bottom(Span::styled(
             " Enter transcribe · Esc cancel · ↑/↓ boost ",
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     let inner = block.inner(area);
     let lines = vec![Line::default(), bar(view, inner.width), advice(view)];
@@ -114,7 +114,7 @@ fn bar(view: &RecordingView, width: u16) -> Line<'static> {
         } else if cell == held && view.loudest > 0.0 {
             ("│", tone(cell, width))
         } else {
-            ("·", palette::INACTIVE)
+            ("·", theme::INACTIVE)
         };
         spans.push(Span::styled(symbol, Style::default().fg(color)));
     }
@@ -141,11 +141,11 @@ fn decibels(level: f32) -> f32 {
 fn tone(cell: usize, width: usize) -> ratatui::style::Color {
     let position = (cell + 1) as f32 / width as f32;
     if position > 0.95 {
-        palette::ERROR
+        theme::ERROR
     } else if position > 0.8 {
-        palette::WARNING
+        theme::WARNING
     } else {
-        palette::SUCCESS
+        theme::SUCCESS
     }
 }
 
@@ -158,24 +158,24 @@ fn advice(view: &RecordingView) -> Line<'static> {
     if view.captured.is_none() {
         return Line::from(Span::styled(
             "waiting for the device — nothing is being recorded yet",
-            Style::default().fg(palette::MUTED_WARNING),
+            Style::default().fg(theme::MUTED_WARNING),
         ));
     }
     if view.loudest > 1.0 {
         return Line::from(Span::styled(
             "too loud — it is being clipped; ↓ to lower the boost",
-            Style::default().fg(palette::WARNING),
+            Style::default().fg(theme::WARNING),
         ));
     }
     if view.loudest < TOO_QUIET {
         return Line::from(Span::styled(
             "very quiet — ↑ to boost the input",
-            Style::default().fg(palette::MUTED_WARNING),
+            Style::default().fg(theme::MUTED_WARNING),
         ));
     }
     Line::from(Span::styled(
         format!("peak {:.0} dB", decibels(view.loudest)),
-        Style::default().fg(palette::MUTED_TEXT),
+        Style::default().fg(theme::MUTED_TEXT),
     ))
 }
 

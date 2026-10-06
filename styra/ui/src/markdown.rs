@@ -5,7 +5,7 @@
 //! constructs correctly. A single-line summary is the same rendering with its
 //! lines laid end to end, so a row and its expanded body never disagree.
 
-use crate::palette;
+use crate::theme;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LinkDisplay {
     Compact,
@@ -39,7 +39,7 @@ use std::sync::LazyLock;
 use tui_markdown::{AlertKind, CodeTheme, StyleSheet};
 
 static MARKDOWN_CODE_THEME: LazyLock<CodeTheme> = LazyLock::new(|| {
-    CodeTheme::from_textmate(palette::MARKDOWN_CODE_THEME)
+    CodeTheme::from_textmate(theme::MARKDOWN_CODE_THEME)
         .expect("Styra's embedded Markdown code theme must be valid")
 });
 
@@ -224,7 +224,7 @@ fn highlight_code(text: &str, language: &str, indent: &str) -> Option<Vec<Line<'
                 let line_style = line.style;
                 let mut spans = vec![Span::styled(
                     indent.to_owned(),
-                    Style::default().fg(palette::TEXT),
+                    Style::default().fg(theme::TEXT),
                 )];
                 spans.extend(
                     line.spans
@@ -314,12 +314,12 @@ fn render_markdown_block(
 /// The selection drawn over a highlighted entry.
 ///
 /// A dusty rose fill stays visible on the selected row too, whose own
-/// background is already [`palette::SELECTION_BACKGROUND`], without competing
+/// background is already [`theme::SELECTION_BACKGROUND`], without competing
 /// with the bright-yellow row cursor.
 fn entry_highlight_style() -> Style {
     Style::new()
-        .fg(palette::TEXT)
-        .bg(palette::LINK_HIGHLIGHT_BACKGROUND)
+        .fg(theme::TEXT)
+        .bg(theme::LINK_HIGHLIGHT_BACKGROUND)
 }
 
 /// Drops the destination `tui-markdown` appends to every link, leaving the
@@ -416,8 +416,8 @@ fn render_links<'a>(
             if is_code_span(span) {
                 span.style = span
                     .style
-                    .fg(palette::ENTRY_CODE)
-                    .bg(palette::ENTRY_CODE_BACKGROUND);
+                    .fg(theme::ENTRY_CODE)
+                    .bg(theme::ENTRY_CODE_BACKGROUND);
             }
             span.style = span.style.add_modifier(Modifier::UNDERLINED);
         }
@@ -556,9 +556,9 @@ fn force_hard_line_breaks(text: &str) -> String {
     out
 }
 
-/// Styra's palette overrides for `tui-markdown`'s default style sheet.
+/// Styra's theme overrides for `tui-markdown`'s default style sheet.
 ///
-/// Every colored Markdown construct is mapped onto Styra's palette. The
+/// Every colored Markdown construct is mapped onto Styra's theme. The
 /// leading heading marker is omitted because pretty mode strips Markdown
 /// syntax rather than showing it styled.
 #[derive(Clone, Copy, Debug, Default)]
@@ -568,12 +568,12 @@ impl StyleSheet for StyraStyleSheet {
     fn heading(&self, level: u8) -> Style {
         match level {
             1 => Style::new()
-                .fg(palette::MARKDOWN_HEADING)
+                .fg(theme::MARKDOWN_HEADING)
                 .bold()
                 .underlined(),
-            2 => Style::new().fg(palette::MARKDOWN_HEADING).bold(),
-            3 => Style::new().fg(palette::ACCENT).bold().italic(),
-            _ => Style::new().fg(palette::LIGHT_ACCENT).italic(),
+            2 => Style::new().fg(theme::MARKDOWN_HEADING).bold(),
+            3 => Style::new().fg(theme::ACCENT).bold().italic(),
+            _ => Style::new().fg(theme::LIGHT_ACCENT).italic(),
         }
     }
 
@@ -583,8 +583,8 @@ impl StyleSheet for StyraStyleSheet {
 
     fn code(&self) -> Style {
         Style::new()
-            .fg(palette::INLINE_CODE)
-            .bg(palette::INLINE_CODE_BACKGROUND)
+            .fg(theme::INLINE_CODE)
+            .bg(theme::INLINE_CODE_BACKGROUND)
     }
 
     fn code_block_fence(&self) -> &str {
@@ -592,62 +592,62 @@ impl StyleSheet for StyraStyleSheet {
     }
 
     fn link(&self) -> Style {
-        Style::new().fg(palette::MARKDOWN_LINK).underlined()
+        Style::new().fg(theme::MARKDOWN_LINK).underlined()
     }
 
     fn blockquote(&self) -> Style {
-        Style::new().fg(palette::MARKDOWN_QUOTE).italic()
+        Style::new().fg(theme::MARKDOWN_QUOTE).italic()
     }
 
     fn heading_meta(&self) -> Style {
-        Style::new().fg(palette::ADDITIONAL_INFO).dim()
+        Style::new().fg(theme::ADDITIONAL_INFO).dim()
     }
 
     fn metadata_block(&self) -> Style {
-        Style::new().fg(palette::MUTED_WARNING)
+        Style::new().fg(theme::MUTED_WARNING)
     }
 
     fn html(&self) -> Style {
-        Style::new().fg(palette::ADDITIONAL_INFO).dim()
+        Style::new().fg(theme::ADDITIONAL_INFO).dim()
     }
 
     fn math_inline(&self) -> Style {
-        Style::new().fg(palette::SPECIAL).italic()
+        Style::new().fg(theme::SPECIAL).italic()
     }
 
     fn math_display(&self) -> Style {
-        Style::new().fg(palette::SPECIAL)
+        Style::new().fg(theme::SPECIAL)
     }
 
     fn footnote_ref(&self) -> Style {
-        Style::new().fg(palette::ADDITIONAL_INFO).dim().italic()
+        Style::new().fg(theme::ADDITIONAL_INFO).dim().italic()
     }
 
     fn footnote_def(&self) -> Style {
-        Style::new().fg(palette::ADDITIONAL_INFO).dim()
+        Style::new().fg(theme::ADDITIONAL_INFO).dim()
     }
 
     fn alert(&self, kind: AlertKind) -> Style {
         let color = match kind {
-            AlertKind::Note => palette::INFO,
-            AlertKind::Tip => palette::SUCCESS,
-            AlertKind::Important => palette::SPECIAL,
-            AlertKind::Warning => palette::WARNING,
-            AlertKind::Caution => palette::ERROR,
+            AlertKind::Note => theme::INFO,
+            AlertKind::Tip => theme::SUCCESS,
+            AlertKind::Important => theme::SPECIAL,
+            AlertKind::Warning => theme::WARNING,
+            AlertKind::Caution => theme::ERROR,
         };
         Style::new().fg(color)
     }
 
     fn table_header(&self) -> Style {
-        Style::new().fg(palette::ACCENT).bold()
+        Style::new().fg(theme::ACCENT).bold()
     }
 
     fn table_border(&self) -> Style {
-        Style::new().fg(palette::INACTIVE)
+        Style::new().fg(theme::INACTIVE)
     }
 
     fn image_alt(&self) -> Style {
-        Style::new().fg(palette::ADDITIONAL_INFO).dim().italic()
+        Style::new().fg(theme::ADDITIONAL_INFO).dim().italic()
     }
 }
 
@@ -697,7 +697,7 @@ pub fn parse_inline_spans_with_highlight(
 /// Entries are the only underlined text Styra draws, bar a level-one heading,
 /// which is told apart by the accent fill it is drawn on.
 pub fn is_entry_style(style: Style) -> bool {
-    style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND)
+    style.bg == Some(theme::LINK_HIGHLIGHT_BACKGROUND)
         || (style.add_modifier.contains(Modifier::UNDERLINED)
             && style.bg != StyraStyleSheet.heading(1).bg)
 }
@@ -734,11 +734,11 @@ mod tests {
 
     #[test]
     fn block_lines_strip_the_heading_marker_and_style_the_heading() {
-        let base = Style::default().fg(palette::TEXT);
+        let base = Style::default().fg(theme::TEXT);
         let lines = markdown_block_lines("# Title", base, "  ");
 
         assert_eq!(rendered_line(&lines[0]), "  Title");
-        assert_eq!(lines[0].style.fg, Some(palette::MARKDOWN_HEADING));
+        assert_eq!(lines[0].style.fg, Some(theme::MARKDOWN_HEADING));
         assert!(lines[0].style.add_modifier.contains(Modifier::BOLD));
     }
 
@@ -788,7 +788,7 @@ mod tests {
         let highlighted: Vec<&str> = render.lines[0]
             .spans
             .iter()
-            .filter(|span| span.style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND))
+            .filter(|span| span.style.bg == Some(theme::LINK_HIGHLIGHT_BACKGROUND))
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(highlighted, vec!["lib.rs:7"]);
@@ -802,7 +802,7 @@ mod tests {
             markdown_block_render(source, base, "", links, Some(0)).lines[0]
                 .spans
                 .iter()
-                .filter(|span| span.style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND))
+                .filter(|span| span.style.bg == Some(theme::LINK_HIGHLIGHT_BACKGROUND))
                 .map(|span| span.content.to_string())
                 .collect::<Vec<String>>()
                 .concat()
@@ -828,7 +828,7 @@ mod tests {
             .lines
             .iter()
             .flat_map(|line| &line.spans)
-            .all(|span| span.style.bg != Some(palette::LINK_HIGHLIGHT_BACKGROUND)));
+            .all(|span| span.style.bg != Some(theme::LINK_HIGHLIGHT_BACKGROUND)));
     }
 
     #[test]
@@ -840,7 +840,7 @@ mod tests {
             markdown_block_render(text, base, "", LinkDisplay::Compact, Some(entry)).lines[0]
                 .spans
                 .iter()
-                .filter(|span| span.style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND))
+                .filter(|span| span.style.bg == Some(theme::LINK_HIGHLIGHT_BACKGROUND))
                 .map(|span| span.content.to_string())
                 .collect::<String>()
         };
@@ -865,7 +865,7 @@ mod tests {
         let summary = parse_inline_spans_with_highlight(text, base, Some(2));
         let summary: String = summary
             .iter()
-            .filter(|span| span.style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND))
+            .filter(|span| span.style.bg == Some(theme::LINK_HIGHLIGHT_BACKGROUND))
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(summary, "Cargo.toml");
@@ -899,13 +899,13 @@ mod tests {
 
         assert_eq!(
             background("Provider::x()"),
-            Some(palette::INLINE_CODE_BACKGROUND)
+            Some(theme::INLINE_CODE_BACKGROUND)
         );
         assert_eq!(
             background("Cargo.toml"),
-            Some(palette::ENTRY_CODE_BACKGROUND)
+            Some(theme::ENTRY_CODE_BACKGROUND)
         );
-        assert_eq!(background("app.rs"), Some(palette::ENTRY_CODE_BACKGROUND));
+        assert_eq!(background("app.rs"), Some(theme::ENTRY_CODE_BACKGROUND));
     }
 
     #[test]
@@ -918,20 +918,20 @@ mod tests {
                 .find(|span| span.content == content)
                 .map(|span| (span.style.fg, span.style.bg))
         };
-        let code = Some(palette::INLINE_CODE);
-        let entry = Some(palette::ENTRY_CODE);
+        let code = Some(theme::INLINE_CODE);
+        let entry = Some(theme::ENTRY_CODE);
 
         assert_eq!(
             style("Provider::x()"),
-            Some((code, Some(palette::INLINE_CODE_BACKGROUND)))
+            Some((code, Some(theme::INLINE_CODE_BACKGROUND)))
         );
         assert_eq!(
             style("Cargo.toml"),
-            Some((entry, Some(palette::ENTRY_CODE_BACKGROUND)))
+            Some((entry, Some(theme::ENTRY_CODE_BACKGROUND)))
         );
         assert_eq!(
             style("app.rs"),
-            Some((entry, Some(palette::ENTRY_CODE_BACKGROUND)))
+            Some((entry, Some(theme::ENTRY_CODE_BACKGROUND)))
         );
     }
 
@@ -979,7 +979,7 @@ mod tests {
         let highlighted: Vec<&str> = render.lines[0]
             .spans
             .iter()
-            .filter(|span| span.style.bg == Some(palette::LINK_HIGHLIGHT_BACKGROUND))
+            .filter(|span| span.style.bg == Some(theme::LINK_HIGHLIGHT_BACKGROUND))
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(highlighted, vec!["app.rs"]);
@@ -1067,7 +1067,7 @@ mod tests {
     #[test]
     fn a_cached_block_is_not_reused_for_a_different_display_choice() {
         let text = "see [app.rs:120](/home/me/src/app.rs:120)";
-        let base = Style::default().fg(palette::TEXT);
+        let base = Style::default().fg(theme::TEXT);
 
         let compact = markdown_block_lines_with_links(text, base, "  ", LinkDisplay::Compact);
         let full = markdown_block_lines_with_links(text, base, "  ", LinkDisplay::Full);

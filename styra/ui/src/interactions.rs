@@ -1,7 +1,7 @@
 //! The live-interaction navigator embedded above the event timeline.
 
 use crate::chrome::StopTone;
-use crate::palette;
+use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -104,7 +104,7 @@ pub fn height(view: &InteractionNavigator<'_>, available: u16) -> u16 {
 pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         // Scope and completion filter are state the list cannot be read
         // without; the commands that change them are behind `?`.
         .title(format!(
@@ -114,16 +114,16 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
     let block = match view.filter {
         Some(filter) if view.typing_filter || !filter.is_empty() => {
             block.title_bottom(Line::from(vec![
-                Span::styled(" /", Style::default().fg(palette::MUTED_TEXT)),
+                Span::styled(" /", Style::default().fg(theme::MUTED_TEXT)),
                 Span::styled(
                     filter.to_owned(),
                     Style::default()
-                        .fg(palette::ACCENT)
+                        .fg(theme::ACCENT)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     if view.typing_filter { "▏ " } else { " " },
-                    Style::default().fg(palette::ACCENT),
+                    Style::default().fg(theme::ACCENT),
                 ),
             ]))
         }
@@ -135,7 +135,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
             items.push(vec![Line::from(Span::styled(
                 format!("  no interaction matches {filter}"),
                 Style::default()
-                    .fg(palette::MUTED_TEXT)
+                    .fg(theme::MUTED_TEXT)
                     .add_modifier(Modifier::DIM),
             ))]);
         }
@@ -177,7 +177,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) {
     }
     frame.render_widget(block, area);
     let highlight = Style::default()
-        .bg(palette::INTERACTION_SELECTION_BACKGROUND)
+        .bg(theme::INTERACTION_SELECTION_BACKGROUND)
         .add_modifier(Modifier::BOLD);
     for (row, (selected, line)) in lines.into_iter().skip(offset).take(viewport).enumerate() {
         let line_area = Rect {
@@ -197,7 +197,7 @@ fn more_lines(arrow: &str, count: usize) -> Line<'static> {
     let noun = if count == 1 { "line" } else { "lines" };
     Line::from(Span::styled(
         format!(" {arrow} {count} more {noun} "),
-        Style::default().fg(palette::MUTED_TEXT),
+        Style::default().fg(theme::MUTED_TEXT),
     ))
 }
 
@@ -216,7 +216,7 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
         return vec![Line::from(Span::styled(
             format!(" {name}"),
             Style::default()
-                .fg(palette::WORKSPACE_NAME)
+                .fg(theme::WORKSPACE_NAME)
                 .add_modifier(Modifier::BOLD),
         ))];
     }
@@ -249,9 +249,9 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
         Span::styled(
             if *current { "• " } else { "  " },
             Style::default().fg(if *current {
-                palette::CURRENT_INTERACTION_MARKER
+                theme::CURRENT_INTERACTION_MARKER
             } else {
-                palette::INACTIVE
+                theme::INACTIVE
             }),
         ),
         Span::styled(marker.to_string(), marker_style),
@@ -263,13 +263,13 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
         main.push(Span::styled(
             "! ",
             Style::default()
-                .fg(palette::UNCOMMITTED)
+                .fg(theme::UNCOMMITTED)
                 .add_modifier(Modifier::BOLD),
         ));
     }
     // A working agent's prompt is bold too, so its row still stands out when
     // the eye lands between spinner steps.
-    let name_style = Style::default().fg(palette::TEXT);
+    let name_style = Style::default().fg(theme::TEXT);
     main.push(Span::styled(
         name.to_string(),
         if running {
@@ -282,39 +282,39 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
     if !tags.is_empty() {
         main.push(Span::styled(
             format!(" #{}", tags.join(" #")),
-            Style::default().fg(palette::INTERACTION_TAG),
+            Style::default().fg(theme::INTERACTION_TAG),
         ));
     }
     if let Some(branch) = branch {
         main.push(Span::styled(
             format!(" · {branch}"),
-            Style::default().fg(palette::ACCENT),
+            Style::default().fg(theme::ACCENT),
         ));
     }
     main.push(Span::styled(
         format!(" · {provider}"),
-        Style::default().fg(palette::INTERACTION_STATUS_INFO),
+        Style::default().fg(theme::INTERACTION_STATUS_INFO),
     ));
     if let Some(why) = stop_reason {
         // In the stop's own color, so how it ended is told apart down the
         // foot of the list without reading every word.
         let tone = match status {
             InteractionStatus::Stopped(tone) => tone.color(),
-            _ => palette::INTERACTION_STATUS_INFO,
+            _ => theme::INTERACTION_STATUS_INFO,
         };
         main.push(Span::styled(format!(" · {why}"), Style::default().fg(tone)));
     }
     if *loading {
         main.push(Span::styled(
             " · loading…",
-            Style::default().fg(palette::INACTIVE),
+            Style::default().fg(theme::INACTIVE),
         ));
     }
     if let Some(window) = rate_limited {
         main.push(Span::styled(
             format!(" · RATE LIMITED ({window})"),
             Style::default()
-                .fg(palette::ERROR)
+                .fg(theme::ERROR)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -322,15 +322,15 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
         main.push(Span::styled(
             " · NEWLY IDLE",
             Style::default()
-                .fg(palette::SUCCESS)
+                .fg(theme::SUCCESS)
                 .add_modifier(Modifier::BOLD),
         ));
     }
     let badge = match completion {
         CompletionState::Active => None,
-        CompletionState::Completed => Some((" · COMPLETED", palette::STOP_COMPLETED)),
-        CompletionState::Abandoned => Some((" · ABANDONED", palette::STOP_ABANDONED)),
-        CompletionState::Sealed => Some((" · SEALED", palette::STOP_SEALED)),
+        CompletionState::Completed => Some((" · COMPLETED", theme::STOP_COMPLETED)),
+        CompletionState::Abandoned => Some((" · ABANDONED", theme::STOP_ABANDONED)),
+        CompletionState::Sealed => Some((" · SEALED", theme::STOP_SEALED)),
     };
     if let Some((badge, color)) = badge {
         main.push(Span::styled(
@@ -342,7 +342,7 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
     // That style is drawn over the list's highlight, so the cursor's
     // background has to be chosen here too.
     let background = if *selected {
-        palette::INTERACTION_SELECTION_BACKGROUND
+        theme::INTERACTION_SELECTION_BACKGROUND
     } else {
         row_background(*status)
     };
@@ -350,7 +350,7 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
     if let Some(text) = last_message {
         lines.push(Line::from(Span::styled(
             format!("    « {text}"),
-            Style::default().fg(palette::SUBORDINATE_TEXT),
+            Style::default().fg(theme::SUBORDINATE_TEXT),
         )));
     }
     lines
@@ -358,28 +358,28 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
 
 fn status_marker(status: InteractionStatus) -> (&'static str, ratatui::style::Color) {
     match status {
-        InteractionStatus::Pending => (".", palette::INFO),
-        InteractionStatus::Running { events } => (running_indicator(events), palette::RUNNING),
-        InteractionStatus::Idle => ("o", palette::SUCCESS),
-        InteractionStatus::Background => ("*", palette::MUTED_WARNING),
+        InteractionStatus::Pending => (".", theme::INFO),
+        InteractionStatus::Running { events } => (running_indicator(events), theme::RUNNING),
+        InteractionStatus::Idle => ("o", theme::SUCCESS),
+        InteractionStatus::Background => ("*", theme::MUTED_WARNING),
         InteractionStatus::Stopped(why) => ("#", why.color()),
         // Not `!`, which marks work left uncommitted on the same row.
-        InteractionStatus::Error => ("x", palette::ERROR),
+        InteractionStatus::Error => ("x", theme::ERROR),
         // Not `x`, which an error is drawn as.
-        InteractionStatus::Ended => ("-", palette::INACTIVE),
+        InteractionStatus::Ended => ("-", theme::INACTIVE),
     }
 }
 
 /// The tint behind an interaction's own line, a faint wash of its marker's hue.
 fn row_background(status: InteractionStatus) -> ratatui::style::Color {
     match status {
-        InteractionStatus::Pending => palette::PENDING_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Running { .. } => palette::RUNNING_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Idle => palette::IDLE_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Background => palette::BACKGROUND_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Stopped(_) => palette::STOPPED_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Error => palette::ERROR_INTERACTION_ROW_BACKGROUND,
-        InteractionStatus::Ended => palette::ENDED_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Pending => theme::PENDING_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Running { .. } => theme::RUNNING_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Idle => theme::IDLE_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Background => theme::BACKGROUND_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Stopped(_) => theme::STOPPED_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Error => theme::ERROR_INTERACTION_ROW_BACKGROUND,
+        InteractionStatus::Ended => theme::ENDED_INTERACTION_ROW_BACKGROUND,
     }
 }
 
@@ -474,8 +474,8 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(78, 1)].bg, palette::IDLE_INTERACTION_ROW_BACKGROUND);
-        assert_eq!(buffer[(78, 2)].bg, palette::RESET);
+        assert_eq!(buffer[(78, 1)].bg, theme::IDLE_INTERACTION_ROW_BACKGROUND);
+        assert_eq!(buffer[(78, 2)].bg, theme::RESET);
     }
 
     /// Each status tints its rows so they read as a group, and the cursor row
@@ -521,14 +521,14 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert_eq!(buffer[(78, 1)].bg, palette::IDLE_INTERACTION_ROW_BACKGROUND);
+        assert_eq!(buffer[(78, 1)].bg, theme::IDLE_INTERACTION_ROW_BACKGROUND);
         assert_eq!(
             buffer[(78, 2)].bg,
-            palette::STOPPED_INTERACTION_ROW_BACKGROUND
+            theme::STOPPED_INTERACTION_ROW_BACKGROUND
         );
         assert_eq!(
             buffer[(78, 3)].bg,
-            palette::INTERACTION_SELECTION_BACKGROUND
+            theme::INTERACTION_SELECTION_BACKGROUND
         );
     }
 

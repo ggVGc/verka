@@ -1,6 +1,6 @@
 //! File tree and prepared-content presentation.
 
-use crate::palette;
+use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -35,16 +35,16 @@ pub fn render_tree(
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         .title(Span::styled(
             format!(" {scope} "),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     if files.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "no files mentioned by this entry",
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             )))
             .block(block),
             area,
@@ -63,7 +63,7 @@ pub fn render_tree(
             lines.push(Line::from(Span::styled(
                 file.root.clone(),
                 Style::default()
-                    .fg(palette::ACCENT)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
             )));
             last_root = Some(&file.root);
@@ -82,7 +82,7 @@ pub fn render_tree(
             if shown_dirs.insert((file.root.clone(), prefix.clone())) {
                 lines.push(Line::from(Span::styled(
                     format!("{}▾ {component}/", "  ".repeat(depth + 1)),
-                    Style::default().fg(palette::MUTED_TEXT),
+                    Style::default().fg(theme::MUTED_TEXT),
                 )));
             }
         }
@@ -93,16 +93,16 @@ pub fn render_tree(
             .unwrap_or(&file.relative);
         let style = if index == selected {
             Style::default()
-                .fg(palette::TEXT)
-                .bg(palette::SELECTION_BACKGROUND)
+                .fg(theme::TEXT)
+                .bg(theme::SELECTION_BACKGROUND)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(palette::TEXT)
+            Style::default().fg(theme::TEXT)
         };
         let marker_style = if index == selected {
             Style::default()
-                .fg(palette::SELECTION_MARKER)
-                .bg(palette::SELECTION_BACKGROUND)
+                .fg(theme::SELECTION_MARKER)
+                .bg(theme::SELECTION_BACKGROUND)
         } else {
             style
         };
@@ -133,7 +133,7 @@ pub fn render_content(
             " file preview ".into(),
             Text::from(Line::from(Span::styled(
                 "no file selected",
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             ))),
             0,
         ),
@@ -141,7 +141,7 @@ pub fn render_content(
             format!(" {} ", title.unwrap_or_default()),
             Text::from(Line::from(Span::styled(
                 "(empty file)",
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             ))),
             0,
         ),
@@ -163,16 +163,16 @@ pub fn render_content(
                     .map(|(index, line)| {
                         let selected = index == marked_index;
                         let style = if selected {
-                            Style::default().bg(palette::SELECTION_BACKGROUND)
+                            Style::default().bg(theme::SELECTION_BACKGROUND)
                         } else {
                             Style::default()
                         };
                         let mut spans = vec![Span::styled(
                             format!("{}{:>5} │ ", if selected { "▶" } else { " " }, index + 1),
                             style.fg(if selected {
-                                palette::SELECTION_MARKER
+                                theme::SELECTION_MARKER
                             } else {
-                                palette::MUTED_TEXT
+                                theme::MUTED_TEXT
                             }),
                         )];
                         spans.extend(line.spans);
@@ -200,15 +200,15 @@ pub fn render_content(
             format!(" {} ", title.unwrap_or_default()),
             Text::from(Line::from(Span::styled(
                 format!("could not read file: {error}"),
-                Style::default().fg(palette::ERROR),
+                Style::default().fg(theme::ERROR),
             ))),
             0,
         ),
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::INACTIVE))
-        .title(Span::styled(title, Style::default().fg(palette::ACCENT)));
+        .border_style(Style::default().fg(theme::INACTIVE))
+        .title(Span::styled(title, Style::default().fg(theme::ACCENT)));
     frame.render_widget(
         Paragraph::new(text)
             .block(block)

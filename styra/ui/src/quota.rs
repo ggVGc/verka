@@ -2,7 +2,7 @@
 
 use crate::chrome::{panel_block, PanelChrome};
 use crate::footer::{Segment, Tone};
-use crate::palette;
+use crate::theme;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -29,9 +29,9 @@ pub struct QuotaView<'a> {
 
 pub fn render(frame: &mut Frame, view: &QuotaView<'_>, area: Rect) {
     let (retry, color) = if view.auto_retry {
-        (" R rate-limit retry: on ", palette::SUCCESS)
+        (" R rate-limit retry: on ", theme::SUCCESS)
     } else {
-        (" R rate-limit retry: off ", palette::INACTIVE)
+        (" R rate-limit retry: off ", theme::INACTIVE)
     };
     let block = panel_block(&view.chrome).title_bottom(Line::from(Span::styled(
         retry,
@@ -50,7 +50,7 @@ pub fn render(frame: &mut Frame, view: &QuotaView<'_>, area: Rect) {
     if room > 0 {
         lines.push(Line::from(Span::styled(
             "  recent readings",
-            Style::default().fg(palette::INACTIVE),
+            Style::default().fg(theme::INACTIVE),
         )));
         let log = view
             .readings
@@ -83,12 +83,12 @@ fn summary_lines(readings: &[&QuotaEvent], now_ms: u64) -> Vec<Line<'static>> {
                 Span::styled(
                     format!("  {:<8}", reading.provider.as_str()),
                     Style::default()
-                        .fg(palette::TEXT)
+                        .fg(theme::TEXT)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!("{:<10} ", reading.window),
-                    Style::default().fg(palette::MUTED_TEXT),
+                    Style::default().fg(theme::MUTED_TEXT),
                 ),
                 Span::styled(
                     format!("{:>5} ", reading.utilization_label()),
@@ -105,7 +105,7 @@ fn summary_lines(readings: &[&QuotaEvent], now_ms: u64) -> Vec<Line<'static>> {
                     Some(reset) => format!("resets {}", stamp(reset, now_ms)),
                     None => "reset unknown".into(),
                 },
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             ));
             Line::from(spans)
         })
@@ -150,7 +150,7 @@ fn line(reading: &QuotaEvent, now_ms: u64) -> Line<'static> {
     let mut spans = vec![
         Span::styled(
             format!("{} ", clock(reading.at_ms)),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ),
         Span::styled(
             format!("{:>5} ", reading.utilization_label()),
@@ -158,11 +158,11 @@ fn line(reading: &QuotaEvent, now_ms: u64) -> Line<'static> {
         ),
         Span::styled(
             format!("{:<10} ", reading.provider.as_str()),
-            Style::default().fg(palette::TEXT),
+            Style::default().fg(theme::TEXT),
         ),
         Span::styled(
             format!("{:<10} ", reading.window),
-            Style::default().fg(palette::TEXT),
+            Style::default().fg(theme::TEXT),
         ),
         Span::styled(
             format!("{:<9} ", status_label(reading.status)),
@@ -172,18 +172,18 @@ fn line(reading: &QuotaEvent, now_ms: u64) -> Line<'static> {
     if let Some(reset) = reading.resets_at_ms {
         spans.push(Span::styled(
             format!("resets {} ", stamp(reset, now_ms)),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     }
     if let Some(detail) = &reading.detail {
         spans.push(Span::styled(
             format!("{detail} "),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     }
     spans.push(Span::styled(
         format!("· {}", reading.session_id),
-        Style::default().fg(palette::INACTIVE),
+        Style::default().fg(theme::INACTIVE),
     ));
     Line::from(spans)
 }
@@ -337,9 +337,9 @@ fn utilization_tone(value: f64) -> Tone {
 }
 fn status_color(status: QuotaStatus) -> Color {
     match status {
-        QuotaStatus::Allowed => palette::MUTED_TEXT,
-        QuotaStatus::Warning => palette::QUOTA_WARNING,
-        QuotaStatus::Exhausted => palette::ERROR,
+        QuotaStatus::Allowed => theme::MUTED_TEXT,
+        QuotaStatus::Warning => theme::QUOTA_WARNING,
+        QuotaStatus::Exhausted => theme::ERROR,
     }
 }
 fn status_label(status: QuotaStatus) -> &'static str {

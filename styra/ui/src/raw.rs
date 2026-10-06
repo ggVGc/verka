@@ -1,7 +1,7 @@
 //! Styra-wire and provider-native raw record presentation.
 
 use crate::chrome::{panel_block, PanelChrome};
-use crate::palette;
+use crate::theme;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
@@ -57,7 +57,7 @@ pub fn render(frame: &mut Frame, view: &RawView<'_>, area: Rect) -> RawFeedback 
     };
     let block = panel_block(&chrome).title_bottom(Line::from(Span::styled(
         bottom,
-        Style::default().fg(palette::MUTED_TEXT),
+        Style::default().fg(theme::MUTED_TEXT),
     )));
     if len == 0 {
         let empty = if provider {
@@ -82,7 +82,7 @@ pub fn render(frame: &mut Frame, view: &RawView<'_>, area: Rect) -> RawFeedback 
     };
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().bg(palette::SELECTION_BACKGROUND));
+        .highlight_style(Style::default().bg(theme::SELECTION_BACKGROUND));
     let mut state = ListState::default();
     state.select(Some(selected));
     frame.render_stateful_widget(list, list_area, &mut state);
@@ -106,10 +106,10 @@ pub fn render(frame: &mut Frame, view: &RawView<'_>, area: Rect) -> RawFeedback 
     };
     let block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::ALL)
-        .border_style(Style::default().fg(palette::INACTIVE))
+        .border_style(Style::default().fg(theme::INACTIVE))
         .title(Span::styled(
             title,
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     frame.render_widget(
         Paragraph::new(lines)
@@ -136,7 +136,7 @@ fn preview_lines(text: Option<&str>) -> Vec<Line<'static>> {
     let Some(text) = text else {
         return vec![Line::from(Span::styled(
             "  no entry selected",
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ))];
     };
     match serde_json::from_str::<serde_json::Value>(text) {
@@ -146,7 +146,7 @@ fn preview_lines(text: Option<&str>) -> Vec<Line<'static>> {
             .map(|line| {
                 Line::from(Span::styled(
                     line.to_owned(),
-                    Style::default().fg(palette::TEXT),
+                    Style::default().fg(theme::TEXT),
                 ))
             })
             .collect(),
@@ -155,9 +155,9 @@ fn preview_lines(text: Option<&str>) -> Vec<Line<'static>> {
 
 fn provider_line(text: &str, selected: bool) -> Line<'static> {
     let color = if selected {
-        palette::WARNING
+        theme::WARNING
     } else {
-        palette::TEXT
+        theme::TEXT
     };
     let spans = tagged(text)
         .map(|(tag, detail)| {
@@ -165,9 +165,9 @@ fn provider_line(text: &str, selected: bool) -> Line<'static> {
                 Span::styled(
                     pad_tag(&tag),
                     Style::default().fg(if selected {
-                        palette::WARNING
+                        theme::WARNING
                     } else {
-                        palette::ADDITIONAL_INFO
+                        theme::ADDITIONAL_INFO
                     }),
                 ),
                 Span::styled(detail, Style::default().fg(color)),
@@ -179,18 +179,18 @@ fn provider_line(text: &str, selected: bool) -> Line<'static> {
 
 fn wire_line(line: &RawLine, selected: bool) -> Line<'static> {
     let (marker, default_marker) = match line.direction {
-        WireDirection::ToAgent => ("» ", palette::ACCENT),
-        WireDirection::FromAgent => ("« ", palette::SUCCESS),
+        WireDirection::ToAgent => ("» ", theme::ACCENT),
+        WireDirection::FromAgent => ("« ", theme::SUCCESS),
     };
     let color = if selected {
-        palette::WARNING
+        theme::WARNING
     } else {
-        palette::TEXT
+        theme::TEXT
     };
     let mut spans = vec![Span::styled(
         marker,
         Style::default().fg(if selected {
-            palette::WARNING
+            theme::WARNING
         } else {
             default_marker
         }),
@@ -199,9 +199,9 @@ fn wire_line(line: &RawLine, selected: bool) -> Line<'static> {
         spans.push(Span::styled(
             pad_tag(&tag),
             Style::default().fg(if selected {
-                palette::WARNING
+                theme::WARNING
             } else {
-                palette::ADDITIONAL_INFO
+                theme::ADDITIONAL_INFO
             }),
         ));
         spans.push(Span::styled(detail, Style::default().fg(color)));
@@ -294,11 +294,11 @@ impl JsonWriter {
     }
     fn value(&mut self, value: &serde_json::Value, indent: usize) {
         match value {
-            serde_json::Value::Null => self.push("null", palette::JSON_LITERAL),
-            serde_json::Value::Bool(value) => self.push(value.to_string(), palette::JSON_LITERAL),
-            serde_json::Value::Number(value) => self.push(value.to_string(), palette::JSON_NUMBER),
+            serde_json::Value::Null => self.push("null", theme::JSON_LITERAL),
+            serde_json::Value::Bool(value) => self.push(value.to_string(), theme::JSON_LITERAL),
+            serde_json::Value::Number(value) => self.push(value.to_string(), theme::JSON_NUMBER),
             serde_json::Value::String(value) => {
-                self.push(format!("{value:?}"), palette::JSON_STRING)
+                self.push(format!("{value:?}"), theme::JSON_STRING)
             }
             serde_json::Value::Array(items) => self.seq(
                 items.iter(),
@@ -315,8 +315,8 @@ impl JsonWriter {
                 '{',
                 '}',
                 |writer, (key, value), indent| {
-                    writer.push(format!("{key:?}"), palette::JSON_KEY);
-                    writer.push(": ", palette::JSON_PUNCTUATION);
+                    writer.push(format!("{key:?}"), theme::JSON_KEY);
+                    writer.push(": ", theme::JSON_PUNCTUATION);
                     writer.value(value, indent);
                 },
             ),
@@ -332,22 +332,22 @@ impl JsonWriter {
         mut write: impl FnMut(&mut Self, T, usize),
     ) {
         if len == 0 {
-            self.push(format!("{open}{close}"), palette::JSON_PUNCTUATION);
+            self.push(format!("{open}{close}"), theme::JSON_PUNCTUATION);
             return;
         }
-        self.push(open.to_string(), palette::JSON_PUNCTUATION);
+        self.push(open.to_string(), theme::JSON_PUNCTUATION);
         self.newline();
         for (index, item) in items.enumerate() {
-            self.push("  ".repeat(indent + 1), palette::JSON_PUNCTUATION);
+            self.push("  ".repeat(indent + 1), theme::JSON_PUNCTUATION);
             write(self, item, indent + 1);
             if index + 1 < len {
-                self.push(",", palette::JSON_PUNCTUATION);
+                self.push(",", theme::JSON_PUNCTUATION);
             }
             self.newline();
         }
         self.push(
             format!("{}{close}", "  ".repeat(indent)),
-            palette::JSON_PUNCTUATION,
+            theme::JSON_PUNCTUATION,
         );
     }
 }

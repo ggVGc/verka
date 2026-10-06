@@ -1,6 +1,6 @@
 //! Shared application footer layout and styling.
 
-use crate::palette;
+use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -61,7 +61,7 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             view.working_directory.to_owned(),
-            Style::default().fg(palette::ADDITIONAL_INFO),
+            Style::default().fg(theme::ADDITIONAL_INFO),
         ))),
         chunks[0],
     );
@@ -71,9 +71,9 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             .iter()
             .map(|segment| {
                 let color = match segment.tone {
-                    Tone::Muted => palette::MUTED_TEXT,
-                    Tone::Warning => palette::QUOTA_WARNING,
-                    Tone::Error => palette::ERROR,
+                    Tone::Muted => theme::MUTED_TEXT,
+                    Tone::Warning => theme::QUOTA_WARNING,
+                    Tone::Error => theme::ERROR,
                 };
                 let style = if segment.bold {
                     Style::default().fg(color).add_modifier(Modifier::BOLD)
@@ -89,7 +89,7 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 retry,
-                Style::default().fg(palette::SUCCESS),
+                Style::default().fg(theme::SUCCESS),
             )))
             .right_aligned(),
             chunks[2],
@@ -99,7 +99,7 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 commit,
-                Style::default().fg(palette::SUCCESS),
+                Style::default().fg(theme::SUCCESS),
             )))
             .right_aligned(),
             chunks[3],
@@ -109,22 +109,22 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
 
 pub fn tag_color(tag: &str) -> Color {
     match tag {
-        "agent" => palette::AGENT_TAG,
-        "user" => palette::USER_TAG,
-        "shell" => palette::SHELL_TAG,
-        "tool" => palette::SPECIAL,
-        "plan" | "files" => palette::INFO,
-        "branch" => palette::ACCENT,
-        "error" | "malformed" => palette::ERROR,
-        _ => palette::ADDITIONAL_INFO,
+        "agent" => theme::AGENT_TAG,
+        "user" => theme::USER_TAG,
+        "shell" => theme::SHELL_TAG,
+        "tool" => theme::SPECIAL,
+        "plan" | "files" => theme::INFO,
+        "branch" => theme::ACCENT,
+        "error" | "malformed" => theme::ERROR,
+        _ => theme::ADDITIONAL_INFO,
     }
 }
 
 pub fn message_text_color(tag: &str) -> Color {
     match tag {
-        "agent" => palette::AGENT_TEXT,
-        "user" => palette::USER_TEXT,
-        _ => palette::TEXT,
+        "agent" => theme::AGENT_TEXT,
+        "user" => theme::USER_TEXT,
+        _ => theme::TEXT,
     }
 }
 

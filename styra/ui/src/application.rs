@@ -5,7 +5,7 @@ use crate::{
     modal_input, overlays, preview, quota, raw, recording, transcript, PanelId, RenderFeedback,
     ScrollFeedback,
 };
-use crate::{markdown, palette};
+use crate::{markdown, theme};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Modifier;
 use ratatui::Frame;
@@ -279,7 +279,7 @@ fn tint_all_but_entries(frame: &mut Frame, area: Rect) {
         for x in area.left()..area.right() {
             let cell = &mut buffer[(x, y)];
             if !markdown::is_entry_style(cell.style()) {
-                cell.set_fg(palette::MODAL_BACKDROP);
+                cell.set_fg(theme::MODAL_BACKDROP);
                 cell.modifier.insert(Modifier::DIM);
             }
         }
@@ -376,7 +376,7 @@ mod tests {
         let text = "see `src/app.rs:4` and [docs](/docs.md) or `Provider::x()`";
         let lines = markdown::markdown_block_lines_with_links(
             text,
-            Style::default().fg(palette::TEXT),
+            Style::default().fg(theme::TEXT),
             "",
             markdown::LinkDisplay::Compact,
         );
@@ -391,11 +391,11 @@ mod tests {
         let row: String = (0..80).map(|x| buffer[(x, 0)].symbol()).collect();
         let washed = |word: &str| {
             let start = row.find(word).unwrap() as u16;
-            (start..start + word.len() as u16).all(|x| buffer[(x, 0)].fg == palette::MODAL_BACKDROP)
+            (start..start + word.len() as u16).all(|x| buffer[(x, 0)].fg == theme::MODAL_BACKDROP)
         };
         let bright = |word: &str| {
             let start = row.find(word).unwrap() as u16;
-            (start..start + word.len() as u16).all(|x| buffer[(x, 0)].fg != palette::MODAL_BACKDROP)
+            (start..start + word.len() as u16).all(|x| buffer[(x, 0)].fg != theme::MODAL_BACKDROP)
         };
 
         assert!(bright("src/app.rs:4"), "{row}");

@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use crate::palette;
+use crate::theme;
 
 /// Everything the box draws: its titles, whatever stands above the buffer
 /// (the main view's queued messages), and the buffer being typed.
@@ -76,7 +76,7 @@ pub fn render(frame: &mut Frame, input: &ModalInput<'_>) {
     frame.render_widget(
         Block::default().style(
             Style::default()
-                .fg(palette::MODAL_BACKDROP)
+                .fg(theme::MODAL_BACKDROP)
                 .add_modifier(Modifier::DIM),
         ),
         frame.area(),
@@ -86,34 +86,34 @@ pub fn render(frame: &mut Frame, input: &ModalInput<'_>) {
 
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         .title(Span::styled(
             input.title.clone(),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     if let Some(note) = &input.note {
         block = block.title(Span::styled(
             note.clone(),
-            Style::default().fg(palette::ACCENT),
+            Style::default().fg(theme::ACCENT),
         ));
     }
     if let Some(model) = &input.model {
         let mut spans = vec![Span::styled(
             format!(" {model}"),
             Style::default().fg(if input.model_reported {
-                palette::TEXT
+                theme::TEXT
             } else {
-                palette::ADDITIONAL_INFO
+                theme::ADDITIONAL_INFO
             }),
         )];
         if let Some(effort) = &input.effort {
-            spans.push(Span::styled(" · ", Style::default().fg(palette::TEXT)));
+            spans.push(Span::styled(" · ", Style::default().fg(theme::TEXT)));
             spans.push(Span::styled(
                 format!("{effort} "),
                 Style::default().fg(if input.effort_reported {
-                    palette::TEXT
+                    theme::TEXT
                 } else {
-                    palette::ADDITIONAL_INFO
+                    theme::ADDITIONAL_INFO
                 }),
             ));
         } else {
@@ -124,7 +124,7 @@ pub fn render(frame: &mut Frame, input: &ModalInput<'_>) {
     if let Some(notice) = &input.notice {
         block = block.title_bottom(Span::styled(
             format!(" {notice} "),
-            Style::default().fg(palette::MUTED_WARNING),
+            Style::default().fg(theme::MUTED_WARNING),
         ));
     }
     let inner = block.inner(area);
@@ -160,7 +160,7 @@ pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
         lines.extend(wrapped_input_lines(
             text,
             width,
-            Style::default().fg(palette::ADDITIONAL_INFO),
+            Style::default().fg(theme::ADDITIONAL_INFO),
         ));
     }
     let preceding_rows = lines.len();
@@ -168,7 +168,7 @@ pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
     if input.text.is_empty() {
         lines.push(Line::from(Span::styled(
             input.placeholder.to_owned(),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         )));
         return InputDisplay {
             lines,
@@ -178,7 +178,7 @@ pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
     }
 
     let mut input_lines =
-        wrapped_input_lines(input.text, width, Style::default().fg(palette::TEXT));
+        wrapped_input_lines(input.text, width, Style::default().fg(theme::TEXT));
     let mut cursor_col = input_lines
         .last()
         .map(|line| line.width())
@@ -238,7 +238,7 @@ mod tests {
             .iter()
             .find(|span| span.content.contains("queued:"))
             .unwrap();
-        assert_eq!(queued.style.fg, Some(palette::ADDITIONAL_INFO));
+        assert_eq!(queued.style.fg, Some(theme::ADDITIONAL_INFO));
     }
 }
 

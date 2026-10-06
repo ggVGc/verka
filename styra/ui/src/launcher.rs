@@ -3,7 +3,7 @@
 //! border so the operator sees exactly what it is selecting.
 
 use crate::fuzzy_list::{render_fuzzy_list, FuzzyList, FuzzyListView};
-use crate::palette;
+use crate::theme;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -31,7 +31,7 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
     frame.render_widget(
         Block::default().style(
             Style::default()
-                .fg(palette::MODAL_BACKDROP)
+                .fg(theme::MODAL_BACKDROP)
                 .add_modifier(Modifier::DIM),
         ),
         area,

@@ -5,7 +5,7 @@
 //! highlighted the same way under `p`, and a suspicious shell result is marked
 //! in both places.
 
-use super::{markdown::syntax_highlighted_code_lines, palette};
+use super::{markdown::syntax_highlighted_code_lines, theme};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
@@ -41,7 +41,7 @@ pub(crate) fn with_gutter(line: Line<'static>, indent: &str) -> Line<'static> {
     let line_style = line.style;
     let mut spans = vec![Span::styled(
         format!("{indent}{GUTTER}"),
-        Style::default().fg(palette::INACTIVE),
+        Style::default().fg(theme::INACTIVE),
     )];
     spans.extend(line.spans);
     Line::from(spans).style(line_style)
@@ -69,17 +69,17 @@ fn body_lines(
     text.lines()
         .map(|line| {
             if suspicious_shell && is_error_diagnostic(line) {
-                return plain(line, palette::ERROR);
+                return plain(line, theme::ERROR);
             }
             if language == Some("bash") {
                 return Line::from(bash_spans(&line.replace('\t', "    ")));
             }
             let color = if line.starts_with('+') && !line.starts_with("+++") {
-                palette::SUCCESS
+                theme::SUCCESS
             } else if line.starts_with('-') && !line.starts_with("---") {
-                palette::ERROR
+                theme::ERROR
             } else if line.starts_with("@@") {
-                palette::ACCENT
+                theme::ACCENT
             } else {
                 text_color
             };
@@ -110,7 +110,7 @@ pub fn is_error_diagnostic(line: &str) -> bool {
 }
 
 /// Small shell highlighter for command previews. Genta identifies the code as
-/// Bash; Styra owns the terminal palette.
+/// Bash; Styra owns the terminal theme.
 fn bash_spans(line: &str) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut rest = line;
@@ -118,7 +118,7 @@ fn bash_spans(line: &str) -> Vec<Span<'static>> {
         if rest.starts_with('#') {
             spans.push(Span::styled(
                 rest.to_owned(),
-                Style::default().fg(palette::ADDITIONAL_INFO),
+                Style::default().fg(theme::ADDITIONAL_INFO),
             ));
             break;
         }
@@ -128,27 +128,27 @@ fn bash_spans(line: &str) -> Vec<Span<'static>> {
                 .find(first)
                 .map(|offset| offset + 2)
                 .unwrap_or(rest.len());
-            (end, palette::SUCCESS)
+            (end, theme::SUCCESS)
         } else if first.is_whitespace() {
             (
                 rest.find(|ch: char| !ch.is_whitespace())
                     .unwrap_or(rest.len()),
-                palette::TEXT,
+                theme::TEXT,
             )
         } else {
             let end = rest
                 .find(|ch: char| ch.is_whitespace() || "|&;<>".contains(ch))
                 .unwrap_or(rest.len());
             if end == 0 {
-                (first.len_utf8(), palette::SPECIAL)
+                (first.len_utf8(), theme::SPECIAL)
             } else {
                 let token = &rest[..end];
                 let color = if token.starts_with('-') {
-                    palette::ACCENT
+                    theme::ACCENT
                 } else if token.contains('$') {
-                    palette::WARNING
+                    theme::WARNING
                 } else {
-                    palette::TEXT
+                    theme::TEXT
                 };
                 (end, color)
             }
@@ -178,20 +178,20 @@ mod tests {
 
     #[test]
     fn every_row_of_a_block_carries_the_gutter() {
-        let lines = code_block_lines("one\ntwo", None, palette::TEXT, false, "  ");
+        let lines = code_block_lines("one\ntwo", None, theme::TEXT, false, "  ");
 
         for line in &lines {
             assert_eq!(line.spans[0].content.as_ref(), "  │ ");
-            assert_eq!(line.spans[0].style.fg, Some(palette::INACTIVE));
+            assert_eq!(line.spans[0].style.fg, Some(theme::INACTIVE));
         }
     }
 
     #[test]
     fn a_highlighted_block_carries_the_gutter_too() {
-        let lines = code_block_lines("fn main() {}", Some("rust"), palette::TEXT, false, "  ");
+        let lines = code_block_lines("fn main() {}", Some("rust"), theme::TEXT, false, "  ");
 
         assert_eq!(lines[0].spans[0].content.as_ref(), "  │ ");
-        assert_eq!(lines[0].spans[0].style.fg, Some(palette::INACTIVE));
+        assert_eq!(lines[0].spans[0].style.fg, Some(theme::INACTIVE));
     }
 
     #[test]
@@ -199,7 +199,7 @@ mod tests {
         let lines = code_block_lines(
             "grep -n 'needle' $FILE",
             Some("bash"),
-            palette::TEXT,
+            theme::TEXT,
             false,
             "  ",
         );
@@ -213,7 +213,7 @@ mod tests {
         let lines = code_block_lines(
             "@@ -1 +1 @@\n-gone\n+added\n--- a/f\n+++ b/f",
             None,
-            palette::TEXT,
+            theme::TEXT,
             false,
             "",
         );
@@ -222,12 +222,12 @@ mod tests {
         assert_eq!(
             fg,
             vec![
-                Some(palette::ACCENT),
-                Some(palette::ERROR),
-                Some(palette::SUCCESS),
+                Some(theme::ACCENT),
+                Some(theme::ERROR),
+                Some(theme::SUCCESS),
                 // File headers are not additions or removals.
-                Some(palette::TEXT),
-                Some(palette::TEXT),
+                Some(theme::TEXT),
+                Some(theme::TEXT),
             ]
         );
     }
@@ -237,17 +237,17 @@ mod tests {
         let lines = code_block_lines(
             "ls missing\nls: no such file or directory",
             Some("bash"),
-            palette::TEXT,
+            theme::TEXT,
             true,
             "",
         );
 
-        assert_eq!(content(&lines[1]).style.fg, Some(palette::ERROR));
+        assert_eq!(content(&lines[1]).style.fg, Some(theme::ERROR));
     }
 
     #[test]
     fn tabs_become_spaces_so_columns_do_not_collapse() {
-        let lines = code_block_lines("a\tb", None, palette::TEXT, false, "");
+        let lines = code_block_lines("a\tb", None, theme::TEXT, false, "");
 
         assert_eq!(content(&lines[0]).content.as_ref(), "a    b");
     }

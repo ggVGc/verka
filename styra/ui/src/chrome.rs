@@ -1,6 +1,6 @@
 //! Shared framed-panel chrome used by main application views.
 
-use crate::palette;
+use crate::theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders};
@@ -34,15 +34,15 @@ pub enum StopTone {
 impl StopTone {
     pub fn color(self) -> ratatui::style::Color {
         match self {
-            StopTone::Paused => palette::STOP_PAUSED,
-            StopTone::Completed => palette::STOP_COMPLETED,
-            StopTone::Abandoned => palette::STOP_ABANDONED,
-            StopTone::Sealed => palette::STOP_SEALED,
-            StopTone::RateLimited => palette::STOP_RATE_LIMITED,
-            StopTone::Failed => palette::STOP_FAILED,
-            StopTone::Exited => palette::STOP_EXITED,
-            StopTone::ServerRestarted => palette::STOP_SERVER_RESTARTED,
-            StopTone::Unknown => palette::STOP_UNKNOWN,
+            StopTone::Paused => theme::STOP_PAUSED,
+            StopTone::Completed => theme::STOP_COMPLETED,
+            StopTone::Abandoned => theme::STOP_ABANDONED,
+            StopTone::Sealed => theme::STOP_SEALED,
+            StopTone::RateLimited => theme::STOP_RATE_LIMITED,
+            StopTone::Failed => theme::STOP_FAILED,
+            StopTone::Exited => theme::STOP_EXITED,
+            StopTone::ServerRestarted => theme::STOP_SERVER_RESTARTED,
+            StopTone::Unknown => theme::STOP_UNKNOWN,
         }
     }
 }
@@ -72,7 +72,7 @@ pub fn all_events_title(show_minor: bool) -> Line<'static> {
     Line::from(Span::styled(
         format!(" all events · {minor} "),
         Style::default()
-            .fg(palette::ACCENT)
+            .fg(theme::ACCENT)
             .add_modifier(Modifier::BOLD),
     ))
 }
@@ -88,27 +88,27 @@ pub fn uncommitted_title(block: Block<'static>) -> Block<'static> {
     block.title_bottom(Line::from(Span::styled(
         " uncommitted changes ",
         Style::default()
-            .fg(palette::UNCOMMITTED)
+            .fg(theme::UNCOMMITTED)
             .add_modifier(Modifier::BOLD),
     )))
 }
 
 pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
     let tone = match chrome.status_tone {
-        StatusTone::Pending => palette::INFO,
-        StatusTone::Running => palette::RUNNING_STATUS,
-        StatusTone::Idle => palette::SUCCESS,
-        StatusTone::Background => palette::MUTED_WARNING,
+        StatusTone::Pending => theme::INFO,
+        StatusTone::Running => theme::RUNNING_STATUS,
+        StatusTone::Idle => theme::SUCCESS,
+        StatusTone::Background => theme::MUTED_WARNING,
         StatusTone::Stopped(why) => why.color(),
-        StatusTone::Ended => palette::INACTIVE,
-        StatusTone::Error => palette::ERROR,
+        StatusTone::Ended => theme::INACTIVE,
+        StatusTone::Error => theme::ERROR,
     };
-    let text = Style::default().fg(palette::MUTED_TEXT);
+    let text = Style::default().fg(theme::MUTED_TEXT);
     let value = |reported| {
         Style::default().fg(if reported {
-            palette::TEXT
+            theme::TEXT
         } else {
-            palette::ADDITIONAL_INFO
+            theme::ADDITIONAL_INFO
         })
     };
     let mut spans = vec![Span::raw(" ")];
@@ -116,7 +116,7 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
         spans.push(Span::styled(
             workspace.clone(),
             Style::default()
-                .fg(palette::TEXT)
+                .fg(theme::TEXT)
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(" · ", text));
@@ -153,9 +153,9 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if chrome.focused {
-            palette::ACCENT
+            theme::ACCENT
         } else {
-            palette::INACTIVE
+            theme::INACTIVE
         }))
         .title(Line::from(spans));
     if let Some(session) = &chrome.session {
@@ -165,7 +165,7 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
                 Span::styled(
                     session.clone(),
                     Style::default()
-                        .fg(palette::ACCENT)
+                        .fg(theme::ACCENT)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(" "),

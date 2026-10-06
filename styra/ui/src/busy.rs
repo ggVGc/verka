@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::palette;
+use crate::theme;
 
 /// What the blocking notice says: the work in progress, in the operator's
 /// terms.
@@ -42,7 +42,7 @@ pub fn render(frame: &mut Frame, view: &BusyView<'_>) {
     frame.render_widget(
         Block::default().style(
             Style::default()
-                .fg(palette::MODAL_BACKDROP)
+                .fg(theme::MODAL_BACKDROP)
                 .add_modifier(Modifier::DIM),
         ),
         frame.area(),
@@ -51,14 +51,14 @@ pub fn render(frame: &mut Frame, view: &BusyView<'_>) {
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::MUTED_WARNING))
+        .border_style(Style::default().fg(theme::MUTED_WARNING))
         .title(Span::styled(
             " working · please wait ",
-            Style::default().fg(palette::MUTED_WARNING),
+            Style::default().fg(theme::MUTED_WARNING),
         ));
     let line = Line::from(Span::styled(
         view.message.to_owned(),
-        Style::default().fg(palette::ACCENT),
+        Style::default().fg(theme::ACCENT),
     ));
     frame.render_widget(Paragraph::new(line).block(block), area);
 }

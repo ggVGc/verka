@@ -8,7 +8,7 @@ use crate::markdown::{
     markdown_block_render, parse_inline_spans_with_highlight, structural_indent, EntryIndex,
     LinkDisplay,
 };
-use crate::palette;
+use crate::theme;
 use crate::render_cache::{Memo, Weigh};
 use crate::search::{self, SearchView};
 use ratatui::layout::Rect;
@@ -180,12 +180,12 @@ pub fn render_entry_log(
     use ratatui::widgets::{Block, Borders};
     let (border, title) = if view.focused {
         (
-            palette::ACCENT,
+            theme::ACCENT,
             " entry log · Tab: back to the list · E: close ",
         )
     } else {
         (
-            palette::INACTIVE,
+            theme::INACTIVE,
             " entry log · follows selection · Tab: read it · E: close ",
         )
     };
@@ -194,13 +194,13 @@ pub fn render_entry_log(
         .border_style(Style::default().fg(border))
         .title(Span::styled(
             title,
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     if view.entries.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "  nothing in the interaction log yet",
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             )))
             .block(block),
             area,
@@ -218,7 +218,7 @@ pub fn render_entry_log(
                     "entries"
                 }
             ),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ))
         .right_aligned(),
     );
@@ -299,24 +299,24 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
                 Line::from(vec![
                     Span::styled(
                         "  launching with ",
-                        Style::default().fg(palette::MUTED_TEXT),
+                        Style::default().fg(theme::MUTED_TEXT),
                     ),
                     Span::styled(
                         view.selection_name.as_str(),
                         Style::default()
-                            .fg(palette::ACCENT)
+                            .fg(theme::ACCENT)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]),
                 Line::from(Span::styled(
                     "  press L to choose the default agent, model, and effort — or i to write the first message",
-                    Style::default().fg(palette::MUTED_TEXT),
+                    Style::default().fg(theme::MUTED_TEXT),
                 )),
             ]
         } else {
             vec![Line::from(Span::styled(
                 "  waiting for the agent — press i to send a message",
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             ))]
         };
         lines.extend(queued_lines(
@@ -834,24 +834,24 @@ fn status_tail(status: &EventListStatus) -> Line<'static> {
     let (text, color) = match status {
         EventListStatus::Pending => (
             "  … waiting for your first message".to_string(),
-            palette::INACTIVE,
+            theme::INACTIVE,
         ),
         EventListStatus::Running {
             elapsed,
             quiet,
             events,
-        } => (running_tail(*elapsed, *quiet, *events), palette::RUNNING),
+        } => (running_tail(*elapsed, *quiet, *events), theme::RUNNING),
         // Idle carries no elapsed figure: nothing is happening, so a
         // climbing counter only draws the eye to a number that means nothing.
         EventListStatus::Idle { reason } => {
-            (format!("  ── idle{} ──", why(reason)), palette::SUCCESS)
+            (format!("  ── idle{} ──", why(reason)), theme::SUCCESS)
         }
         EventListStatus::Background { elapsed } => (
             format!(
                 "  ── idle {} · background work still running ──",
                 format_duration(*elapsed)
             ),
-            palette::WARNING,
+            theme::WARNING,
         ),
         EventListStatus::Stopped { reason, tone, .. } => {
             (format!("  ── stopped{} ──", why(reason)), tone.color())
@@ -881,7 +881,7 @@ fn tail_lines(
 /// them in full, so here they only have to say what is waiting, and in what
 /// order.
 fn queued_lines(queued: &[QueuedMessage], width: usize) -> Vec<Line<'static>> {
-    let muted = Style::default().fg(palette::INACTIVE);
+    let muted = Style::default().fg(theme::INACTIVE);
     let mut lines: Vec<Line<'static>> = queued
         .iter()
         .take(MAX_QUEUED_ROWS)
@@ -895,7 +895,7 @@ fn queued_lines(queued: &[QueuedMessage], width: usize) -> Vec<Line<'static>> {
             truncate_line(
                 Line::from(vec![
                     Span::styled(label, muted),
-                    Span::styled(text, Style::default().fg(palette::MUTED_TEXT)),
+                    Span::styled(text, Style::default().fg(theme::MUTED_TEXT)),
                 ]),
                 width,
                 false,
@@ -1101,7 +1101,7 @@ fn build_entry_rows(
             0,
             Line::from(Span::styled(
                 format!("{DETAIL_INDENT}reported success; output contains an error diagnostic"),
-                Style::default().fg(palette::WARNING),
+                Style::default().fg(theme::WARNING),
             )),
         );
     }
@@ -1110,7 +1110,7 @@ fn build_entry_rows(
         detail.truncate(MAX_DETAIL_LINES);
         detail.push(Line::from(Span::styled(
             format!("{DETAIL_INDENT}… {hidden} more lines"),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         )));
     }
     lines.extend(detail);
@@ -1124,14 +1124,14 @@ fn build_entry_rows(
             if let Some(summary) = wrapped.first_mut() {
                 summary
                     .spans
-                    .push(Span::styled(" …", Style::default().fg(palette::MUTED_TEXT)));
+                    .push(Span::styled(" …", Style::default().fg(theme::MUTED_TEXT)));
             }
         } else {
             let hidden = wrapped.len() - (max_rows - 1);
             wrapped.truncate(max_rows - 1);
             wrapped.push(Line::from(Span::styled(
                 format!("{DETAIL_INDENT}… {hidden} more rows — press p for the full entry"),
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             )));
         }
     }
@@ -1152,9 +1152,9 @@ fn build_entry_rows(
 /// full width of the row instead of stopping at the end of the text.
 fn with_entry_backdrop(line: Line<'static>, entry: &EventEntry<'_>) -> Line<'static> {
     let background = if entry.selected {
-        Some(palette::SELECTION_BACKGROUND)
+        Some(theme::SELECTION_BACKGROUND)
     } else if matches!(entry.event, AgentEvent::UserMessage { .. }) {
-        Some(palette::USER_MESSAGE_BACKGROUND)
+        Some(theme::USER_MESSAGE_BACKGROUND)
     } else {
         None
     };
@@ -1180,10 +1180,10 @@ fn selected_summary_line(
     }
     if is_conversation {
         if let Some(glyph) = line.spans.get_mut(1) {
-            glyph.style = glyph.style.fg(palette::SELECTION_MARKER);
+            glyph.style = glyph.style.fg(theme::SELECTION_MARKER);
         }
     } else if let Some(lead) = line.spans.get_mut(0) {
-        *lead = Span::styled("• ", Style::default().fg(palette::SELECTION_MARKER));
+        *lead = Span::styled("• ", Style::default().fg(theme::SELECTION_MARKER));
     }
     line
 }
@@ -1236,7 +1236,7 @@ fn truncate_line(line: Line<'static>, width: usize, has_marker: bool) -> Line<'s
     }
     kept.push(Span::styled(
         "…",
-        Style::default().fg(palette::ADDITIONAL_INFO),
+        Style::default().fg(theme::ADDITIONAL_INFO),
     ));
     kept.extend(marker);
     Line::from(kept)
@@ -1634,7 +1634,7 @@ pub fn summary_line(
             (
                 Style::default().fg(tag_color(tag)),
                 "✗ ",
-                Style::default().fg(palette::ERROR),
+                Style::default().fg(theme::ERROR),
             )
         }
         AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. }
@@ -1643,7 +1643,7 @@ pub fn summary_line(
             (
                 Style::default().fg(tag_color(tag)),
                 "⚠ ",
-                Style::default().fg(palette::WARNING),
+                Style::default().fg(theme::WARNING),
             )
         }
         AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. }
@@ -1652,7 +1652,7 @@ pub fn summary_line(
             (
                 Style::default().fg(tag_color(tag)),
                 "✓ ",
-                Style::default().fg(palette::SUCCESS),
+                Style::default().fg(theme::SUCCESS),
             )
         }
         _ if tag == "shell" => (Style::default().fg(tag_color(tag)), "", Style::default()),
@@ -1660,15 +1660,15 @@ pub fn summary_line(
             if status == "error" =>
         {
             (
-                Style::default().fg(palette::ERROR),
+                Style::default().fg(theme::ERROR),
                 "✗ ",
-                Style::default().fg(palette::ERROR),
+                Style::default().fg(theme::ERROR),
             )
         }
         AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. } => (
-            Style::default().fg(palette::TEXT),
+            Style::default().fg(theme::TEXT),
             "✓ ",
-            Style::default().fg(palette::SUCCESS),
+            Style::default().fg(theme::SUCCESS),
         ),
         _ => (
             Style::default().fg(message_text_color(tag)),
@@ -1726,13 +1726,13 @@ pub fn summary_line(
     if let Some(contract) = entry.contract {
         spans.push(Span::styled(
             format!(" ⟨{}⟩", contract.as_str()),
-            Style::default().fg(palette::ACCENT),
+            Style::default().fg(theme::ACCENT),
         ));
     }
     if has_detail {
         spans.push(Span::styled(
             format!(" {marker}"),
-            Style::default().fg(palette::ADDITIONAL_INFO),
+            Style::default().fg(theme::ADDITIONAL_INFO),
         ));
     }
     Line::from(spans)
@@ -1847,7 +1847,7 @@ pub fn detail_lines_with_links(
             lines.truncate(cap);
             lines.push(Line::from(Span::styled(
                 format!("{DETAIL_INDENT}… {hidden} more lines"),
-                Style::default().fg(palette::MUTED_TEXT),
+                Style::default().fg(theme::MUTED_TEXT),
             )));
         }
     }
@@ -1875,7 +1875,7 @@ fn search_title(search: &SearchView<'_>) -> Option<Line<'static>> {
     Some(Line::from(Span::styled(
         text,
         Style::default()
-            .fg(palette::ACCENT)
+            .fg(theme::ACCENT)
             .add_modifier(Modifier::BOLD),
     )))
 }
@@ -1887,16 +1887,16 @@ fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
     if counts == ActivityCounts::default() {
         return Vec::new();
     }
-    let separator = || Span::styled("/", Style::default().fg(palette::MUTED_TEXT));
+    let separator = || Span::styled("/", Style::default().fg(theme::MUTED_TEXT));
     let count =
         |value: usize, color: Color| Span::styled(value.to_string(), Style::default().fg(color));
     let mut spans = vec![
         Span::raw(" "),
-        count(counts.running, palette::WARNING),
+        count(counts.running, theme::WARNING),
         separator(),
-        count(counts.idle, palette::SUCCESS),
+        count(counts.idle, theme::SUCCESS),
         separator(),
-        count(counts.stopped, palette::MUTED_TEXT),
+        count(counts.stopped, theme::MUTED_TEXT),
         Span::raw(" "),
     ];
     if counts.newly_idle > 0 {
@@ -1906,7 +1906,7 @@ fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
                 counts.newly_idle,
                 if counts.newly_idle == 1 { "" } else { "s" }
             ),
-            Style::default().fg(palette::SUCCESS),
+            Style::default().fg(theme::SUCCESS),
         ));
     }
     spans
@@ -2195,7 +2195,7 @@ mod tests {
         let marked = (0..buffer.area.height)
             .map(|y| {
                 (0..buffer.area.width)
-                    .filter(|x| buffer.cell((*x, y)).unwrap().bg == palette::ACCENT)
+                    .filter(|x| buffer.cell((*x, y)).unwrap().bg == theme::ACCENT)
                     .map(|x| buffer.cell((x, y)).unwrap().symbol())
                     .collect::<String>()
             })
@@ -2273,7 +2273,7 @@ mod tests {
         assert!(
             (0..buffer.area.width).any(|x| {
                 let cell = buffer.cell((x, 0)).unwrap();
-                cell.symbol() == "g" && cell.bg == palette::LINK_HIGHLIGHT_BACKGROUND
+                cell.symbol() == "g" && cell.bg == theme::LINK_HIGHLIGHT_BACKGROUND
             }),
             "the selected link remains visible on the summary"
         );

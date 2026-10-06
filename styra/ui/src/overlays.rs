@@ -1,5 +1,5 @@
 use crate::fuzzy_list::{marked, FuzzyList};
-use crate::palette;
+use crate::theme;
 use crate::text_prompt::{self, TextPrompt};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -24,7 +24,7 @@ pub fn render_branch(frame: &mut Frame, prompt: BranchPromptView, frame_area: Re
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         .title(" branch from selected entry · ? keys ");
     let list = List::new([
         ListItem::new(Line::from("entire interaction through this entry")),
@@ -33,7 +33,7 @@ pub fn render_branch(frame: &mut Frame, prompt: BranchPromptView, frame_area: Re
     .block(block)
     .highlight_style(
         Style::default()
-            .bg(palette::SELECTION_BACKGROUND)
+            .bg(theme::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -64,15 +64,15 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
     frame.render_widget(Clear, popup);
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         .title(" Interaction tags · ? keys ");
     if picker.list.is_filtering() {
         block = block.title_bottom(Line::from(vec![
-            Span::styled(" /", Style::default().fg(palette::MUTED_TEXT)),
+            Span::styled(" /", Style::default().fg(theme::MUTED_TEXT)),
             Span::styled(
                 format!("{} ", picker.list.query),
                 Style::default()
-                    .fg(palette::ACCENT)
+                    .fg(theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -89,7 +89,7 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
         vec![ListItem::new(Line::from(Span::styled(
             format!("  {note}"),
             Style::default()
-                .fg(palette::MUTED_TEXT)
+                .fg(theme::MUTED_TEXT)
                 .add_modifier(Modifier::DIM),
         )))]
     } else {
@@ -103,7 +103,7 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
                     } else {
                         " [ ] "
                     },
-                    Style::default().fg(palette::ACCENT),
+                    Style::default().fg(theme::ACCENT),
                 )];
                 spans.extend(marked(tag, &found.positions));
                 ListItem::new(Line::from(spans))
@@ -128,14 +128,14 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
     );
     let list = List::new(rows).highlight_style(
         Style::default()
-            .bg(palette::SELECTION_BACKGROUND)
+            .bg(theme::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
     state.select((!matches.is_empty()).then(|| picker.list.selected.min(matches.len() - 1)));
     frame.render_stateful_widget(list, list_area, &mut state);
     frame.render_widget(
-        Paragraph::new(input).style(Style::default().fg(palette::SUBORDINATE_TEXT)),
+        Paragraph::new(input).style(Style::default().fg(theme::SUBORDINATE_TEXT)),
         input_area,
     );
 }
@@ -171,20 +171,20 @@ pub fn render_references(frame: &mut Frame, references: ReferencesView<'_>, fram
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         .title(Span::styled(
             " files in this entry · ? keys ",
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     let items = references.items.iter().map(|reference| {
         let mut spans = vec![Span::styled(
             reference.label,
-            Style::default().fg(palette::TEXT),
+            Style::default().fg(theme::TEXT),
         )];
         if let Some(line) = reference.line {
             spans.push(Span::styled(
                 format!("  line {line}"),
-                Style::default().fg(palette::ADDITIONAL_INFO),
+                Style::default().fg(theme::ADDITIONAL_INFO),
             ));
         }
         ListItem::new(Line::from(spans))
@@ -193,7 +193,7 @@ pub fn render_references(frame: &mut Frame, references: ReferencesView<'_>, fram
         .block(block)
         .highlight_style(
             Style::default()
-                .bg(palette::SELECTION_BACKGROUND)
+                .bg(theme::SELECTION_BACKGROUND)
                 .add_modifier(Modifier::BOLD),
         );
     let mut state = ListState::default();
@@ -244,28 +244,28 @@ fn render_insert_grant(frame: &mut Frame, host: &str, restarts: bool, area: Rect
     let prompt = insert_floating(area, if restarts { 6 } else { 5 });
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::WARNING))
+        .border_style(Style::default().fg(theme::WARNING))
         .title(Span::styled(
             " outside the sandbox ",
-            Style::default().fg(palette::WARNING),
+            Style::default().fg(theme::WARNING),
         ))
         .title_bottom(Line::from(Span::styled(
             " for this interaction ",
-            Style::default().fg(palette::WARNING),
+            Style::default().fg(theme::WARNING),
         )));
     let key = |ch| {
         Span::styled(
             ch,
             Style::default()
-                .fg(palette::ACCENT)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )
     };
-    let muted = Style::default().fg(palette::MUTED_TEXT);
+    let muted = Style::default().fg(theme::MUTED_TEXT);
     let mut lines = vec![
         Line::from(Span::styled(
             host.to_owned(),
-            Style::default().fg(palette::TEXT),
+            Style::default().fg(theme::TEXT),
         )),
         Line::default(),
     ];
@@ -274,7 +274,7 @@ fn render_insert_grant(frame: &mut Frame, host: &str, restarts: bool, area: Rect
     if restarts {
         lines.push(Line::from(Span::styled(
             "mounting restarts the interaction; the conversation resumes",
-            Style::default().fg(palette::WARNING),
+            Style::default().fg(theme::WARNING),
         )));
     }
     lines.push(Line::from(vec![

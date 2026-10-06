@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::modal_input::wrapped_input_lines;
-use crate::palette;
+use crate::theme;
 
 /// One prompt: what it is for, and what has been typed into it.
 pub struct TextPrompt<'a> {
@@ -36,7 +36,7 @@ impl<'a> TextPrompt<'a> {
             title: title.into(),
             bottom: None,
             text,
-            border: palette::ACCENT,
+            border: theme::ACCENT,
         }
     }
 
@@ -50,7 +50,7 @@ impl<'a> TextPrompt<'a> {
 /// takes after it.
 fn layout(text: &str, width: u16) -> (Vec<Line<'static>>, u16, u16) {
     let width = usize::from(width.max(1));
-    let mut lines = wrapped_input_lines(text, width, Style::default().fg(palette::TEXT));
+    let mut lines = wrapped_input_lines(text, width, Style::default().fg(theme::TEXT));
     let mut column = lines.last().map(Line::width).unwrap_or_default();
     // A cursor past the last column belongs at the start of the next row, not
     // on the border, so that row is drawn too.

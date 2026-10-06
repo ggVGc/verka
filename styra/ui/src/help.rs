@@ -1,4 +1,4 @@
-use crate::palette;
+use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -28,12 +28,12 @@ pub fn render(
     scroll: u16,
 ) -> u16 {
     let heading = Style::default()
-        .fg(palette::ACCENT)
+        .fg(theme::ACCENT)
         .add_modifier(Modifier::BOLD);
     let key = Style::default()
-        .fg(palette::WARNING)
+        .fg(theme::WARNING)
         .add_modifier(Modifier::BOLD);
-    let muted = Style::default().fg(palette::MUTED_TEXT);
+    let muted = Style::default().fg(theme::MUTED_TEXT);
     let mut lines = rows
         .iter()
         .map(|row| match row {
@@ -54,7 +54,7 @@ pub fn render(
     let limit = (rows.len() as u16 + 2).saturating_sub(visible);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(theme::ACCENT))
         .title(format!(" styra · {window} · keybinds "));
     frame.render_widget(
         Paragraph::new(Text::from(lines))

@@ -1,7 +1,7 @@
 //! Filtered plain-text transcript presentation.
 
 use crate::chrome::{all_events_title, panel_block, uncommitted_title, PanelChrome};
-use crate::palette;
+use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, view: &TranscriptView<'_>, area: Rect) -> u16 {
         .map(|line| {
             Line::from(Span::styled(
                 line.to_owned(),
-                Style::default().fg(palette::TEXT),
+                Style::default().fg(theme::TEXT),
             ))
         })
         .collect::<Vec<_>>();

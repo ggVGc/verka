@@ -6,7 +6,7 @@
 //! thing found can be read off the screen without hunting for where the match
 //! ends.
 
-use crate::palette;
+use crate::theme;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
@@ -42,13 +42,13 @@ pub fn term(query: &str) -> Option<&str> {
 
 /// The mark drawn over a matching word.
 ///
-/// Cyan rather than the yellow of a selection ([`palette::SELECTION_MARKER`]):
+/// Cyan rather than the yellow of a selection ([`theme::SELECTION_MARKER`]):
 /// a match is not where the cursor is, and the two are routinely on screen at
 /// once — the selected row can hold matches of its own.
 fn match_style() -> Style {
     Style::new()
-        .fg(palette::CODE_BACKGROUND)
-        .bg(palette::ACCENT)
+        .fg(theme::CODE_BACKGROUND)
+        .bg(theme::ACCENT)
 }
 
 /// Mark every word of `lines` containing `term`, case-insensitively.
@@ -148,7 +148,7 @@ mod tests {
     fn marked(line: &Line<'_>) -> Vec<String> {
         line.spans
             .iter()
-            .filter(|span| span.style.bg == Some(palette::ACCENT))
+            .filter(|span| span.style.bg == Some(theme::ACCENT))
             .map(|span| span.content.to_string())
             .collect()
     }
