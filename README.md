@@ -39,6 +39,8 @@ dependencies rather than a single framework.
   its record. Nota knows Git revisions, but not Linka candidates or nodes. The
   implemented scope is the prototype described in
   [`nota/PROTOTYPE_V1.md`](nota/PROTOTYPE_V1.md).
+- [`nota-vim/`](nota-vim/README.md) — a Vim and Neovim plugin using the Nota
+  CLI to start reviews, inspect notes and suggestion patches, and write notes.
 
 ## Dependency direction
 
@@ -52,6 +54,7 @@ Orka Web   ---->  Orka, Linka
 Orka       ---->  Linka, Driva, Genta, Nota
 Driva      ---->  Bubblewrap
 Nota       ---->  Git
+Nota Vim   ---->  Nota CLI, Git
 ```
 
 Linka, Driva, Genta, and Nota are leaves: they depend on no other application

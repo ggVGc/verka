@@ -1,0 +1,45 @@
+*nota.txt*  Git-native reviews from Vim using the Nota CLI
+
+COMMANDS                                                       *nota-commands*
+
+:NotaStart [revision] [branch]                                  *:NotaStart*
+        Start and select a review; defaults to HEAD and a generated branch.
+        The review branch is created without changing the checkout or index.
+
+:NotaShow [branch]                                              *:NotaShow*
+        Open and select a review. Without a branch, use the selection for
+        this worktree, or the checked-out branch if none has been selected.
+        Enter opens the subject or an entry's message and patch; r refreshes;
+        n composes a note; q closes. Entry buffers also use q to close.
+
+:NotaBranch [branch]                                            *:NotaBranch*
+        Select an existing review without opening it. No argument clears
+        the worktree's selection and restores the checked-out default.
+        Review, entry, and draft buffers retain their own branch context.
+
+:[range]NotaNote [text]                                         *:NotaNote*
+        Append a note. No text opens a Markdown draft; :write submits and
+        closes it, :bdelete! discards it. Errors preserve the draft.
+        A range appends Source: path:first-last to the note; paths are
+        worktree-relative and line numbers come from the current file buffer.
+        A draft pins its branch and range when opened. Hidden drafts are
+        available through :buffers! and :buffer {number}.
+
+CONFIGURATION                                            *g:nota_executable*
+
+        let g:nota_executable = '/path/to/nota'
+
+        Executable path, without arguments. Default: 'nota' on PATH.
+        Requires Git and Vim 8.2+ or Neovim. CLI calls run synchronously.
+        Commands use the current file's worktree or, for unnamed buffers,
+        Vim's working directory. Selections last until Vim exits.
+
+SUGGESTIONS                                              *nota-suggestions*
+
+        Suggestions are ordinary commits with project changes on the review
+        branch. Create a worktree with git worktree add, edit in Vim, and use
+        git add / git commit. Refresh the review to see the suggestion.
+        Apply accepted suggestions by cherry-picking individual commits.
+        Published reviews are append-only: do not amend, rebase, or force-push.
+
+ vim:tw=78:ts=8:noet:ft=help:norl:
