@@ -36,6 +36,31 @@ pub(crate) fn branch_name<'a>(
     app.interactions.name(event.branch_target()?)
 }
 
+pub(crate) fn branch_provider_switch(
+    app: &App,
+    event: &styra_protocol::event::AgentEvent,
+) -> Option<(
+    styra_protocol::agent::Provider,
+    styra_protocol::agent::Provider,
+)> {
+    use styra_protocol::event::{AgentEvent, BranchDirection};
+    match event {
+        AgentEvent::Branched {
+            direction: BranchDirection::From,
+            session,
+            ..
+        } => app
+            .interactions
+            .provider_switch_from(session, &app.session_id),
+        AgentEvent::Branched {
+            direction: BranchDirection::To,
+            session,
+            ..
+        } => app.interactions.provider_switch_to(session),
+        _ => None,
+    }
+}
+
 pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
     let branch_point = app.timeline.branch_point();
     let entries = app
@@ -56,6 +81,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
                 .filter(|highlight| highlight.entry == index)
                 .map(|highlight| highlight.link),
             branch_name: branch_name(app, entry.event()),
+            branch_provider_switch: branch_provider_switch(app, entry.event()),
             inherited: branch_point.is_some_and(|point| index < point),
         })
         .collect();
@@ -378,6 +404,75 @@ mod tests {
         assert!(
             view(&app).entries.iter().any(|entry| entry.selected),
             "some rendered row is the selected one"
+        );
+    }
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+    use styra_protocol::{
+        agent::Provider,
+        event::{AgentEvent, BranchDirection},
+        BranchHistory, SessionOrigin,
+    };
+
+    #[test]
+    fn provider_switch_resolves_on_both_sides_from_persisted_origin() {
+        let mut app = App::new(
+            styra_protocol::agent::Selection::new(Provider::Claude),
+            "source",
+        );
+        let origin = SessionOrigin {
+            session_id: "source".into(),
+            provider: Provider::Claude,
+            at_ms: None,
+            history: BranchHistory::ThroughSelected,
+        };
+        app.interactions
+            .note_origin("destination", Provider::Codex, Some(&origin));
+        let marker = |direction, session: &str| AgentEvent::Branched {
+            direction,
+            session: session.into(),
+            name: None,
+        };
+        let expected = Some((Provider::Claude, Provider::Codex));
+        assert_eq!(
+            branch_provider_switch(&app, &marker(BranchDirection::To, "destination")),
+            expected
+        );
+        app.session_id = "destination".into();
+        assert_eq!(
+            branch_provider_switch(&app, &marker(BranchDirection::From, "source")),
+            expected
+        );
+        assert_eq!(
+            branch_provider_switch(&app, &marker(BranchDirection::From, "unrelated")),
+            None
+        );
+        let inherited_origin = SessionOrigin {
+            session_id: "destination".into(),
+            provider: Provider::Codex,
+            at_ms: None,
+            history: BranchHistory::ThroughSelected,
+        };
+        app.interactions
+            .note_origin("descendant", Provider::Codex, Some(&inherited_origin));
+        app.session_id = "descendant".into();
+        assert_eq!(
+            branch_provider_switch(&app, &marker(BranchDirection::From, "source")),
+            expected
+        );
+        assert_eq!(
+            branch_provider_switch(&app, &marker(BranchDirection::To, "destination")),
+            expected
+        );
+        app.interactions
+            .note_origin("ordinary", Provider::Claude, Some(&origin));
+        app.session_id = "source".into();
+        assert_eq!(
+            branch_provider_switch(&app, &marker(BranchDirection::To, "ordinary")),
+            None
         );
     }
 }

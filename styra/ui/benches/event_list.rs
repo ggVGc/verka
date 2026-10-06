@@ -54,6 +54,7 @@ fn frame(events: &[AgentEvent], versions: &[EntryVersion]) -> usize {
                 selected: false,
                 link_highlight: None,
                 branch_name: None,
+                branch_provider_switch: None,
                 inherited: false,
             };
             entry_item(&entry, WIDTH, VIEWPORT, render)
@@ -97,6 +98,7 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
             selected: index == selected,
             link_highlight: None,
             branch_name: None,
+            branch_provider_switch: None,
             inherited: false,
         })
         .collect();

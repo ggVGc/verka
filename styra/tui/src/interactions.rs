@@ -35,6 +35,15 @@ pub struct LiveInteractions {
     /// rows and the current screen both resolve through this map instead of
     /// retaining independent copies that a rename has to keep synchronized.
     names: HashMap<String, Option<String>>,
+    /// Persisted ancestry, retained when a Session leaves the live roster.
+    branch_origins: HashMap<
+        String,
+        (
+            String,
+            styra_protocol::agent::Provider,
+            styra_protocol::agent::Provider,
+        ),
+    >,
     /// Where the cursor is while that is not the Interaction on screen.
     /// `None` — the resting state — means the cursor is on the current
     /// Interaction, so there is no move outstanding.
@@ -137,6 +146,53 @@ impl LiveInteractions {
         self.names.insert(id.into(), name);
     }
 
+    /// Cache the immutable origin and provider for branch-marker rendering.
+    pub fn note_origin(
+        &mut self,
+        id: &str,
+        provider: styra_protocol::agent::Provider,
+        origin: Option<&styra_protocol::SessionOrigin>,
+    ) {
+        if let Some(origin) = origin {
+            self.branch_origins.insert(
+                id.to_owned(),
+                (origin.session_id.clone(), origin.provider, provider),
+            );
+        }
+    }
+
+    pub fn provider_switch_from(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> Option<(
+        styra_protocol::agent::Provider,
+        styra_protocol::agent::Provider,
+    )> {
+        let mut destination = destination;
+        // A copied marker can belong to an ancestor branch. Bound the walk
+        // so malformed cyclic origins cannot keep rendering forever.
+        for _ in 0..self.branch_origins.len() {
+            let (parent, from, to) = self.branch_origins.get(destination)?;
+            if parent == source {
+                return (from != to).then_some((*from, *to));
+            }
+            destination = parent;
+        }
+        None
+    }
+
+    pub fn provider_switch_to(
+        &self,
+        destination: &str,
+    ) -> Option<(
+        styra_protocol::agent::Provider,
+        styra_protocol::agent::Provider,
+    )> {
+        let (_, from, to) = self.branch_origins.get(destination)?;
+        (from != to).then_some((*from, *to))
+    }
+
     /// The current operator-facing name for `id`, shared by every TUI surface.
     pub fn name(&self, id: &str) -> Option<&str> {
         self.names.get(id).and_then(Option::as_deref)
@@ -146,11 +202,17 @@ impl LiveInteractions {
     /// the operator-owned navigator state is carried onto it.
     pub fn adopt_names_from(&mut self, newer: &Self) {
         self.names.extend(newer.names.clone());
+        self.branch_origins.extend(newer.branch_origins.clone());
     }
 
     fn take_names(&mut self, items: &mut [InteractionSummary]) -> bool {
         let mut changed = false;
         for interaction in items {
+            self.note_origin(
+                &interaction.id,
+                interaction.selection.provider,
+                interaction.origin.as_ref(),
+            );
             let name = interaction.name.take();
             changed |= self
                 .names

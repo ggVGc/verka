@@ -18,7 +18,7 @@
 //! it the navigation keys. The preview shows whatever its cursor is on for as
 //! long as it is open, keys or not; see [`crate::entry_log`].
 
-use super::list::{branch_name, ui_link_display};
+use super::list::{branch_name, branch_provider_switch, ui_link_display};
 use crate::app::App;
 pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
     let shown = app.entry_log_indices();
@@ -39,6 +39,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
             selected: cursor == Some(index),
             link_highlight: None,
             branch_name: branch_name(app, entry.event()),
+            branch_provider_switch: branch_provider_switch(app, entry.event()),
             inherited: false,
         })
         .collect();

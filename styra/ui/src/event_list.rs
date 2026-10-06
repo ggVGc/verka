@@ -58,6 +58,11 @@ pub struct EventEntry<'a> {
     /// for display: it is a snapshot taken when the marker was written, and a
     /// rename afterward would leave it stale.
     pub branch_name: Option<&'a str>,
+    /// Provider transition recorded by the linked branch's origin.
+    pub branch_provider_switch: Option<(
+        styra_protocol::agent::Provider,
+        styra_protocol::agent::Provider,
+    )>,
     /// The entry precedes a branched Session's branch point: history copied
     /// from its source rather than its own, drawn faded so the two read apart.
     pub inherited: bool,
@@ -985,6 +990,10 @@ struct RowKey {
     link_highlight: Option<EntryIndex>,
     inherited: bool,
     search: Option<String>,
+    branch_provider_switch: Option<(
+        styra_protocol::agent::Provider,
+        styra_protocol::agent::Provider,
+    )>,
 }
 
 impl Weigh for Vec<Line<'static>> {
@@ -1035,6 +1044,7 @@ fn entry_rows_with_max_rows(
         link_highlight: entry.link_highlight,
         inherited: entry.inherited,
         search: render.search.map(str::to_owned),
+        branch_provider_switch: entry.branch_provider_switch,
     };
     ROW_CACHE.with(|cache| {
         cache.borrow_mut().get_or_insert_with(key, || {
@@ -1774,6 +1784,20 @@ pub fn summary_line(
                 summary = first_line.to_owned();
             }
         }
+        if let Some((from, to)) = entry.branch_provider_switch {
+            let sealed = if matches!(entry.event, AgentEvent::Branched {
+                direction: styra_protocol::event::BranchDirection::To, ..
+            }) {
+                "; source sealed"
+            } else {
+                ""
+            };
+            summary.push_str(&format!(
+                " (provider switch: {} → {}{sealed})",
+                from.as_str(),
+                to.as_str()
+            ));
+        }
         let display_summary = match &entry.event {
             AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
                 summary
@@ -2095,6 +2119,7 @@ mod tests {
                 selected: index == selected,
                 link_highlight: None,
                 branch_name: None,
+                branch_provider_switch: None,
                 inherited: false,
             })
             .collect();
@@ -2265,6 +2290,7 @@ mod tests {
                 selected: true,
                 link_highlight: None,
                 branch_name: None,
+                branch_provider_switch: None,
                 inherited: false,
             }],
             activity: ActivityCounts::default(),
@@ -2361,6 +2387,7 @@ mod tests {
                 selected,
                 link_highlight: None,
                 branch_name: None,
+                branch_provider_switch: None,
                 inherited: false,
             };
             summary_line(&entry, false, false, true, Protocol::default())
@@ -2381,6 +2408,60 @@ mod tests {
     }
 
     #[test]
+    fn provider_switch_is_shown_in_branch_summary_and_invalidates_cached_rows() {
+        use styra_protocol::agent::Provider;
+        use styra_protocol::event::BranchDirection;
+        let event = AgentEvent::Branched {
+            direction: BranchDirection::To,
+            session: "destination".into(),
+            name: None,
+        };
+        let mut entry = EventEntry {
+            event: &event,
+            version: version(),
+            expanded: false,
+            has_detail: true,
+            contract: None,
+            selected: false,
+            link_highlight: None,
+            branch_name: None,
+            branch_provider_switch: None,
+            inherited: false,
+        };
+        let render = EntryRender {
+            protocol: Protocol::default(),
+            links: LinkDisplay::Compact,
+            search: None,
+        };
+        let text = |rows: Vec<Line<'static>>| {
+            rows.into_iter()
+                .flat_map(|line| line.spans)
+                .map(|span| span.content.into_owned())
+                .collect::<String>()
+        };
+        let plain = text(entry_rows_with_max_rows(&entry, 120, 5, render));
+        assert!(!plain.contains("provider switch"));
+        entry.branch_provider_switch = Some((Provider::Claude, Provider::Codex));
+        let switched = text(entry_rows_with_max_rows(&entry, 120, 5, render));
+        assert!(
+            switched.contains("provider switch: claude → codex; source sealed"),
+            "{switched}"
+        );
+        assert!(!plain.contains("sealed"));
+        let destination_marker = AgentEvent::Branched {
+            direction: BranchDirection::From,
+            session: "source".into(),
+            name: None,
+        };
+        entry.event = &destination_marker;
+        let destination_summary = text(vec![summary_line(
+            &entry, false, true, true, Protocol::default(),
+        )]);
+        assert!(destination_summary.contains("provider switch: claude → codex"));
+        assert!(!destination_summary.contains("sealed"));
+    }
+
+    #[test]
     fn a_highlighted_link_does_not_repeat_the_selected_summary() {
         let event = AgentEvent::AgentMessage {
             text: "see [guide](https://example.com/guide)".into(),
@@ -2394,6 +2475,7 @@ mod tests {
             selected: true,
             link_highlight: Some(0),
             branch_name: None,
+            branch_provider_switch: None,
             inherited: false,
         };
         let render = EntryRender {
@@ -2670,6 +2752,7 @@ mod tests {
             selected: false,
             link_highlight: None,
             branch_name: None,
+            branch_provider_switch: None,
             inherited: false,
         }
     }

@@ -518,6 +518,7 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
     app.interactions
         .note_name(interaction.id.clone(), interaction.name.clone());
+    note_branch_origins(client, &mut app, &interaction.workspace_id);
     app.workspace.id = Some(interaction.workspace_id.clone());
     app.workspace.enter(interaction.workspace.clone());
     app.launch.record(interaction.driva.clone());
@@ -571,8 +572,10 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
 pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment)> {
     let stored = client.stored_session(session_id)?;
     let name = stored.summary.name.clone();
+    let workspace_id = stored.summary.workspace_id.clone();
     let mut app = App::new(stored.summary.selection, stored.summary.id);
     app.interactions.note_name(app.session_id.clone(), name);
+    note_branch_origins(client, &mut app, &workspace_id);
     app.workspace.id = Some(stored.summary.workspace_id);
     // A replayed Session has no live root — nothing is mounted anywhere — but
     // the server can still say where it was working when it stopped, and the
@@ -1050,6 +1053,19 @@ fn mark_stopped(app: &mut App, live: &mut Attachment, reason: StopReason) {
     };
     app.activity.status = Status::Stopped(reason);
     *live = Attachment::Detached;
+}
+
+/// Resolve persisted branch origins for markers on either side, including stored Sessions.
+fn note_branch_origins(client: &Client, app: &mut App, workspace_id: &str) {
+    if let Ok(sessions) = client.list_sessions(workspace_id) {
+        for session in sessions {
+            app.interactions.note_origin(
+                &session.id,
+                session.selection.provider,
+                session.origin.as_ref(),
+            );
+        }
+    }
 }
 
 #[cfg(test)]
