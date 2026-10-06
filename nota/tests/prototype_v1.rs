@@ -190,16 +190,49 @@ impl Git for FakeGit {
         Ok(history)
     }
 
+    fn first_parent_commits_with_trailers(
+        &self,
+        repository: &Path,
+        tips: &[String],
+        keys: &[&str],
+    ) -> Result<Vec<nota::Commit>> {
+        let mut found = BTreeMap::new();
+        for tip in tips {
+            for commit in self.first_parent_history(repository, tip)? {
+                let read = self.read(&commit)?;
+                let matches = read
+                    .message
+                    .lines()
+                    .any(|line| keys.iter().any(|key| line.starts_with(&format!("{key}:"))));
+                if matches {
+                    found.insert(commit, read);
+                }
+            }
+        }
+        Ok(found.into_values().collect())
+    }
+
+    fn commits(&self, _repository: &Path, commits: &[String]) -> Result<Vec<nota::Commit>> {
+        commits.iter().map(|commit| self.read(commit)).collect()
+    }
+}
+
+impl FakeGit {
+    fn read(&self, commit: &str) -> Result<nota::Commit> {
+        self.with_commit(commit, |read| nota::Commit {
+            id: commit.into(),
+            first_parent: read.parent.clone(),
+            message: read.message.trim().into(),
+            paths: read.paths.clone(),
+        })
+    }
+
     fn commit_message(&self, _repository: &Path, commit: &str) -> Result<String> {
         self.with_commit(commit, |commit| commit.message.clone())
     }
 
     fn first_parent(&self, _repository: &Path, commit: &str) -> Result<Option<String>> {
         self.with_commit(commit, |commit| commit.parent.clone())
-    }
-
-    fn changed_paths(&self, _repository: &Path, commit: &str) -> Result<Vec<String>> {
-        self.with_commit(commit, |commit| commit.paths.clone())
     }
 }
 

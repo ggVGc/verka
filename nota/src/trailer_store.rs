@@ -4,12 +4,13 @@
 //! a working tree, and a note is told apart from a suggestion by its
 //! `Nota-Note` trailer rather than by the files it changes.
 
-use crate::git::{Git, SystemGit};
+use crate::git::{Commit, Git, SystemGit};
 use crate::review::{
     Review, ReviewDiagnostic, ReviewEntry, ReviewEntryKind, ReviewIndex, ReviewQuery, ReviewStore,
     ReviewSummary, StartedReview,
 };
 use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
 use std::path::Path;
 
 const REVIEW_TRAILER: &str = "Nota-Review";
@@ -98,17 +99,14 @@ impl ReviewStore for GitTrailerStore<'_> {
         self.git
             .update_branch(&repository, branch, &commit, &review.tip)
             .with_context(|| format!("review branch `{branch}` changed while adding the note"))?;
-        self.entry_at(&repository, &commit)
+        let mut entries = self.entries(&repository, &[commit])?;
+        Ok(entries.remove(0))
     }
 
     fn load_review(&self, path: &Path, branch: &str) -> Result<Review> {
         let repository = self.git.repository_root(path)?;
         let review = self.read_branch(&repository, branch)?;
-        let entries = review
-            .entries
-            .iter()
-            .map(|commit| self.entry_at(&repository, commit))
-            .collect::<Result<Vec<_>>>()?;
+        let entries = self.entries(&repository, &review.entries)?;
         Ok(Review {
             branch: branch.to_string(),
             marker: review.marker.commit,
@@ -126,10 +124,18 @@ impl ReviewStore for GitTrailerStore<'_> {
             .transpose()?;
         let mut branches = self.git.local_branches(&repository)?;
         branches.sort_by(|a, b| a.0.cmp(&b.0));
+        let tips = branches
+            .iter()
+            .map(|(_, tip)| tip.clone())
+            .collect::<Vec<_>>();
+        let markers = self.marker_candidates(&repository, &tips)?;
         let mut index = ReviewIndex::default();
+        if markers.is_empty() {
+            return Ok(index);
+        }
         for (branch, tip) in branches {
             let summary = (|| -> Result<Option<ReviewSummary>> {
-                let Some(review) = self.read_branch_at(&repository, &branch, tip)? else {
+                let Some(review) = self.read_branch_at(&repository, &branch, tip, &markers)? else {
                     return Ok(None);
                 };
                 if subject
@@ -140,8 +146,8 @@ impl ReviewStore for GitTrailerStore<'_> {
                 }
                 let mut notes = 0;
                 let mut suggestions = 0;
-                for commit in &review.entries {
-                    match self.entry_at(&repository, commit)?.kind {
+                for entry in self.entries(&repository, &review.entries)? {
+                    match entry.kind {
                         ReviewEntryKind::Note => notes += 1,
                         ReviewEntryKind::Suggestion => suggestions += 1,
                     }
@@ -195,17 +201,39 @@ impl GitTrailerStore<'_> {
     /// history, and check that it names `branch`.
     fn read_branch(&self, repository: &Path, branch: &str) -> Result<Branch> {
         let tip = self.git.branch_tip(repository, branch)?;
-        self.read_branch_at(repository, branch, tip)?
+        let markers = self.marker_candidates(repository, std::slice::from_ref(&tip))?;
+        self.read_branch_at(repository, branch, tip, &markers)?
             .with_context(|| format!("`{branch}` is not a Nota review (no review marker found)"))
     }
 
+    /// The commits on the first-parent histories of `tips` that may be review
+    /// markers, read in one pass so that discovery never reads each commit of
+    /// a long history separately.
+    fn marker_candidates(
+        &self,
+        repository: &Path,
+        tips: &[String],
+    ) -> Result<HashMap<String, Commit>> {
+        let commits = self.git.first_parent_commits_with_trailers(
+            repository,
+            tips,
+            &[REVIEW_TRAILER, SUBJECT_TRAILER],
+        )?;
+        Ok(commits
+            .into_iter()
+            .map(|commit| (commit.id.clone(), commit))
+            .collect())
+    }
+
     /// Inspect a captured tip so ref changes during discovery cannot mix
-    /// versions. No marker is distinct from a malformed review.
+    /// versions. `markers` must include the marker candidates of `tip`'s
+    /// history. No marker is distinct from a malformed review.
     fn read_branch_at(
         &self,
         repository: &Path,
         branch: &str,
         tip: String,
+        markers: &HashMap<String, Commit>,
     ) -> Result<Option<Branch>> {
         let mut history = self
             .git
@@ -213,8 +241,10 @@ impl GitTrailerStore<'_> {
             .with_context(|| format!("reading review history from `{branch}`"))?;
         for position in 0..history.len() {
             let commit = &history[position];
-            let message = self.git.commit_message(repository, commit)?;
-            let (_, trailers) = split_trailers(&message);
+            let Some(candidate) = markers.get(commit) else {
+                continue;
+            };
+            let (_, trailers) = split_trailers(&candidate.message);
             let review = trailer(&trailers, REVIEW_TRAILER);
             let subject = trailer(&trailers, SUBJECT_TRAILER);
             if review.is_none() && subject.is_none() {
@@ -224,7 +254,7 @@ impl GitTrailerStore<'_> {
                 .with_context(|| format!("review marker `{commit}` has no review trailer"))?;
             let subject = subject
                 .with_context(|| format!("review marker `{commit}` has no subject trailer"))?;
-            if self.git.first_parent(repository, commit)?.as_deref() != Some(subject) {
+            if candidate.first_parent.as_deref() != Some(subject) {
                 bail!("review marker `{commit}` has an invalid subject trailer");
             }
             if review != branch {
@@ -245,37 +275,51 @@ impl GitTrailerStore<'_> {
         Ok(None)
     }
 
-    fn entry_at(&self, repository: &Path, commit: &str) -> Result<ReviewEntry> {
-        let message = self.git.commit_message(repository, commit)?;
-        let paths = self.git.changed_paths(repository, commit)?;
-        let (text, trailers) = split_trailers(&message);
-        if trailer(&trailers, NOTE_TRAILER).is_some() {
-            if !paths.is_empty() {
-                bail!("note commit `{commit}` changes project files");
-            }
-            if text.trim().is_empty() {
-                bail!("note commit `{commit}` has no text");
-            }
-            return Ok(ReviewEntry {
-                commit: commit.to_string(),
-                message: text.to_string(),
-                kind: ReviewEntryKind::Note,
-                paths,
-            });
+    /// Read and validate the entry `commits`, in order.
+    fn entries(&self, repository: &Path, commits: &[String]) -> Result<Vec<ReviewEntry>> {
+        let read = self.git.commits(repository, commits)?;
+        if read.len() != commits.len() {
+            bail!(
+                "expected {} review entries, read {}",
+                commits.len(),
+                read.len()
+            );
         }
-        if message.trim().is_empty() {
-            bail!("suggestion commit `{commit}` has an empty review comment");
-        }
-        if paths.is_empty() {
-            bail!("suggestion commit `{commit}` has no changed project files");
-        }
-        Ok(ReviewEntry {
-            commit: commit.to_string(),
-            message,
-            kind: ReviewEntryKind::Suggestion,
-            paths,
-        })
+        read.into_iter().map(entry).collect()
     }
+}
+
+fn entry(commit: Commit) -> Result<ReviewEntry> {
+    let Commit {
+        id, message, paths, ..
+    } = commit;
+    let (text, trailers) = split_trailers(&message);
+    if trailer(&trailers, NOTE_TRAILER).is_some() {
+        if !paths.is_empty() {
+            bail!("note commit `{id}` changes project files");
+        }
+        if text.trim().is_empty() {
+            bail!("note commit `{id}` has no text");
+        }
+        return Ok(ReviewEntry {
+            message: text.to_string(),
+            commit: id,
+            kind: ReviewEntryKind::Note,
+            paths,
+        });
+    }
+    if message.trim().is_empty() {
+        bail!("suggestion commit `{id}` has an empty review comment");
+    }
+    if paths.is_empty() {
+        bail!("suggestion commit `{id}` has no changed project files");
+    }
+    Ok(ReviewEntry {
+        commit: id,
+        message,
+        kind: ReviewEntryKind::Suggestion,
+        paths,
+    })
 }
 
 /// Split a commit message into its text and the `Key: value` trailers of its

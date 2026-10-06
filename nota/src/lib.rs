@@ -4,7 +4,7 @@ mod git;
 mod review;
 mod trailer_store;
 
-pub use git::{Git, SystemGit};
+pub use git::{Commit, Git, SystemGit};
 pub use review::{
     Review, ReviewDiagnostic, ReviewEntry, ReviewEntryKind, ReviewIndex, ReviewQuery, ReviewStore,
     ReviewSummary, StartedReview,

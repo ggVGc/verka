@@ -54,13 +54,30 @@ pub trait Git {
     /// `revision` and its first-parent ancestors, newest first.
     fn first_parent_history(&self, repository: &Path, revision: &str) -> Result<Vec<String>>;
 
-    fn commit_message(&self, repository: &Path, commit: &str) -> Result<String>;
+    /// Commits on the first-parent histories of `tips` whose message has a
+    /// line starting with `<key>:` for any of `keys`, in no particular order.
+    /// Such a line need not be a trailer, so callers must still parse them.
+    fn first_parent_commits_with_trailers(
+        &self,
+        repository: &Path,
+        tips: &[String],
+        keys: &[&str],
+    ) -> Result<Vec<Commit>>;
 
-    /// The first parent of `commit`, or `None` for a root commit.
-    fn first_parent(&self, repository: &Path, commit: &str) -> Result<Option<String>>;
+    /// Read `commits`, in the order given.
+    fn commits(&self, repository: &Path, commits: &[String]) -> Result<Vec<Commit>>;
+}
 
-    /// The paths `commit` changes relative to its parent.
-    fn changed_paths(&self, repository: &Path, commit: &str) -> Result<Vec<String>>;
+/// A commit as Nota reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Commit {
+    pub id: String,
+    /// `None` for a root commit.
+    pub first_parent: Option<String>,
+    /// The full message, without surrounding whitespace.
+    pub message: String,
+    /// The paths a non-merge commit changes relative to its parent.
+    pub paths: Vec<String>,
 }
 
 /// [`Git`] answered by running the `git` executable.
@@ -161,21 +178,60 @@ impl Git for SystemGit {
         )?))
     }
 
-    fn commit_message(&self, repository: &Path, commit: &str) -> Result<String> {
-        checked(repository, &["show", "-s", "--format=%B", commit])
+    fn first_parent_commits_with_trailers(
+        &self,
+        repository: &Path,
+        tips: &[String],
+        keys: &[&str],
+    ) -> Result<Vec<Commit>> {
+        let mut args = vec!["--first-parent".to_string()];
+        args.extend(keys.iter().map(|key| format!("--grep=^{key}:")));
+        log(repository, &args, tips)
     }
 
-    fn first_parent(&self, repository: &Path, commit: &str) -> Result<Option<String>> {
-        let parents = checked(repository, &["show", "-s", "--format=%P", commit])?;
-        Ok(parents.split_whitespace().next().map(str::to_string))
+    fn commits(&self, repository: &Path, commits: &[String]) -> Result<Vec<Commit>> {
+        log(repository, &["--no-walk=unsorted".to_string()], commits)
     }
+}
 
-    fn changed_paths(&self, repository: &Path, commit: &str) -> Result<Vec<String>> {
-        Ok(lines(&checked(
-            repository,
-            &["diff-tree", "--no-commit-id", "--name-only", "-r", commit],
-        )?))
+/// One `git log` over `revisions`, which are passed on stdin so their number
+/// is not limited by the command line.
+fn log(repository: &Path, args: &[String], revisions: &[String]) -> Result<Vec<Commit>> {
+    // Without revisions, `git log` would read `HEAD`.
+    if revisions.is_empty() {
+        return Ok(Vec::new());
     }
+    // Each record is `RS id NUL parents NUL message NUL`, followed by the
+    // changed paths, which `--name-only` prints after the format.
+    let mut command = vec![
+        "-c",
+        "log.showSignature=false",
+        "log",
+        "--no-renames",
+        "--name-only",
+        "--format=%x1e%H%x00%P%x00%B%x00",
+    ];
+    command.extend(args.iter().map(String::as_str));
+    command.push("--stdin");
+    let output = checked_with_input(repository, &command, &(revisions.join("\n") + "\n"))?;
+    output
+        .split('\x1e')
+        .skip(1)
+        .map(|record| {
+            let mut fields = record.splitn(4, '\0');
+            let (Some(id), Some(parents), Some(message), Some(paths)) =
+                (fields.next(), fields.next(), fields.next(), fields.next())
+            else {
+                bail!("invalid `git log` output in {}", repository.display());
+            };
+            Ok(Commit {
+                id: id.to_string(),
+                first_parent: parents.split_whitespace().next().map(str::to_string),
+                message: message.trim().to_string(),
+                paths: lines(paths),
+            })
+        })
+        .collect()
 }
 
 fn lines(value: &str) -> Vec<String> {
