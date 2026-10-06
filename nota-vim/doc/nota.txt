@@ -87,6 +87,12 @@ their own repository and branch context.
         an editable Markdown draft. With [range], record the source lines.
         See |nota-notes|.
 
+:NotaSuggest [text]                                          *:NotaSuggest*
+        Commit this worktree's uncommitted edits to the selected review as a
+        suggestion, with [text] as its comment. Without [text], open an
+        editable Markdown draft. Fails when no review is selected. See
+        |nota-suggest|.
+
 ==============================================================================
 5. Mappings                                                  *nota-mappings*
 
@@ -97,6 +103,7 @@ The review buffer opened by |:NotaShow| and |:NotaStart| defines:
   r             Refresh the review. Use after recording notes or committing
                 suggestions.
   n             Compose a note, as |:NotaNote| without arguments.
+  s             Compose a suggestion, as |:NotaSuggest| without arguments.
   q             Close the buffer.
 
 Entry buffers also map `q` to close.
@@ -124,7 +131,24 @@ note. A draft pins its range when opened.
 7. Suggestions                                            *nota-suggestions*
 
 Nota represents suggestions as ordinary Git commits on the review branch.
-Create a separate worktree, open the files there in Vim, edit, and commit: >sh
+
+                                                            *nota-suggest*
+The quick way is to edit files in your own checkout and run: >vim
+        :NotaSuggest Handle the missing value explicitly.
+<
+This commits your uncommitted edits to tracked files (staged or not) onto
+the review selected with |:NotaStart|, |:NotaShow|, or |:NotaBranch|, without
+falling back to the checked-out branch. Your checkout, index, and edits are
+left as they are. Each edited file is committed with its current content, so
+you can keep editing and run |:NotaSuggest| again: the next suggestion holds
+only what changed since. Untracked files are not included; write modified
+buffers first. Nota refuses edits that would undo changes the review already
+made to the same files, such as another reviewer's suggestion you do not
+have locally, and refuses when the review branch is checked out in this
+worktree; commit there with Git instead. Without text, |:NotaSuggest| opens a
+draft like |nota-draft|; the edits are taken when you |:write| it.
+
+Alternatively, create a separate worktree, edit there, and commit: >sh
         git worktree add ../my-review nota/my-review
         git -C ../my-review add src/example.rs
         git -C ../my-review commit -m 'Handle the missing value explicitly'

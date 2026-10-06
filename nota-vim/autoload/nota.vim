@@ -86,6 +86,7 @@ function! s:display(context, lines) abort
   nnoremap <silent><buffer> r :call nota#command('refresh', [])<CR>
   nnoremap <silent><buffer> <CR> :call nota#command('entry', [])<CR>
   nnoremap <silent><buffer> n :NotaNote<CR>
+  nnoremap <silent><buffer> s :NotaSuggest<CR>
   return 1
 endfunction
 
@@ -152,6 +153,104 @@ function! s:add_note(context, text) abort
   return 1
 endfunction
 
+" Run git with a scratch index, leaving the worktree's own index alone.
+function! s:git_index(index, repository, arguments) abort
+  let l:saved = exists('$GIT_INDEX_FILE') ? $GIT_INDEX_FILE : v:null
+  let $GIT_INDEX_FILE = a:index
+  try
+    return s:git(a:repository, a:arguments)
+  finally
+    if l:saved is v:null
+      unlet $GIT_INDEX_FILE
+    else
+      let $GIT_INDEX_FILE = l:saved
+    endif
+  endtry
+endfunction
+
+function! s:unsaved(repository) abort
+  let l:prefix = a:repository . '/'
+  for l:buffer in getbufinfo({'bufmodified': 1})
+    if getbufvar(l:buffer.bufnr, '&buftype') ==# ''
+          \ && stridx(fnamemodify(l:buffer.name, ':p'), l:prefix) == 0
+      call s:fail('write ' . fnamemodify(l:buffer.name, ':~:.') . ' before suggesting')
+    endif
+  endfor
+endfunction
+
+" Commit the worktree's uncommitted edits to the review branch. Each file
+" edited since HEAD takes its worktree content, so a later suggestion carries
+" only what changed since the last one. Edits that would undo the review's own
+" changes to those files are refused.
+function! s:add_suggestion(context, text) abort
+  let l:text = substitute(a:text, '\_s*$', '', '')
+  if l:text !~# '\S'
+    call s:fail('review message must not be empty')
+  endif
+  let l:repository = a:context.repository
+  let l:ref = 'refs/heads/' . a:context.branch
+  if s:git(l:repository, ['rev-parse', '--symbolic-full-name', 'HEAD'])[0] ==# l:ref
+    call s:fail(a:context.branch . ' is checked out here; commit suggestions with git')
+  endif
+  call s:unsaved(l:repository)
+  let l:tip = s:git(l:repository, ['rev-parse', '--verify', l:ref . '^{commit}'])[0]
+  let l:files = {'paths': tempname(), 'guard': tempname(), 'index': tempname(),
+        \ 'message': tempname()}
+  try
+    call s:git(l:repository, ['diff', 'HEAD', '--name-only', '-z', '--no-renames',
+          \ '--no-relative', '--output=' . l:files.paths])
+    if getfsize(l:files.paths) <= 0
+      call s:fail('no uncommitted edits to suggest')
+    endif
+    call s:git_index(l:files.index, l:repository, ['read-tree', l:tip])
+    call s:git_index(l:files.index, l:repository, ['--literal-pathspecs', 'add', '-A',
+          \ '--pathspec-from-file=' . l:files.paths, '--pathspec-file-nul'])
+    " The edited files must still contain what the review changed in them.
+    call s:git(l:repository, ['diff', '-U0', '--binary', '--full-index', '--no-ext-diff',
+          \ '--no-color', '--no-relative', '--src-prefix=a/', '--dst-prefix=b/',
+          \ 'HEAD', l:tip, '--output=' . l:files.guard])
+    if getfsize(l:files.guard) > 0
+      try
+        call s:git_index(l:files.index, l:repository, ['apply', '--cached', '--check',
+              \ '--reverse', '--unidiff-zero', l:files.guard])
+      catch /^nota:/
+        call s:fail('your edits would undo changes the review made to the same files:'
+              \ . substitute(v:exception, '^nota:', '', ''))
+      endtry
+    endif
+    let l:tree = s:git_index(l:files.index, l:repository, ['write-tree'])[0]
+    if l:tree ==# s:git(l:repository, ['rev-parse', l:tip . '^{tree}'])[0]
+      call s:fail('the review already contains these edits')
+    endif
+    call writefile(split(l:text, "\n", 1), l:files.message)
+    let l:commit = s:git(l:repository,
+          \ ['commit-tree', l:tree, '-p', l:tip, '-F', l:files.message])[0]
+  finally
+    for l:file in values(l:files)
+      call delete(l:file)
+    endfor
+  endtry
+  call s:git(l:repository, ['update-ref', l:ref, l:commit, l:tip])
+  echomsg 'Nota: ' . strpart(l:commit, 0, 12) . '  suggestion'
+  return 1
+endfunction
+
+function! s:draft(kind, context, source) abort
+  call s:scratch(a:kind, a:context)
+  setlocal buftype=acwrite bufhidden=hide filetype=markdown
+  let b:nota_kind = a:kind
+  let b:nota_source = a:source
+  " Context stays outside the editable text, so an empty draft is refused.
+  augroup nota_note
+    autocmd! * <buffer>
+    autocmd BufWriteCmd <buffer> call nota#command('submit', [])
+  augroup END
+  nunmap <buffer> q
+  echomsg 'Nota: ' . a:kind . ' for ' . a:context.branch
+        \ . '; :write submits, :bdelete! discards'
+  return 1
+endfunction
+
 function! s:note(message, range, first, last) abort
   let l:context = s:context()
   " Resolve the checked-out default now, so an open draft keeps its target.
@@ -161,17 +260,19 @@ function! s:note(message, range, first, last) abort
     let l:text = a:message . (empty(l:source) ? '' : "\n\n" . l:source)
     return s:add_note(l:context, l:text)
   endif
-  call s:scratch('note', l:context)
-  setlocal buftype=acwrite bufhidden=hide filetype=markdown
-  let b:nota_source = l:source
-  " Context stays outside the editable text, so an empty draft is refused.
-  augroup nota_note
-    autocmd! * <buffer>
-    autocmd BufWriteCmd <buffer> call nota#command('submit', [])
-  augroup END
-  nunmap <buffer> q
-  echomsg 'Nota: note for ' . l:context.branch . '; :write submits, :bdelete! discards'
-  return 1
+  return s:draft('note', l:context, l:source)
+endfunction
+
+function! s:suggest(message) abort
+  let l:context = s:context()
+  if empty(l:context.branch)
+    call s:fail('no review started; use :NotaStart, or select one with :NotaBranch')
+  endif
+  call s:load(l:context)
+  if !empty(a:message)
+    return s:add_suggestion(l:context, a:message)
+  endif
+  return s:draft('suggestion', l:context, '')
 endfunction
 
 function! s:submit() abort
@@ -182,7 +283,11 @@ function! s:submit() abort
   if !empty(b:nota_source)
     let l:text .= "\n\n" . b:nota_source
   endif
-  call s:add_note(b:nota_context, l:text)
+  if b:nota_kind ==# 'suggestion'
+    call s:add_suggestion(b:nota_context, l:text)
+  else
+    call s:add_note(b:nota_context, l:text)
+  endif
   setlocal nomodified
   bwipeout
   return 1

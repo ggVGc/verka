@@ -174,6 +174,42 @@ try
   call s:edit(s:repository)
   NotaBranch
   call assert_equal(0, nota#command('show', []))
+
+  " Suggestions commit uncommitted edits to the selected review only.
+  call setline(1, ['one', 'two', 'THREE'])
+  write
+  call assert_equal(0, nota#command('suggest', ['No review selected.']))
+  NotaBranch nota/first
+  let s:tip = s:git(s:repository, ['rev-parse', 'nota/first'])
+  " The review changed the first line; edits without it would undo that.
+  call assert_equal(0, nota#command('suggest', ['Undoes the review.']))
+  call setline(1, 'suggested')
+  call assert_equal(0, nota#command('suggest', ['Unsaved edits.']))
+  call assert_equal(s:tip, s:git(s:repository, ['rev-parse', 'nota/first']))
+  write
+  NotaSuggest Shout the last line.
+  call assert_match('Shout the last line', s:message(s:repository, 'nota/first'))
+  call assert_equal("file.txt\nstaged.txt",
+        \ s:git(s:repository, ['diff-tree', '--name-only', '-r', '--no-commit-id', 'nota/first']))
+  call assert_equal(0, nota#command('suggest', ['Nothing new.']))
+  " Edits kept after a suggestion are not suggested again.
+  call setline(2, 'TWO')
+  write
+  NotaSuggest
+  call assert_equal('acwrite', &buftype)
+  call setline(1, ['Shout the middle line', '', 'Details.'])
+  write
+  call assert_match('Shout the middle line\n\nDetails.', s:message(s:repository, 'nota/first'))
+  call assert_equal("-two\n+TWO", s:git(s:repository,
+        \ ['diff', '-U0', 'nota/first~', 'nota/first', '--', 'file.txt'])->split("\n")[-2:]->join("\n"))
+  call assert_equal(['suggested', 'TWO', 'THREE'],
+        \ split(s:git(s:repository, ['show', 'nota/first:file.txt']), "\n"))
+  NotaShow
+  call assert_match('suggestion Shout the middle line', join(getline(1, '$'), "\n"))
+  close
+  call setline(1, ['one', 'two', 'three'])
+  write
+  NotaBranch
   " Unnamed buffers use :pwd.
   enew
   execute 'cd ' . fnameescape(s:repository)
