@@ -145,6 +145,9 @@ pub const SELECTION_BACKGROUND: Color = palette::DARK_GRAY;
 pub const SUBORDINATE_TEXT: Color = MUTED_TEXT;
 /// `PreProc` / `MatchParen` text.
 pub const SELECTION_MARKER: Color = palette::BRIGHT_YELLOW;
+/// The glyph at the head of the interaction log's selected entry: red rather
+/// than [`SELECTION_MARKER`], so the cursor is easy to find down the log.
+pub const SELECTED_ENTRY_MARKER: Color = palette::COMFORTABLE_RED;
 /// The focused Markdown link: visible without the hard yellow used for a row
 /// cursor, since it sits directly behind the link's own syntax styling.
 pub const LINK_HIGHLIGHT_BACKGROUND: Color = palette::MUTED_WINE;

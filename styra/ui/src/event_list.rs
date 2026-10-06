@@ -1169,7 +1169,7 @@ fn with_entry_backdrop(line: Line<'static>, entry: &EventEntry<'_>) -> Line<'sta
 
 /// A conversation already starts with a direction glyph, so tint that glyph
 /// rather than inserting another marker. Other events reserve the same first
-/// column for a small yellow dot when selected.
+/// column for a small red dot when selected.
 fn selected_summary_line(
     mut line: Line<'static>,
     is_conversation: bool,
@@ -1180,10 +1180,10 @@ fn selected_summary_line(
     }
     if is_conversation {
         if let Some(glyph) = line.spans.get_mut(1) {
-            glyph.style = glyph.style.fg(theme::SELECTION_MARKER);
+            glyph.style = glyph.style.fg(theme::SELECTED_ENTRY_MARKER);
         }
     } else if let Some(lead) = line.spans.get_mut(0) {
-        *lead = Span::styled("• ", Style::default().fg(theme::SELECTION_MARKER));
+        *lead = Span::styled("• ", Style::default().fg(theme::SELECTED_ENTRY_MARKER));
     }
     line
 }
