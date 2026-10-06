@@ -14,7 +14,7 @@
 //! `main` feeds it input and session updates.
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use styra_protocol::agent::{Provider, Selection};
 use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode};
 use styra_protocol::Contract;
@@ -33,6 +33,7 @@ use crate::insert::Prompt;
 use crate::interactions::LiveInteractions;
 use crate::launch::{self, Launch};
 use crate::launcher::Launcher;
+use crate::link_menu::LinkMenu;
 use crate::notices::Notices;
 use crate::outbox::Outbox;
 use crate::overview::Overview;
@@ -363,6 +364,8 @@ pub struct App {
     pub answer: AnswerView,
     /// The Markdown link selected while walking the conversation with `F`.
     pub link_highlight: Option<LinkHighlight>,
+    /// The actions offered on the highlighted link, while that menu is open.
+    pub link_menu: Option<LinkMenu>,
     /// The modal choice of how the selected entry seeds a new Session.
     pub branch_prompt: Option<BranchPrompt>,
     /// The microphone capture that is running, if one is; see [`Recorded`].
@@ -567,6 +570,7 @@ impl App {
             files: FilesView::default(),
             answer: AnswerView::default(),
             link_highlight: None,
+            link_menu: None,
             branch_prompt: None,
             recording: None,
             busy: None,
@@ -1241,10 +1245,19 @@ impl App {
         self.link_highlight = None;
     }
 
+    /// Offer the actions that can be taken on the highlighted link.
+    pub fn open_link_menu(&mut self) {
+        let Some(destination) = self.highlighted_link_destination() else {
+            return self.show_action_message("selected link no longer exists");
+        };
+        let web = is_web_address(&destination);
+        self.link_menu = Some(LinkMenu::new(destination, web));
+    }
+
     /// Ask the event loop to open the selected link: a web address in the
-    /// configured browser, anything else in the configured editor. Relative
-    /// destinations are rooted in the current workspace, as file citations
-    /// were before link navigation replaced their picker.
+    /// configured browser, anything else in the configured editor. A file
+    /// link is looked for as [`files::locate`] describes; one that cannot be
+    /// found is reported rather than opened, and stays highlighted.
     pub fn open_highlighted_link(&mut self) {
         let Some(destination) = self.highlighted_link_destination() else {
             return self.show_action_message("selected link no longer exists");
@@ -1252,25 +1265,44 @@ impl App {
         if is_web_address(&destination) {
             self.ask(Request::OpenUrl(destination));
         } else if let Some((_, path, _)) = self.highlighted_link_target() {
-            self.ask(Request::OpenPath(path));
+            match path {
+                Ok(path) => self.ask(Request::OpenPath(path)),
+                Err(problem) => return self.show_action_message(problem),
+            }
         }
         self.clear_link_highlight();
     }
 
-    /// The active file link as written, where it resolves on this host, and
-    /// its optional one-based line number. The preview and opener share this
-    /// so a `path:line` citation never attempts to read a file literally named
-    /// `path:line`. A web address names no file, so it has no target.
-    pub fn highlighted_link_target(&self) -> Option<(String, PathBuf, Option<u32>)> {
+    /// The active file link as written, the file it names on this host (or
+    /// why none was found), and its optional one-based line number. Every use
+    /// of a file link — opening, previewing, mounting — goes through this, so
+    /// a `path:line` citation never attempts to read a file literally named
+    /// `path:line`, and none of them can find a different file from the
+    /// others. A web address names no file, so it has no target.
+    pub fn highlighted_link_target(
+        &self,
+    ) -> Option<(String, Result<PathBuf, String>, Option<u32>)> {
         let destination = self.highlighted_link_destination()?;
         if is_web_address(&destination) {
             return None;
         }
         let (path, line) = split_link_location(&destination);
-        let resolved = if let Some(root) = self.workspace.root_or_current_directory() {
-            files::resolve(&root, path)
-        } else {
-            PathBuf::from(path)
+        let workspace = self.workspace.link_boundary();
+        // The checkout the Workspace root is in, rather than the one recorded
+        // for the Workspace: in a linked worktree they are different trees,
+        // and the file wanted is the one this interaction is working on.
+        let repository = self.workspace.git_repository.as_ref().map(|recorded| {
+            workspace
+                .and_then(files::enclosing_checkout)
+                .unwrap_or_else(|| recorded.clone())
+        });
+        let resolved = match self
+            .workspace
+            .working_directory_or_current()
+            .or_else(|| workspace.map(Path::to_path_buf))
+        {
+            Some(start) => files::locate(&start, workspace, repository.as_deref(), path),
+            None => Err(format!("{path}: no directory to look for it in")),
         };
         Some((destination, resolved, line))
     }
@@ -3508,14 +3540,93 @@ mod tests {
         );
     }
 
+    /// An empty file in the temporary directory, by its absolute path, for a
+    /// link to name: a file link only opens if there is a file there.
+    fn scratch_file(name: &str) -> String {
+        let path = std::env::temp_dir().join(format!("styra-app-{name}"));
+        std::fs::write(&path, "").unwrap();
+        path.display().to_string()
+    }
+
+    #[test]
+    fn a_file_link_is_looked_for_from_the_working_directory_up_to_the_workspace() {
+        let root = std::env::temp_dir().join("styra-app-link-search");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("crate/src")).unwrap();
+        std::fs::write(root.join("crate/Cargo.toml"), "").unwrap();
+        let mut app = app();
+        app.workspace.enter(root.clone());
+        app.workspace.change_directory(root.join("crate/src"));
+        app.push_event(AgentEvent::AgentMessage {
+            text: "[manifest](Cargo.toml)".into(),
+        });
+        app.timeline.selected = 0;
+        app.highlight_first_link();
+
+        app.open_highlighted_link();
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenPath(root.join("crate/Cargo.toml")))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_file_link_is_also_looked_for_from_the_top_of_the_git_checkout() {
+        let repository = std::env::temp_dir().join("styra-app-link-repository");
+        let _ = std::fs::remove_dir_all(&repository);
+        std::fs::create_dir_all(repository.join(".git")).unwrap();
+        std::fs::create_dir_all(repository.join("styra/tui")).unwrap();
+        std::fs::write(repository.join("README.md"), "").unwrap();
+        let mut app = app();
+        app.workspace.enter(repository.join("styra/tui"));
+        app.push_event(AgentEvent::AgentMessage {
+            text: "[readme](README.md)".into(),
+        });
+        app.timeline.selected = 0;
+        app.highlight_first_link();
+
+        // Without an associated repository the search stops at the Workspace.
+        assert!(app.highlighted_link_target().unwrap().1.is_err());
+
+        app.workspace.git_repository = Some(repository.clone());
+        assert_eq!(
+            app.highlighted_link_target().unwrap().1,
+            Ok(repository.join("README.md"))
+        );
+        let _ = std::fs::remove_dir_all(&repository);
+    }
+
+    #[test]
+    fn a_file_link_that_names_no_file_is_reported_not_opened() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage {
+            text: "[gone](/no/such/styra-file.md)".into(),
+        });
+        app.timeline.selected = 0;
+        app.highlight_first_link();
+
+        app.open_highlighted_link();
+
+        assert!(app.take_request().is_none());
+        assert!(app.link_highlight.is_some(), "the link stays highlighted");
+        assert!(app
+            .notices
+            .iter()
+            .any(|message| message.text.contains("no such file")));
+    }
+
     #[test]
     fn link_highlight_starts_at_the_selected_entry_and_jk_walks_links() {
         let mut app = app();
+        let first = scratch_file("walk-first.md");
+        let second = scratch_file("walk-second.md");
         app.push_event(AgentEvent::AgentMessage {
             text: "[old](https://old.example)".into(),
         });
         app.push_event(AgentEvent::AgentMessage {
-            text: "[first](/tmp/first.md) then [second](/tmp/second.md)".into(),
+            text: format!("[first]({first}) then [second]({second})"),
         });
         app.timeline.selected = 1;
 
@@ -3546,13 +3657,29 @@ mod tests {
         app.open_highlighted_link();
         assert_eq!(
             app.take_request(),
-            Some(Request::OpenPath(PathBuf::from("/tmp/first.md")))
+            Some(Request::OpenPath(PathBuf::from(&first)))
         );
         assert!(app.link_highlight.is_none());
 
         app.highlight_first_link();
         app.clear_link_highlight();
         assert!(app.link_highlight.is_none());
+    }
+
+    #[test]
+    fn the_link_menu_names_the_highlighted_link() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage {
+            text: "[first](/tmp/first.md)".into(),
+        });
+        app.timeline.selected = 0;
+        app.highlight_first_link();
+
+        app.open_link_menu();
+        let menu = app.link_menu.as_ref().unwrap();
+        assert_eq!(menu.destination(), "/tmp/first.md");
+        assert_eq!(menu.labels()[0], "open in editor");
+        assert!(app.take_request().is_none());
     }
 
     #[test]
@@ -3577,8 +3704,9 @@ mod tests {
     #[test]
     fn a_web_link_opens_as_an_address_not_a_file() {
         let mut app = app();
+        let local = scratch_file("web-local.md");
         app.push_event(AgentEvent::AgentMessage {
-            text: "[docs](https://example.com/docs) and [local](/tmp/local.md)".into(),
+            text: format!("[docs](https://example.com/docs) and [local]({local})"),
         });
         app.timeline.selected = 0;
 
@@ -3595,7 +3723,7 @@ mod tests {
         app.open_highlighted_link();
         assert_eq!(
             app.take_request(),
-            Some(Request::OpenPath(PathBuf::from("/tmp/local.md")))
+            Some(Request::OpenPath(PathBuf::from(&local)))
         );
     }
 
@@ -3614,7 +3742,10 @@ mod tests {
         );
         let (written, path, line) = app.highlighted_link_target().unwrap();
         assert_eq!(written, "/tmp/spec.rs:44");
-        assert_eq!(path, PathBuf::from("/tmp/spec.rs"));
+        assert!(
+            path.is_err(),
+            "a citation of a file that is not there finds none"
+        );
         assert_eq!(line, Some(44));
 
         // The code that is not a filename is not a second entry.

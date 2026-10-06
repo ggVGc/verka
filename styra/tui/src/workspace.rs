@@ -96,6 +96,13 @@ impl Location {
         self.root.clone().or_else(|| std::env::current_dir().ok())
     }
 
+    /// The directory a file link is looked for up to (see
+    /// [`crate::files::locate`]): the live root, or for a replayed Session,
+    /// which has none, the Workspace's own directory.
+    pub fn link_boundary(&self) -> Option<&Path> {
+        self.root.as_deref().or(self.host_path.as_deref())
+    }
+
     /// Where the agent is working, for the footer to name. Same fallback, and
     /// for the same reason.
     pub fn working_directory_or_current(&self) -> Option<PathBuf> {

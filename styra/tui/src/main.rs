@@ -28,6 +28,7 @@ mod keybindings;
 mod keyboard;
 mod launch;
 mod launcher;
+mod link_menu;
 mod logging;
 mod mount;
 mod notices;

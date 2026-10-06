@@ -165,18 +165,12 @@ pub fn create_workspace(
     host_path: PathBuf,
     name: Option<String>,
 ) -> Result<WorkspaceSummary> {
-    let git_repository = enclosing_git_repository(&host_path);
+    let git_repository = crate::files::enclosing_checkout(&host_path);
     client.create_workspace(&CreateWorkspace {
         host_path,
         name,
         git_repository,
     })
-}
-
-fn enclosing_git_repository(path: &Path) -> Option<PathBuf> {
-    path.ancestors()
-        .find(|directory| directory.join(".git").exists())
-        .map(Path::to_path_buf)
 }
 
 /// Find the durable Workspace associated with an already-canonical host path.

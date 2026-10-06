@@ -65,6 +65,7 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_LAST: [Key::ch('G')] => Action::EventsLast;
     EVENTS_FOLLOW_BRANCH: [Key::ch('b')] ("or Enter on a branch marker")
         => Action::EventsFollowBranch;
+    EVENTS_LINK_MENU: [Key::ch(' ')] ("link highlighted") => Action::EventsLinkMenu;
     EVENTS_TOGGLE_EXPAND: [Key::ch(' '), Key::code(KeyCode::Enter), Key::ch('o')]
         => Action::EventsToggleExpand;
     EVENTS_EXPAND_ONLY: [Key::ch('O')] => Action::EventsExpandOnly;
@@ -245,6 +246,13 @@ bindings! { BRANCH = "Branch from selected entry";
     BRANCH_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => Action::BranchCancel;
 }
 
+bindings! { LINK_MENU = "Actions on the highlighted link";
+    LINK_MENU_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::LinkMenuNext;
+    LINK_MENU_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::LinkMenuPrev;
+    LINK_MENU_CONFIRM: [Key::code(KeyCode::Enter)] => Action::LinkMenuConfirm;
+    LINK_MENU_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => Action::LinkMenuCancel;
+}
+
 bindings! { TAGS = "Interaction tags";
     // The list is typed at, as the launcher's is, so letters are the query and
     // the commands are on Space, Enter, Esc, the arrows and control chords.
@@ -372,6 +380,7 @@ pub(crate) enum Window {
     Overview,
     Interactions,
     Branch,
+    LinkMenu,
     Tags,
     SessionPicker,
     WorkspacePicker,
@@ -398,6 +407,7 @@ impl Window {
             Self::Overview => "overview",
             Self::Interactions => "interactions",
             Self::Branch => "branch",
+            Self::LinkMenu => "link actions",
             Self::Tags => "tags",
             Self::SessionPicker => "sessions",
             Self::WorkspacePicker => "Workspaces",
@@ -422,6 +432,7 @@ impl Window {
             Self::Overview => &[OVERVIEW, GLOBAL],
             Self::Interactions => &[INTERACTIONS, GLOBAL],
             Self::Branch => &[BRANCH, GLOBAL],
+            Self::LinkMenu => &[LINK_MENU, GLOBAL],
             Self::Tags => &[TAGS, GLOBAL],
             Self::SessionPicker => &[SESSION_PICKER],
             Self::WorkspacePicker => &[WORKSPACE_PICKER],
@@ -450,7 +461,7 @@ mod reference_tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
 
-    const WINDOWS: [Window; 18] = [
+    const WINDOWS: [Window; 19] = [
         Window::Events,
         Window::Raw,
         Window::Log,
@@ -463,6 +474,7 @@ mod reference_tests {
         Window::Overview,
         Window::Interactions,
         Window::Branch,
+        Window::LinkMenu,
         Window::Tags,
         Window::SessionPicker,
         Window::WorkspacePicker,

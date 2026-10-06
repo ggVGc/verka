@@ -283,8 +283,15 @@ session JSONL (when the provider still has it).
 `f` starts link highlighting from the selected event, wrapping to the bottom-most earlier link if no later link remains. While it is on, everything but the links and file references is dimmed. It opens the event list when pressed from transcript or
 full-screen preview. While a link is highlighted, `j` and `k` move forward and
 backward through Markdown links and backticked file references (`src/app.rs:120`)
-across the visible conversation, `Enter` opens the link in the configured editor (or, for an `http`/`https` address, the configured browser), and `Esc` returns `j`/`k` to normal list
+across the visible conversation, `Enter` opens the link in the configured editor (or, for an `http`/`https` address, the configured browser), `Space` opens a menu of actions to take on the link — opening it, as `Enter` does, and for a file, mounting it read-only or read-write into this interaction's sandbox (it applies when the Session next launches, and is refused while the interaction is running), and `Esc` returns `j`/`k` to normal list
 navigation.
+
+A relative file link is looked for in the directory the interaction is working
+in, then in each directory above it up to the Workspace's own directory, and
+last, when the Workspace is associated with a Git repository, from the top of
+the checkout it is in (the interaction's own linked worktree, when it has one);
+the nearest match wins. A link that names no file there is reported rather than
+opened, previewed, or mounted.
 
 In Files: `e` opens the selected path in the configured opener, `a` switches
 focused-event/all-session files, `p` previews, `y` copies its path, and `J`/`K`

@@ -102,6 +102,78 @@ pub fn resolve(root: &Path, reported: &str) -> PathBuf {
     }
 }
 
+/// Find the file a link names on this host, or say why there is none.
+///
+/// Unlike [`resolve`], this looks. A relative link is tried against `start`,
+/// the directory the interaction is working in, and then against each
+/// directory above it in turn, up to and including `workspace`. An agent
+/// working in a subdirectory names some files relative to where it stands and
+/// others relative to the top of the project, and both should open.
+///
+/// The search never climbs past the Workspace: a match above it would be a
+/// file the agent had no business naming. When `start` is not inside the
+/// Workspace at all, the two are tried on their own. The one exception is
+/// `repository`, the root of the Git checkout the Workspace is part of, tried
+/// last: agents name files from the top of the repository out of habit, and
+/// that may be above a Workspace made in one of its subdirectories.
+///
+/// An absolute link names one file and is only re-rooted, as [`resolve`]
+/// does, against the Workspace (or `start`, when there is none).
+pub fn locate(
+    start: &Path,
+    workspace: Option<&Path>,
+    repository: Option<&Path>,
+    reported: &str,
+) -> Result<PathBuf, String> {
+    let root = workspace.unwrap_or(start);
+    if Path::new(reported).is_absolute() {
+        let path = resolve(root, reported);
+        return if path.exists() {
+            Ok(path)
+        } else {
+            Err(format!("{}: no such file", path.display()))
+        };
+    }
+    let mut directories: Vec<&Path> = if start.starts_with(root) {
+        start
+            .ancestors()
+            .take_while(|directory| directory.starts_with(root))
+            .collect()
+    } else {
+        vec![start, root]
+    };
+    let repository = repository.filter(|repository| !directories.contains(repository));
+    directories.extend(repository);
+    directories
+        .iter()
+        .map(|directory| directory.join(reported))
+        .find(|path| path.exists())
+        .ok_or_else(|| {
+            let searched = if start == root {
+                format!("{reported}: not found in {}", root.display())
+            } else {
+                format!(
+                    "{reported}: not found in {} or any directory up to {}",
+                    start.display(),
+                    root.display()
+                )
+            };
+            match repository {
+                Some(repository) => format!("{searched}, nor in {}", repository.display()),
+                None => searched,
+            }
+        })
+}
+
+/// The top of the Git checkout `path` is in: the nearest directory, `path`
+/// itself included, holding a `.git` — a directory in a main checkout, a file
+/// in a linked worktree.
+pub fn enclosing_checkout(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|directory| directory.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
 /// Resolve and group every reported path, in the order the list shows them.
 ///
 /// Files under the Workspace are grouped beneath it; anything else is grouped
@@ -278,6 +350,123 @@ mod tests {
         let resolved = resolve(Path::new("/home/me/project"), "/etc/hosts");
 
         assert_eq!(resolved, PathBuf::from("/etc/hosts"));
+    }
+
+    /// A directory tree for the search to walk: `root/sub/deeper`, with a
+    /// file at each level so that which one is found says where it stopped.
+    fn project(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("styra-locate-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub/deeper")).unwrap();
+        std::fs::write(root.join("top.md"), "").unwrap();
+        std::fs::write(root.join("sub/middle.md"), "").unwrap();
+        std::fs::write(root.join("sub/deeper/here.md"), "").unwrap();
+        std::fs::write(root.join("sub/deeper/top.md"), "").unwrap();
+        root
+    }
+
+    #[test]
+    fn a_relative_link_is_found_where_the_interaction_is_working_first() {
+        let root = project("first");
+        let start = root.join("sub/deeper");
+
+        assert_eq!(
+            locate(&start, Some(&root), None, "here.md"),
+            Ok(start.join("here.md"))
+        );
+        // Present both here and at the top: the nearer one wins.
+        assert_eq!(
+            locate(&start, Some(&root), None, "top.md"),
+            Ok(start.join("top.md"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_relative_link_is_looked_for_up_to_the_workspace() {
+        let root = project("up");
+        let start = root.join("sub/deeper");
+
+        assert_eq!(
+            locate(&start, Some(&root), None, "middle.md"),
+            Ok(root.join("sub/middle.md"))
+        );
+        assert_eq!(
+            locate(&start, Some(&root), None, "sub/middle.md"),
+            Ok(root.join("sub/middle.md"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_search_stops_at_the_workspace() {
+        let outer = project("stops");
+        let root = outer.join("sub");
+        let start = root.join("deeper");
+
+        // `top.md` exists above the Workspace, and is not its file to name.
+        let error = locate(&root, Some(&root), None, "top.md").unwrap_err();
+        assert!(error.contains("not found"), "{error}");
+        assert!(locate(&start, Some(&root), None, "missing.md").is_err());
+        let _ = std::fs::remove_dir_all(&outer);
+    }
+
+    #[test]
+    fn a_relative_link_is_also_looked_for_from_the_top_of_the_repository() {
+        let repository = project("repository");
+        let workspace = repository.join("sub");
+        let start = workspace.join("deeper");
+
+        // `top.md` is above the Workspace, but at the top of its checkout.
+        assert_eq!(
+            locate(&workspace, Some(&workspace), Some(&repository), "top.md"),
+            Ok(repository.join("top.md"))
+        );
+        // Still nearest first: the working directory's own wins.
+        assert_eq!(
+            locate(&start, Some(&workspace), Some(&repository), "top.md"),
+            Ok(start.join("top.md"))
+        );
+        let error = locate(&start, Some(&workspace), Some(&repository), "gone.md").unwrap_err();
+        assert!(
+            error.contains(&format!("nor in {}", repository.display())),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(&repository);
+    }
+
+    #[test]
+    fn a_checkout_is_found_by_its_git_directory_or_worktree_file() {
+        let root = project("checkout");
+        assert_eq!(enclosing_checkout(&root.join("sub")), None);
+        std::fs::create_dir(root.join(".git")).unwrap();
+        assert_eq!(
+            enclosing_checkout(&root.join("sub/deeper")),
+            Some(root.clone())
+        );
+        std::fs::write(root.join("sub/.git"), "gitdir: elsewhere").unwrap();
+        assert_eq!(
+            enclosing_checkout(&root.join("sub/deeper")),
+            Some(root.join("sub"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_absolute_link_is_only_re_rooted() {
+        let root = project("absolute");
+
+        assert_eq!(
+            locate(
+                &root,
+                Some(&root),
+                None,
+                sandbox().join("top.md").to_str().unwrap()
+            ),
+            Ok(root.join("top.md"))
+        );
+        assert!(locate(&root, Some(&root), None, "/no/such/file.md").is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

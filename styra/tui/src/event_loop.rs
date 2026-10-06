@@ -921,6 +921,13 @@ pub fn run(
             continue;
         }
 
+        // The link menu is modal over link navigation, so it owns the keys
+        // that would otherwise move the highlight or open the link directly.
+        if app.link_menu.is_some() {
+            input::handle_link_menu_key(app, key);
+            continue;
+        }
+
         // The message editor's path prompt is modal, and its second question is
         // answered by a bare letter that means something else everywhere else,
         // so it is handled ahead of the reference.

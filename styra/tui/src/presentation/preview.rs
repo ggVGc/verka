@@ -11,10 +11,12 @@ use crate::preview::PreviewTarget;
 
 pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewView<'_> {
     let file_target = app.highlighted_link_target().map(|(location, path, line)| {
-        let content = match std::fs::read_to_string(&path) {
+        let content = match path
+            .and_then(|path| std::fs::read_to_string(&path).map_err(|error| error.to_string()))
+        {
             Ok(content) if content.is_empty() => styra_ui::preview::FileTargetContent::Empty,
             Ok(content) => styra_ui::preview::FileTargetContent::Ready(content),
-            Err(error) => styra_ui::preview::FileTargetContent::Failed(error.to_string()),
+            Err(problem) => styra_ui::preview::FileTargetContent::Failed(problem),
         };
         styra_ui::preview::FileTarget {
             location,

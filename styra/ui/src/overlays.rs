@@ -42,6 +42,44 @@ pub fn render_branch(frame: &mut Frame, prompt: BranchPromptView, frame_area: Re
 }
 
 #[derive(Clone, Copy)]
+pub struct LinkMenuView<'a> {
+    /// The link the actions apply to, as the reply wrote it.
+    pub destination: &'a str,
+    pub actions: &'a [&'a str],
+    pub selected: usize,
+}
+
+pub fn render_link_menu(frame: &mut Frame, menu: LinkMenuView<'_>, frame_area: Rect) {
+    let width = frame_area.width.saturating_sub(4).min(72);
+    let height = (menu.actions.len() as u16 + 2).min(frame_area.height);
+    let area = Rect {
+        x: frame_area.x + frame_area.width.saturating_sub(width) / 2,
+        y: frame_area.y + frame_area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(format!(" {} · ? keys ", menu.destination));
+    let list = List::new(
+        menu.actions
+            .iter()
+            .map(|action| ListItem::new(Line::from(*action))),
+    )
+    .block(block)
+    .highlight_style(
+        Style::default()
+            .bg(theme::SELECTION_BACKGROUND)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut state = ListState::default();
+    state.select(Some(menu.selected));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+#[derive(Clone, Copy)]
 pub struct TagPickerView<'a> {
     pub available: &'a [String],
     pub selected: &'a [String],

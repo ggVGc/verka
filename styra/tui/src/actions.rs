@@ -67,6 +67,7 @@ pub(crate) enum Action {
     EventsPageDown,
     EventsPageUp,
     EventsLinks,
+    EventsLinkMenu,
     EventsCopy,
     ReadingDown,
     ReadingUp,
@@ -173,6 +174,10 @@ pub(crate) enum Action {
     BranchPrev,
     BranchConfirm,
     BranchCancel,
+    LinkMenuNext,
+    LinkMenuPrev,
+    LinkMenuConfirm,
+    LinkMenuCancel,
     TagsFilter,
     TagsNext,
     TagsPrev,
@@ -315,7 +320,10 @@ impl Action {
             }
             Self::EventsPageDown => "scroll the preview half a page, or the entry log, down",
             Self::EventsPageUp => "scroll the preview half a page, or the entry log, up",
-            Self::EventsLinks => "highlight conversation links (j/k moves, Enter opens, Esc exits)",
+            Self::EventsLinks => {
+                "highlight conversation links (j/k moves, Enter opens, Space offers actions, Esc exits)"
+            }
+            Self::EventsLinkMenu => "actions on the highlighted link",
             Self::EventsCopy => "copy selected entry to clipboard",
             Self::ReadingDown => "move or scroll down",
             Self::ReadingUp => "move or scroll up",
@@ -436,6 +444,10 @@ impl Action {
             Self::BranchPrev => "only this entry",
             Self::BranchConfirm => "branch, and open the result",
             Self::BranchCancel => "cancel",
+            Self::LinkMenuNext => "next action",
+            Self::LinkMenuPrev => "previous action",
+            Self::LinkMenuConfirm => "take the selected action",
+            Self::LinkMenuCancel => "cancel",
             Self::TagsFilter => "narrow the list to what is typed",
             Self::TagsNext => "move selection down",
             Self::TagsPrev => "move selection up",

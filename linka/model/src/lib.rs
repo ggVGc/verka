@@ -1,4 +1,8 @@
-//! On-disk data types.
+//! The Linka domain model: the on-disk data types.
+//!
+//! This crate holds only the types; reading, writing, and operating on a store
+//! of them lives in the `linka` crate, which re-exports this one as
+//! `linka::model`.
 //!
 //! A node separates structured data from prose: `node.toml` and
 //! `description.md` form its definition, while `result.toml` and the optional

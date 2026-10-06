@@ -13,6 +13,7 @@ use crate::activity::Status;
 use crate::app::{App, Request, View};
 use crate::insert;
 use crate::launch;
+use crate::link_menu::LinkAction;
 use crate::preferences;
 use crate::session::{self, Attachment};
 use styra_protocol::{CompletionState, Contract, LogEntry};
@@ -138,6 +139,75 @@ pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
         k if BRANCH_CANCEL.matches(k) => app.branch_prompt = None,
         _ => {}
     }
+}
+
+/// Keys for the menu of actions on the highlighted link. Taking an action
+/// closes the menu; cancelling it leaves the link highlighted.
+pub fn handle_link_menu_key(app: &mut App, key: KeyEvent) {
+    let Some(menu) = app.link_menu.as_mut() else {
+        return;
+    };
+    match key {
+        k if LINK_MENU_NEXT.matches(k) => menu.select_next(),
+        k if LINK_MENU_PREV.matches(k) => menu.select_previous(),
+        k if LINK_MENU_CONFIRM.matches(k) => {
+            let action = menu.selected();
+            app.link_menu = None;
+            match action {
+                LinkAction::Open => app.open_highlighted_link(),
+                LinkAction::Mount { writable } => mount_highlighted_link(app, writable),
+            }
+        }
+        k if LINK_MENU_CANCEL.matches(k) => app.link_menu = None,
+        _ => {}
+    }
+}
+
+/// Add the highlighted file to this interaction's own mounts, the layer the
+/// message editor's path prompt grants into, for the same reason: the path came
+/// up in this conversation. The link stays highlighted, so the operator can go
+/// on to open it or mount the next one.
+fn mount_highlighted_link(app: &mut App, writable: bool) {
+    let path = match app.highlighted_link_target() {
+        Some((_, Ok(path), _)) => path,
+        Some((_, Err(problem), _)) => return app.show_action_message(problem),
+        None => return app.show_action_message("selected link names no file to mount"),
+    };
+    if !app.allow_launch_edit() {
+        return;
+    }
+    // Driva canonicalizes a mount source, so the grant is recorded in the
+    // same terms and compared against the sandbox's mounts in them.
+    let source = match std::fs::canonicalize(&path) {
+        Ok(source) => source,
+        Err(error) => return app.show_action_message(format!("{}: {error}", path.display())),
+    };
+    let mounts = app
+        .launch
+        .driva
+        .as_ref()
+        .map(styra_protocol::DrivaOptions::plain_mounts);
+    if let Some(visible) = mounts
+        .as_deref()
+        .and_then(|mounts| crate::mount::visibility(mounts, &source))
+    {
+        return app.show_action_message(format!(
+            "already in the sandbox at {} ({})",
+            visible.path.display(),
+            visible.access
+        ));
+    }
+    let mount = styra_protocol::LaunchMount {
+        source,
+        destination: None,
+        writable,
+    };
+    let label = crate::mount::label(&mount);
+    let message = match app.launch.add_interaction_mount(mount) {
+        Ok(()) => format!("added {label} — applies when this Session next launches"),
+        Err(reason) => reason.to_owned(),
+    };
+    app.show_action_message(message);
 }
 
 pub fn handle_list_key(
@@ -333,6 +403,9 @@ pub fn handle_list_key(
             k if EVENTS_PREV_LINE.matches(k) => app.select_prev_line(),
             k if k.code == KeyCode::Enter && app.link_highlight.is_some() => {
                 app.open_highlighted_link()
+            }
+            k if EVENTS_LINK_MENU.matches(k) && app.link_highlight.is_some() => {
+                app.open_link_menu()
             }
             // Branch markers are reciprocal links between the source and its
             // child Session. Enter follows either direction; all other
@@ -1494,5 +1567,85 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// Highlight the one link in a reply naming `link`, and open its menu.
+    fn link_menu_on(app: &mut App, link: &str) {
+        app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
+            text: format!("see [it]({link})"),
+        });
+        app.timeline.selected = app.timeline.entries.len() - 1;
+        // The reply marks the interaction running; mounts are added between
+        // runs, so put it back to where the policy can be edited.
+        app.activity.status = crate::activity::Status::Pending;
+        app.highlight_first_link();
+        app.open_link_menu();
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        handle_link_menu_key(app, KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn the_link_menus_first_action_opens_the_link_as_enter_does() {
+        let root = tree("link-open");
+        let mut app = app(&root);
+        link_menu_on(&mut app, &root.join("notes.txt").display().to_string());
+
+        press(&mut app, KeyCode::Enter);
+
+        assert!(app.link_menu.is_none());
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenPath(root.join("notes.txt")))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_link_menu_mounts_a_file_outside_the_sandbox_for_this_interaction() {
+        let root = tree("link-mount");
+        let outside = tree("link-mount-elsewhere");
+        let host = outside.join("notes.txt");
+        let mut app = app(&root);
+        link_menu_on(&mut app, &host.display().to_string());
+
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+
+        assert!(app.link_menu.is_none());
+        assert_eq!(
+            app.launch.interaction.mounts,
+            vec![LaunchMount {
+                source: host.clone(),
+                destination: None,
+                writable: true,
+            }]
+        );
+        assert!(
+            app.link_highlight.is_some(),
+            "mounting keeps the link highlighted"
+        );
+        assert!(app.take_request().is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn the_link_menu_does_not_mount_what_the_sandbox_already_carries() {
+        let root = tree("link-mounted");
+        let mut app = app(&root);
+        link_menu_on(&mut app, "notes.txt");
+
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+
+        assert!(app.launch.interaction.mounts.is_empty());
+        assert!(app.notices.iter().any(|message| message
+            .text
+            .contains("already in the sandbox at /workspace")));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

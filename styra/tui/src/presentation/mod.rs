@@ -191,6 +191,9 @@ pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
     if app.branch_prompt.is_some() {
         return Window::Branch;
     }
+    if app.link_menu.is_some() {
+        return Window::LinkMenu;
+    }
     if app.tag_picker.is_some() {
         return Window::Tags;
     }
@@ -519,6 +522,16 @@ fn draw_main(
         .map(|prompt| styra_ui::overlays::BranchPromptView {
             selected: prompt.selected_index(),
         });
+    let link_labels = app.link_menu.as_ref().map(|menu| menu.labels());
+    let link_menu = app
+        .link_menu
+        .as_ref()
+        .zip(link_labels.as_deref())
+        .map(|(menu, actions)| styra_ui::overlays::LinkMenuView {
+            destination: menu.destination(),
+            actions,
+            selected: menu.selected_index(),
+        });
     let tags = app
         .tag_picker
         .as_ref()
@@ -540,6 +553,7 @@ fn draw_main(
             references: None,
             insert,
             branch,
+            link_menu,
             tags,
             busy: app
                 .busy

@@ -5,7 +5,8 @@
 //! `result.md` form the completion record. Status, readiness, and staleness are
 //! all derived, never stored.
 //!
-//! * [`model`] — the on-disk data types and derived status.
+//! * [`model`] — the on-disk data types and derived status; the separate
+//!   `linka-model` crate, re-exported here.
 //! * [`store`] — the two-files-per-node store and blob hashing.
 //! * [`vcs`] — the version-control seam ([`Vcs`]); [`git::GitVcs`] is the real impl.
 //! * [`ops`] — the operations (add, link, edit, complete, fail) and the derived
@@ -13,11 +14,12 @@
 
 pub mod candidate;
 pub mod git;
-pub mod model;
 pub mod ops;
 pub mod pairing;
 pub mod store;
 pub mod vcs;
+
+pub use linka_model as model;
 
 pub use candidate::{
     CandidateRecord, CandidateState, CandidateStore, ExternalIdentity, NewCandidate,
