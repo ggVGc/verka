@@ -117,10 +117,10 @@ pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrom
 }
 
 /// The chrome every full-region view wears: a border that brightens when the
-/// list has focus, the session's status title (opening with the Workspace
-/// name), and the Session name at the top right. `suffix` names the view in
-/// the title; `None` is the event list, which is the default view and so
-/// needs no name.
+/// list has focus, and the session's status title, opening with the
+/// Workspace name followed by the interaction's own title. `suffix` names
+/// the view in the title; `None` is the event list, which is the default
+/// view and so needs no name.
 fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrome {
     let label = app.launch_label();
     use styra_ui::chrome::StatusTone;
@@ -746,13 +746,15 @@ mod tests {
     }
 
     #[test]
-    fn header_shows_the_workspace_name_alongside_the_session_name() {
+    fn header_shows_the_interaction_title_just_after_the_workspace_name() {
         let mut app = test_support::app("s1");
         app.workspace.name = Some("payments".into());
         app.interactions.note_name("s1", Some("Fix retries".into()));
-        let screen = rendered(&app);
-        assert!(screen.contains("Fix retries"));
-        assert!(screen.contains("payments"));
+        let title = test_support::screen(&app).title();
+        assert!(
+            title.starts_with("┌ payments · Fix retries · "),
+            "{title}"
+        );
     }
 
     fn interaction_with_checkout(id: &str, checkout: Option<CheckoutState>) -> InteractionSummary {

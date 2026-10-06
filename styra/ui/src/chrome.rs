@@ -51,6 +51,9 @@ impl StopTone {
 pub struct PanelChrome {
     pub focused: bool,
     pub workspace: Option<String>,
+    /// The interaction's operator-facing title, shown right after the
+    /// Workspace name.
+    pub session: Option<String>,
     /// The linked worktree the interaction is working in, when it is not the
     /// Workspace's own checkout. `None` for a plain checkout, so the bar does
     /// not repeat what the Workspace name already said.
@@ -64,7 +67,6 @@ pub struct PanelChrome {
     pub status_tone: StatusTone,
     pub elapsed: Option<String>,
     pub suffix: Option<String>,
-    pub session: Option<String>,
 }
 
 /// The bottom-border marker for a panel showing every event rather than the
@@ -125,6 +127,15 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
         ));
         spans.push(Span::styled(" · ", text));
     }
+    if let Some(session) = &chrome.session {
+        spans.push(Span::styled(
+            session.clone(),
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(" · ", text));
+    }
     if let Some(worktree) = &chrome.worktree {
         spans.push(Span::styled(worktree.clone(), Style::default().fg(theme::ACCENT)));
         spans.push(Span::styled(" · ", text));
@@ -158,30 +169,14 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
             .unwrap_or_else(|| " ".into()),
         text,
     ));
-    let mut block = Block::default()
+    Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if chrome.focused {
             theme::ACCENT
         } else {
             theme::INACTIVE
         }))
-        .title(Line::from(spans));
-    if let Some(session) = &chrome.session {
-        block = block.title(
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    session.clone(),
-                    Style::default()
-                        .fg(theme::ACCENT)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" "),
-            ])
-            .right_aligned(),
-        );
-    }
-    block
+        .title(Line::from(spans))
 }
 
 #[cfg(test)]
