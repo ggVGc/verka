@@ -4,6 +4,7 @@ mod common;
 
 use common::*;
 use linka::{Author, CandidateStore, NewCandidate, VerificationOutcome};
+use nota::{GitTrailerStore, ReviewStore};
 use orka::review::{AbandonOutcome, FinishOutcome, Reviews};
 use orka::review_worktree::{GitReviewWorktrees, ReviewCleanupOutcome};
 use std::process::Command;
@@ -65,12 +66,13 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
             &started.review.branch,
         ],
     );
-    let note = nota::add_note(
-        &nota::SystemGit,
-        &review_tree,
-        "The candidate looks correct.",
-    )
-    .unwrap();
+    let note = GitTrailerStore::default()
+        .add_note(
+            &review_tree,
+            &started.review.branch,
+            "The candidate looks correct.",
+        )
+        .unwrap();
 
     assert_eq!(
         reviews
@@ -164,12 +166,9 @@ fn verification_submission_atomically_decides_the_candidate() {
     let store = store_at(&root);
     let reviews = Reviews::new(&store, root.join(".orka"));
     let started = reviews.start(&candidate.id, Author::Human).unwrap();
-    let review = nota::load_review_ref(
-        &nota::SystemGit,
-        &root.join("project"),
-        &started.record.branch,
-    )
-    .unwrap();
+    let review = GitTrailerStore::default()
+        .load_review(&root.join("project"), &started.record.branch)
+        .unwrap();
     let producer = linka::ProducerEvidence {
         namespace: "orka.nota".into(),
         data: serde_json::json!({
@@ -241,12 +240,15 @@ fn finishing_a_review_rejects_an_invalid_git_suggestion() {
             &started.review.branch,
         ],
     );
-    std::fs::create_dir_all(review_tree.join(".nota")).unwrap();
-    std::fs::write(review_tree.join(".nota/metadata"), "invalid\n").unwrap();
-    git(&review_tree, &["add", "--force", ".nota/metadata"]);
     git(
         &review_tree,
-        &["commit", "--quiet", "-m", "invalid suggestion"],
+        &[
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "invalid suggestion",
+        ],
     );
 
     let error = reviews
@@ -257,7 +259,7 @@ fn finishing_a_review_rejects_an_invalid_git_suggestion() {
             Author::Human,
         )
         .unwrap_err();
-    assert!(format!("{error:#}").contains("may not contain Nota files"));
+    assert!(format!("{error:#}").contains("has no changed project files"));
     assert!(store
         .read_result(&started.record.verification)
         .unwrap()
@@ -483,12 +485,9 @@ fn active_reviews_can_be_listed_and_abandoned_without_removing_nota_evidence() {
             .unwrap(),
         linka::IntegrationStatus::Pending
     );
-    assert!(nota::load_review_ref(
-        &nota::SystemGit,
-        &root.join("project"),
-        &started.record.branch
-    )
-    .is_ok());
+    assert!(GitTrailerStore::default()
+        .load_review(&root.join("project"), &started.record.branch)
+        .is_ok());
 
     assert_eq!(
         reviews

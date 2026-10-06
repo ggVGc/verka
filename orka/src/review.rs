@@ -12,7 +12,7 @@ use linka::{
     Author, CandidateId, CandidateRecord, CandidateStore, GitVcs, NodeId, ProducerEvidence, Store,
     SubmissionConflict, VerificationOutcome, VerificationSubmission, WorkSnapshot,
 };
-use nota::{Review, StartedReview, SystemGit};
+use nota::{GitTrailerStore, Review, ReviewStore, StartedReview};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -119,7 +119,7 @@ impl<'a> Reviews<'a> {
         let record = self.load(verification)?;
         self.validate_binding(&record)?;
         if let Ok(review) =
-            nota::load_review_ref(&SystemGit, &self.linka.project_root(), &record.branch)
+            GitTrailerStore::default().load_review(&self.linka.project_root(), &record.branch)
         {
             return Ok(Started {
                 review: StartedReview {
@@ -243,7 +243,8 @@ impl<'a> Reviews<'a> {
     pub fn review(&self, verification: &NodeId) -> Result<(ReviewRecord, Review)> {
         let record = self.load(verification)?;
         self.validate_binding(&record)?;
-        let review = nota::load_review_ref(&SystemGit, &self.linka.project_root(), &record.branch)?;
+        let review =
+            GitTrailerStore::default().load_review(&self.linka.project_root(), &record.branch)?;
         if review.subject != record.subject {
             bail!(
                 "Nota review subject {} does not match candidate artifact {}",
@@ -344,8 +345,7 @@ impl<'a> Reviews<'a> {
     }
 
     fn start_nota(&self, record: ReviewRecord) -> Result<Started> {
-        let review = nota::start_review(
-            &SystemGit,
+        let review = GitTrailerStore::default().start_review(
             &self.linka.project_root(),
             &record.subject,
             Some(&record.branch),

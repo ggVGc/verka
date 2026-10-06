@@ -105,8 +105,8 @@ Each application writes only through storage it owns or an explicit adapter:
   are committed together through Linka's generic opaque attachment interface,
   after which clean local attempt state is removed. Active review bindings and
   unsafe retained worktrees remain local only while needed.
-- Nota stores its review marker and entries as commits on a Git branch; note
-  bodies also appear as files under `.nota/notes/` on that branch.
+- Nota stores its review marker and entries as commits on a Git branch; the
+  marker and notes are empty commits whose data is in Git trailers.
 
 Sharing a Git repository does not merge these schemas. Cross-application
 references are stable opaque identifiers or version pins.
