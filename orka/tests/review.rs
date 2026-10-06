@@ -65,7 +65,12 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
             &started.review.branch,
         ],
     );
-    let note = nota::add_note(&review_tree, "The candidate looks correct.").unwrap();
+    let note = nota::add_note(
+        &nota::SystemGit,
+        &review_tree,
+        "The candidate looks correct.",
+    )
+    .unwrap();
 
     assert_eq!(
         reviews
@@ -159,7 +164,12 @@ fn verification_submission_atomically_decides_the_candidate() {
     let store = store_at(&root);
     let reviews = Reviews::new(&store, root.join(".orka"));
     let started = reviews.start(&candidate.id, Author::Human).unwrap();
-    let review = nota::load_review_ref(&root.join("project"), &started.record.branch).unwrap();
+    let review = nota::load_review_ref(
+        &nota::SystemGit,
+        &root.join("project"),
+        &started.record.branch,
+    )
+    .unwrap();
     let producer = linka::ProducerEvidence {
         namespace: "orka.nota".into(),
         data: serde_json::json!({
@@ -473,7 +483,12 @@ fn active_reviews_can_be_listed_and_abandoned_without_removing_nota_evidence() {
             .unwrap(),
         linka::IntegrationStatus::Pending
     );
-    assert!(nota::load_review_ref(&root.join("project"), &started.record.branch).is_ok());
+    assert!(nota::load_review_ref(
+        &nota::SystemGit,
+        &root.join("project"),
+        &started.record.branch
+    )
+    .is_ok());
 
     assert_eq!(
         reviews

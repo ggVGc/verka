@@ -7,6 +7,7 @@ mod review;
 use anyhow::Result;
 use std::path::PathBuf;
 
+pub use git::{Git, SystemGit};
 pub use providers::GitProvider;
 pub use review::{
     add_note, load_review, load_review_ref, start_review, Review, ReviewEntry, ReviewEntryKind,

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nota::{add_note, load_review, start_review, GitProvider, ReviewEntryKind};
+use nota::{add_note, load_review, start_review, GitProvider, ReviewEntryKind, SystemGit};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -60,7 +60,12 @@ fn run(cli: Cli) -> Result<()> {
                     revision,
                     repository,
                     branch,
-                } => start_review(&GitProvider::new(repository), &revision, branch.as_deref())?,
+                } => start_review(
+                    &SystemGit,
+                    &GitProvider::new(&SystemGit, repository),
+                    &revision,
+                    branch.as_deref(),
+                )?,
             };
             println!("review   {}", started.branch);
             println!("subject  {}", started.subject);
@@ -75,11 +80,11 @@ fn run(cli: Cli) -> Result<()> {
             message,
             repository,
         } => {
-            let entry = add_note(&repository, &message)?;
+            let entry = add_note(&SystemGit, &repository, &message)?;
             println!("{}  note", short(&entry.commit));
         }
         Command::Show { repository } => {
-            let review = load_review(&repository)?;
+            let review = load_review(&SystemGit, &repository)?;
             println!("review   {}", review.branch);
             println!("subject  {}", review.subject);
             println!("marker   {}", review.marker);
