@@ -118,7 +118,7 @@ transcript, details, files, answer, preview) stack over the event list, and
 
 | Key | Use |
 | --- | --- |
-| `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send it in a new Git workspace and branch (later in a Session, as `W` does, then sends) / insert editor newline |
+| `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send it in a new Git workspace and branch (later in a Session, as `W` does, then sends; refused while the agent is mid-turn) / insert editor newline |
 | `Ctrl+R` (message editor) | start/stop recording and insert its transcript |
 | `W` (existing session) | create and associate a linked workspace and branch, then restart the interaction in it; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |

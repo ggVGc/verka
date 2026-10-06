@@ -9,6 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use std::path::Path;
 
+use crate::activity::Status;
 use crate::app::{App, Request, View};
 use crate::insert;
 use crate::launch;
@@ -713,6 +714,16 @@ pub fn handle_input_key(
         k if EDITOR_NEWLINE.matches(k) => app.composer.newline(),
         k if EDITOR_SEND.matches(k) || EDITOR_SEND_IN_BRANCH.matches(k) => {
             let create_worktree = creates_worktree(app, k);
+            // Moving the interaction means stopping it, which would throw
+            // away the turn under way; the message stays in the box instead.
+            if create_worktree
+                && matches!(live, Attachment::Attached { .. })
+                && app.activity.status == Status::Running
+            {
+                return app.show_action_message(
+                    "the agent is mid-turn — wait for it to finish before moving it to a new Git workspace",
+                );
+            }
             if let Some(message) = app.take_message() {
                 app.enter_list();
                 if create_worktree {
@@ -1097,6 +1108,7 @@ mod tests {
         let root = tree("later-message-worktree");
         let mut app = app(&root);
         app.session_id = "session-1".into();
+        app.activity.status = Status::Idle(crate::activity::IdleReason::TurnComplete);
         app.enter_input();
         app.composer.set("carry on in a branch".into());
         let client = Client::new(root.join("missing.sock"));
@@ -1117,6 +1129,33 @@ mod tests {
             })
         );
         assert!(app.composer.text.is_empty());
+        assert_eq!(live, Attachment::Attached { cursor: 0 });
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Moving a working agent would stop its turn, so the press is refused and
+    /// the message is left where it was written.
+    #[test]
+    fn control_enter_mid_turn_is_refused_and_keeps_the_message() {
+        let root = tree("mid-turn-worktree");
+        let mut app = app(&root);
+        app.session_id = "session-1".into();
+        app.activity.status = Status::Running;
+        app.enter_input();
+        app.composer.set("carry on in a branch".into());
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Attached { cursor: 0 };
+
+        handle_input_key(
+            &mut app,
+            &client,
+            "workspace-1",
+            &mut live,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(app.take_request(), None);
+        assert_eq!(app.composer.text, "carry on in a branch");
         assert_eq!(live, Attachment::Attached { cursor: 0 });
         let _ = std::fs::remove_dir_all(root);
     }
