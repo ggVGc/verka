@@ -752,6 +752,32 @@ pub fn restart(app: &App, client: &Client, live: &Attachment) -> Result<SessionI
     })
 }
 
+/// Stop the Session's agent and bring it back up with `message` as its next
+/// turn — [`restart`] for a Session whose checkout has just changed, with the
+/// message that asked for the change carried into it. Answers whether the
+/// message went out; when it did not, it is back in the box and the reason is
+/// in the log.
+pub fn restart_and_send(
+    app: &mut App,
+    client: &Client,
+    live: &mut Attachment,
+    message: String,
+) -> bool {
+    if let Attachment::Attached { .. } = live {
+        if let Err(error) = client.stop_interaction(&app.session_id) {
+            app.push_log(LogEntry::error(format!(
+                "could not stop the interaction to move it: {error:#}"
+            )));
+            app.set_input(message);
+            return false;
+        }
+        mark_stopped(app, live, StopReason::Paused);
+    }
+    let contract = app.outbox.take_contract();
+    resume_and_send(app, client, live, message, contract);
+    matches!(live, Attachment::Attached { .. })
+}
+
 /// Restart the idle interaction on screen under the launch policy as it now
 /// stands, and stay on it.
 ///

@@ -223,7 +223,7 @@ pub fn handle_list_key(
         }
         k if GLOBAL_WORKSPACES.matches(k) => return app.ask(Request::Workspace),
         k if GLOBAL_SESSION_WORKTREE.matches(k) && !app.session_id.is_empty() => {
-            return app.ask(Request::CreateWorktree { first_prompt: None })
+            return app.ask(Request::CreateWorktree { message: None })
         }
         k if GLOBAL_SESSIONS.matches(k) => return app.ask(Request::Sessions),
         // Newly idle work needs attention first; without one, `n` walks every
@@ -670,18 +670,18 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Whether this keypress submits the first prompt into a new Git workspace.
+/// Whether this keypress sends the message into a new Git workspace.
 ///
-/// Ctrl-Enter is a distinct first-prompt submission: it creates the Session's
-/// branch and linked workspace as it sends the prompt, with no standing option
-/// to leak into a later Session.
+/// Ctrl-Enter is a distinct submission: it creates the Session's branch and
+/// linked workspace as it sends the message, with no standing option to leak
+/// into a later Session. On a first prompt the Session launches there; on a
+/// later message the running interaction is moved there first, as `W` does.
 ///
 /// Such a send is handed to the event loop rather than made here, the same
 /// request `W` makes for a Session that already exists: branching blocks long
 /// enough to need the notice only the loop can paint.
 fn creates_worktree(app: &App, key: KeyEvent) -> bool {
     EDITOR_SEND_IN_BRANCH.matches(key)
-        && app.session_id.is_empty()
         // Nothing is sent, and so nothing is branched, for a blank box.
         && !app.composer.text.trim().is_empty()
 }
@@ -717,7 +717,7 @@ pub fn handle_input_key(
                 app.enter_list();
                 if create_worktree {
                     app.ask(Request::CreateWorktree {
-                        first_prompt: Some(message),
+                        message: Some(message),
                     });
                 } else {
                     session::submit_message(app, client, workspace_id, live, message, false);
@@ -1032,7 +1032,7 @@ mod tests {
     /// Only these presses are handed to the event loop to branch; every other
     /// send goes out from the message box as it is.
     #[test]
-    fn only_a_typed_first_prompt_sent_with_control_enter_branches() {
+    fn only_a_typed_message_sent_with_control_enter_branches() {
         let root = tree("creates-worktree");
         let mut app = app(&root);
         let press = |modifiers| KeyEvent::new(KeyCode::Enter, modifiers);
@@ -1053,8 +1053,8 @@ mod tests {
         app.composer.set("continue".into());
         app.session_id = "session-1".into();
         assert!(
-            !creates_worktree(&app, press(KeyModifiers::CONTROL)),
-            "branching is a first-prompt choice only"
+            creates_worktree(&app, press(KeyModifiers::CONTROL)),
+            "a Session already under way can still be branched"
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -1082,11 +1082,42 @@ mod tests {
         assert_eq!(
             app.take_request(),
             Some(Request::CreateWorktree {
-                first_prompt: Some("start here".into())
+                message: Some("start here".into())
             })
         );
         assert!(app.composer.text.is_empty());
         assert_eq!(live, Attachment::Detached, "nothing launches from the box");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Later in a Session the message rides the same request, and nothing is
+    /// sent from the box: the interaction has to be moved before it hears it.
+    #[test]
+    fn control_enter_mid_session_hands_the_message_to_the_worktree_request() {
+        let root = tree("later-message-worktree");
+        let mut app = app(&root);
+        app.session_id = "session-1".into();
+        app.enter_input();
+        app.composer.set("carry on in a branch".into());
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Attached { cursor: 0 };
+
+        handle_input_key(
+            &mut app,
+            &client,
+            "workspace-1",
+            &mut live,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::CreateWorktree {
+                message: Some("carry on in a branch".into())
+            })
+        );
+        assert!(app.composer.text.is_empty());
+        assert_eq!(live, Attachment::Attached { cursor: 0 });
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1113,7 +1144,7 @@ mod tests {
 
         assert_eq!(
             app.take_request(),
-            Some(Request::CreateWorktree { first_prompt: None })
+            Some(Request::CreateWorktree { message: None })
         );
         let _ = std::fs::remove_dir_all(root);
     }

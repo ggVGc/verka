@@ -1419,16 +1419,21 @@ pub fn run(
             // copies the repository out, which together take long enough to
             // look like a hang. `W` and `Ctrl-Enter` differ only in what the
             // checkout is made for: a Session already running, which has to be
-            // restarted into it, or one that the first prompt launches there.
-            Some(Request::CreateWorktree { first_prompt }) => {
-                if let Some(message) = first_prompt {
-                    // The launch branches and checks out before it sends, and
-                    // reports its own failure — restoring the message box.
-                    blocked_on(terminal, app, CREATING_WORKTREE, |app| {
-                        session::submit_message(app, client, &workspace_id, live, message, true)
-                    })?;
-                    continue;
-                }
+            // restarted into it — carrying the message, if `Ctrl-Enter` sent
+            // one — or one that the first prompt launches there.
+            Some(Request::CreateWorktree { message }) => {
+                let message = match message {
+                    Some(message) if app.session_id.is_empty() => {
+                        // The launch branches and checks out before it sends,
+                        // and reports its own failure — restoring the message
+                        // box.
+                        blocked_on(terminal, app, CREATING_WORKTREE, |app| {
+                            session::submit_message(app, client, &workspace_id, live, message, true)
+                        })?;
+                        continue;
+                    }
+                    message => message,
+                };
                 let session_id = app.session_id.clone();
                 let created = blocked_on(terminal, app, CREATING_WORKTREE, |_| {
                     client.create_session_worktree(&session_id)
@@ -1437,6 +1442,28 @@ pub fn run(
                     app.show_action_message(format!(
                         "could not create a linked workspace: {error}"
                     ));
+                    // Nothing was sent: the message waits in the box for a
+                    // plain Enter, or for another try.
+                    if let Some(message) = message {
+                        app.set_input(message);
+                        app.enter_input();
+                    }
+                    continue;
+                }
+                if let Some(message) = message {
+                    let sent = blocked_on(
+                        terminal,
+                        app,
+                        "restarting the interaction in the linked workspace…",
+                        |app| session::restart_and_send(app, client, live, message),
+                    )?;
+                    if sent {
+                        return Ok(RunOutcome::OpenSession(session_id));
+                    }
+                    app.show_action_message(
+                        "created the linked workspace, but could not restart in it; the message is back in the box",
+                    );
+                    app.enter_input();
                     continue;
                 }
                 // The checkout is read when the agent launches, so the
