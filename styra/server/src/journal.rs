@@ -139,12 +139,14 @@ enum Record {
     /// the source. Like [`Record::ModelChange`] no provider puts this on the
     /// wire, and it belongs beside the messages — it is where a conversation
     /// was continued somewhere else.
+    ///
+    /// Carries only the other side's id, not its name: a name baked in here
+    /// would go stale the moment that Session was renamed. A reader resolves
+    /// the current name live, from the id, instead.
     Branch {
         at_ms: u64,
         direction: BranchDirection,
         session: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
     },
 }
 
@@ -310,17 +312,11 @@ impl Journal {
     }
 
     /// Record a branch boundary linking this Session to `session`.
-    pub fn record_branch(
-        &mut self,
-        direction: BranchDirection,
-        session: &str,
-        name: Option<&str>,
-    ) -> Result<()> {
+    pub fn record_branch(&mut self, direction: BranchDirection, session: &str) -> Result<()> {
         self.write(&Record::Branch {
             at_ms: now_ms(),
             direction,
             session: session.to_owned(),
-            name: name.map(str::to_owned),
         })
     }
 
@@ -931,14 +927,13 @@ fn replay_records(path: &Path, protocol: Protocol, include_raw: bool) -> Result<
                 events.push(AgentEvent::UserMessage { text });
             }
             Ok(Record::Branch {
-                direction,
-                session,
-                name,
-                ..
+                direction, session, ..
             }) => events.push(AgentEvent::Branched {
                 direction,
                 session,
-                name,
+                // The marker carries only the id; a client resolves the
+                // current name live instead of trusting one baked in here.
+                name: None,
             }),
             Ok(Record::ModelChange { model, effort, .. }) => {
                 events.push(AgentEvent::ModelChanged { model, effort })
@@ -1534,7 +1529,7 @@ mod tests {
         {
             let mut journal = Journal::create(&directory).unwrap();
             journal
-                .record_branch(BranchDirection::From, "styra-source", Some("review"))
+                .record_branch(BranchDirection::From, "styra-source")
                 .unwrap();
             journal.record_user_message("carry on here").unwrap();
         }
@@ -1545,7 +1540,7 @@ mod tests {
                 AgentEvent::Branched {
                     direction: BranchDirection::From,
                     session: "styra-source".into(),
-                    name: Some("review".into()),
+                    name: None,
                 },
                 AgentEvent::UserMessage {
                     text: "carry on here".into()

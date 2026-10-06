@@ -24,6 +24,18 @@ pub(crate) fn ui_link_display(value: crate::app::LinkDisplay) -> LinkDisplay {
     }
 }
 
+/// For a branch marker, the other session's current name, resolved live from
+/// the roster rather than trusted from the event itself: the event's own
+/// `name` is a snapshot taken when the marker was written, and a rename since
+/// would leave it stale. `None` both for an event that is not a marker and
+/// for one whose target the roster has no row for.
+pub(crate) fn branch_name<'a>(
+    app: &'a App,
+    event: &styra_protocol::event::AgentEvent,
+) -> Option<&'a str> {
+    app.interactions.name(event.branch_target()?)
+}
+
 pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
     let entries = app
         .timeline
@@ -42,6 +54,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
                 .link_highlight
                 .filter(|highlight| highlight.entry == index)
                 .map(|highlight| highlight.link),
+            branch_name: branch_name(app, entry.event()),
         })
         .collect();
     let progress = app.activity.progress();

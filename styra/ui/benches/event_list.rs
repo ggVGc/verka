@@ -53,6 +53,7 @@ fn frame(events: &[AgentEvent], versions: &[EntryVersion]) -> usize {
                 contract: None,
                 selected: false,
                 link_highlight: None,
+                branch_name: None,
             };
             entry_item(&entry, WIDTH, VIEWPORT, render)
         })
@@ -94,6 +95,7 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
             contract: None,
             selected: index == selected,
             link_highlight: None,
+            branch_name: None,
         })
         .collect();
     let view = EventListView {

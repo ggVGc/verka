@@ -569,16 +569,19 @@ impl Interaction {
     /// continued in `session`. Nothing is sent to the agent: a branch copies
     /// the transcript on the host, so the running conversation is unchanged
     /// and only the log gains the boundary.
-    pub fn record_branch(&self, session: &str, name: Option<&str>) -> Result<()> {
+    ///
+    /// Carries only `session`'s id: a client resolves its current name live
+    /// instead of being handed one that can go stale.
+    pub fn record_branch(&self, session: &str) -> Result<()> {
         if let Ok(mut journal) = self.journal.lock() {
-            journal.record_branch(BranchDirection::To, session, name)?;
+            journal.record_branch(BranchDirection::To, session)?;
         }
         let _ = self
             .updates
             .send(InteractionUpdate::Event(AgentEvent::Branched {
                 direction: BranchDirection::To,
                 session: session.to_owned(),
-                name: name.map(str::to_owned),
+                name: None,
             }));
         Ok(())
     }

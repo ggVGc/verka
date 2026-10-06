@@ -51,6 +51,13 @@ pub struct EventEntry<'a> {
     pub selected: bool,
     /// The Markdown link within this entry to mark, if link navigation is on it.
     pub link_highlight: Option<EntryIndex>,
+    /// For an [`AgentEvent::Branched`] entry, the other session's *current*
+    /// operator-facing name, resolved by the host from its live roster —
+    /// `None` when the host has no row for that id (it was never listed, or
+    /// has since been forgotten). The event's own `name` field is not used
+    /// for display: it is a snapshot taken when the marker was written, and a
+    /// rename afterward would leave it stale.
+    pub branch_name: Option<&'a str>,
 }
 
 pub enum EventListStatus {
@@ -1090,7 +1097,14 @@ fn build_entry_rows(
     }
     let mut lines = vec![summary];
     let mut detail =
-        detail_lines_with_links(entry.event, protocol, None, links, entry.link_highlight);
+        detail_lines_with_links(
+            entry.event,
+            protocol,
+            None,
+            links,
+            entry.link_highlight,
+            entry.branch_name,
+        );
     // The first detail line is the summary already shown above. Link focus is
     // rendered on that summary, so it never needs a duplicate body line.
     if !detail.is_empty() {
@@ -1810,6 +1824,41 @@ fn file_action_summary(event: &AgentEvent) -> Option<String> {
     Some(format!("{action} {}", paths.join(", ")))
 }
 
+/// Replace whatever name an [`AgentEvent::Branched`] detail block carries
+/// with the live one the host resolved from its roster, dropping the line
+/// entirely rather than falling back to a stale one when the host has none.
+/// A no-op for every other event: the cached `name` on the event is never
+/// trusted for display, so there is nothing to override when the host did
+/// not resolve a live one either, and nothing to do for events that are not
+/// branch markers at all.
+pub(crate) fn with_live_branch_name(
+    event: &AgentEvent,
+    blocks: Vec<DetailBlock>,
+    branch_name: Option<&str>,
+) -> Vec<DetailBlock> {
+    if !matches!(event, AgentEvent::Branched { .. }) {
+        return blocks;
+    }
+    blocks
+        .into_iter()
+        .map(|block| match block {
+            DetailBlock::Text(text) => {
+                let mut lines: Vec<String> = text
+                    .lines()
+                    .filter(|line| !line.starts_with("name: "))
+                    .map(str::to_owned)
+                    .collect();
+                if let Some(name) = branch_name {
+                    let at = lines.len().min(1);
+                    lines.insert(at, format!("name: {name}"));
+                }
+                DetailBlock::Text(lines.join("\n"))
+            }
+            other => other,
+        })
+        .collect()
+}
+
 /// The pretty, provider-aware expandable body of an entry. `cap` bounds how
 /// many lines are shown inline in the list so one noisy command cannot bury
 /// the rest of the session. The preview panel owns the optional raw view.
@@ -1819,12 +1868,13 @@ pub fn detail_lines_with_links(
     cap: Option<usize>,
     links: LinkDisplay,
     highlight: Option<EntryIndex>,
+    branch_name: Option<&str>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let text_color = message_text_color(event.tag());
     let suspicious_shell = suspicious_shell_success(event);
     let mut entries_before = 0;
-    for block in protocol.presented_detail(event, PresentationMode::Pretty) {
+    for block in with_live_branch_name(event, protocol.presented_detail(event, PresentationMode::Pretty), branch_name) {
         match block {
             DetailBlock::Text(text) => {
                 let base_style = Style::default().fg(text_color);
@@ -1998,6 +2048,7 @@ mod tests {
                 contract: None,
                 selected: index == selected,
                 link_highlight: None,
+                branch_name: None,
             })
             .collect();
         let view = EventListView {
@@ -2166,6 +2217,7 @@ mod tests {
                 contract: None,
                 selected: true,
                 link_highlight: None,
+                branch_name: None,
             }],
             activity: ActivityCounts::default(),
             all_events: false,
@@ -2260,6 +2312,7 @@ mod tests {
                 contract: None,
                 selected,
                 link_highlight: None,
+                branch_name: None,
             };
             summary_line(&entry, false, false, true, Protocol::default())
                 .spans
@@ -2291,6 +2344,7 @@ mod tests {
             contract: None,
             selected: true,
             link_highlight: Some(0),
+            branch_name: None,
         };
         let render = EntryRender {
             protocol: Protocol::default(),
@@ -2565,6 +2619,7 @@ mod tests {
             contract: None,
             selected: false,
             link_highlight: None,
+            branch_name: None,
         }
     }
 

@@ -2789,11 +2789,7 @@ impl ServerState {
         // The marker goes in before the copied history: it is the branch's
         // first line, so reading the new Session from the top starts with
         // where its conversation came from.
-        journal.record_branch(
-            crate::event::BranchDirection::From,
-            id,
-            summary.name.as_deref(),
-        )?;
+        journal.record_branch(crate::event::BranchDirection::From, id)?;
         let source_protocol = journal::read_session_meta(&summary.path)?.protocol;
         journal.copy_branch_from(&summary.path, source_protocol, at_ms, history)?;
         journal::store_provider_session_id(&directory, &new_native_id)?;
@@ -2806,7 +2802,7 @@ impl ServerState {
                 history,
             },
         )?;
-        self.record_source_branch(id, &summary.path, &new_id, branch_name.as_deref())?;
+        self.record_source_branch(id, &summary.path, &new_id)?;
 
         // A provider conversion leaves the source Session's native transcript
         // behind for good — the branch is the only copy the new provider can
@@ -2932,17 +2928,9 @@ impl ServerState {
     /// a branch takes a copy and leaves the conversation it came from intact.
     /// A provider conversion does stop it, but by sealing it afterwards; see
     /// [`Self::branch_session`].
-    fn record_source_branch(
-        &self,
-        id: &str,
-        source_path: &Path,
-        branch_id: &str,
-        branch_name: Option<&str>,
-    ) -> Result<()> {
+    fn record_source_branch(&self, id: &str, source_path: &Path, branch_id: &str) -> Result<()> {
         if let Ok(interaction) = self.interaction(id) {
-            return interaction
-                .interaction
-                .record_branch(branch_id, branch_name);
+            return interaction.interaction.record_branch(branch_id);
         }
         let directory = if source_path.is_dir() {
             source_path.to_path_buf()
@@ -2952,11 +2940,7 @@ impl ServerState {
                 .map(Path::to_path_buf)
                 .unwrap_or_default()
         };
-        Journal::open(&directory)?.record_branch(
-            crate::event::BranchDirection::To,
-            branch_id,
-            branch_name,
-        )
+        Journal::open(&directory)?.record_branch(crate::event::BranchDirection::To, branch_id)
     }
 
     fn interaction(&self, id: &str) -> Result<Arc<ManagedInteraction>> {
@@ -5702,7 +5686,7 @@ mod tests {
         drop(journal);
 
         state
-            .record_source_branch(&source_id, &source_path, "styra-branch", Some("review"))
+            .record_source_branch(&source_id, &source_path, "styra-branch")
             .unwrap();
 
         assert_eq!(
@@ -5714,7 +5698,7 @@ mod tests {
                 crate::event::AgentEvent::Branched {
                     direction: crate::event::BranchDirection::To,
                     session: "styra-branch".into(),
-                    name: Some("review".into()),
+                    name: None,
                 },
             ]
         );

@@ -183,6 +183,7 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         view,
         suspicious,
         view.link_highlight,
+        entry.branch_name,
     ));
     lines
 }
@@ -249,15 +250,16 @@ fn detail_lines(
     view: &PreviewView<'_>,
     suspicious: bool,
     highlight: Option<EntryIndex>,
+    branch_name: Option<&str>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut entries_before = 0;
-    for (index, block) in view
-        .protocol
-        .presented_detail(event, PresentationMode::Pretty)
-        .into_iter()
-        .enumerate()
-    {
+    let blocks = crate::event_list::with_live_branch_name(
+        event,
+        view.protocol.presented_detail(event, PresentationMode::Pretty),
+        branch_name,
+    );
+    for (index, block) in blocks.into_iter().enumerate() {
         if index > 0 {
             lines.push(Line::from(""));
         }
