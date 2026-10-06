@@ -87,12 +87,13 @@ workspaces/<WORKSPACE-ID>/
     diagnostics.log
 ```
 
-Linked worktrees are off by default. Send a new session's first prompt with
-`Ctrl+Enter` to create its branch and worktree as part of that submission.
-For an existing Session without one, press `W` to create and associate its
-linked worktree and branch; the interaction is then restarted into that
-checkout, so it is where the agent works and what the footer names from there
-on.
+Linked worktrees are off by default. Send a message with `Ctrl+Enter` to
+create the Session's branch and worktree as part of that submission. On a
+first prompt the Session launches there; later on, or with `W` when there is
+no message to send, the existing Session gets its linked worktree and branch
+and the interaction is restarted into that checkout — carrying the message,
+if there is one — so it is where the agent works and what the footer names
+from there on.
 When selected and the Workspace's host directory is inside a Git working tree,
 Styra discovers that repository on the host and, before that interaction starts,
 creates a branch `styra/<SESSION-ID>` checked out at

@@ -406,10 +406,10 @@ pub enum Request {
     NewSession,
     /// Give a Session a Git branch and linked workspace of its own: `W` asks
     /// it for the Session being viewed, and `Ctrl-Enter` for the one its
-    /// `first_prompt` is about to start. Either way the checkout is made
-    /// before the agent runs in it, so both wait behind the same notice.
+    /// `message` is about to start or continue. Either way the checkout is
+    /// made before the agent runs in it, so both wait behind the same notice.
     CreateWorktree {
-        first_prompt: Option<String>,
+        message: Option<String>,
     },
     /// Open the selected entry in the Files view in the configured opener.
     EditFile,

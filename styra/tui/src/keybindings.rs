@@ -180,7 +180,7 @@ bindings! { MESSAGE_EDITOR = "Message editor";
     EDITOR_CONTRACT: [Key::ctrl('t')]
         => Action::EditorContract;
     EDITOR_SEND: [Key::code(KeyCode::Enter)] => Action::EditorSend;
-    EDITOR_SEND_IN_BRANCH: [Key::ctrl_code(KeyCode::Enter)] ("first prompt")
+    EDITOR_SEND_IN_BRANCH: [Key::ctrl_code(KeyCode::Enter)]
         => Action::EditorSendInBranch;
     EDITOR_CHANGE_DIRECTORY: [] as "/cd <directory>"
         => Action::EditorChangeDirectory;

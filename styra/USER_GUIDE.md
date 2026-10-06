@@ -118,7 +118,7 @@ transcript, details, files, answer, preview) stack over the event list, and
 
 | Key | Use |
 | --- | --- |
-| `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send first prompt in a new Git workspace and branch / insert editor newline |
+| `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send it in a new Git workspace and branch (later in a Session, as `W` does, then sends; refused while the agent is mid-turn) / insert editor newline |
 | `Ctrl+R` (message editor) | start/stop recording and insert its transcript |
 | `W` (existing session) | create and associate a linked workspace and branch, then restart the interaction in it; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
@@ -340,7 +340,7 @@ These are related but independent Workspace features:
 | Feature | How it is enabled | What a future interaction receives |
 | --- | --- | --- |
 | **Git checkout association** | When the TUI creates a Workspace, it finds the nearest enclosing checkout and records its canonical root automatically. | The checkout is mounted read-only at its host path; its Git metadata/common directory is writable, so Git can operate on that checkout. |
-| **Linked worktrees** | Send the first prompt with `Ctrl+Enter`. | A branch and linked checkout of its own, mounted writable at `/tmp/styra/workspace`, plus the repository's shared Git metadata. |
+| **Linked worktrees** | Send any message with `Ctrl+Enter` (or press `W`). | A branch and linked checkout of its own, mounted writable at `/tmp/styra/workspace`, plus the repository's shared Git metadata. |
 
 The automatic repository association is visible in Workspace metadata. Press `d`, then
 `G`, to replace it; enter any path inside the checkout and Styra stores its
@@ -357,7 +357,7 @@ Use `"git_repository":null` to clear the association. The checkout must exist
 and be inside a Git repository.
 
 The repository worktrees are made from is discovered from the **Workspace host
-directory**, not from the optional checkout association, so the first-prompt
+directory**, not from the optional checkout association, so the
 `Ctrl+Enter` action only has an effect when that directory is inside a Git working tree.
 
 There is nothing to ask the agent for: before an interaction starts, Styra
