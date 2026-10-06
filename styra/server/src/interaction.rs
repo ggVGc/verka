@@ -706,6 +706,37 @@ impl Interaction {
         }
         true
     }
+
+    /// Close the agent's stdin and, if it has not left within the grace
+    /// period, terminate its sandbox — without waiting here for either.
+    ///
+    /// [`Self::stop`] alone is a request an agent may ignore: Claude Code does
+    /// not exit on stdin EOF while a background task it started is still
+    /// running, and takes that task's completion as a new turn, working on
+    /// with nothing left to report it to.
+    pub fn stop_or_terminate(&self) {
+        self.stop();
+        let control = Arc::clone(&self.execution_control);
+        // Terminating a sandbox that has already gone is a flag nothing reads.
+        let _ = std::thread::Builder::new()
+            .name("styra-stop".into())
+            .spawn(move || {
+                std::thread::sleep(SHUTDOWN_GRACE);
+                control.terminate();
+            });
+    }
+
+    /// End the agent now: close its stdin and terminate its sandbox, with
+    /// everything running in it, without first asking it to leave. Waits for
+    /// it to be gone and reports whether it is.
+    pub fn kill(&self) -> bool {
+        self.stop();
+        self.execution_control.terminate();
+        let Some(handle) = self.exec.as_ref() else {
+            return true;
+        };
+        wait_finished(handle, SHUTDOWN_GRACE)
+    }
 }
 
 /// Wait up to `grace` for `handle`'s thread to finish, without joining it.
@@ -1573,6 +1604,46 @@ mod tests {
         assert!(stubborn.shut_down());
         assert!(terminated.load(Ordering::Acquire));
         assert!(stubborn.exec.as_ref().unwrap().is_finished());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// An agent with background work ignores stdin EOF and works on, so
+    /// stopping one has to end in termination, and completing a Session kills
+    /// it outright rather than asking first.
+    #[test]
+    fn stopping_and_killing_end_an_agent_that_ignores_eof() {
+        let dir = std::env::temp_dir().join(format!("styra-kill-session-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let spawn_stubborn = |terminated: &Arc<AtomicBool>| {
+            Interaction::spawn(
+                workspace_spec(&dir),
+                Box::new(StubbornBackend {
+                    terminated: Arc::clone(terminated),
+                }),
+                Journal::create(&dir).unwrap(),
+                "stubborn-session".into(),
+                dir.join("diagnostics.log"),
+            )
+            .unwrap()
+        };
+
+        let terminated = Arc::new(AtomicBool::new(false));
+        let (stopped, _updates) = spawn_stubborn(&terminated);
+        stopped.stop_or_terminate();
+        assert!(!terminated.load(Ordering::Acquire));
+        assert!(wait_finished(
+            stopped.exec.as_ref().unwrap(),
+            SHUTDOWN_GRACE * 4
+        ));
+        assert!(terminated.load(Ordering::Acquire));
+
+        let terminated = Arc::new(AtomicBool::new(false));
+        let (killed, _updates) = spawn_stubborn(&terminated);
+        assert!(killed.kill());
+        assert!(terminated.load(Ordering::Acquire));
+        assert!(killed.exec.as_ref().unwrap().is_finished());
 
         std::fs::remove_dir_all(dir).ok();
     }

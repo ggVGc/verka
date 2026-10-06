@@ -1115,24 +1115,42 @@ impl ManagedInteraction {
         Ok(())
     }
 
+    /// Stop the agent, terminating it if it does not leave on its own: an
+    /// interaction reported stopped must not go on working out of sight.
     fn stop(&self) {
         self.activity.stopped(InteractionActivityReason::Paused);
-        self.interaction.stop();
+        self.interaction.stop_or_terminate();
     }
 
     /// Set whether the operator has finished with this interaction's Session,
     /// mirroring the state to `session_path` first so a crash between the two
     /// never leaves the live summary claiming a state the store disagrees
-    /// with. Marking it complete (or sealed) also stops the interaction —
-    /// there is nothing left for its agent to do — with the ordinary
-    /// [`Self::stop`] reason: completion is a fact about the Session, not a
-    /// new way for an interaction to be stopped.
+    /// with.
+    ///
+    /// Marking it complete (or sealed) first kills the agent and everything
+    /// running in its sandbox — background tasks and subagents included — and
+    /// refuses the state if the sandbox will not go: a finished Session must
+    /// never have work still running in it. The stop reason is the ordinary
+    /// [`Self::stop`] one: completion is a fact about the Session, not a new
+    /// way for an interaction to be stopped.
     fn set_completed(&self, completed: CompletionState) -> Result<()> {
+        if completed.is_done() {
+            self.kill()
+                .with_context(|| format!("the session was not marked {completed:?}"))?;
+        }
         journal::store_session_completed(&self.session_path, completed)?;
         *self.completed.lock().expect("completion lock poisoned") = completed;
-        if completed.is_done() {
-            self.stop();
-        }
+        Ok(())
+    }
+
+    /// Kill the agent and everything running in its sandbox now, without
+    /// asking it to leave first, and fail if the sandbox is not gone after.
+    fn kill(&self) -> Result<()> {
+        self.activity.stopped(InteractionActivityReason::Paused);
+        anyhow::ensure!(
+            self.interaction.kill(),
+            "the agent's sandbox did not exit after being terminated"
+        );
         Ok(())
     }
 
@@ -2668,6 +2686,15 @@ impl ServerState {
                 "provider {:?} is not an interactive provider Styra can branch into",
                 to_provider.as_str()
             );
+        }
+        // A conversion seals the source below, and a sealed Session has
+        // nothing running in it. Killed before anything is read, so the
+        // transcript and journal copied are final and the agent cannot go on
+        // working while the branch is made.
+        if to_provider != from_provider {
+            if let Ok(source) = self.interaction(id) {
+                source.kill()?;
+            }
         }
         let provider_session_id = journal::read_provider_session_id(&summary.path)?
             .with_context(|| {
