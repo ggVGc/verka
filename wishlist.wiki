@@ -1,3 +1,7 @@
+- Parsing of markdown messages with point/bullet lists:
+  - Each piece can become a selectable sub-entry in the interaction list
+  - Should be able to branch off from this point, bringing the context up to this message, and whichever parts of the point list have been selected. This put into prompt builder in the branched off interaction.
+  - The connection between the selection and the new branch should be stored somehow.
 - In input box: Quick inputs for things like parent branch, current branch, commit list etc.
 - Some way to produce a report from a session, which can be shared as a way to show an executable prototype of an idea, including the underlying interactions, correlated with the features and ideas present in the final prototype.
 - Reference an interaction, or a part of an interaction, in another one
