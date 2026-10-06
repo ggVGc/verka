@@ -1,45 +1,157 @@
 *nota.txt*  Git-native reviews from Vim using the Nota CLI
 
-COMMANDS                                                       *nota-commands*
+                                                                  *nota*
+==============================================================================
+CONTENTS                                                     *nota-contents*
+
+  1. Introduction ........................................ |nota-intro|
+  2. Installation ........................................ |nota-install|
+  3. Usage ............................................... |nota-usage|
+  4. Commands ............................................ |nota-commands|
+  5. Mappings ............................................ |nota-mappings|
+  6. Notes ............................................... |nota-notes|
+  7. Suggestions ......................................... |nota-suggestions|
+  8. Configuration ....................................... |nota-config|
+  9. Testing ............................................. |nota-testing|
+
+==============================================================================
+1. Introduction                                                 *nota-intro*
+
+Review with the `nota` CLI from Vim or Neovim. Start or select a review,
+read its notes and suggestion patches, and write notes without leaving the
+editor. Review storage and validation belong to Nota.
+
+Requirements:
+  - Vim 8.2+ or Neovim
+  - Git
+  - `nota` on your PATH, or |g:nota_executable| set
+
+CLI calls run synchronously.
+
+==============================================================================
+2. Installation                                               *nota-install*
+
+Build the CLI from the Verka repository: >sh
+        cargo build -p nota
+<
+or install it: >sh
+        cargo install --path nota
+<
+Add `nota-vim/` to your plugin manager or Vim's runtime path: >vim
+        set runtimepath+=/path/to/verka/nota-vim
+<
+Generate the help tags so |:help| can find this file: >vim
+        :helptags /path/to/verka/nota-vim/doc
+<
+==============================================================================
+3. Usage                                                        *nota-usage*
+
+A typical review: >vim
+        :NotaStart HEAD nota/my-review
+        :NotaNote Please explain the error handling.
+        :10,15NotaNote This needs a regression test.
+        :NotaNote
+<
+Starting a review and adding notes leave your checkout and index untouched.
+
+                                                            *nota-selection*
+Each worktree has a selected review, set by |:NotaStart|, |:NotaShow|, and
+|:NotaBranch|. With no selection, commands use the checked-out branch, as
+the CLI does. Selections are independent per worktree and last until Vim
+exits.
+
+Commands find the worktree from the current file, or from Vim's working
+directory in a buffer without a file. Review, entry, and note buffers carry
+their own repository and branch context.
+
+==============================================================================
+4. Commands                                                  *nota-commands*
 
 :NotaStart [revision] [branch]                                  *:NotaStart*
-        Start and select a review; defaults to HEAD and a generated branch.
-        The review branch is created without changing the checkout or index.
+        Start a review of [revision] (default: HEAD) on [branch] (default:
+        a generated name), open it, and select it for this worktree. The
+        review branch is created without changing the checkout or index.
 
 :NotaShow [branch]                                              *:NotaShow*
-        Open and select a review. Without a branch, use the selection for
-        this worktree, or the checked-out branch if none has been selected.
-        Enter opens the subject or an entry's message and patch; r refreshes;
-        n composes a note; q closes. Entry buffers also use q to close.
+        Open the review on [branch] and select it. Without [branch], use the
+        |nota-selection| for this worktree. See |nota-mappings| for the keys
+        available in the review buffer.
 
 :NotaBranch [branch]                                            *:NotaBranch*
-        Select an existing review without opening it. No argument clears
-        the worktree's selection and restores the checked-out default.
-        Review, entry, and draft buffers retain their own branch context.
+        Select the existing review on [branch] without opening it. Without
+        [branch], clear the selection so commands use the checked-out
+        branch again.
 
 :[range]NotaNote [text]                                         *:NotaNote*
-        Append a note. No text opens a Markdown draft; :write submits and
-        closes it, :bdelete! discards it. Errors preserve the draft.
-        A range appends Source: path:first-last to the note; paths are
-        worktree-relative and line numbers come from the current file buffer.
-        A draft pins its branch and range when opened. Hidden drafts are
-        available through :buffers! and :buffer {number}.
+        Append [text] as a note to the selected review. Without [text], open
+        an editable Markdown draft. With [range], record the source lines.
+        See |nota-notes|.
 
-CONFIGURATION                                            *g:nota_executable*
+==============================================================================
+5. Mappings                                                  *nota-mappings*
 
-        let g:nota_executable = '/path/to/nota'
+The review buffer opened by |:NotaShow| and |:NotaStart| defines:
 
-        Executable path, without arguments. Default: 'nota' on PATH.
-        Requires Git and Vim 8.2+ or Neovim. CLI calls run synchronously.
-        Commands use the current file's worktree or, for unnamed buffers,
-        Vim's working directory. Selections last until Vim exits.
+  <CR>          Open the subject or the entry under the cursor, showing its
+                full commit message and patch.
+  r             Refresh the review. Use after recording notes or committing
+                suggestions.
+  n             Compose a note, as |:NotaNote| without arguments.
+  q             Close the buffer.
 
-SUGGESTIONS                                              *nota-suggestions*
+Entry buffers also map `q` to close.
 
-        Suggestions are ordinary commits with project changes on the review
-        branch. Create a worktree with git worktree add, edit in Vim, and use
-        git add / git commit. Refresh the review to see the suggestion.
-        Apply accepted suggestions by cherry-picking individual commits.
-        Published reviews are append-only: do not amend, rebase, or force-push.
+==============================================================================
+6. Notes                                                        *nota-notes*
+
+`:NotaNote {text}` submits the rest of the command line as a note.
+
+                                                              *nota-draft*
+`:NotaNote` with no text opens an editable Markdown draft. |:write| submits
+it and closes the draft; `:bdelete!` discards it. Failed submissions
+preserve the draft. Hidden drafts can be recovered with `:buffers!` and
+`:buffer {number}`. Each draft keeps the branch it was opened for, even if
+you select another review later.
+
+                                                              *nota-source*
+A range such as `:'<,'>NotaNote` appends `Source: path:10-15` to the
+submitted note. Paths are relative to the worktree and line numbers refer to
+the buffer at the time you run the command; this is prose context, not a
+structured location tracked by Nota. Plain `:NotaNote` writes a general
+note. A draft pins its range when opened.
+
+==============================================================================
+7. Suggestions                                            *nota-suggestions*
+
+Nota represents suggestions as ordinary Git commits on the review branch.
+Create a separate worktree, open the files there in Vim, edit, and commit: >sh
+        git worktree add ../my-review nota/my-review
+        git -C ../my-review add src/example.rs
+        git -C ../my-review commit -m 'Handle the missing value explicitly'
+<
+The commit appears as a suggestion in |:NotaShow| after a refresh. Accepted
+suggestions are cherry-picked individually onto the destination branch.
+Published reviews are append-only; do not amend, rebase, or force-push their
+commits. See `nota/PROTOTYPE_V1.md` in the Verka repository.
+
+==============================================================================
+8. Configuration                                               *nota-config*
+
+                                                         *g:nota_executable*
+g:nota_executable       string (default: 'nota')
+        Path to the Nota CLI, without arguments. Use it when the CLI is not
+        on your PATH: >vim
+                let g:nota_executable = '/path/to/verka/target/debug/nota'
+<
+==============================================================================
+9. Testing                                                    *nota-testing*
+
+The integration test uses the real CLI and disposable Git worktrees. From
+the repository root: >sh
+        cargo build -p nota
+        vim -Nu NONE -n -es -S nota-vim/tests/integration.vim
+        nvim --headless -u NONE -n -S nota-vim/tests/integration.vim
+<
+Set `$NOTA_TEST_EXECUTABLE` to test a different CLI binary.
 
  vim:tw=78:ts=8:noet:ft=help:norl:
