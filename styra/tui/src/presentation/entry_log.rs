@@ -39,6 +39,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
             selected: cursor == Some(index),
             link_highlight: None,
             branch_name: branch_name(app, entry.event()),
+            inherited: false,
         })
         .collect();
     styra_ui::event_list::EntryLogView {

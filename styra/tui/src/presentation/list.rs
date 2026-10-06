@@ -37,6 +37,7 @@ pub(crate) fn branch_name<'a>(
 }
 
 pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
+    let branch_point = app.timeline.branch_point();
     let entries = app
         .timeline
         .entries
@@ -55,6 +56,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
                 .filter(|highlight| highlight.entry == index)
                 .map(|highlight| highlight.link),
             branch_name: branch_name(app, entry.event()),
+            inherited: branch_point.is_some_and(|point| index < point),
         })
         .collect();
     let progress = app.activity.progress();

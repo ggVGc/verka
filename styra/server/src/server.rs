@@ -2878,12 +2878,16 @@ impl ServerState {
             let checkout = worktrees.fork(&new_id, topic.as_deref(), &source_checkout.branch)?;
             journal::store_session_checkout(&directory, &checkout)?;
         }
-        // The marker goes in before the copied history: it is the branch's
-        // first line, so reading the new Session from the top starts with
-        // where its conversation came from.
+        // The marker goes in twice. Once before the copied history: it is the
+        // branch's first line, so reading the new Session from the top starts
+        // with where its conversation came from. And once after it, at the
+        // branch point itself, so the log also shows where the inherited
+        // history ends and this Session's own begins — clients mute what
+        // precedes the last such marker.
         journal.record_branch(crate::event::BranchDirection::From, id)?;
         let source_protocol = journal::read_session_meta(&summary.path)?.protocol;
         journal.copy_branch_from(&summary.path, source_protocol, at_ms, history)?;
+        journal.record_branch(crate::event::BranchDirection::From, id)?;
         journal::store_provider_session_id(&directory, &new_native_id)?;
         journal::store_session_origin(
             &directory,

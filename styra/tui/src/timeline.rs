@@ -13,7 +13,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use styra_protocol::event::{AgentEvent, DetailBlock};
+use styra_protocol::event::{AgentEvent, BranchDirection, DetailBlock};
 use styra_protocol::Contract;
 
 /// A stable handle to one row of the list.
@@ -472,6 +472,25 @@ impl Timeline {
         start..end
     }
 
+    /// Where a branched Session's own history begins: the index of its last
+    /// `branched from` marker. The server writes one at the top of a branch
+    /// and another after the history it copied, so everything before the last
+    /// one — including any marker an earlier branch left in that history — was
+    /// inherited from the source. `None` for a Session that was never branched,
+    /// and in effect for one branched before the second marker was written,
+    /// whose only marker is its first entry.
+    pub fn branch_point(&self) -> Option<usize> {
+        self.entries.iter().rposition(|entry| {
+            matches!(
+                entry.event(),
+                AgentEvent::Branched {
+                    direction: BranchDirection::From,
+                    ..
+                }
+            )
+        })
+    }
+
     /// The file changes made during the selected message's stretch — the
     /// entries [`Self::conversation_span`] scopes it to, so the same work the
     /// entry-log pane lists. This is what the preview shows for a message: its
@@ -577,6 +596,33 @@ mod tests {
         let before = list.entries[0].version();
         list.toggle_expand();
         assert_eq!(list.entries[0].version(), before);
+    }
+
+    /// A branch of a branch carries its source's markers in the history it
+    /// copied; only the last one says where this Session's own work begins.
+    #[test]
+    fn the_branch_point_is_the_last_branched_from_marker() {
+        let from = |session: &str| AgentEvent::Branched {
+            direction: BranchDirection::From,
+            session: session.into(),
+            name: None,
+        };
+        let list = timeline(vec![
+            from("b"),
+            from("a"),
+            message("a's work"),
+            from("a"),
+            message("b's work"),
+            from("b"),
+            message("this session's work"),
+            AgentEvent::Branched {
+                direction: BranchDirection::To,
+                session: "d".into(),
+                name: None,
+            },
+        ]);
+        assert_eq!(list.branch_point(), Some(5));
+        assert_eq!(timeline(vec![message("fresh")]).branch_point(), None);
     }
 
     /// The caller resets the preview scroll on a move, so a key that could not

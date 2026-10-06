@@ -164,6 +164,24 @@ fn branching_a_session_forks_the_checkout_it_works_in() {
         "filtered\n"
     );
 
+    // Its log names where it came from twice: at the top, and again at the
+    // branch point, after the copied history and before anything of its own.
+    let marker = styra_server::event::AgentEvent::Branched {
+        direction: styra_server::event::BranchDirection::From,
+        session: source_id.clone(),
+        name: None,
+    };
+    assert_eq!(
+        journal::replay(&branched.path, Protocol::CodexJsonl).unwrap(),
+        vec![
+            marker.clone(),
+            styra_server::event::AgentEvent::UserMessage {
+                text: "teach the picker to filter".into(),
+            },
+            marker,
+        ]
+    );
+
     // The source keeps everything it had: a branch takes a copy.
     assert_eq!(
         journal::read_session_checkout(&source_path).unwrap(),

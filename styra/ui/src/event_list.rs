@@ -58,6 +58,9 @@ pub struct EventEntry<'a> {
     /// for display: it is a snapshot taken when the marker was written, and a
     /// rename afterward would leave it stale.
     pub branch_name: Option<&'a str>,
+    /// The entry precedes a branched Session's branch point: history copied
+    /// from its source rather than its own, drawn faded so the two read apart.
+    pub inherited: bool,
 }
 
 pub enum EventListStatus {
@@ -980,6 +983,7 @@ struct RowKey {
     protocol: Protocol,
     links: LinkDisplay,
     link_highlight: Option<EntryIndex>,
+    inherited: bool,
     search: Option<String>,
 }
 
@@ -1029,14 +1033,56 @@ fn entry_rows_with_max_rows(
         protocol: render.protocol,
         links: render.links,
         link_highlight: entry.link_highlight,
+        inherited: entry.inherited,
         search: render.search.map(str::to_owned),
     };
     ROW_CACHE.with(|cache| {
-        cache
-            .borrow_mut()
-            .get_or_insert_with(key, || build_entry_rows(entry, width, max_rows, render))
+        cache.borrow_mut().get_or_insert_with(key, || {
+            let rows = build_entry_rows(entry, width, max_rows, render);
+            // The selected row keeps its own colours: the cursor is where
+            // the operator is reading, inherited or not.
+            if entry.inherited && !entry.selected {
+                rows.into_iter().map(inherited_line).collect()
+            } else {
+                rows
+            }
+        })
     })
 }
+
+/// Fade a row of inherited history: every foreground a step toward the
+/// background, so the row keeps its hues — a tool still reads as a tool, a
+/// failure as a failure — but sits behind the Session's own work.
+/// Backgrounds are left alone; they carry the selection and message tints.
+fn inherited_line(mut line: Line<'static>) -> Line<'static> {
+    line.style = inherited_style(line.style);
+    for span in &mut line.spans {
+        span.style = inherited_style(span.style);
+    }
+    line
+}
+
+fn inherited_style(style: Style) -> Style {
+    match (
+        style.fg.unwrap_or(theme::TEXT),
+        theme::INHERITED_FADE_TOWARD,
+    ) {
+        (Color::Rgb(r, g, b), Color::Rgb(to_r, to_g, to_b)) => {
+            let fade = |from: u8, to: u8| {
+                let (from, to) = (u16::from(from), u16::from(to));
+                ((from * (10 - INHERITED_FADE) + to * INHERITED_FADE) / 10) as u8
+            };
+            style.fg(Color::Rgb(fade(r, to_r), fade(g, to_g), fade(b, to_b)))
+        }
+        // A terminal's named colours have no value to blend; let it dim them.
+        _ => style.add_modifier(Modifier::DIM),
+    }
+}
+
+/// How far, in tenths, [`inherited_line`] moves a colour toward
+/// [`theme::INHERITED_FADE_TOWARD`]: enough to tell at a glance, not so much
+/// that the history stops being readable.
+const INHERITED_FADE: u16 = 3;
 
 fn entry_item_slice(
     entry: &EventEntry<'_>,
@@ -2049,6 +2095,7 @@ mod tests {
                 selected: index == selected,
                 link_highlight: None,
                 branch_name: None,
+                inherited: false,
             })
             .collect();
         let view = EventListView {
@@ -2218,6 +2265,7 @@ mod tests {
                 selected: true,
                 link_highlight: None,
                 branch_name: None,
+                inherited: false,
             }],
             activity: ActivityCounts::default(),
             all_events: false,
@@ -2313,6 +2361,7 @@ mod tests {
                 selected,
                 link_highlight: None,
                 branch_name: None,
+                inherited: false,
             };
             summary_line(&entry, false, false, true, Protocol::default())
                 .spans
@@ -2345,6 +2394,7 @@ mod tests {
             selected: true,
             link_highlight: Some(0),
             branch_name: None,
+            inherited: false,
         };
         let render = EntryRender {
             protocol: Protocol::default(),
@@ -2620,6 +2670,7 @@ mod tests {
             selected: false,
             link_highlight: None,
             branch_name: None,
+            inherited: false,
         }
     }
 
@@ -2702,6 +2753,41 @@ mod tests {
         ));
 
         assert_eq!(first, second);
+    }
+
+    /// History a branch inherited reads apart from its own: the same text in
+    /// the same hue, a step darker. The cursor row is exempt, since that is
+    /// where the operator is reading.
+    #[test]
+    fn inherited_history_is_drawn_faded_except_under_the_cursor() {
+        let version = version();
+        let event = AgentEvent::AgentMessage {
+            text: "the checks are green".into(),
+        };
+        let fg = |inherited: bool, selected: bool| {
+            let entry = EventEntry {
+                inherited,
+                selected,
+                ..entry_of(&event, version)
+            };
+            entry_rows_with_max_rows(&entry, 120, 40, render_of())[0]
+                .spans
+                .iter()
+                .find(|span| span.content == "checks")
+                .expect("the message text is on the row")
+                .style
+                .fg
+                // Unstyled text is drawn in the default text colour.
+                .unwrap_or(theme::TEXT)
+        };
+        let Color::Rgb(own, ..) = fg(false, false) else {
+            panic!("the message text is an RGB colour");
+        };
+        let Color::Rgb(inherited, ..) = fg(true, false) else {
+            panic!("faded text is still an RGB colour");
+        };
+        assert!(inherited < own, "{inherited} should be darker than {own}");
+        assert_eq!(fg(true, true), fg(false, true));
     }
 
     /// Width is in the key because nothing below the cache re-wraps: the rows

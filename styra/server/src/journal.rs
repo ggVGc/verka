@@ -1487,6 +1487,54 @@ mod tests {
         std::fs::remove_dir_all(destination).ok();
     }
 
+    /// A branched Session's journal is not in time order: its `branched from`
+    /// markers are dated when the branch was made, and the history copied
+    /// between them is older. Branching it again at an entry in that inherited
+    /// history still has to copy that entry — the marker at the top is newer
+    /// than the cutoff, but it is not where the history stops.
+    #[test]
+    fn branching_a_branch_inside_its_inherited_history_copies_the_selected_entry() {
+        let source = temp_dir("branch-of-branch-source");
+        std::fs::write(
+            source.join(JOURNAL_FILE),
+            concat!(
+                "{\"source\":\"branch\",\"at_ms\":100,\"direction\":\"from\",\"session\":\"styra-origin\"}\n",
+                "{\"source\":\"user\",\"at_ms\":10,\"text\":\"inherited first\"}\n",
+                "{\"source\":\"user\",\"at_ms\":20,\"text\":\"inherited second\"}\n",
+                "{\"source\":\"branch\",\"at_ms\":100,\"direction\":\"from\",\"session\":\"styra-origin\"}\n",
+                "{\"source\":\"user\",\"at_ms\":110,\"text\":\"own\"}\n"
+            ),
+        )
+        .unwrap();
+
+        for history in [
+            crate::protocol::BranchHistory::ThroughSelected,
+            crate::protocol::BranchHistory::SelectedOnly,
+        ] {
+            let destination = temp_dir("branch-of-branch-destination");
+            {
+                let mut journal = Journal::create(&destination).unwrap();
+                journal
+                    .copy_branch_from(&source, Protocol::ClaudeJsonl, Some(10), history)
+                    .unwrap();
+            }
+            let messages: Vec<_> = replay(&destination, Protocol::ClaudeJsonl)
+                .unwrap()
+                .into_iter()
+                .filter_map(|event| match event {
+                    AgentEvent::UserMessage { text } => Some(text),
+                    _ => None,
+                })
+                .collect();
+
+            assert_eq!(messages, vec!["inherited first"], "{history:?}");
+
+            std::fs::remove_dir_all(destination).ok();
+        }
+
+        std::fs::remove_dir_all(source).ok();
+    }
+
     /// A branch point resolves to an operator message only when their message
     /// is what the cutoff lands on; landing on an agent line resolves to
     /// nothing, since the provider's own copy of that line needs no help being
