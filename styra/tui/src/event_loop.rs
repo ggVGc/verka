@@ -19,7 +19,8 @@ use crate::preferences;
 use crate::presentation;
 use crate::session::{self, Attachment};
 use styra_protocol::{
-    InteractionSummary, LogEntry, TemplateSummary, WorkspaceLaunchChange, WorkspaceSummary,
+    CompletionState, InteractionSummary, LogEntry, TemplateSummary, WorkspaceLaunchChange,
+    WorkspaceSummary,
 };
 use styra_server::Client;
 use styra_ui::Ui;
@@ -1132,16 +1133,23 @@ pub fn run(
                     app.interactions.toggle_completed();
                     continue;
                 }
-                k if keys::INTERACTIONS_COMPLETE.matches(k) => {
+                k if keys::INTERACTIONS_COMPLETE.matches(k)
+                    || keys::INTERACTIONS_ABANDON.matches(k) =>
+                {
                     let Some(interaction) = app.interactions.current(&app.session_id).cloned()
                     else {
                         continue;
                     };
+                    let finished = if keys::INTERACTIONS_ABANDON.matches(k) {
+                        CompletionState::Abandoned
+                    } else {
+                        CompletionState::Completed
+                    };
                     // The cursor settle above already made this row the one
-                    // on screen, so completing it is the same action — and the
-                    // same local status update — as the `C` bound directly on
-                    // the Events view.
-                    if !session::complete_interaction(app, client, live) {
+                    // on screen, so finishing it is the same action — and the
+                    // same local status update — as the `C` and `Z` bound
+                    // directly on the Events view.
+                    if !session::finish_interaction(app, client, live, finished) {
                         continue;
                     }
                     // Completion is a Session property the server owns, so the

@@ -1009,11 +1009,14 @@ mod tests {
 
     #[test]
     fn completed_interactions_are_hidden_until_toggled() {
+        let mut abandoned = interaction("abandoned", InteractionActivity::Stopped);
+        abandoned.completed = CompletionState::Abandoned;
         let mut live = LiveInteractions::default();
         live.open(
             vec![
                 completed("completed"),
                 interaction("active", InteractionActivity::Pending),
+                abandoned,
             ],
             vec![],
         );
@@ -1021,10 +1024,10 @@ mod tests {
         assert_eq!(
             live.visible_indices(Some("workspace")),
             vec![1],
-            "completed rows are hidden by default"
+            "completed and abandoned rows are hidden by default"
         );
         live.toggle_completed();
-        assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1]);
+        assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
     }
 
     /// Completion is a property of the Session, cleared by the server when it

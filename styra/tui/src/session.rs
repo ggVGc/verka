@@ -871,26 +871,39 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) 
     }
 }
 
-/// Mark the interaction currently on screen as finished — the same action the
-/// live-interactions navigator's `C` performs on the row under its cursor,
-/// offered here too so finishing the interaction already in view does not
-/// require opening the navigator first. Works whether or not it is still
-/// live: completion is a property of the Session, not of an agent process,
-/// and a Session that has already stopped can still be marked done with.
+/// Mark the interaction currently on screen as finished, as `finished` says —
+/// completed (`C`) or abandoned (`Z`) — the same action the live-interactions
+/// navigator performs on the row under its cursor, offered here too so
+/// finishing the interaction already in view does not require opening the
+/// navigator first. Works whether or not it is still live: completion is a
+/// property of the Session, not of an agent process, and a Session that has
+/// already stopped can still be marked done with.
 ///
 /// Returns whether it succeeded, so a caller that does more with the result —
 /// the navigator refreshing its list, say — knows whether there is anything
 /// new to refresh.
-pub fn complete_interaction(app: &mut App, client: &Client, live: &mut Attachment) -> bool {
-    match client.set_session_completed(&app.session_id, CompletionState::Completed) {
+pub fn finish_interaction(
+    app: &mut App,
+    client: &Client,
+    live: &mut Attachment,
+    finished: CompletionState,
+) -> bool {
+    let (label, reason) = match finished {
+        CompletionState::Completed => ("completed", StopReason::Completed),
+        CompletionState::Abandoned => ("abandoned", StopReason::Abandoned),
+        CompletionState::Active | CompletionState::Sealed => {
+            unreachable!("an operator finishes an interaction only by completing or abandoning it")
+        }
+    };
+    match client.set_session_completed(&app.session_id, finished) {
         Ok(()) => {
-            app.push_log(LogEntry::info("interaction marked completed"));
-            mark_stopped(app, live, StopReason::Completed);
+            app.push_log(LogEntry::info(format!("interaction marked {label}")));
+            mark_stopped(app, live, reason);
             true
         }
         Err(error) => {
             app.push_log(LogEntry::error(format!(
-                "could not complete interaction: {error:#}"
+                "could not mark interaction {label}: {error:#}"
             )));
             false
         }

@@ -524,8 +524,12 @@ defmodule Styra.Protocol do
       ]
     },
 
-    # Whether the operator is finished with a Session, and if so, whether that
-    # is final.
+    # Whether the operator is finished with a Session, how, and whether that is
+    # final.
+    #
+    # `Self::Abandoned` is `Self::Completed` in everything but what it says:
+    # the operator is done with the Session because they gave up on the work,
+    # not because it got done. Both are reversible in the same ways.
     #
     # `Self::Sealed` means the same as `Self::Completed` wherever completion
     # is read — hidden from the default listing, its interaction stopped — but
@@ -541,6 +545,7 @@ defmodule Styra.Protocol do
       variants: [
         %{name: "active", payload: %{kind: :unit}},
         %{name: "completed", payload: %{kind: :unit}},
+        %{name: "abandoned", payload: %{kind: :unit}},
         %{name: "sealed", payload: %{kind: :unit}}
       ]
     },
@@ -3052,8 +3057,12 @@ defmodule Styra.Protocol.CompletionState do
   @moduledoc ~S"""
   Wire spellings of `CompletionState`.
 
-  Whether the operator is finished with a Session, and if so, whether that
-  is final.
+  Whether the operator is finished with a Session, how, and whether that is
+  final.
+
+  `Self::Abandoned` is `Self::Completed` in everything but what it says:
+  the operator is done with the Session because they gave up on the work,
+  not because it got done. Both are reversible in the same ways.
 
   `Self::Sealed` means the same as `Self::Completed` wherever completion
   is read — hidden from the default listing, its interaction stopped — but
@@ -3067,6 +3076,7 @@ defmodule Styra.Protocol.CompletionState do
   @spellings [
     {:active, "active"},
     {:completed, "completed"},
+    {:abandoned, "abandoned"},
     {:sealed, "sealed"}
   ]
 
@@ -3102,6 +3112,12 @@ defmodule Styra.Protocol.CompletionState do
   explicit client action, can put it back to `Self::Active`.
   """
   def completed, do: "completed"
+
+  @doc ~S"""
+  The operator is done with this Session without the work being done:
+  they gave up on it. Reversible exactly as `Self::Completed` is.
+  """
+  def abandoned, do: "abandoned"
 
   @doc ~S"""
   The operator is done with this Session for good: nothing puts it back

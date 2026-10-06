@@ -1001,8 +1001,12 @@ pub enum BranchHistory {
     SelectedOnly,
 }
 
-/// Whether the operator is finished with a Session, and if so, whether that
-/// is final.
+/// Whether the operator is finished with a Session, how, and whether that is
+/// final.
+///
+/// [`Self::Abandoned`] is [`Self::Completed`] in everything but what it says:
+/// the operator is done with the Session because they gave up on the work,
+/// not because it got done. Both are reversible in the same ways.
 ///
 /// [`Self::Sealed`] means the same as [`Self::Completed`] wherever completion
 /// is read — hidden from the default listing, its interaction stopped — but
@@ -1020,6 +1024,9 @@ pub enum CompletionState {
     /// The operator is done with this Session, reversibly: resuming it, or an
     /// explicit client action, can put it back to [`Self::Active`].
     Completed,
+    /// The operator is done with this Session without the work being done:
+    /// they gave up on it. Reversible exactly as [`Self::Completed`] is.
+    Abandoned,
     /// The operator is done with this Session for good: nothing puts it back
     /// to [`Self::Active`], and it cannot be resumed.
     Sealed,

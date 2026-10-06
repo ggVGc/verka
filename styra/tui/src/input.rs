@@ -14,7 +14,7 @@ use crate::insert;
 use crate::launch;
 use crate::preferences;
 use crate::session::{self, Attachment};
-use styra_protocol::{Contract, LogEntry};
+use styra_protocol::{CompletionState, Contract, LogEntry};
 use styra_server::Client;
 
 /// Keys for the event list's `/` search prompt. It is modal — every printable
@@ -256,7 +256,10 @@ pub fn handle_list_key(
             // not steal the preview pane's own `C`, which claims the key while
             // that pane is open.
             k if EVENTS_COMPLETE.matches(k) && !app.preview.open => {
-                session::complete_interaction(app, client, live);
+                session::finish_interaction(app, client, live, CompletionState::Completed);
+            }
+            k if EVENTS_ABANDON.matches(k) => {
+                session::finish_interaction(app, client, live, CompletionState::Abandoned);
             }
             // The Events screen shows two windows when the entry-log pane is
             // open, and Tab is what moves the navigation keys between them.

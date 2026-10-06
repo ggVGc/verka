@@ -22,6 +22,7 @@ pub enum StatusTone {
 pub enum StopTone {
     Paused,
     Completed,
+    Abandoned,
     Sealed,
     RateLimited,
     Failed,
@@ -35,6 +36,7 @@ impl StopTone {
         match self {
             StopTone::Paused => palette::STOP_PAUSED,
             StopTone::Completed => palette::STOP_COMPLETED,
+            StopTone::Abandoned => palette::STOP_ABANDONED,
             StopTone::Sealed => palette::STOP_SEALED,
             StopTone::RateLimited => palette::STOP_RATE_LIMITED,
             StopTone::Failed => palette::STOP_FAILED,
@@ -185,6 +187,7 @@ mod tests {
         let tones = [
             StopTone::Paused,
             StopTone::Completed,
+            StopTone::Abandoned,
             StopTone::Sealed,
             StopTone::RateLimited,
             StopTone::Failed,

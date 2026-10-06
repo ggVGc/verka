@@ -73,6 +73,7 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_PREVIEW_TARGET: [Key::ch('C')] ("preview open") => Action::EventsPreviewTarget;
     EVENTS_COMPLETE: [Key::ch('C')] ("preview closed")
         => Action::EventsComplete;
+    EVENTS_ABANDON: [Key::ch('Z')] => Action::EventsAbandon;
     EVENTS_LINK_DESTINATIONS: [Key::ch('u')] => Action::EventsLinkDestinations;
     EVENTS_SEARCH: [Key::ch('/')]
         => Action::EventsSearch;
@@ -211,6 +212,7 @@ bindings! { INTERACTIONS = "Interactions";
     INTERACTIONS_SCOPE: [Key::ch('w')] => Action::InteractionsScope;
     INTERACTIONS_COMPLETED: [Key::ch('c')] => Action::InteractionsCompleted;
     INTERACTIONS_COMPLETE: [Key::ch('C')] => Action::InteractionsComplete;
+    INTERACTIONS_ABANDON: [Key::ch('Z')] => Action::InteractionsAbandon;
     INTERACTIONS_TAGS: [Key::ch('T')] => Action::InteractionsTags;
     INTERACTIONS_STOP: [Key::ch('S')] => Action::InteractionsStop;
     INTERACTIONS_DELETE: [Key::ch('D')] => Action::InteractionsDelete;
@@ -255,6 +257,7 @@ bindings! { SESSION_PICKER = "Stored sessions";
     SESSIONS_NEW: [Key::ch('n')] => Action::SessionsNew;
     SESSIONS_COMPLETED: [Key::ch('c')] => Action::SessionsCompleted;
     SESSIONS_COMPLETE: [Key::ch('C')] => Action::SessionsComplete;
+    SESSIONS_ABANDON: [Key::ch('Z')] => Action::SessionsAbandon;
     SESSIONS_FILTER: [Key::ch('/')] => Action::SessionsFilter;
     SESSIONS_SORT: [Key::ch('s')] => Action::SessionsSort;
     SESSIONS_OLDER: [Key::ch('a')] => Action::SessionsOlder;

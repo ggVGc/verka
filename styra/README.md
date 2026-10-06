@@ -109,10 +109,10 @@ work the source had committed, while its uncommitted files stay with it. A
 Workspace outside Git receives none of this. Turning the setting off affects future
 launches and does not delete existing worktrees.
 
-`styra clean-worktrees` deletes the checkouts of Sessions marked completed
-whose working trees are clean, and records each such Session as working on its
-branch alone; the branch itself is never touched, and resuming the Session
-checks it out again in the same place. A checkout holding uncommitted work, or
+`styra clean-worktrees` deletes the checkouts of Sessions marked completed,
+abandoned or sealed whose working trees are clean, and records each such
+Session as working on its branch alone; the branch itself is never touched, and
+resuming the Session checks it out again in the same place. A checkout holding uncommitted work, or
 one a live interaction is still using, is reported and kept. Without `--all`
 the pass is scoped to the Workspace covering the current directory.
 

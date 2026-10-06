@@ -5105,6 +5105,28 @@ mod tests {
             CompletionState::Active
         );
 
+        // Abandoning it is the same kind of mark, and just as reversible.
+        state
+            .handle(Request::SetSessionCompleted {
+                id: id.clone(),
+                completed: CompletionState::Abandoned,
+            })
+            .unwrap();
+        assert_eq!(
+            journal::read_session_completed(&session_path).unwrap(),
+            CompletionState::Abandoned
+        );
+        state
+            .handle(Request::SetSessionCompleted {
+                id: id.clone(),
+                completed: CompletionState::Active,
+            })
+            .unwrap();
+        assert_eq!(
+            journal::read_session_completed(&session_path).unwrap(),
+            CompletionState::Active
+        );
+
         // Sealing it, though, is final: even with no live interaction behind
         // the row, nothing can un-seal it from here.
         state

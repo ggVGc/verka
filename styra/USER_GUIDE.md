@@ -20,7 +20,7 @@ styra --stop                  # stop the daemon and its live interactions
 styra --standalone            # run the server in this process, with no daemon
 styra shell                   # choose and attach to a live sandbox shell
 styra shell --session ID      # attach to that live session's shell
-styra clean-worktrees         # delete the worktrees of completed, committed sessions
+styra clean-worktrees         # delete the worktrees of finished, committed sessions
 styra clean-worktrees --all   # the same, across every Workspace
 ```
 
@@ -136,7 +136,9 @@ Sending a message to a stopped or viewed Session automatically attempts native
 provider resume. In the main interaction view, `T` edits the current
 interaction's tags. `a` opens the live-interaction list; there, `w` switches
 current/all-Workspace scope, `j`/`k` selects, `T` edits the selected
-interaction's tags, and `D` deletes a stopped
+interaction's tags, `C` / `Z` marks it completed / abandoned and stops it (also
+available directly in the event view), `c` shows or hides those rows again, and
+`D` deletes a stopped
 interaction (the durable Session remains). `/` filters the list as you type —
 case-insensitively, by name, tag, branch, provider, or Workspace name. The
 arrows still move the cursor while you type. `Enter` keeps the filter and gives
@@ -180,8 +182,10 @@ edit yourself, your changes are committed alongside the agent's.
 
 `A` opens the full Session list. In that list, `/` starts a case-insensitive
 filter over the Session name and first prompt; `Esc` abandons the filter. `c`
-shows or hides the Sessions marked completed, and `C` marks the selected
-Session completed — or, on one already marked, unmarks it. `n` leaves the list
+shows or hides the Sessions marked completed or abandoned. `C` marks the
+selected Session completed and `Z` marks it abandoned — given up on rather than
+finished; each key, pressed on a Session already marked that way, unmarks it.
+Neither touches a sealed Session. `n` leaves the list
 without resuming anything and starts a new Session in the Workspace whose list
 you were reading. `V` opens the Workspace list, which is typed at: every
 printable key filters it over the Workspace name and host path, `Ctrl+W` drops the last
@@ -202,7 +206,7 @@ the opening words of the prompt name it instead, as before.
 `n` first goes to an interaction that newly went idle, wherever it is. If none
 are waiting, it steps through every interaction still running — waiting on you
 or mid-turn, seen or unseen — in list order, wrapping at the end. Stopped and
-completed interactions are skipped. `N` likewise steps through the interactions
+completed or abandoned interactions are skipped. `N` likewise steps through the interactions
 actively working. While the live-interaction list is scoped to the current
 Workspace (`w`), both stay within that Workspace.
 
@@ -396,8 +400,8 @@ styra clean-worktrees         # the Workspace covering the current directory
 styra clean-worktrees --all   # every Workspace the server knows
 ```
 
-A checkout is deleted only when you have marked its Session complete (`C` in
-the Session list, or sealed it) *and* `git status` in it is clean. The
+A checkout is deleted only when you have marked its Session complete or
+abandoned (`C` or `Z` in the Session list), or it was sealed, *and* `git status` in it is clean. The
 branch is never touched: the commits stay exactly where you expect to find
 them in `git branch`, and the Session goes on recording that branch with no
 directory beside it. Resuming such a Session checks the branch out again, in

@@ -106,6 +106,7 @@ pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrom
     match reason {
         StopReason::Paused => StopTone::Paused,
         StopReason::Completed => StopTone::Completed,
+        StopReason::Abandoned => StopTone::Abandoned,
         StopReason::Sealed => StopTone::Sealed,
         StopReason::RateLimited(_) => StopTone::RateLimited,
         StopReason::Failed { .. } => StopTone::Failed,
@@ -777,6 +778,11 @@ mod tests {
             crate::activity::Status::Stopped(crate::activity::StopReason::Completed);
         let title = rendered(&app);
         assert!(title.contains("completed"), "{title}");
+
+        app.activity.status =
+            crate::activity::Status::Stopped(crate::activity::StopReason::Abandoned);
+        let title = rendered(&app);
+        assert!(title.contains("abandoned"), "{title}");
     }
 
     #[test]

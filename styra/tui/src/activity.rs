@@ -142,6 +142,9 @@ pub enum StopReason {
     /// The operator finished with the interaction (`C`): stopped, and stopped
     /// because the work it was doing is done.
     Completed,
+    /// The operator gave up on the interaction (`Z`): stopped, and stopped
+    /// because the work it was doing is not worth finishing.
+    Abandoned,
     /// The operator sealed the interaction: stopped, done, and — unlike
     /// [`Self::Completed`] — not something resuming or a client action can
     /// undo.
@@ -181,6 +184,7 @@ impl StopReason {
         match completed {
             CompletionState::Sealed => return StopReason::Sealed,
             CompletionState::Completed => return StopReason::Completed,
+            CompletionState::Abandoned => return StopReason::Abandoned,
             CompletionState::Active => {}
         }
         match reason {
@@ -209,6 +213,7 @@ impl StopReason {
         match self {
             StopReason::Paused => "paused".into(),
             StopReason::Completed => "completed".into(),
+            StopReason::Abandoned => "abandoned".into(),
             StopReason::Sealed => "sealed".into(),
             StopReason::RateLimited(limit) => format!("rate limited ({})", limit.window),
             StopReason::Failed { message } => format!("failed: {message}"),

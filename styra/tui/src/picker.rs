@@ -306,18 +306,27 @@ pub fn run_session_picker(
             // Completion is stored on the Session, so the row can be marked
             // from here without the interaction being live — and unmarked the
             // same way, which is the only way back once `c` has revealed it.
+            // `C` and `Z` each toggle their own state: pressed on a row
+            // already in it, it goes back to active; pressed on a row in the
+            // other one, it changes how the Session is finished with.
             // Sealed rows are not among them: nothing an operator types seals
             // a Session — Styra does that itself when a conversion leaves the
             // source behind — and nothing they type undoes it either, so `C`
-            // passes over a sealed row rather than appearing to reopen it.
-            k if keys::SESSIONS_COMPLETE.matches(k)
+            // and `Z` pass over a sealed row rather than appearing to reopen
+            // it.
+            k if (keys::SESSIONS_COMPLETE.matches(k) || keys::SESSIONS_ABANDON.matches(k))
                 && !sessions.is_empty()
                 && sessions[selected].completed != CompletionState::Sealed =>
             {
-                let completed = if sessions[selected].completed == CompletionState::Active {
-                    CompletionState::Completed
+                let toggled = if keys::SESSIONS_ABANDON.matches(k) {
+                    CompletionState::Abandoned
                 } else {
+                    CompletionState::Completed
+                };
+                let completed = if sessions[selected].completed == toggled {
                     CompletionState::Active
+                } else {
+                    toggled
                 };
                 let id = sessions[selected].id.clone();
                 if let Err(error) = client.set_session_completed(&id, completed) {

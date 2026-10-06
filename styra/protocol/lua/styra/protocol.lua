@@ -514,8 +514,12 @@ M.types.Selection = {
   },
 }
 
---- Whether the operator is finished with a Session, and if so, whether that
---- is final.
+--- Whether the operator is finished with a Session, how, and whether that is
+--- final.
+---
+--- `Self::Abandoned` is `Self::Completed` in everything but what it says:
+--- the operator is done with the Session because they gave up on the work,
+--- not because it got done. Both are reversible in the same ways.
 ---
 --- `Self::Sealed` means the same as `Self::Completed` wherever completion
 --- is read — hidden from the default listing, its interaction stopped — but
@@ -531,6 +535,7 @@ M.types.CompletionState = {
   variants = {
     { name = "active", payload = { kind = "unit" } },
     { name = "completed", payload = { kind = "unit" } },
+    { name = "abandoned", payload = { kind = "unit" } },
     { name = "sealed", payload = { kind = "unit" } },
   },
 }
@@ -1688,11 +1693,12 @@ M.WorkspaceLaunchChange = {
   REPLACE = "replace",
 }
 
-M.enums.CompletionState = { "active", "completed", "sealed" }
+M.enums.CompletionState = { "active", "completed", "abandoned", "sealed" }
 --- Wire spellings of `CompletionState`.
 M.CompletionState = {
   ACTIVE = "active",
   COMPLETED = "completed",
+  ABANDONED = "abandoned",
   SEALED = "sealed",
 }
 

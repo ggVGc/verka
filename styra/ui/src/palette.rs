@@ -93,6 +93,9 @@ pub const STOP_PAUSED: Color = ADDITIONAL_INFO;
 /// The operator finished with it: a soft green, apart from the terminal green
 /// of a live, idle agent.
 pub const STOP_COMPLETED: Color = Color::Rgb(135, 200, 140);
+/// The operator gave up on it: a cool slate, finished with like the greens
+/// but without their sense of success, and nothing like a failure's red.
+pub const STOP_ABANDONED: Color = Color::Rgb(140, 155, 185);
 /// Finished for good: the completed green a step deeper.
 pub const STOP_SEALED: Color = Color::Rgb(95, 165, 110);
 /// A plan window refused the work: an amber orange, waiting rather than
@@ -226,7 +229,7 @@ pub const MARKDOWN_CODE_THEME: &str = r##"
       <key>foreground</key><string>#FFFFD7</string>
     </dict></dict>
     <dict><key>scope</key><string>invalid</string><key>settings</key><dict>
-      <key>foreground</key><string>#FF0000</string>
+      <key>foreground</key><string>#AA0000</string>
     </dict></dict>
   </array>
 </dict>

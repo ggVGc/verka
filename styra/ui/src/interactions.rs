@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 use std::borrow::Cow;
+use styra_protocol::CompletionState;
 
 /// A quarter-filled circle turning one step per event: solid enough to catch
 /// the eye in a long list, where a single braille dot is easily missed.
@@ -59,12 +60,11 @@ pub enum InteractionRow<'a> {
         /// The interaction has stopped and left work uncommitted in its
         /// repository — see [`crate::footer::FooterView::uncommitted_changes`].
         uncommitted: bool,
-        completed: bool,
-        /// Set only when [`Self::completed`] is true because the operator
-        /// sealed the Session, not merely completed it — the row's badge
-        /// reads "SEALED" instead of "COMPLETED" so the irreversible state
-        /// reads differently from the reversible one.
-        sealed: bool,
+        /// Whether, and how, the operator is finished with the Session. Each
+        /// way of being done has its own badge, so a Session given up on
+        /// does not read as one that got done, and the irreversible seal
+        /// does not read as either.
+        completion: CompletionState,
         tags: &'a [String],
         last_message: Option<&'a str>,
     },
@@ -232,8 +232,7 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
         stop_reason,
         rate_limited,
         uncommitted,
-        completed,
-        sealed,
+        completion,
         tags,
         last_message,
         ..
@@ -327,19 +326,16 @@ fn row_item(row: &InteractionRow<'_>) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    if *sealed {
+    let badge = match completion {
+        CompletionState::Active => None,
+        CompletionState::Completed => Some((" · COMPLETED", palette::STOP_COMPLETED)),
+        CompletionState::Abandoned => Some((" · ABANDONED", palette::STOP_ABANDONED)),
+        CompletionState::Sealed => Some((" · SEALED", palette::STOP_SEALED)),
+    };
+    if let Some((badge, color)) = badge {
         main.push(Span::styled(
-            " · SEALED",
-            Style::default()
-                .fg(palette::STOP_SEALED)
-                .add_modifier(Modifier::BOLD),
-        ));
-    } else if *completed {
-        main.push(Span::styled(
-            " · COMPLETED",
-            Style::default()
-                .fg(palette::STOP_COMPLETED)
-                .add_modifier(Modifier::BOLD),
+            badge,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
     // The tint is the line's own style, so it runs the full width of the row.
@@ -429,8 +425,7 @@ mod tests {
                     stop_reason: None,
                     rate_limited: None,
                     uncommitted: false,
-                    completed: false,
-                    sealed: false,
+                    completion: CompletionState::Active,
                     tags: &tags,
                     last_message: Some("The checks are green."),
                 },
@@ -468,8 +463,7 @@ mod tests {
                 stop_reason: None,
                 rate_limited: None,
                 uncommitted: false,
-                completed: false,
-                sealed: false,
+                completion: CompletionState::Active,
                 tags: &tags,
                 last_message: Some("The checks are green."),
             }],
@@ -501,8 +495,7 @@ mod tests {
             stop_reason: None,
             rate_limited: None,
             uncommitted: false,
-            completed: false,
-            sealed: false,
+            completion: CompletionState::Active,
             tags: &[],
             last_message: None,
         };
@@ -562,8 +555,7 @@ mod tests {
                 stop_reason: None,
                 rate_limited: None,
                 uncommitted: true,
-                completed: false,
-                sealed: false,
+                completion: CompletionState::Active,
                 tags: &[],
                 last_message: None,
             }],
@@ -593,8 +585,7 @@ mod tests {
                 stop_reason: Some("paused".into()),
                 rate_limited: None,
                 uncommitted: false,
-                completed: false,
-                sealed: false,
+                completion: CompletionState::Active,
                 tags: &[],
                 last_message: None,
             }],
@@ -625,8 +616,7 @@ mod tests {
                 stop_reason: None,
                 rate_limited: Some("five_hour".into()),
                 uncommitted: false,
-                completed: false,
-                sealed: false,
+                completion: CompletionState::Active,
                 tags: &[],
                 last_message: None,
             }],
@@ -654,8 +644,7 @@ mod tests {
                     stop_reason: None,
                     rate_limited: None,
                     uncommitted: false,
-                    completed: false,
-                    sealed: false,
+                    completion: CompletionState::Active,
                     tags: &[],
                     last_message: Some("done"),
                 })
@@ -691,6 +680,43 @@ mod tests {
         assert!(!screen.contains("↓"), "{screen}");
     }
 
+    /// Each way of being finished with a Session has its own badge, so one
+    /// given up on never reads as one that got done.
+    #[test]
+    fn each_completion_state_has_its_own_badge() {
+        for (completion, badge) in [
+            (CompletionState::Completed, "· COMPLETED"),
+            (CompletionState::Abandoned, "· ABANDONED"),
+            (CompletionState::Sealed, "· SEALED"),
+        ] {
+            let mut view = many_rows(0);
+            view.rows.truncate(1);
+            if let InteractionRow::Interaction {
+                completion: row, ..
+            } = &mut view.rows[0]
+            {
+                *row = completion;
+            }
+            let screen = rendered(&view);
+            assert!(screen.contains(badge), "{completion:?}: {screen}");
+            for (other, other_badge) in [
+                (CompletionState::Completed, "· COMPLETED"),
+                (CompletionState::Abandoned, "· ABANDONED"),
+                (CompletionState::Sealed, "· SEALED"),
+            ] {
+                if other != completion {
+                    assert!(!screen.contains(other_badge), "{completion:?}: {screen}");
+                }
+            }
+        }
+        let mut view = many_rows(0);
+        view.rows.truncate(1);
+        let screen = rendered(&view);
+        assert!(!screen.contains("COMPLETED"), "{screen}");
+        assert!(!screen.contains("ABANDONED"), "{screen}");
+        assert!(!screen.contains("SEALED"), "{screen}");
+    }
+
     #[test]
     fn current_and_cursor_are_independent() {
         let view = InteractionNavigator {
@@ -712,8 +738,7 @@ mod tests {
                     stop_reason: None,
                     rate_limited: None,
                     uncommitted: false,
-                    completed: false,
-                    sealed: false,
+                    completion: CompletionState::Active,
                     tags: &[],
                     last_message: None,
                 },
@@ -729,8 +754,7 @@ mod tests {
                     stop_reason: None,
                     rate_limited: None,
                     uncommitted: false,
-                    completed: false,
-                    sealed: false,
+                    completion: CompletionState::Active,
                     tags: &[],
                     last_message: None,
                 },

@@ -727,6 +727,13 @@ fn session_item(
                 .fg(palette::SUCCESS)
                 .add_modifier(Modifier::BOLD),
         ));
+    } else if session.completed == styra_protocol::CompletionState::Abandoned {
+        spans.push(Span::styled(
+            " · ABANDONED",
+            Style::default()
+                .fg(palette::STOP_ABANDONED)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
     ListItem::new(Line::from(spans))
 }

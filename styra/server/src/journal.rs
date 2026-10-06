@@ -1791,6 +1791,12 @@ mod tests {
             CompletionState::Active
         );
 
+        store_session_completed(directory, CompletionState::Abandoned).unwrap();
+        assert_eq!(
+            read_session_completed(directory).unwrap(),
+            CompletionState::Abandoned
+        );
+
         // Sealing behaves the same way at the storage layer; only the server
         // refuses to undo it.
         store_session_completed(directory, CompletionState::Sealed).unwrap();
