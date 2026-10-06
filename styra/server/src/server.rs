@@ -2729,12 +2729,17 @@ impl ServerState {
             Selection::new(to_provider)
         };
         let profile = crate::agent::resolve_profile(&selection, &layout)?;
+        let branch_name = if to_provider == from_provider {
+            Some(format!("Branch: {}", summary.name.as_deref().unwrap_or(id)))
+        } else {
+            summary.name.clone()
+        };
         let (mut journal, new_id) = Journal::create_in_workspace(
             &self.inner.store_root,
             &summary.workspace_id,
             &profile,
             &selection,
-            summary.name.clone(),
+            branch_name.clone(),
         )?;
         let directory = journal
             .path()
@@ -2774,7 +2779,7 @@ impl ServerState {
                 history,
             },
         )?;
-        self.record_source_branch(id, &summary.path, &new_id, summary.name.as_deref())?;
+        self.record_source_branch(id, &summary.path, &new_id, branch_name.as_deref())?;
 
         // A provider conversion leaves the source Session's native transcript
         // behind for good — the branch is the only copy the new provider can

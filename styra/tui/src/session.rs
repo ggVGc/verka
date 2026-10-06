@@ -994,7 +994,7 @@ pub fn branch_session(
                 "branched to session {}",
                 branched.name.as_deref().unwrap_or(&branched.id)
             )));
-            app.ask(crate::app::Request::OpenSession(branched.id));
+            app.ask(crate::app::Request::OpenBranch(branched.id));
         }
         Err(error) => app.push_log(LogEntry::error(format!("branch failed: {error:#}"))),
     }

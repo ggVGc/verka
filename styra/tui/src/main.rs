@@ -527,6 +527,16 @@ fn main() -> Result<()> {
                     jumps.push(left);
                 }
             }
+            RunOutcome::OpenBranch(session_id) => {
+                let left = app.session_id.clone();
+                if open_session_view(&client, &launch, &mut app, &mut live, &session_id) {
+                    if !left.is_empty() && left != session_id {
+                        jumps.push(left);
+                    }
+                    app.branch_needs_prompt_name = true;
+                    app.enter_input();
+                }
+            }
             // Ctrl-O: walk back along the Sessions left by `OpenSession`,
             // skipping any that are the one already on screen.
             RunOutcome::JumpBack => {

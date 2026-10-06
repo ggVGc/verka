@@ -238,6 +238,8 @@ pub struct App {
     /// The event list and the operator's place in it; see [`Timeline`].
     pub timeline: Timeline,
     pub focus: Focus,
+    /// The first message in a newly opened branch supplies its title.
+    pub branch_needs_prompt_name: bool,
     pub view: View,
     /// The open page within the details view.
     pub details_tab: DetailsTab,
@@ -391,6 +393,8 @@ pub enum Request {
     /// skipping the picker — e.g. right after branching one, to look at the
     /// result rather than having to find it again in the list.
     OpenSession(String),
+    /// Open a newly created branch with the message box focused.
+    OpenBranch(String),
     /// Return to the Session viewed before the last [`Request::OpenSession`],
     /// as Ctrl-O does in Vim's jump list.
     JumpBack,
@@ -508,6 +512,7 @@ impl App {
         Self {
             timeline: Timeline::default(),
             focus: Focus::List,
+            branch_needs_prompt_name: false,
             view: View::Events,
             details_tab: DetailsTab::default(),
             details_scroll: Scroll::default(),
@@ -1554,9 +1559,12 @@ impl App {
     /// rather than leaving the new Session queued behind the operator's next
     /// keypress, and without consuming an unrelated request ahead of it.
     pub fn take_open_session_request(&mut self) -> Option<Request> {
-        matches!(self.requests.front(), Some(Request::OpenSession(_)))
-            .then(|| self.requests.pop_front())
-            .flatten()
+        matches!(
+            self.requests.front(),
+            Some(Request::OpenSession(_) | Request::OpenBranch(_))
+        )
+        .then(|| self.requests.pop_front())
+        .flatten()
     }
 
     /// Take the next effect only when it is a Workspace launch edit. Modal

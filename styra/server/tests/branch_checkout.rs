@@ -139,6 +139,8 @@ fn branching_a_session_forks_the_checkout_it_works_in() {
         .branch_session(&source_id, None, BranchHistory::ThroughSelected, None)
         .expect("branching a stored Session");
 
+    assert_eq!(branched.name.as_deref(), Some("Branch: picker"));
+
     // The branch works somewhere of its own, under the topic it inherited.
     let checkout = journal::read_session_checkout(&branched.path)
         .unwrap()

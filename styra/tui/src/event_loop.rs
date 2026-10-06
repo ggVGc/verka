@@ -36,6 +36,7 @@ pub enum RunOutcome {
         open_interactions: bool,
     },
     OpenSession(String),
+    OpenBranch(String),
     /// Reopen the Session viewed before the last [`RunOutcome::OpenSession`].
     JumpBack,
     Reset,
@@ -912,8 +913,10 @@ pub fn run(
             input::handle_branch_prompt_key(app, client, key);
             // Confirming has already branched; open the result on this key
             // rather than leaving the switch queued behind the next one.
-            if let Some(Request::OpenSession(id)) = app.take_open_session_request() {
-                return Ok(RunOutcome::OpenSession(id));
+            match app.take_open_session_request() {
+                Some(Request::OpenSession(id)) => return Ok(RunOutcome::OpenSession(id)),
+                Some(Request::OpenBranch(id)) => return Ok(RunOutcome::OpenBranch(id)),
+                _ => {}
             }
             continue;
         }
@@ -1348,6 +1351,7 @@ pub fn run(
                 }
             }
             Some(Request::OpenSession(id)) => return Ok(RunOutcome::OpenSession(id)),
+            Some(Request::OpenBranch(id)) => return Ok(RunOutcome::OpenBranch(id)),
             Some(Request::JumpBack) => return Ok(RunOutcome::JumpBack),
             Some(Request::Sessions) => {
                 let mut sessions = client.list_sessions(&workspace_id)?;

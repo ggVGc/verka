@@ -708,7 +708,10 @@ pub fn handle_input_key(
     key: KeyEvent,
 ) {
     match key {
-        k if GLOBAL_LEAVE_MESSAGE.matches(k) => app.enter_list(),
+        k if GLOBAL_LEAVE_MESSAGE.matches(k) => {
+            app.branch_needs_prompt_name = false;
+            app.enter_list();
+        }
         // Choosing a shape is part of writing the message, so it lives in the
         // box rather than being a mode entered from outside it.
         k if EDITOR_CONTRACT.matches(k) => app.outbox.cycle_contract(),
@@ -724,6 +727,17 @@ pub fn handle_input_key(
                 return app.show_action_message(
                     "the agent is mid-turn — wait for it to finish before moving it to a new Git workspace",
                 );
+            }
+            if app.branch_needs_prompt_name {
+                if let Some(name) =
+                    styra_server::journal::name_from_message(Some(&app.composer.text))
+                {
+                    if let Err(error) = client.rename_session(&app.session_id, Some(&name)) {
+                        return app
+                            .show_action_message(format!("could not name the branch: {error:#}"));
+                    }
+                    app.branch_needs_prompt_name = false;
+                }
             }
             if let Some(message) = app.take_message() {
                 app.enter_list();
@@ -809,6 +823,47 @@ mod tests {
             handle_insert_key(app, KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
         handle_insert_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn escape_closes_the_branch_prompt_without_naming_it_from_a_later_message() {
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
+        app.session_id = "branch-1".into();
+        app.branch_needs_prompt_name = true;
+        app.enter_input();
+        app.composer.insert("discarded prompt");
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        let mut live = Attachment::Detached;
+        handle_input_key(
+            &mut app,
+            &client,
+            "workspace",
+            &mut live,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert_eq!(app.focus, crate::app::Focus::List);
+        assert!(!app.branch_needs_prompt_name);
+        assert!(app.take_request().is_none());
+    }
+
+    #[test]
+    fn a_blank_branch_prompt_keeps_the_fallback_and_waits_for_input() {
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
+        app.session_id = "branch-1".into();
+        app.branch_needs_prompt_name = true;
+        app.enter_input();
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        let mut live = Attachment::Detached;
+        handle_input_key(
+            &mut app,
+            &client,
+            "workspace",
+            &mut live,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(app.focus, crate::app::Focus::Input);
+        assert!(app.branch_needs_prompt_name);
+        assert!(app.take_request().is_none());
     }
 
     #[test]
