@@ -791,7 +791,8 @@ defmodule Styra.Protocol do
         %{name: "auto_commit", required: false, type: %{kind: :boolean}},
         %{name: "events", required: false, type: %{kind: :number, integer: true}},
         %{name: "completed", required: false, type: %{kind: :ref, name: "CompletionState"}},
-        %{name: "focus_requested", required: false, type: %{kind: :boolean}}
+        %{name: "focus_requested", required: false, type: %{kind: :boolean}},
+        %{name: "origin", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "SessionOrigin"}}}
       ]
     },
 
@@ -1089,7 +1090,8 @@ defmodule Styra.Protocol do
             %{name: "exit_code", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}}
           ]
         }},
-        %{name: "server_restarted", payload: %{kind: :unit}}
+        %{name: "server_restarted", payload: %{kind: :unit}},
+        %{name: "branched", payload: %{kind: :unit}}
       ]
     },
 
@@ -3454,7 +3456,8 @@ defmodule Styra.Protocol.InteractionActivityReason do
     {:background_finished, "background_finished"},
     {:paused, "paused"},
     {:exited, "exited"},
-    {:server_restarted, "server_restarted"}
+    {:server_restarted, "server_restarted"},
+    {:branched, "branched"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -3532,6 +3535,13 @@ defmodule Styra.Protocol.InteractionActivityReason do
   Session is what brings an agent back.
   """
   def server_restarted, do: "server_restarted"
+
+  @doc ~S"""
+  The Session was just branched from another one and nothing has run it
+  yet: it is listed so the operator can find the branch beside its
+  source, and resuming it is what starts its first agent.
+  """
+  def branched, do: "branched"
 end
 
 defmodule Styra.Protocol.AgentEvent do

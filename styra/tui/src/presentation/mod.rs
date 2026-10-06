@@ -104,7 +104,9 @@ pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrom
     use crate::activity::StopReason;
     use styra_ui::chrome::StopTone;
     match reason {
-        StopReason::Paused => StopTone::Paused,
+        // Stopped at the operator's word, as a pause is: nothing has started
+        // it yet.
+        StopReason::Paused | StopReason::Branched => StopTone::Paused,
         StopReason::Completed => StopTone::Completed,
         StopReason::Abandoned => StopTone::Abandoned,
         StopReason::Sealed => StopTone::Sealed,
@@ -785,6 +787,7 @@ mod tests {
             branched_from: None,
             completed: styra_protocol::CompletionState::Active,
             focus_requested: false,
+            origin: None,
         }
     }
 

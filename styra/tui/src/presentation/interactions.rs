@@ -2,14 +2,12 @@
 
 use crate::activity::{IdleReason, Status};
 use crate::app::App;
-use crate::interactions::in_main_checkout;
+use crate::interactions::shares_directory;
 use std::borrow::Cow;
 use styra_ui::interactions::{InteractionNavigator, InteractionRow, InteractionStatus};
 
 pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
-    let ordered = app
-        .interactions
-        .display_indices(app.workspace.id.as_deref());
+    let ordered = app.interactions.display_rows(app.workspace.id.as_deref());
     let cursor = app.interactions.cursor(&app.session_id);
     let loading = app
         .interactions
@@ -35,7 +33,8 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
     let mut rows = Vec::new();
     let mut heading = None;
     let mut directory = None;
-    for &index in &ordered {
+    let shown: Vec<usize> = ordered.iter().map(|(index, _)| *index).collect();
+    for &(index, depth) in &ordered {
         let interaction = &app.interactions.items[index];
         let new_workspace = heading.as_deref() != Some(interaction.workspace_id.as_str());
         if all_workspaces && new_workspace {
@@ -53,18 +52,12 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         // in is headed, as the Workspace is, with those rows beneath it. The
         // order has put them next to each other. The main checkout is not: its
         // interactions lead the Workspace's group, under its own heading.
-        let workspaces = &app.interactions.workspaces;
-        let grouped = !in_main_checkout(interaction, workspaces)
-            && ordered
-                .iter()
-                .filter(|other| {
-                    let other = &app.interactions.items[**other];
-                    other.workspace_id == interaction.workspace_id
-                        && other.workspace == interaction.workspace
-                        && !in_main_checkout(other, workspaces)
-                })
-                .nth(1)
-                .is_some();
+        let grouped = shares_directory(
+            &app.interactions.items,
+            &app.interactions.workspaces,
+            &shown,
+            index,
+        );
         if grouped && (new_workspace || directory != Some(&interaction.workspace)) {
             let name = interaction
                 .workspace
@@ -115,6 +108,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         rows.push(InteractionRow::Interaction {
             name,
             grouped,
+            depth,
             provider: interaction.selection.provider.as_str(),
             branch: interaction
                 .checkout

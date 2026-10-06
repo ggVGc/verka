@@ -758,7 +758,9 @@ impl ManagedInteraction {
             // `InteractionSummary::checkout`. Where the work is happening is
             // still the answer while the agent is working on it.
             checkout: self.working_tree.checkout_state(),
-            branched_from: stored.and_then(|summary| summary.branched_from),
+            branched_from: stored
+                .as_ref()
+                .and_then(|summary| summary.branched_from.clone()),
             activity,
             activity_reason: state.reason,
             activity_since_ms: state.since_ms,
@@ -768,6 +770,7 @@ impl ManagedInteraction {
             events: self.events.load(Ordering::Acquire),
             completed: *self.completed.lock().expect("completion lock poisoned"),
             focus_requested: self.focus_requested,
+            origin: stored.and_then(|summary| summary.origin),
         }
     }
 
@@ -2782,7 +2785,71 @@ impl ServerState {
             self.set_session_completion(id, CompletionState::Sealed)?;
         }
 
-        self.stored_summary(&new_id)
+        let branched = self.stored_summary(&new_id)?;
+        self.list_branch(&summary, &branched)?;
+        Ok(branched)
+    }
+
+    /// List a Session just branched off `source` among the interactions,
+    /// stopped: nothing is running it yet, but it is the conversation the
+    /// operator has just made, and it belongs beside the one it came from
+    /// rather than only among the stored Sessions. Resuming it replaces the
+    /// row with a live interaction, as it would a restored one.
+    ///
+    /// The sandbox policy shown for it is its source's, which is what a
+    /// resume from the source's screen launches it under; a source with no
+    /// row of its own has none to lend, and the branch shows only where it
+    /// works.
+    fn list_branch(&self, source: &SessionSummary, branched: &SessionSummary) -> Result<()> {
+        let source_driva = self
+            .inner
+            .interactions
+            .lock()
+            .expect("server interaction lock poisoned")
+            .get(&source.id)
+            .map(|managed| managed.driva.clone())
+            .or_else(|| {
+                self.inner
+                    .roster
+                    .restored_session(&source.id)
+                    .map(|(row, _)| row.driva)
+            });
+        let (host, sandbox) = self.stored_workspace_mount(branched)?;
+        let mut driva = source_driva.unwrap_or_default();
+        driva.working_directory = sandbox;
+        let checkout = checkout_state(self.inner.git.as_ref(), &host);
+        // What a resume would commit with: the Session's own answer, or else
+        // whether the branch works in a linked checkout of its own.
+        let auto_commit = journal::resolve_auto_commit(
+            journal::read_session_auto_commit(&branched.path)?,
+            checkout.as_ref().is_some_and(CheckoutState::linked),
+        );
+        let row = InteractionSummary {
+            id: branched.id.clone(),
+            name: branched.name.clone(),
+            tags: branched.tags.clone(),
+            workspace_id: branched.workspace_id.clone(),
+            selection: branched.selection.clone(),
+            checkout,
+            branched_from: branched.branched_from.clone(),
+            workspace: host,
+            driva,
+            activity: InteractionActivity::Stopped,
+            activity_reason: Some(InteractionActivityReason::Branched),
+            activity_since_ms: journal::now_ms(),
+            idle_unseen: false,
+            uncommitted_changes: false,
+            last_message: None,
+            auto_retry: false,
+            auto_commit,
+            events: 0,
+            completed: branched.completed,
+            focus_requested: false,
+            origin: branched.origin.clone(),
+        };
+        self.inner.roster.adopt(branched.path.clone(), row);
+        self.publish_roster();
+        Ok(())
     }
 
     /// Set whether the operator is finished with a Session, whether or not it
@@ -5340,6 +5407,7 @@ mod tests {
                 events: 0,
                 completed: CompletionState::Active,
                 focus_requested: false,
+                origin: None,
             },
         )]);
 

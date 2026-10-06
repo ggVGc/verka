@@ -114,6 +114,7 @@ impl IdleReason {
             Some(InteractionActivityReason::Paused)
             | Some(InteractionActivityReason::Exited { .. })
             | Some(InteractionActivityReason::ServerRestarted)
+            | Some(InteractionActivityReason::Branched)
             | None => IdleReason::Reported,
         }
     }
@@ -161,6 +162,9 @@ pub enum StopReason {
     /// again because it was never closed, but its agent went down with that
     /// run and resuming the Session is what brings one back.
     ServerRestarted,
+    /// The interaction is a branch just taken from another one: listed beside
+    /// its source, with no agent started for it yet.
+    Branched,
     /// The server still lists the interaction, but its agent no longer accepts
     /// messages and said nothing about why — a stale record a client must
     /// treat as stopped rather than queue against.
@@ -203,6 +207,7 @@ impl StopReason {
                 resets_at_ms: *resets_at_ms,
             }),
             Some(InteractionActivityReason::ServerRestarted) => StopReason::ServerRestarted,
+            Some(InteractionActivityReason::Branched) => StopReason::Branched,
             _ => StopReason::NotAccepting,
         }
     }
@@ -222,6 +227,7 @@ impl StopReason {
             } => format!("exited ({code})"),
             StopReason::Exited { exit_code: None } => "exited".into(),
             StopReason::ServerRestarted => "server restarted".into(),
+            StopReason::Branched => "branched, not started".into(),
             StopReason::NotAccepting => "not accepting messages".into(),
         }
     }
@@ -856,6 +862,7 @@ mod tests {
             branched_from: None,
             completed: CompletionState::Active,
             focus_requested: false,
+            origin: None,
         }
     }
 

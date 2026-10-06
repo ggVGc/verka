@@ -228,8 +228,21 @@ impl LiveInteractions {
     /// A stopped entry stays where it belongs, in its own Workspace's group and
     /// in item order: its row says that it stopped and why, which is enough to
     /// tell it apart from the work that can still be talked to.
+    ///
+    /// Within that, a branch follows the entry it was branched from, as the
+    /// Session picker nests it: see [`Self::display_rows`].
     pub fn display_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
-        grouped_by_workspace(
+        self.display_rows(workspace_id)
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// [`Self::display_indices`], each with how deeply it is nested beneath
+    /// the entries it was branched from. A branch whose source is not shown —
+    /// closed, hidden as completed, or out of scope — stands at the root.
+    pub fn display_rows(&self, workspace_id: Option<&str>) -> Vec<(usize, usize)> {
+        display_tree(
             &self.items,
             &self.workspaces,
             self.visible_indices(workspace_id),
@@ -245,22 +258,19 @@ impl LiveInteractions {
     /// and the `/` filter: each step picks its own candidates, and one it lands
     /// on behind the filter is revealed rather than skipped.
     fn step_order(&self, workspace_id: Option<&str>) -> Vec<usize> {
-        if self.only_current_workspace {
-            return grouped_by_workspace(
-                &self.items,
-                &self.workspaces,
-                (0..self.items.len())
-                    .filter(|index| {
-                        workspace_id.is_some_and(|id| self.items[*index].workspace_id == id)
-                    })
-                    .collect(),
-            );
-        }
-        grouped_by_workspace(
-            &self.items,
-            &self.workspaces,
-            (0..self.items.len()).collect(),
-        )
+        let candidates = if self.only_current_workspace {
+            (0..self.items.len())
+                .filter(|index| {
+                    workspace_id.is_some_and(|id| self.items[*index].workspace_id == id)
+                })
+                .collect()
+        } else {
+            (0..self.items.len()).collect()
+        };
+        display_tree(&self.items, &self.workspaces, candidates)
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect()
     }
 
     /// The first Interaction in `order` after `from` that `candidate` accepts,
@@ -327,22 +337,6 @@ impl LiveInteractions {
             .or_else(|| self.next_live(from, workspace_id))
     }
 
-    /// Move the cursor onto the next live Interaction, as a j/k move does, so
-    /// the jump loads only where it comes to rest. The step stays within the
-    /// navigator's scope, but reveals one hidden behind the `/` filter: live
-    /// work must not be unreachable because of a search.
-    ///
-    /// The step starts from the cursor, so presses quicker than the settle
-    /// keep walking rather than landing on the same row each time.
-    pub fn cursor_to_next_live(
-        &mut self,
-        current: &str,
-        workspace_id: Option<&str>,
-    ) -> Option<InteractionSummary> {
-        let next = self.next_live(self.cursor(current), workspace_id)?;
-        self.cursor_to(next, current)
-    }
-
     /// The next Interaction that is actually working — Running or Background —
     /// from `from` in display order, wrapping past the end of the list. Unlike
     /// [`Self::next_live`] this skips ones idle and waiting on the operator, so
@@ -386,8 +380,12 @@ impl LiveInteractions {
     }
 
     /// Move the cursor onto the next actively working Interaction, as a j/k
-    /// move does, so the jump loads only where it comes to rest. Scoped and
-    /// revealed as [`Self::cursor_to_next_live`] is.
+    /// move does, so the jump loads only where it comes to rest. The step stays
+    /// within the navigator's scope, but reveals one hidden behind the `/`
+    /// filter: work in progress must not be unreachable because of a search.
+    ///
+    /// The step starts from the cursor, so presses quicker than the settle
+    /// keep walking rather than landing on the same row each time.
     pub fn cursor_to_next_active(
         &mut self,
         current: &str,
@@ -855,6 +853,125 @@ fn grouped_by_workspace(
     ordered
 }
 
+/// [`grouped_by_workspace`], with each group then laid out as its branch tree
+/// — see [`branch_tree`] — and every entry paired with its depth in it.
+fn display_tree(
+    interactions: &[InteractionSummary],
+    workspaces: &[WorkspaceSummary],
+    visible: Vec<usize>,
+) -> Vec<(usize, usize)> {
+    branch_tree(
+        interactions,
+        workspaces,
+        grouped_by_workspace(interactions, workspaces, visible),
+    )
+}
+
+/// `ordered` rearranged so each branch sits directly beneath the entry it was
+/// branched from, siblings in the order they already had, paired with how
+/// many sources deep it is — the same tree the Session picker draws.
+///
+/// Only a source in the same list and the same Workspace counts: nesting
+/// under one that is not shown would put the branch nowhere, and nesting
+/// across Workspaces would break up their groups. Neither may share a worktree
+/// with another shown entry, for the same reason: those are drawn together
+/// under the worktree's heading, and moving one of them out from under it, or
+/// a branch in between them, would break that group up. A malformed loop of
+/// origins has no root, so its entries are placed at the root in their
+/// existing order rather than lost.
+fn branch_tree(
+    interactions: &[InteractionSummary],
+    workspaces: &[WorkspaceSummary],
+    ordered: Vec<usize>,
+) -> Vec<(usize, usize)> {
+    let position = |id: &str| {
+        ordered
+            .iter()
+            .position(|index| interactions[*index].id == id)
+    };
+    let grouped: Vec<bool> = ordered
+        .iter()
+        .map(|index| shares_directory(interactions, workspaces, &ordered, *index))
+        .collect();
+    let parents: Vec<Option<usize>> = ordered
+        .iter()
+        .enumerate()
+        .map(|(at, index)| {
+            let interaction = &interactions[*index];
+            let origin = interaction.origin.as_ref()?;
+            if grouped[at] {
+                return None;
+            }
+            position(&origin.session_id).filter(|parent| {
+                *parent != at
+                    && !grouped[*parent]
+                    && interactions[ordered[*parent]].workspace_id == interaction.workspace_id
+            })
+        })
+        .collect();
+    let mut children = vec![Vec::new(); ordered.len()];
+    for (at, parent) in parents.iter().enumerate() {
+        if let Some(parent) = parent {
+            children[*parent].push(at);
+        }
+    }
+
+    fn walk(
+        at: usize,
+        depth: usize,
+        children: &[Vec<usize>],
+        placed: &mut [bool],
+        out: &mut Vec<(usize, usize)>,
+    ) {
+        if placed[at] {
+            return;
+        }
+        placed[at] = true;
+        out.push((at, depth));
+        for child in &children[at] {
+            walk(*child, depth + 1, children, placed, out);
+        }
+    }
+
+    let mut placed = vec![false; ordered.len()];
+    let mut tree = Vec::with_capacity(ordered.len());
+    for (at, parent) in parents.iter().enumerate() {
+        if parent.is_none() {
+            walk(at, 0, &children, &mut placed, &mut tree);
+        }
+    }
+    for at in 0..ordered.len() {
+        walk(at, 0, &children, &mut placed, &mut tree);
+    }
+    tree.into_iter()
+        .map(|(at, depth)| (ordered[at], depth))
+        .collect()
+}
+
+/// Whether the entry at `index` works in a worktree another of `shown` in the
+/// same Workspace also works in: those are drawn under the worktree's heading.
+/// The main checkout never is — its entries lead the Workspace's group, under
+/// the Workspace's own heading.
+pub fn shares_directory(
+    interactions: &[InteractionSummary],
+    workspaces: &[WorkspaceSummary],
+    shown: &[usize],
+    index: usize,
+) -> bool {
+    let interaction = &interactions[index];
+    !in_main_checkout(interaction, workspaces)
+        && shown
+            .iter()
+            .filter(|other| {
+                let other = &interactions[**other];
+                other.workspace_id == interaction.workspace_id
+                    && other.workspace == interaction.workspace
+                    && !in_main_checkout(other, workspaces)
+            })
+            .nth(1)
+            .is_some()
+}
+
 /// Whether `interaction` works in its Workspace's own checkout — on its main
 /// branch, typically — rather than in a worktree made for it. Before Git has
 /// been asked where it works, that is whether it works in the Workspace
@@ -940,6 +1057,7 @@ mod tests {
             branched_from: None,
             completed: CompletionState::Active,
             focus_requested: false,
+            origin: None,
         }
     }
 
@@ -1399,7 +1517,7 @@ mod tests {
         assert_eq!(live.next_active("current", scope).unwrap().id, "here");
         assert_eq!(live.previous_active("current", scope).unwrap().id, "here");
 
-        let next = live.cursor_to_next_live("current", scope).unwrap();
+        let next = live.cursor_to_next_active("current", scope).unwrap();
         assert_eq!(next.id, "here");
         assert!(live.only_current_workspace);
         // Moved like a j/k step, so the load waits for the cursor to rest.
@@ -1430,10 +1548,10 @@ mod tests {
         assert!(live.next_active("current", Some("workspace")).is_none());
     }
 
-    /// Presses quicker than the settle must keep walking the live set, so
+    /// Presses quicker than the settle must keep walking the working set, so
     /// each step starts from the cursor rather than the loaded Interaction.
     #[test]
-    fn repeated_live_steps_walk_on_from_the_cursor() {
+    fn repeated_working_steps_walk_on_from_the_cursor() {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
@@ -1443,8 +1561,8 @@ mod tests {
             ],
             vec![],
         );
-        let first = live.cursor_to_next_live("current", None).unwrap().id;
-        let second = live.cursor_to_next_live("current", None).unwrap().id;
+        let first = live.cursor_to_next_active("current", None).unwrap().id;
+        let second = live.cursor_to_next_active("current", None).unwrap().id;
 
         assert_ne!(first, second);
         assert_eq!(live.cursor("current"), second);
@@ -1643,6 +1761,141 @@ mod tests {
         assert_eq!(
             ordered(&live),
             ["main-1", "main-2", "feature-1", "feature-2"]
+        );
+    }
+
+    fn branched(id: &str, activity: InteractionActivity, from: &str) -> InteractionSummary {
+        let mut interaction = interaction(id, activity);
+        interaction.origin = Some(styra_protocol::SessionOrigin {
+            session_id: from.into(),
+            provider: styra_protocol::agent::Provider::Codex,
+            at_ms: None,
+            history: Default::default(),
+        });
+        interaction
+    }
+
+    fn display<'a>(
+        live: &'a LiveInteractions,
+        workspace_id: Option<&str>,
+    ) -> Vec<(&'a str, usize)> {
+        live.display_rows(workspace_id)
+            .into_iter()
+            .map(|(index, depth)| (live.items[index].id.as_str(), depth))
+            .collect()
+    }
+
+    /// A branch sits beneath the interaction it came from, as it does in the
+    /// Session picker, rather than wherever its creation would sort it — a
+    /// fresh branch is the newest, and would otherwise rise to the head of the
+    /// list, away from its source.
+    #[test]
+    fn a_branch_is_listed_beneath_its_source() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                branched(
+                    "0000000000400-twig",
+                    InteractionActivity::Pending,
+                    "0000000000300-branch",
+                ),
+                interaction("0000000000200-other", InteractionActivity::Running),
+                branched(
+                    "0000000000300-branch",
+                    InteractionActivity::Stopped,
+                    "0000000000100-source",
+                ),
+                interaction("0000000000100-source", InteractionActivity::Running),
+            ],
+            vec![],
+        );
+
+        assert_eq!(
+            display(&live, Some("workspace")),
+            [
+                ("0000000000200-other", 0),
+                ("0000000000100-source", 0),
+                ("0000000000300-branch", 1),
+                ("0000000000400-twig", 2),
+            ]
+        );
+        // Walking the list follows the tree the navigator draws.
+        assert_eq!(
+            live.next("0000000000100-source", Some("workspace"))
+                .unwrap()
+                .id,
+            "0000000000300-branch"
+        );
+        assert_eq!(
+            live.next("0000000000200-other", Some("workspace"))
+                .unwrap()
+                .id,
+            "0000000000100-source"
+        );
+        live.toggle_workspace_scope();
+        assert_eq!(
+            display(&live, Some("workspace")),
+            [
+                ("0000000000200-other", 0),
+                ("0000000000100-source", 0),
+                ("0000000000300-branch", 1),
+                ("0000000000400-twig", 2),
+            ]
+        );
+    }
+
+    /// A branch whose source is not shown has nothing to hang from, so it
+    /// stands at the root rather than disappearing with its source.
+    #[test]
+    fn a_branch_of_a_hidden_source_stands_at_the_root() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                completed("source"),
+                branched("branch", InteractionActivity::Stopped, "source"),
+                branched("orphan", InteractionActivity::Pending, "closed"),
+            ],
+            vec![],
+        );
+
+        assert_eq!(
+            display(&live, Some("workspace")),
+            [("branch", 0), ("orphan", 0)]
+        );
+        live.toggle_completed();
+        assert_eq!(
+            display(&live, Some("workspace")),
+            [("source", 0), ("branch", 1), ("orphan", 0)]
+        );
+    }
+
+    /// Interactions sharing a worktree stay together under its heading: a
+    /// branch is not nested beneath a source among them, which would put it
+    /// between them, nor taken out of a group of its own.
+    #[test]
+    fn a_branch_does_not_break_up_a_shared_worktree() {
+        let in_worktree = |mut interaction: InteractionSummary| {
+            interaction.workspace = PathBuf::from("/worktrees/feature");
+            interaction.checkout = Some(styra_protocol::CheckoutState {
+                worktree: PathBuf::from("/worktrees/feature"),
+                repository: PathBuf::from("/workspace"),
+                branch: Some("feature".into()),
+            });
+            interaction
+        };
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                in_worktree(interaction("source", InteractionActivity::Pending)),
+                branched("branch", InteractionActivity::Stopped, "source"),
+                in_worktree(interaction("sibling", InteractionActivity::Pending)),
+            ],
+            vec![],
+        );
+
+        assert_eq!(
+            display(&live, Some("workspace")),
+            [("branch", 0), ("source", 0), ("sibling", 0)]
         );
     }
 

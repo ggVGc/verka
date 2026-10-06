@@ -1111,6 +1111,7 @@ mod tests {
             branched_from: None,
             completed: CompletionState::Active,
             focus_requested: false,
+            origin: None,
         }
     }
 
