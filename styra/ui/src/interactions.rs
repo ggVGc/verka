@@ -449,7 +449,7 @@ fn branch_indent(depth: usize) -> String {
     }
 }
 
-fn status_marker(status: InteractionStatus) -> (&'static str, ratatui::style::Color) {
+pub(crate) fn status_marker(status: InteractionStatus) -> (&'static str, ratatui::style::Color) {
     match status {
         // Each status has its own shape, so the list reads without its colors.
         InteractionStatus::Pending => ("●", theme::INFO),

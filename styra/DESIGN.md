@@ -1064,6 +1064,30 @@ stopped Interaction from the server. The next available Interaction becomes
 current without closing the navigator; deleting the last one closes it and
 returns Styra to its blank default state.
 
+#### The overview
+
+The navigator is a list, and a list is read one row at a time. `v` replaces
+the main region with an **overview** instead: every Interaction whose agent
+still takes turns — running, in the background, or idle — laid out as a grid
+of tiles across every Workspace. It answers a different question from the
+navigator: not "which one do I go to next" but "what is all of it doing right
+now".
+
+It reads the same snapshot the event loop already refreshes several times a
+second for the footer's tally, so it costs no per-tile request. What a tile can
+show is therefore what an `InteractionSummary` carries — the name, Workspace,
+branch, selection, activity and its marks, and the clipped last agent message —
+rather than a tail of each conversation, which would mean streaming every
+Interaction's updates at once. The navigator's scope, completion and `/`
+settings are deliberately not applied: a grid of the work in flight that hid
+some of it, with nothing on screen to say so, would be worse than none. Stopped
+and completed Interactions are not in flight and are left out.
+
+The renderer chooses the number of columns from the terminal's width and
+reports it back with the frame, which is how `j`/`k` know how far a column
+step is. `Enter` makes the tile's Interaction current exactly as `n` does —
+loaded outright, not cursored — and returns to its event list.
+
 #### The list survives a restart
 
 An Interaction leaves the server's list only when the operator removes it.

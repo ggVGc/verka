@@ -2,8 +2,8 @@
 
 use crate::{
     answer, busy, driva, event_list, files, footer, interactions, launcher, log, messages,
-    modal_input, overlays, preview, quota, raw, recording, transcript, PanelId, RenderFeedback,
-    ScrollFeedback,
+    modal_input, overlays, overview, preview, quota, raw, recording, transcript, PanelId,
+    RenderFeedback, ScrollFeedback,
 };
 use crate::{markdown, theme};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -44,6 +44,7 @@ pub enum MainView<'a> {
     Files(FilesView<'a>),
     Answer(&'a answer::AnswerView<'a>),
     Preview(&'a preview::PreviewView<'a>),
+    Overview(&'a overview::OverviewView<'a>),
 }
 
 #[derive(Default)]
@@ -157,6 +158,10 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             render_files(frame, files_view, view.session_id, chunks[0], &mut feedback)
         }
         MainView::Answer(answer_view) => answer::render(frame, answer_view, chunks[0]),
+        MainView::Overview(overview_view) => {
+            feedback.overview_columns =
+                Some(overview::render(frame, overview_view, chunks[0]).columns);
+        }
         MainView::Preview(_) => unreachable!(),
     }
     if message_height > 0 {

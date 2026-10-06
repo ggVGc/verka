@@ -220,6 +220,29 @@ impl LiveInteractions {
             .collect()
     }
 
+    /// The Interactions the overview tiles, in the order it lays them out:
+    /// every one whose agent still takes turns — working or waiting on the
+    /// operator — grouped by Workspace as the navigator's All scope is.
+    ///
+    /// Unlike [`Self::visible_indices`] this follows none of the navigator's
+    /// settings. The overview is the whole of the work in flight, and a scope
+    /// or filter left over from the list would hide some of it with nothing
+    /// on the grid to say so. Completed ones are left out with the stopped
+    /// ones: completion stops an interaction, and one still taking turns
+    /// after being completed has been signed off on all the same.
+    pub fn overview_indices(&self) -> Vec<usize> {
+        let active = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, interaction)| {
+                interaction.activity.accepting() && !interaction.completed.is_done()
+            })
+            .map(|(index, _)| index)
+            .collect();
+        grouped_by_workspace(&self.items, &self.workspaces, active)
+    }
+
     /// The visible indices in the order [`crate::presentation::interactions`] draws
     /// them: in All scope the entries are grouped under their Workspace
     /// heading, and in either scope those sharing a directory under its, so
@@ -1022,12 +1045,12 @@ fn is_idle(interaction: &InteractionSummary) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
     use styra_protocol::{CompletionState, DrivaOptions, InteractionActivity};
 
-    fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
+    pub(crate) fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
             auto_retry: false,
             auto_commit: false,

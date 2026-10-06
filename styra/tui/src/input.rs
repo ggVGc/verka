@@ -156,6 +156,9 @@ pub fn handle_list_key(
         }
         return;
     }
+    if app.view == View::Overview && handle_overview_key(app, key) {
+        return;
+    }
     match key {
         k if GLOBAL_QUIT.matches(k) => return app.ask(Request::Quit),
         // The event list is the bottom of the stack every other view is
@@ -186,7 +189,11 @@ pub fn handle_list_key(
         // standing where the interaction is working. That works with no live
         // interaction — a finished one still has a directory to look at.
         k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
-        k if GLOBAL_FOCUS_MESSAGE.matches(k) && app.view != View::Preview => {
+        // Not from the overview, which shows no conversation for the message
+        // to join.
+        k if GLOBAL_FOCUS_MESSAGE.matches(k)
+            && !matches!(app.view, View::Preview | View::Overview) =>
+        {
             return app.enter_input()
         }
         // Global, unlike `y`: what it copies is the session's exchange, which
@@ -223,6 +230,8 @@ pub fn handle_list_key(
         k if GLOBAL_INTERACTIONS.matches(k) && app.view != View::Files => {
             return app.ask(Request::Interactions)
         }
+        // The raw view keeps `v` for switching to the provider's own record.
+        k if GLOBAL_OVERVIEW.matches(k) && app.view != View::Raw => return app.toggle_overview(),
         k if GLOBAL_WORKSPACES.matches(k) => return app.ask(Request::Workspace),
         k if GLOBAL_SESSION_WORKTREE.matches(k) && !app.session_id.is_empty() => {
             return app.ask(Request::CreateWorktree { message: None })
@@ -541,7 +550,38 @@ pub fn handle_list_key(
             k if PREVIEW_COPY.matches(k) => copy_selection(app),
             _ => {}
         },
+        // Every key of its own was taken by `handle_overview_key`.
+        View::Overview => {}
     }
+}
+
+/// The overview's own keys. They are offered before the global ones, because
+/// walking a grid needs `l`, which is the launcher everywhere else; anything
+/// else falls through to them. Reports whether `key` was one of its own.
+fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
+    let current = app.session_id.clone();
+    match key {
+        k if OVERVIEW_LEFT.matches(k) => app.overview.left(&app.interactions, &current),
+        k if OVERVIEW_RIGHT.matches(k) => app.overview.right(&app.interactions, &current),
+        k if OVERVIEW_DOWN.matches(k) => app.overview.down(&app.interactions, &current),
+        k if OVERVIEW_UP.matches(k) => app.overview.up(&app.interactions, &current),
+        k if OVERVIEW_FIRST.matches(k) => app.overview.first(&app.interactions),
+        k if OVERVIEW_LAST.matches(k) => app.overview.last(&app.interactions),
+        // Loading another interaction is a server round-trip the event loop
+        // makes, as it does for the navigator.
+        k if OVERVIEW_OPEN.matches(k) => {
+            match app.overview.selected_id(&app.interactions, &current) {
+                Some(id) => {
+                    let id = id.to_owned();
+                    app.ask(Request::ShowInteraction(id))
+                }
+                None => app.show_action_message("no interaction is running or idle"),
+            }
+        }
+        k if OVERVIEW_CLOSE.matches(k) => app.view = View::Events,
+        _ => return false,
+    }
+    true
 }
 
 /// Open the tag editor for the Interaction currently on screen. The
@@ -978,6 +1018,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// The grid takes `l` from the launcher to move right, `Enter` asks for
+    /// the tile's interaction, and `v` toggles the overview from both sides.
+    #[test]
+    fn the_overview_walks_its_grid_and_opens_the_chosen_tile() {
+        use styra_protocol::InteractionActivity;
+        let root = tree("overview-keys");
+        let mut app = app(&root);
+        app.enter_list();
+        app.interactions.refresh(vec![
+            crate::interactions::tests::interaction("2-left", InteractionActivity::Running),
+            crate::interactions::tests::interaction("1-right", InteractionActivity::Pending),
+        ]);
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+        let mut press = |app: &mut App, code| {
+            handle_list_key(
+                app,
+                &client,
+                &mut live,
+                KeyEvent::new(code, KeyModifiers::NONE),
+                &mut pending_fold,
+                &root.join("preferences.toml"),
+            );
+        };
+
+        press(&mut app, KeyCode::Char('v'));
+        assert_eq!(app.take_request(), Some(Request::Overview));
+
+        app.view = View::Overview;
+        press(&mut app, KeyCode::Char('l'));
+        assert!(app.launcher.is_none(), "`l` moves in the grid");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ShowInteraction("1-right".into()))
+        );
+
+        press(&mut app, KeyCode::Char('v'));
+        assert_eq!(app.view, View::Events);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn control_l_toggles_the_log_view() {
         let root = tree("log-shortcut");
@@ -1018,6 +1101,7 @@ mod tests {
             View::Files,
             View::Answer,
             View::Preview,
+            View::Overview,
         ] {
             app.view = view;
             handle_list_key(

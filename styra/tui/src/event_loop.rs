@@ -1388,6 +1388,42 @@ pub fn run(
                 app.interactions.open(interactions, workspaces);
                 interactions_refreshed = Instant::now();
             }
+            // The overview reads the same snapshot the loop refreshes on its
+            // timer, but the tiles name their Workspaces, and that list is
+            // only fetched when asked for. Both are best-effort: a grid a
+            // moment stale is still the grid.
+            Some(Request::Overview) => {
+                if let Ok(interactions) = client.list_interactions() {
+                    app.interactions.refresh(interactions);
+                    interactions_refreshed = Instant::now();
+                }
+                if let Ok(workspaces) = client.list_workspaces() {
+                    app.interactions.workspaces = workspaces;
+                }
+                app.interactions.close();
+                app.overview.open();
+                app.view = crate::app::View::Overview;
+                app.focus = Focus::List;
+            }
+            // Loaded outright, as `n` does. A load that fails leaves the
+            // overview up, and says so where the operator is looking rather
+            // than only in the log.
+            Some(Request::ShowInteraction(id)) => {
+                if id == app.session_id {
+                    app.view = crate::app::View::Events;
+                    continue;
+                }
+                let Some(interaction) = app.interactions.current(&id).cloned() else {
+                    app.show_action_message("that interaction is no longer running");
+                    continue;
+                };
+                make_interaction_current(app, live, client, standing_launch, interaction);
+                if app.session_id != id {
+                    app.show_action_message(
+                        "could not open that interaction; the log (ctrl-l) says why",
+                    );
+                }
+            }
             // The interaction is loaded outright rather than cursored, and the
             // navigator is left as it was: open or closed. Newly idle work
             // takes priority; otherwise this walks every live interaction.

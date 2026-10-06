@@ -14,6 +14,7 @@ mod files;
 mod footer_tests;
 mod interactions;
 mod list;
+mod overview;
 mod preview;
 pub(crate) mod quota;
 mod raw;
@@ -77,8 +78,13 @@ fn status_elapsed(app: &App) -> Option<String> {
 pub(crate) fn clock_reading(app: &App) -> Option<String> {
     // The elapsed figure in the title, and for a running turn the list tail's
     // matching one. Compared as the string, so it counts as having moved
-    // exactly when the operator would see it move.
-    let elapsed = status_elapsed(app);
+    // exactly when the operator would see it move. The overview has no title
+    // of its own session's, but times each working tile.
+    let elapsed = if app.view == View::Overview {
+        Some(overview::clock_reading(app)).filter(|reading| !reading.is_empty())
+    } else {
+        status_elapsed(app)
+    };
     // A boolean rather than a reading: the quota footer's figures never move
     // on their own — a utilization figure stands until a new reading replaces
     // it, and a reset is quoted as the moment it falls at rather than counted
@@ -201,6 +207,7 @@ pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
         View::Files => Window::Files,
         View::Answer => Window::Answer,
         View::Preview => Window::Preview,
+        View::Overview => Window::Overview,
     }
 }
 
@@ -387,6 +394,10 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
             let preview = preview::view(app, true);
             draw_main(ui, app, MainView::Preview(&preview))
         }
+        View::Overview => {
+            let overview = overview::view(app);
+            draw_main(ui, app, MainView::Overview(&overview))
+        }
         View::Files => {
             let list = list::view(app);
             let preview = app.preview.open.then(|| preview::view(app, false));
@@ -540,6 +551,9 @@ fn draw_main(
 }
 
 pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback) {
+    if let Some(columns) = feedback.overview_columns {
+        app.overview.note_columns(columns);
+    }
     if let Some(offset) = feedback.list_offset {
         app.timeline.list_offset = offset;
         app.timeline.list_row_offset = feedback.list_row_offset.unwrap_or_default();

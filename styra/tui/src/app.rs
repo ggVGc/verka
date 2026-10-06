@@ -35,6 +35,7 @@ use crate::launch::{self, Launch};
 use crate::launcher::Launcher;
 use crate::notices::Notices;
 use crate::outbox::Outbox;
+use crate::overview::Overview;
 use crate::picker::TemplatePicker;
 use crate::preview::{self, Preview};
 use crate::raw::{ProviderRawView, RawView};
@@ -81,7 +82,8 @@ impl LinkDisplay {
 
 /// What the main region shows: the decoded event list, the raw wire stream,
 /// the diagnostic log, the rendered transcript, server details and Driva policy,
-/// or the selected entry's full-screen preview.
+/// the selected entry's full-screen preview, or the overview of every active
+/// interaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     Events,
@@ -95,6 +97,9 @@ pub enum View {
     /// The last turn's typed answer, rendered as the shape it was asked for.
     Answer,
     Preview,
+    /// Every interaction still taking turns, as a grid of tiles; see
+    /// [`Overview`].
+    Overview,
 }
 
 /// Which page of the details view is visible.
@@ -253,6 +258,8 @@ pub struct App {
     pub composer: Composer,
     /// Server-wide interaction navigation shown above the event timeline.
     pub interactions: LiveInteractions,
+    /// The overview's cursor over that same snapshot.
+    pub overview: Overview,
     /// Messages on their way out and the shape the next one asks for; see
     /// [`Outbox`].
     pub outbox: Outbox,
@@ -400,6 +407,12 @@ pub enum Request {
     JumpBack,
     /// Open the server's live interactions above the main event timeline.
     Interactions,
+    /// Show every running and idle interaction as a grid, with a fresh
+    /// listing behind it.
+    Overview,
+    /// Make the interaction with this id current, as choosing its tile in the
+    /// overview does, and return to its event list.
+    ShowInteraction(String),
     /// Make a newly idle interaction current when one is unseen; otherwise,
     /// make the next live interaction current in navigator order.
     NextLiveInteraction,
@@ -519,6 +532,7 @@ impl App {
             help: Help::default(),
             composer: Composer::default(),
             interactions: LiveInteractions::default(),
+            overview: Overview::default(),
             outbox: Outbox::default(),
             activity: Activity::default(),
             notices: Notices::default(),
@@ -1090,6 +1104,17 @@ impl App {
 
     // --- Typed turn answers ---------------------------------------------------
 
+    /// Open the overview, or leave it when already there. Opening asks the
+    /// event loop for a fresh listing: the tiles name their Workspaces, and the
+    /// Workspace list is only fetched on request.
+    pub fn toggle_overview(&mut self) {
+        if self.view == View::Overview {
+            self.view = View::Events;
+        } else {
+            self.ask(Request::Overview);
+        }
+    }
+
     /// Show the answer view, asking the event loop to fetch under the
     /// session's recorded contract; or leave it when already there.
     pub fn toggle_answer(&mut self) {
@@ -1478,7 +1503,7 @@ impl App {
             // rather than navigated copies the whole value, which is what an
             // operator reaching for `y` on a JSON or prose answer wants.
             View::Answer => self.answer.copy_text(),
-            View::Log | View::Quota | View::Transcript | View::Driva => None,
+            View::Log | View::Quota | View::Transcript | View::Driva | View::Overview => None,
         }
     }
 

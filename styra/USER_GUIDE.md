@@ -129,6 +129,7 @@ transcript, details, files, answer, preview) stack over the event list, and
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
+| `v` | overview: every running and idle interaction as a grid of tiles |
 | `Ctrl+L` | choose provider, model, and effort (one list, typed at) |
 | `Ctrl+G` | turn auto-commit on/off for this interaction (also in the message editor) |
 
@@ -156,6 +157,19 @@ client's screen, and has not been focused since, is marked `NEWLY IDLE`; the
 event list's bottom border counts those rows, beside the `running/idle/stopped`
 tally, until they are focused. Finishing a turn while a client
 is showing it is not one of them — you watched it happen.
+
+`v` opens the overview, which lays out every interaction that is running or
+idle — in every Workspace, whatever the `a` list's scope or filter — as a grid
+of tiles, so the whole fleet can be watched at once. Each tile names the
+interaction, its Workspace and branch, its agent and model, and what it is
+doing (with how long a turn has been running), carries the same `NEWLY IDLE`,
+`RATE LIMITED` and uncommitted marks as the list, and ends with the last thing
+the agent said. The grid takes as many columns as the terminal's width allows
+and scrolls by rows when there are more tiles than fit. `h`/`j`/`k`/`l` or the
+arrows move between tiles (in the overview `l` moves rather than opening the
+launcher), `g`/`G` jump to the first and last, and `Enter` opens the selected
+interaction in the event list. `v` or `Esc` goes back without switching.
+Stopped and completed interactions are left out; `a` still lists them.
 
 An interaction that stops with uncommitted changes in its Git checkout — edits
 or new files the agent left behind — is marked `UNCOMMITTED` in the list, and

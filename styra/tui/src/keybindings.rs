@@ -25,6 +25,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_SHELL: [Key::ch('!')] => Action::GlobalShell;
     GLOBAL_DIRECTORY: [Key::ch('~')] => Action::GlobalDirectory;
     GLOBAL_INTERACTIONS: [Key::ch('a')] => Action::GlobalInteractions;
+    GLOBAL_OVERVIEW: [Key::ch('v')] ("not in raw") => Action::GlobalOverview;
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
     GLOBAL_WORKSPACES: [Key::ch('V')] => Action::GlobalWorkspaces;
     GLOBAL_SESSION_WORKTREE: [Key::ch('W')] ("existing session")
@@ -222,6 +223,19 @@ bindings! { INTERACTIONS = "Interactions";
         => Action::InteractionsClose;
 }
 
+bindings! { OVERVIEW = "Overview";
+    // `l` is the launcher everywhere else; here the grid needs all four
+    // directions, so the arrows' vim keys win.
+    OVERVIEW_LEFT: [Key::ch('h'), Key::code(KeyCode::Left)] => Action::OverviewLeft;
+    OVERVIEW_RIGHT: [Key::ch('l'), Key::code(KeyCode::Right)] => Action::OverviewRight;
+    OVERVIEW_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::OverviewDown;
+    OVERVIEW_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::OverviewUp;
+    OVERVIEW_FIRST: [Key::ch('g')] => Action::OverviewFirst;
+    OVERVIEW_LAST: [Key::ch('G')] => Action::OverviewLast;
+    OVERVIEW_OPEN: [Key::code(KeyCode::Enter)] => Action::OverviewOpen;
+    OVERVIEW_CLOSE: [Key::ch('v'), Key::code(KeyCode::Esc)] => Action::OverviewClose;
+}
+
 bindings! { BRANCH = "Branch from selected entry";
     BRANCH_NEXT: [Key::ch('j'), Key::ch('J'), Key::code(KeyCode::Down)]
         => Action::BranchNext;
@@ -339,6 +353,7 @@ pub(crate) enum Window {
     Files,
     Answer,
     Preview,
+    Overview,
     Interactions,
     Branch,
     Tags,
@@ -363,6 +378,7 @@ impl Window {
             Self::Files => "files",
             Self::Answer => "typed answer",
             Self::Preview => "preview",
+            Self::Overview => "overview",
             Self::Interactions => "interactions",
             Self::Branch => "branch",
             Self::Tags => "tags",
@@ -385,6 +401,7 @@ impl Window {
             Self::Driva => &[DRIVA, GLOBAL],
             Self::Files => &[FILES, GLOBAL],
             Self::Answer => &[ANSWER, GLOBAL],
+            Self::Overview => &[OVERVIEW, GLOBAL],
             Self::Interactions => &[INTERACTIONS, GLOBAL],
             Self::Branch => &[BRANCH, GLOBAL],
             Self::Tags => &[TAGS, GLOBAL],
@@ -414,7 +431,7 @@ mod reference_tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
 
-    const WINDOWS: [Window; 16] = [
+    const WINDOWS: [Window; 17] = [
         Window::Events,
         Window::Raw,
         Window::Log,
@@ -424,6 +441,7 @@ mod reference_tests {
         Window::Files,
         Window::Answer,
         Window::Preview,
+        Window::Overview,
         Window::Interactions,
         Window::Branch,
         Window::Tags,

@@ -32,6 +32,7 @@ pub mod markdown;
 pub mod messages;
 pub mod modal_input;
 pub mod overlays;
+pub mod overview;
 pub mod palette;
 pub mod picker;
 pub mod preview;
@@ -88,6 +89,9 @@ pub struct RenderFeedback {
     pub list_row_offset: Option<usize>,
     /// The line the interactions navigator was drawn from, when it was drawn.
     pub navigator_offset: Option<usize>,
+    /// How many columns of tiles the overview was laid out in, when it was
+    /// drawn.
+    pub overview_columns: Option<usize>,
 }
 
 /// An error raised by the terminal boundary.
@@ -321,6 +325,7 @@ where
                 list_offset: None,
                 list_row_offset: None,
                 navigator_offset: None,
+                overview_columns: None,
             }
         })
     }

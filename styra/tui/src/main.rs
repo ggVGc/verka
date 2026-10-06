@@ -32,6 +32,7 @@ mod logging;
 mod mount;
 mod notices;
 mod outbox;
+mod overview;
 mod picker;
 mod preferences;
 mod presentation;

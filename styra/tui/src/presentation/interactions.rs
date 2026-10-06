@@ -4,6 +4,7 @@ use crate::activity::{IdleReason, Status};
 use crate::app::App;
 use crate::interactions::shares_directory;
 use std::borrow::Cow;
+use styra_protocol::InteractionSummary;
 use styra_ui::interactions::{InteractionNavigator, InteractionRow, InteractionStatus};
 
 pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
@@ -87,19 +88,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             Status::Idle(IdleReason::RateLimited(limit)) => Some(Cow::Owned(limit.window.clone())),
             _ => None,
         };
-        let status = match reported {
-            Status::Pending => InteractionStatus::Pending,
-            // Each row's own event count, not the attached session's: the rows
-            // that are working animate whether or not this client's session is.
-            Status::Running => InteractionStatus::Running {
-                events: interaction.events,
-            },
-            Status::Idle(_) => InteractionStatus::Idle,
-            Status::Background => InteractionStatus::Background,
-            Status::Stopped(ref why) => InteractionStatus::Stopped(super::stop_tone(why)),
-            Status::Ended { error: Some(_), .. } => InteractionStatus::Error,
-            Status::Ended { .. } => InteractionStatus::Ended,
-        };
+        let status = status(&reported, interaction);
         let name = app
             .interactions
             .name(&interaction.id)
@@ -138,5 +127,22 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         typing_filter: app.interactions.typing_filter(),
         requested_offset: app.interactions.scroll_offset,
         rows,
+    }
+}
+
+/// The marker an interaction is drawn with, wherever it is listed.
+pub(super) fn status(reported: &Status, interaction: &InteractionSummary) -> InteractionStatus {
+    match reported {
+        Status::Pending => InteractionStatus::Pending,
+        // Each row's own event count, not the attached session's: the rows
+        // that are working animate whether or not this client's session is.
+        Status::Running => InteractionStatus::Running {
+            events: interaction.events,
+        },
+        Status::Idle(_) => InteractionStatus::Idle,
+        Status::Background => InteractionStatus::Background,
+        Status::Stopped(why) => InteractionStatus::Stopped(super::stop_tone(why)),
+        Status::Ended { error: Some(_), .. } => InteractionStatus::Error,
+        Status::Ended { .. } => InteractionStatus::Ended,
     }
 }
