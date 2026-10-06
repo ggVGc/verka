@@ -2004,6 +2004,7 @@ mod tests {
             chrome: PanelChrome {
                 focused: true,
                 workspace: None,
+                worktree: None,
                 agent: "codex".into(),
                 model: "gpt-5.6-sol".into(),
                 model_reported: true,
@@ -2145,6 +2146,7 @@ mod tests {
             chrome: PanelChrome {
                 focused: true,
                 workspace: None,
+                worktree: None,
                 agent: "codex".into(),
                 model: "gpt-5.6-sol".into(),
                 model_reported: true,

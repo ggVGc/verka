@@ -1704,6 +1704,7 @@ mod tests {
             chrome: PanelChrome {
                 focused: true,
                 workspace: None,
+                worktree: None,
                 agent: "codex".into(),
                 model: "gpt".into(),
                 model_reported: false,

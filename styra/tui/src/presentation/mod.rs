@@ -133,9 +133,18 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         Status::Ended { error: Some(_), .. } => StatusTone::Error,
         Status::Ended { .. } => StatusTone::Ended,
     };
+    let worktree = app
+        .interactions
+        .current(&app.session_id)
+        .and_then(|interaction| interaction.checkout.as_ref())
+        .filter(|checkout| checkout.linked())
+        .and_then(|checkout| checkout.worktree.file_name())
+        .and_then(|name| name.to_str())
+        .map(str::to_owned);
     styra_ui::chrome::PanelChrome {
         focused: app.focus == Focus::List,
         workspace: app.workspace.name.clone(),
+        worktree,
         agent: label.agent,
         model: label.model.unwrap_or_else(|| "default model".into()),
         model_reported: label.model_reported,
@@ -588,6 +597,7 @@ mod tests {
     use super::test_support::{self, rendered};
     use super::*;
     use styra_protocol::event::{AgentEvent, TurnOutcome, TurnUsage};
+    use styra_protocol::{CheckoutState, InteractionSummary};
 
     /// What lets the event loop stop drawing an idle Styra: an idle frame has
     /// nothing on it read off the clock, so leaving it up is leaving it right.
@@ -743,6 +753,76 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("Fix retries"));
         assert!(screen.contains("payments"));
+    }
+
+    fn interaction_with_checkout(id: &str, checkout: Option<CheckoutState>) -> InteractionSummary {
+        InteractionSummary {
+            auto_retry: false,
+            auto_commit: false,
+            id: id.into(),
+            name: None,
+            tags: Vec::new(),
+            workspace_id: "workspace".into(),
+            selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
+            workspace: std::path::PathBuf::from("/workspace"),
+            driva: styra_protocol::DrivaOptions {
+                isolation_backend: "none".into(),
+                command: vec![],
+                working_directory: std::path::PathBuf::from("/workspace"),
+                network: false,
+                base: Vec::new(),
+                mounts: vec![],
+                ..Default::default()
+            },
+            activity: styra_protocol::InteractionActivity::Running,
+            activity_reason: None,
+            activity_since_ms: 0,
+            idle_unseen: false,
+            uncommitted_changes: false,
+            checkout,
+            last_message: None,
+            events: 0,
+            branched_from: None,
+            completed: styra_protocol::CompletionState::Active,
+            focus_requested: false,
+        }
+    }
+
+    /// A linked worktree names the branch of its agent away from the
+    /// Workspace's own checkout, so the operator cannot mistake one for the
+    /// other from the header alone.
+    #[test]
+    fn header_names_a_linked_worktree() {
+        let mut app = test_support::app("s1");
+        app.interactions.items = vec![interaction_with_checkout(
+            "s1",
+            Some(CheckoutState {
+                worktree: "/workspace/.worktrees/fix-retries".into(),
+                repository: "/workspace".into(),
+                branch: Some("fix-retries".into()),
+            }),
+        )];
+
+        let title = test_support::screen(&app).title();
+        assert!(title.contains("fix-retries"), "{title}");
+    }
+
+    /// The agent's own checkout is the Workspace's, so naming it again in the
+    /// header would only repeat what the Workspace name already says.
+    #[test]
+    fn header_says_nothing_extra_for_a_plain_checkout() {
+        let mut app = test_support::app("s1");
+        app.interactions.items = vec![interaction_with_checkout(
+            "s1",
+            Some(CheckoutState {
+                worktree: "/workspace".into(),
+                repository: "/workspace".into(),
+                branch: Some("main".into()),
+            }),
+        )];
+
+        let title = test_support::screen(&app).title();
+        assert!(!title.contains("main"), "{title}");
     }
 
     #[test]

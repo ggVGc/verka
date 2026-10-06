@@ -51,6 +51,10 @@ impl StopTone {
 pub struct PanelChrome {
     pub focused: bool,
     pub workspace: Option<String>,
+    /// The linked worktree the interaction is working in, when it is not the
+    /// Workspace's own checkout. `None` for a plain checkout, so the bar does
+    /// not repeat what the Workspace name already said.
+    pub worktree: Option<String>,
     pub agent: String,
     pub model: String,
     pub model_reported: bool,
@@ -119,6 +123,10 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
                 .fg(theme::TEXT)
                 .add_modifier(Modifier::BOLD),
         ));
+        spans.push(Span::styled(" · ", text));
+    }
+    if let Some(worktree) = &chrome.worktree {
+        spans.push(Span::styled(worktree.clone(), Style::default().fg(theme::ACCENT)));
         spans.push(Span::styled(" · ", text));
     }
     spans.push(Span::styled(format!("{} · ", chrome.agent), text));
