@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nota::{add_note, load_review, start_review, ReviewEntryKind, SystemGit};
+use nota::{GitTrailerStore, ReviewEntryKind, ReviewStore};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -23,16 +23,22 @@ enum Command {
         #[arg(long)]
         branch: Option<String>,
     },
-    /// Add and commit one Markdown review note.
+    /// Append one note to a review branch without touching any checkout.
     Note {
         message: String,
         #[arg(long, default_value = ".")]
         repository: PathBuf,
+        /// The review branch; defaults to the checked-out branch.
+        #[arg(long)]
+        branch: Option<String>,
     },
-    /// Show the review represented by the current branch.
+    /// Show a review.
     Show {
         #[arg(long, default_value = ".")]
         repository: PathBuf,
+        /// The review branch; defaults to the checked-out branch.
+        #[arg(long)]
+        branch: Option<String>,
     },
 }
 
@@ -44,13 +50,18 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let store = GitTrailerStore::default();
+    let review_branch = |repository: &PathBuf, branch: Option<String>| match branch {
+        Some(branch) => Ok(branch),
+        None => store.current_review(repository),
+    };
     match cli.command {
         Command::Start {
             revision,
             repository,
             branch,
         } => {
-            let started = start_review(&SystemGit, &repository, &revision, branch.as_deref())?;
+            let started = store.start_review(&repository, &revision, branch.as_deref())?;
             println!("review   {}", started.branch);
             println!("subject  {}", started.subject);
             println!("marker   {}", started.marker);
@@ -63,12 +74,15 @@ fn run(cli: Cli) -> Result<()> {
         Command::Note {
             message,
             repository,
+            branch,
         } => {
-            let entry = add_note(&SystemGit, &repository, &message)?;
+            let branch = review_branch(&repository, branch)?;
+            let entry = store.add_note(&repository, &branch, &message)?;
             println!("{}  note", short(&entry.commit));
         }
-        Command::Show { repository } => {
-            let review = load_review(&SystemGit, &repository)?;
+        Command::Show { repository, branch } => {
+            let branch = review_branch(&repository, branch)?;
+            let review = store.load_review(&repository, &branch)?;
             println!("review   {}", review.branch);
             println!("subject  {}", review.subject);
             println!("marker   {}", review.marker);

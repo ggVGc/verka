@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use nota::{add_note, load_review, load_review_ref, start_review, Git, ReviewEntryKind};
+use nota::{Git, GitTrailerStore, ReviewEntryKind, ReviewStore};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -18,8 +18,6 @@ struct State {
     branches: BTreeMap<String, String>,
     /// The checked-out branch; `None` is a detached HEAD.
     head: Option<String>,
-    /// Contents of every file written through [`Git::commit_file`].
-    files: HashMap<String, String>,
 }
 
 /// An in-memory repository at [`ROOT`] whose `main` branch holds one commit,
@@ -78,10 +76,6 @@ impl FakeGit {
 
     fn tip(&self, branch: &str) -> String {
         self.state.borrow().branches[branch].clone()
-    }
-
-    fn file(&self, path: &str) -> Option<String> {
-        self.state.borrow().files.get(path).cloned()
     }
 
     fn with_commit<T>(&self, commit: &str, read: impl FnOnce(&FakeCommit) -> T) -> Result<T> {
@@ -149,18 +143,19 @@ impl Git for FakeGit {
         Ok(self.add_commit(Some(parent.into()), message, &[]))
     }
 
-    fn commit_file(
+    fn update_branch(
         &self,
         _repository: &Path,
-        path: &str,
-        contents: &str,
-        message: &str,
-    ) -> Result<String> {
-        self.state
-            .borrow_mut()
-            .files
-            .insert(path.into(), contents.into());
-        Ok(self.commit(message, &[path]))
+        branch: &str,
+        commit: &str,
+        expected: &str,
+    ) -> Result<()> {
+        let mut state = self.state.borrow_mut();
+        if state.branches.get(branch).map(String::as_str) != Some(expected) {
+            bail!("branch `{branch}` is not at `{expected}`");
+        }
+        state.branches.insert(branch.into(), commit.into());
+        Ok(())
     }
 
     fn first_parent_history(&self, repository: &Path, revision: &str) -> Result<Vec<String>> {
@@ -192,14 +187,23 @@ fn root() -> PathBuf {
 
 /// Start a review of `main` on `branch` and check that branch out.
 fn review_on(git: &FakeGit, branch: &str) {
-    start_review(git, &root(), "HEAD", Some(branch)).unwrap();
+    GitTrailerStore::new(git)
+        .start_review(&root(), "HEAD", Some(branch))
+        .unwrap();
     git.switch(branch);
+}
+
+fn load_current(git: &FakeGit) -> Result<nota::Review> {
+    let store = GitTrailerStore::new(git);
+    store.load_review(&root(), &store.current_review(&root())?)
 }
 
 #[test]
 fn a_review_started_inside_the_repository_resolves_an_exact_commit() {
     let git = FakeGit::new();
-    let started = start_review(&git, &root().join("src"), "HEAD", Some("nota/review-one")).unwrap();
+    let started = GitTrailerStore::new(&git)
+        .start_review(&root().join("src"), "HEAD", Some("nota/review-one"))
+        .unwrap();
     assert_eq!(started.repository, root());
     assert_eq!(started.subject, git.tip("main"));
 }
@@ -207,8 +211,11 @@ fn a_review_started_inside_the_repository_resolves_an_exact_commit() {
 #[test]
 fn review_branch_records_notes_and_ordinary_project_commits_as_suggestions() {
     let git = FakeGit::new();
+    let store = GitTrailerStore::new(&git);
     let subject = git.tip("main");
-    let started = start_review(&git, &root(), "HEAD", Some("nota/review-one")).unwrap();
+    let started = store
+        .start_review(&root(), "HEAD", Some("nota/review-one"))
+        .unwrap();
 
     assert_eq!(started.subject, subject);
     assert_eq!(git.tip("nota/review-one"), started.marker);
@@ -221,23 +228,24 @@ fn review_branch_records_notes_and_ordinary_project_commits_as_suggestions() {
         git.first_parent(&root(), &started.marker).unwrap(),
         Some(subject.clone())
     );
-    let review = load_review_ref(&git, &root(), "nota/review-one").unwrap();
+    let review = store.load_review(&root(), "nota/review-one").unwrap();
     assert_eq!(review.subject, subject);
     assert!(review.entries.is_empty());
 
     git.switch("nota/review-one");
-    let note = add_note(&git, &root(), "Please explain this behavior.").unwrap();
+    let note = store
+        .add_note(&root(), "nota/review-one", "Please explain this behavior.")
+        .unwrap();
     assert_eq!(note.kind, ReviewEntryKind::Note);
     assert_eq!(note.message, "Please explain this behavior.");
-    assert_eq!(note.paths.len(), 1);
-    assert!(note.paths[0].starts_with(".nota/notes/note-"));
+    assert!(note.paths.is_empty());
     assert_eq!(
-        git.file(&note.paths[0]).as_deref(),
-        Some("Please explain this behavior.\n")
+        git.commit_message(&root(), &note.commit).unwrap(),
+        "Please explain this behavior.\n\nNota-Note: true\n"
     );
 
     let suggestion = git.commit("Make the behavior explicit.", &["suggested.txt"]);
-    let review = load_review(&git, &root()).unwrap();
+    let review = load_current(&git).unwrap();
     assert_eq!(review.branch, "nota/review-one");
     assert_eq!(review.marker, started.marker);
     assert_eq!(review.subject, subject);
@@ -249,13 +257,53 @@ fn review_branch_records_notes_and_ordinary_project_commits_as_suggestions() {
 }
 
 #[test]
-fn loading_a_review_rejects_suggestions_containing_nota_files() {
+fn notes_are_added_without_checking_out_the_review_branch() {
+    let git = FakeGit::new();
+    let store = GitTrailerStore::new(&git);
+    store
+        .start_review(&root(), "HEAD", Some("nota/elsewhere"))
+        .unwrap();
+
+    let note = store
+        .add_note(&root(), "nota/elsewhere", "Seen from main.")
+        .unwrap();
+    assert_eq!(git.tip("nota/elsewhere"), note.commit);
+    assert_eq!(
+        git.current_branch(&root()).unwrap().as_deref(),
+        Some("main")
+    );
+    let review = store.load_review(&root(), "nota/elsewhere").unwrap();
+    assert_eq!(review.entries.len(), 1);
+}
+
+#[test]
+fn notes_cannot_be_added_to_a_branch_that_is_not_a_review() {
+    let git = FakeGit::new();
+    let error = GitTrailerStore::new(&git)
+        .add_note(&root(), "main", "Not a review.")
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("not a Nota review"));
+}
+
+#[test]
+fn a_note_keeps_its_own_trailer_like_text() {
+    let git = FakeGit::new();
+    let store = GitTrailerStore::new(&git);
+    review_on(&git, "nota/trailers");
+    let note = store
+        .add_note(&root(), "nota/trailers", "Looks off.\n\nSee-Also: issue 3")
+        .unwrap();
+    assert_eq!(note.message, "Looks off.\n\nSee-Also: issue 3");
+}
+
+#[test]
+fn loading_a_review_rejects_note_commits_that_change_files() {
     let git = FakeGit::new();
     review_on(&git, "nota/invalid");
-    git.commit("invalid suggestion", &[".nota/metadata"]);
+    git.commit("invalid note\n\nNota-Note: true", &["suggested.txt"]);
 
-    let error = load_review(&git, &root()).unwrap_err();
-    assert!(format!("{error:#}").contains("may not contain Nota files"));
+    let error = load_current(&git).unwrap_err();
+    assert!(format!("{error:#}").contains("changes project files"));
 }
 
 #[test]
@@ -264,7 +312,7 @@ fn loading_a_review_rejects_empty_suggestion_commits() {
     review_on(&git, "nota/empty");
     git.commit("empty suggestion", &[]);
 
-    let error = load_review(&git, &root()).unwrap_err();
+    let error = load_current(&git).unwrap_err();
     assert!(format!("{error:#}").contains("has no changed project files"));
 }
 
@@ -274,6 +322,6 @@ fn loading_a_review_rejects_suggestions_without_a_comment() {
     review_on(&git, "nota/no-comment");
     git.commit("", &["suggested.txt"]);
 
-    let error = load_review(&git, &root()).unwrap_err();
+    let error = load_current(&git).unwrap_err();
     assert!(format!("{error:#}").contains("has an empty review comment"));
 }

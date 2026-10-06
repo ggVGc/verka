@@ -16,21 +16,25 @@ domain and storage design below is implemented.
 What exists today is the prototype: a review is a Git branch whose marker
 commit records the review id and subject in trailers, and whose later
 first-parent commits are the entries. Git supplies entry identity, ordering,
-concurrency detection, history, and distribution, so there is no store layer.
+concurrency detection, history, and distribution.
 
 Implemented:
 
-- `start_review` (at a Git revision), `add_note`, `load_review`, `load_review_ref`.
-- Exactly two entry kinds, `Note` and `Suggestion`, discriminated by whether
-  every changed path lies under `.nota/notes/`.
-- Validation on load: a suggestion must have a non-empty message, must change
-  at least one project file, and must not touch `.nota/`.
+- A smaller `ReviewStore` trait (`start_review`, `current_review`, `add_note`,
+  `load_review`) with one implementation, `GitTrailerStore`.
+- Exactly two entry kinds, `Note` and `Suggestion`. A note is an empty commit
+  with a `Nota-Note` trailer; any other entry is a suggestion.
+- Validation on load: a note must change no files; a suggestion must have a
+  non-empty message and change at least one project file.
+- Appending a note checks the branch tip it read with a compare-and-swap ref
+  update, so concurrent appends fail instead of being lost.
 
 Not implemented — the sections below describe these, and no code provides them:
 
-- The `ReviewStore` trait and any storage abstraction or backend selection.
-- Optimistic concurrency, expected versions, and `update_entry`; entries are
-  append-only Git commits and are never revised in place.
+- The full `ReviewStore` interface below, review queries, and backend
+  selection.
+- `update_entry`; entries are append-only Git commits and are never revised in
+  place.
 - Suggested edits as structured proposals carrying an expected original range.
   A suggestion is an ordinary Git commit; it is applied by cherry-pick, and a
   Git conflict is the only staleness signal.

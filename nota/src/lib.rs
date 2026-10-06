@@ -2,9 +2,8 @@
 
 mod git;
 mod review;
+mod trailer_store;
 
 pub use git::{Git, SystemGit};
-pub use review::{
-    add_note, load_review, load_review_ref, start_review, Review, ReviewEntry, ReviewEntryKind,
-    StartedReview,
-};
+pub use review::{Review, ReviewEntry, ReviewEntryKind, ReviewStore, StartedReview};
+pub use trailer_store::GitTrailerStore;

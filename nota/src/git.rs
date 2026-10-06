@@ -33,16 +33,15 @@ pub trait Git {
     /// parent's, without changing any ref, the index, or the checkout.
     fn commit_empty(&self, repository: &Path, parent: &str, message: &str) -> Result<String>;
 
-    /// Write `contents` to `path`, relative to the root, and commit only that
-    /// file on the current branch, even if it is ignored. Other staged changes
-    /// stay staged and out of the commit.
-    fn commit_file(
+    /// Move existing `branch` from `expected` to `commit`, failing if it no
+    /// longer points at `expected`.
+    fn update_branch(
         &self,
         repository: &Path,
-        path: &str,
-        contents: &str,
-        message: &str,
-    ) -> Result<String>;
+        branch: &str,
+        commit: &str,
+        expected: &str,
+    ) -> Result<()>;
 
     /// `revision` and its first-parent ancestors, newest first.
     fn first_parent_history(&self, repository: &Path, revision: &str) -> Result<Vec<String>>;
@@ -112,26 +111,15 @@ impl Git for SystemGit {
         )
     }
 
-    fn commit_file(
+    fn update_branch(
         &self,
         repository: &Path,
-        path: &str,
-        contents: &str,
-        message: &str,
-    ) -> Result<String> {
-        let absolute = repository.join(path);
-        if let Some(parent) = absolute.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&absolute, contents)
-            .with_context(|| format!("writing {}", absolute.display()))?;
-        checked(repository, &["add", "--force", "--", path])?;
-        checked_with_input(
-            repository,
-            &["commit", "--only", "-F", "-", "--", path],
-            message,
-        )?;
-        self.resolve_commit(repository, "HEAD")
+        branch: &str,
+        commit: &str,
+        expected: &str,
+    ) -> Result<()> {
+        let refname = format!("refs/heads/{branch}");
+        checked(repository, &["update-ref", &refname, commit, expected]).map(drop)
     }
 
     fn first_parent_history(&self, repository: &Path, revision: &str) -> Result<Vec<String>> {
