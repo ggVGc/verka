@@ -154,8 +154,13 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
     let mut items = view
         .rows
         .iter()
-        .map(|row| {
-            let mut item = row_item(row, view.all_workspaces);
+        .enumerate()
+        .map(|(index, row)| {
+            let last_in_directory = !matches!(
+                view.rows.get(index + 1),
+                Some(InteractionRow::Interaction { grouped: true, .. })
+            );
+            let mut item = row_item(row, view.all_workspaces, last_in_directory);
             match row {
                 InteractionRow::Workspace(_) | InteractionRow::Directory(_) => striped = false,
                 InteractionRow::Interaction { selected, .. } => {
@@ -271,12 +276,17 @@ fn row_height(row: &InteractionRow<'_>) -> usize {
 
 /// `under_workspaces` says whether the list is drawn under Workspace
 /// headings, which every row then steps in beneath.
-fn row_item(row: &InteractionRow<'_>, under_workspaces: bool) -> Vec<Line<'static>> {
-    // Each heading's rows are stepped in past where its name starts, so which
-    // heading a row belongs to reads from the left edge. The Workspace
-    // headings, the outermost, sit against the edge itself.
-    let step = |levels: usize| " ".repeat(2 * levels);
-    let workspace_level = usize::from(under_workspaces);
+fn row_item(
+    row: &InteractionRow<'_>,
+    under_workspaces: bool,
+    last_in_directory: bool,
+) -> Vec<Line<'static>> {
+    // Bright, undimmed tree lines make membership readable independently of
+    // heading colors, including when the heading has scrolled out of view.
+    let group_style = Style::default()
+        .fg(theme::TEXT)
+        .add_modifier(Modifier::BOLD);
+    let workspace_edge = if under_workspaces { "│ " } else { "" };
     match row {
         InteractionRow::Workspace(name) => {
             return vec![Line::from(Span::styled(
@@ -287,10 +297,13 @@ fn row_item(row: &InteractionRow<'_>, under_workspaces: bool) -> Vec<Line<'stati
             ))];
         }
         InteractionRow::Directory(name) => {
-            return vec![Line::from(Span::styled(
-                format!(" {}{name}/", step(workspace_level)),
-                Style::default().fg(theme::DIRECTORY_NAME),
-            ))];
+            return vec![Line::from(vec![
+                Span::styled(workspace_edge, group_style),
+                Span::styled(
+                    format!(" {name}/"),
+                    Style::default().fg(theme::DIRECTORY_NAME),
+                ),
+            ])];
         }
         InteractionRow::Interaction { .. } => {}
     }
@@ -325,10 +338,16 @@ fn row_item(row: &InteractionRow<'_>, under_workspaces: bool) -> Vec<Line<'stati
         .bg(status_background(*status, *selected))
         .add_modifier(Modifier::BOLD);
     let running = matches!(status, InteractionStatus::Running { .. });
-    let indent = step(workspace_level + usize::from(*grouped));
+    let directory_edge = if !*grouped {
+        ""
+    } else if last_in_directory {
+        " └─ "
+    } else {
+        " ├─ "
+    };
     let edge = branch_indent(*depth);
     let mut main = vec![
-        Span::raw(indent.clone()),
+        Span::styled(format!("{workspace_edge}{directory_edge}"), group_style),
         Span::styled(edge.clone(), Style::default().fg(theme::INACTIVE)),
         // The running indicator is already as wide as the block.
         Span::styled(
@@ -430,10 +449,23 @@ fn row_item(row: &InteractionRow<'_>, under_workspaces: bool) -> Vec<Line<'stati
     }
     let mut lines = vec![Line::from(main)];
     if let Some(text) = last_message {
-        lines.push(Line::from(Span::styled(
-            format!("{indent}{}    « {text}", " ".repeat(edge.chars().count())),
-            Style::default().fg(theme::SUBORDINATE_TEXT),
-        )));
+        let directory_continuation = if !*grouped {
+            ""
+        } else if last_in_directory {
+            "    "
+        } else {
+            " │  "
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{workspace_edge}{directory_continuation}"),
+                group_style,
+            ),
+            Span::styled(
+                format!("{}    « {text}", " ".repeat(edge.chars().count())),
+                Style::default().fg(theme::SUBORDINATE_TEXT),
+            ),
+        ]));
     }
     lines
 }
@@ -586,12 +618,10 @@ mod tests {
         assert_eq!(height(&view, 12), 5);
     }
 
-    /// Each heading's rows are stepped in past where its name starts: under
-    /// a Workspace heading, which sits against the edge, and again under a
-    /// directory heading within it,
-    /// where they also drop the branch the heading already gives.
+    /// Tree lines show workspace and directory membership without color;
+    /// grouped rows also drop the branch the directory heading already gives.
     #[test]
-    fn rows_are_indented_under_their_headings() {
+    fn rows_have_tree_lines_under_their_headings() {
         let row = |name: &'static str, grouped| InteractionRow::Interaction {
             name: name.into(),
             grouped,
@@ -607,7 +637,7 @@ mod tests {
             uncommitted: false,
             completion: CompletionState::Active,
             tags: &[],
-            last_message: None,
+            last_message: grouped.then_some("preview"),
         };
         let lines = |view: &InteractionNavigator<'_>| {
             rendered(view)
@@ -626,22 +656,32 @@ mod tests {
                 InteractionRow::Directory("checkout".into()),
                 row("first", true),
                 row("second", true),
+                InteractionRow::Directory("other".into()),
+                row("third", true),
             ],
             ..many_rows(0)
         };
         let screen = lines(&all);
         assert!(screen[1].starts_with("│Payments"), "{screen:#?}");
         assert!(
-            screen[2].starts_with("│   ●  alone · feature · claude"),
+            screen[2].starts_with("││  ●  alone · feature · claude"),
             "{screen:#?}"
         );
-        assert!(screen[3].starts_with("│   checkout/"), "{screen:#?}");
+        assert!(screen[3].starts_with("││  checkout/"), "{screen:#?}");
         assert!(
-            screen[4].starts_with("│     ●  first · claude "),
+            screen[4].starts_with("││  ├─  ●  first · claude "),
             "{screen:#?}"
         );
         assert!(
-            screen[5].starts_with("│     ●  second · claude "),
+            screen[6].starts_with("││  └─  ●  second · claude "),
+            "{screen:#?}"
+        );
+
+        assert!(screen[5].starts_with("││  │      « preview"), "{screen:#?}");
+        assert!(screen[7].starts_with("││         « preview"), "{screen:#?}");
+        assert!(screen[8].starts_with("││  other/"), "{screen:#?}");
+        assert!(
+            screen[9].starts_with("││  └─  ●  third · claude"),
             "{screen:#?}"
         );
 
@@ -651,6 +691,7 @@ mod tests {
                 row("alone", false),
                 InteractionRow::Directory("checkout".into()),
                 row("first", true),
+                row("outside", false),
             ],
             ..many_rows(0)
         };
@@ -661,7 +702,12 @@ mod tests {
         );
         assert!(screen[2].starts_with("│ checkout/"), "{screen:#?}");
         assert!(
-            screen[3].starts_with("│   ●  first · claude "),
+            screen[3].starts_with("│ └─  ●  first · claude "),
+            "{screen:#?}"
+        );
+        assert!(screen[4].starts_with("│        « preview"), "{screen:#?}");
+        assert!(
+            screen[5].starts_with("│ ●  outside · feature · claude"),
             "{screen:#?}"
         );
     }
