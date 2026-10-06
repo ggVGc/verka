@@ -55,9 +55,10 @@ impl ReviewStore for GitTrailerStore<'_> {
     ) -> Result<StartedReview> {
         let repository = self.git.repository_root(path)?;
         let subject = self.git.resolve_commit(&repository, revision)?;
-        let branch = branch
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("nota/review-{}", ulid::Ulid::new()));
+        let branch = match branch {
+            Some(branch) => branch.to_string(),
+            None => self.default_branch(&repository, revision, &subject)?,
+        };
         self.git.validate_branch_name(&repository, &branch)?;
         if self.git.branch_exists(&repository, &branch)? {
             bail!("review branch `{branch}` already exists");
@@ -115,6 +116,28 @@ impl ReviewStore for GitTrailerStore<'_> {
 }
 
 impl GitTrailerStore<'_> {
+    /// `nota/review-<source>`, where `<source>` is the local branch `revision`
+    /// names (or the checked-out branch for `HEAD`), falling back to the short
+    /// subject commit. A numeric suffix keeps the name unused.
+    fn default_branch(&self, repository: &Path, revision: &str, subject: &str) -> Result<String> {
+        let source = if revision == "HEAD" {
+            self.git.current_branch(repository)?
+        } else if self.git.branch_exists(repository, revision)? {
+            Some(revision.to_string())
+        } else {
+            None
+        };
+        let source = source.unwrap_or_else(|| subject[..subject.len().min(12)].to_string());
+        let base = format!("nota/review-{source}");
+        let mut branch = base.clone();
+        let mut n = 2;
+        while self.git.branch_exists(repository, &branch)? {
+            branch = format!("{base}-{n}");
+            n += 1;
+        }
+        Ok(branch)
+    }
+
     /// Find the review marker nearest the tip of `branch` on its first-parent
     /// history, and check that it names `branch`.
     fn read_branch(&self, repository: &Path, branch: &str) -> Result<Branch> {

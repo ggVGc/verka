@@ -23,7 +23,9 @@ comment as work.
 ## Review representation
 
 A review conventionally uses `nota/<review-id>` as its branch name. Callers may
-supply the name; the default generates `nota/review-<ulid>`. An integration
+supply the name; the default is `nota/review-<source>`, where `<source>` is the
+local branch the revision names (the checked-out branch for `HEAD`) or else the
+short subject commit, with `-2`, `-3`, … appended while taken. An integration
 normally passes its own identity instead — Orka uses `nota/<verification-id>` —
 which Nota records and checks but never interprets. Starting a review creates
 the branch without checking it out and adds one empty marker commit whose parent

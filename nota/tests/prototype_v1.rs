@@ -331,3 +331,26 @@ fn loading_a_review_rejects_suggestions_without_a_comment() {
     let error = load_current(&git).unwrap_err();
     assert!(format!("{error:#}").contains("has an empty review comment"));
 }
+
+#[test]
+fn a_default_review_branch_is_named_after_the_source_branch() {
+    let git = FakeGit::new();
+    let store = GitTrailerStore::new(&git);
+    let first = store.start_review(&root(), "main", None).unwrap();
+    let again = store.start_review(&root(), "HEAD", None).unwrap();
+    let third = store.start_review(&root(), "main", None).unwrap();
+    assert_eq!(first.branch, "nota/review-main");
+    assert_eq!(again.branch, "nota/review-main-2");
+    assert_eq!(third.branch, "nota/review-main-3");
+    assert!(store.load_review(&root(), "nota/review-main-2").is_ok());
+}
+
+#[test]
+fn a_default_review_of_a_bare_commit_is_named_after_the_commit() {
+    let git = FakeGit::new();
+    let subject = git.tip("main");
+    let started = GitTrailerStore::new(&git)
+        .start_review(&root(), &subject, None)
+        .unwrap();
+    assert_eq!(started.branch, format!("nota/review-{}", &subject[..12]));
+}
