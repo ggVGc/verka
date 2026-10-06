@@ -717,6 +717,10 @@ pub enum InteractionActivityReason {
     /// but nothing of the previous run's process survived: resuming the
     /// Session is what brings an agent back.
     ServerRestarted,
+    /// The Session was just branched from another one and nothing has run it
+    /// yet: it is listed so the operator can find the branch beside its
+    /// source, and resuming it is what starts its first agent.
+    Branched,
 }
 
 impl InteractionActivityReason {
@@ -965,6 +969,12 @@ pub struct InteractionSummary {
     /// on every refresh.
     #[serde(default)]
     pub focus_requested: bool,
+    /// Where the Session this interaction serves was branched from — see
+    /// [`SessionSummary::origin`] — so a listing can nest a branch beneath
+    /// its source the way the stored-session tree does. `None` for a Session
+    /// launched fresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<SessionOrigin>,
 }
 
 /// Where a Session came from, when it was not launched fresh but branched

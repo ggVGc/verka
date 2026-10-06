@@ -43,6 +43,9 @@ pub enum InteractionRow<'a> {
         /// The row sits under a [`InteractionRow::Directory`] heading, and is
         /// indented beneath it.
         grouped: bool,
+        /// How many sources deep this interaction was branched: nested
+        /// beneath the entry it came from, as the Session picker nests it.
+        depth: usize,
         provider: &'a str,
         /// The Git branch checked out for this interaction. `None` means the
         /// interaction is not associated with a Git checkout; a detached
@@ -294,6 +297,7 @@ fn row_item(row: &InteractionRow<'_>, under_workspaces: bool) -> Vec<Line<'stati
     let InteractionRow::Interaction {
         name,
         grouped,
+        depth,
         provider,
         branch,
         status,
@@ -322,8 +326,10 @@ fn row_item(row: &InteractionRow<'_>, under_workspaces: bool) -> Vec<Line<'stati
         .add_modifier(Modifier::BOLD);
     let running = matches!(status, InteractionStatus::Running { .. });
     let indent = step(workspace_level + usize::from(*grouped));
+    let edge = branch_indent(*depth);
     let mut main = vec![
         Span::raw(indent.clone()),
+        Span::styled(edge.clone(), Style::default().fg(theme::INACTIVE)),
         // The running indicator is already as wide as the block.
         Span::styled(
             if running {
@@ -425,11 +431,22 @@ fn row_item(row: &InteractionRow<'_>, under_workspaces: bool) -> Vec<Line<'stati
     let mut lines = vec![Line::from(main)];
     if let Some(text) = last_message {
         lines.push(Line::from(Span::styled(
-            format!("{indent}    « {text}"),
+            format!("{indent}{}    « {text}", " ".repeat(edge.chars().count())),
             Style::default().fg(theme::SUBORDINATE_TEXT),
         )));
     }
     lines
+}
+
+/// The tree edge a branch hangs from, matching the Session picker's: a child
+/// starts beneath its source's content, and each further level carries that
+/// indent forward.
+fn branch_indent(depth: usize) -> String {
+    if depth == 0 {
+        String::new()
+    } else {
+        format!("{}└─ ", "  ".repeat(depth))
+    }
 }
 
 fn status_marker(status: InteractionStatus) -> (&'static str, ratatui::style::Color) {
@@ -489,6 +506,44 @@ mod tests {
             .collect()
     }
 
+    fn row(
+        name: &'static str,
+        depth: usize,
+        last_message: Option<&'static str>,
+    ) -> InteractionRow<'static> {
+        InteractionRow::Interaction {
+            name: name.into(),
+            grouped: false,
+            depth,
+            provider: "codex",
+            branch: None,
+            status: InteractionStatus::Stopped(StopTone::Paused),
+            selected: false,
+            loading: false,
+            newly_idle: false,
+            stop_reason: None,
+            rate_limited: None,
+            uncommitted: false,
+            completion: CompletionState::Active,
+            tags: &[],
+            last_message,
+        }
+    }
+
+    /// A branch hangs beneath its source with the Session picker's tree edge,
+    /// and its last message is indented along with it.
+    #[test]
+    fn a_branch_is_drawn_nested_beneath_its_source() {
+        let view = InteractionNavigator {
+            rows: vec![row("source", 0, None), row("branch", 1, Some("forked"))],
+            ..many_rows(0)
+        };
+        let screen = rendered(&view);
+        assert!(screen.contains("│ ■  source · codex"), "{screen}");
+        assert!(screen.contains("│  └─  ■  branch · codex"), "{screen}");
+        assert!(screen.contains("│         « forked"), "{screen}");
+    }
+
     #[test]
     fn renders_grouping_activity_and_continuation_rows() {
         let tags = vec!["bug".into(), "urgent".into()];
@@ -504,6 +559,7 @@ mod tests {
                 InteractionRow::Interaction {
                     name: "repair checkout".into(),
                     grouped: false,
+                    depth: 0,
                     provider: "codex",
                     branch: Some("fix"),
                     status: InteractionStatus::Running { events: 2 },
@@ -539,6 +595,7 @@ mod tests {
         let row = |name: &'static str, grouped| InteractionRow::Interaction {
             name: name.into(),
             grouped,
+            depth: 0,
             provider: "claude",
             branch: Some("feature"),
             status: InteractionStatus::Idle,
@@ -623,6 +680,7 @@ mod tests {
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 grouped: false,
+                depth: 0,
                 provider: "claude",
                 branch: None,
                 status: InteractionStatus::Stopped(StopTone::Paused),
@@ -655,6 +713,7 @@ mod tests {
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 grouped: false,
+                depth: 0,
                 provider: "claude",
                 branch: None,
                 status: InteractionStatus::Idle,
@@ -684,6 +743,7 @@ mod tests {
                 .map(|index| InteractionRow::Interaction {
                     name: format!("task {index}").into(),
                     grouped: false,
+                    depth: 0,
                     provider: "claude",
                     branch: None,
                     status: InteractionStatus::Idle,

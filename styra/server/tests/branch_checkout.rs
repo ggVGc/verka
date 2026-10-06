@@ -14,7 +14,7 @@ use styra_server::agent::{MessageFormat, Profile, Provider, Selection};
 use styra_server::ensure_server;
 use styra_server::event::Protocol;
 use styra_server::journal::{self, Journal};
-use styra_server::protocol::BranchHistory;
+use styra_server::protocol::{BranchHistory, InteractionActivity, InteractionActivityReason};
 use styra_server::worktree::Checkout;
 
 /// One Codex conversation, in Codex's own on-disk rollout shape.
@@ -166,6 +166,33 @@ fn branching_a_session_forks_the_checkout_it_works_in() {
     assert_eq!(
         journal::read_session_checkout(&source_path).unwrap(),
         Some(Checkout::at(source_checkout))
+    );
+
+    // Nothing runs the branch yet, but it is listed among the interactions,
+    // stopped, working in its own checkout and naming the Session it came
+    // from so a listing can nest it there.
+    let row = client
+        .list_interactions()
+        .unwrap()
+        .into_iter()
+        .find(|interaction| interaction.id == branched.id)
+        .expect("the branch is listed among the interactions");
+    assert_eq!(row.activity, InteractionActivity::Stopped);
+    assert_eq!(
+        row.activity_reason,
+        Some(InteractionActivityReason::Branched)
+    );
+    assert_eq!(
+        row.origin.map(|origin| origin.session_id),
+        Some(source_id.clone())
+    );
+    assert_eq!(row.workspace, path);
+    let loaded = client
+        .load_interaction(&branched.id)
+        .expect("the listed branch opens");
+    assert_eq!(
+        loaded.summary.activity_reason,
+        Some(InteractionActivityReason::Branched)
     );
 
     // The daemon this test spawned is detached, so it would outlive the run

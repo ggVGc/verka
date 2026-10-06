@@ -782,6 +782,7 @@ M.types.InteractionSummary = {
     { name = "events", required = false, type = { kind = "number", integer = true } },
     { name = "completed", required = false, type = { kind = "ref", name = "CompletionState" } },
     { name = "focus_requested", required = false, type = { kind = "boolean" } },
+    { name = "origin", required = false, type = { kind = "optional", inner = { kind = "ref", name = "SessionOrigin" } } },
   },
 }
 
@@ -1080,6 +1081,7 @@ M.types.InteractionActivityReason = {
       },
     } },
     { name = "server_restarted", payload = { kind = "unit" } },
+    { name = "branched", payload = { kind = "unit" } },
   },
 }
 
@@ -1749,7 +1751,7 @@ M.InteractionActivity = {
   STOPPED = "stopped",
 }
 
-M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "exited", "server_restarted" }
+M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "exited", "server_restarted", "branched" }
 --- Wire spellings of `InteractionActivityReason`.
 M.InteractionActivityReason = {
   TURN_COMPLETED = "turn_completed",
@@ -1760,6 +1762,7 @@ M.InteractionActivityReason = {
   PAUSED = "paused",
   EXITED = "exited",
   SERVER_RESTARTED = "server_restarted",
+  BRANCHED = "branched",
 }
 
 M.enums.AgentEvent = { "user_message", "thread_started", "turn_started", "turn_completed", "usage_updated", "command_started", "command_completed", "file_changed", "diff_updated", "tool_started", "tool_completed", "plan_updated", "agent_message", "thinking", "error", "model_changed", "branched", "task_started", "task_progress", "task_completed", "background_tasks", "unknown", "malformed" }

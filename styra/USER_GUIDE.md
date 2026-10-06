@@ -148,6 +148,9 @@ loaded once the cursor rests on it, so the list can be crossed without waiting
 for every row on the way; the row being loaded says so, and any other key acts
 on it as soon as it arrives. When an interaction is associated with a Git
 checkout, its row also names the checked-out branch (or says `detached head`).
+A branched interaction is listed beneath the one it was branched from, as in
+the session picker. Branching (`B`) lists the new interaction straight away,
+stopped as `branched, not started`, until a message resumes it.
 An interaction that went idle away from every
 client's screen, and has not been focused since, is marked `NEWLY IDLE`; the
 event list's bottom border counts those rows, beside the `running/idle/stopped`

@@ -88,7 +88,12 @@ impl Roster {
             .filter(|entry| entry.session_path.is_dir())
             .map(|mut entry| {
                 entry.summary.activity = InteractionActivity::Stopped;
-                entry.summary.activity_reason = Some(InteractionActivityReason::ServerRestarted);
+                // A branch nothing has run yet lost no agent to the restart,
+                // so it keeps saying what it is.
+                if entry.summary.activity_reason != Some(InteractionActivityReason::Branched) {
+                    entry.summary.activity_reason =
+                        Some(InteractionActivityReason::ServerRestarted);
+                }
                 // Deliberately not restored, for the reason the quota log does
                 // not restore its announcements: a notification is owed to the
                 // operator of the run that raised it, and this is not that run.
@@ -112,6 +117,16 @@ impl Roster {
                             .ok()
                             .flatten()
                             .and_then(|checkout| checkout.branched_from);
+                }
+                // Where a Session was branched from never changes, but a row
+                // mirrored before summaries carried it does not say.
+                if entry.summary.origin.is_none() {
+                    entry.summary.origin = crate::journal::session_summary_at(
+                        &entry.session_path,
+                        &entry.summary.workspace_id,
+                    )
+                    .ok()
+                    .and_then(|summary| summary.origin);
                 }
                 (entry.summary.id.clone(), entry)
             })
@@ -170,6 +185,20 @@ impl Roster {
         entry.summary.activity_reason = Some(InteractionActivityReason::Paused);
         entry.summary.activity_since_ms = crate::journal::now_ms();
         true
+    }
+
+    /// List a row this run has no agent for, as a restored one is listed:
+    /// a Session just branched off another, stopped until the operator
+    /// resumes it. It is mirrored with the rest, so a branch left unstarted
+    /// is still beside its source after a restart.
+    pub fn adopt(&self, session_path: PathBuf, summary: InteractionSummary) {
+        self.lock().insert(
+            summary.id.clone(),
+            Entry {
+                session_path,
+                summary,
+            },
+        );
     }
 
     /// Drop a restored row: the operator closed it, or this run has revived
@@ -332,6 +361,7 @@ mod tests {
             events: 12,
             completed: CompletionState::Active,
             focus_requested: false,
+            origin: None,
         }
     }
 
