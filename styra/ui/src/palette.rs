@@ -90,6 +90,7 @@ pub const MUTED_ROSE_TINT: Color = Color::Rgb(51, 42, 42);
 pub const STONE_TINT: Color = Color::Rgb(53, 51, 47);
 /// A red a fifth of the way up from [`NEAR_BLACK`].
 pub const RED_TINT: Color = Color::Rgb(64, 24, 24);
+pub const RED_FG: Color = Color::Rgb(255, 177, 177);
 /// [`PALE_PINK`] nearly half the way up from [`NEAR_BLACK`].
 pub const PALE_PINK_TINT_BRIGHT: Color = Color::Rgb(125, 107, 107);
 /// [`AMBER_YELLOW`] nearly half the way up from [`NEAR_BLACK`].

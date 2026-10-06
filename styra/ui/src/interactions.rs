@@ -351,7 +351,7 @@ fn row_item(row: &InteractionRow<'_>, under_workspaces: bool) -> Vec<Line<'stati
     // every other row's, whatever its status.
     let name_style = if *selected {
         Style::default()
-            .fg(theme::SELECTED_INTERACTION_TEXT)
+            .fg(theme::SELECTED_LIVE_INTERACTION_TEXT)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(match status {
