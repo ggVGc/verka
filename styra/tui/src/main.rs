@@ -465,6 +465,9 @@ fn main() -> Result<()> {
     // changes what this client views; server-owned Interactions continue. In
     // standalone mode the server owner's teardown ends them when this process
     // leaves, after the terminal has been restored below.
+    // Sessions left by following a branch marker or picking another Session,
+    // newest last, for Ctrl-O to return to.
+    let mut jumps: Vec<String> = Vec::new();
     let result = loop {
         let outcome = match event_loop::run(
             &mut terminal,
@@ -516,15 +519,23 @@ fn main() -> Result<()> {
             // Switch only this client's view. In particular, a running
             // interaction for the Session being left remains server-owned.
             RunOutcome::OpenSession(session_id) => {
-                match session::open_session(&client, &session_id) {
-                    Ok((mut new_app, new_live)) => {
-                        new_app.launch.interaction = launch.clone();
-                        app = new_app;
-                        live = new_live;
+                let left = app.session_id.clone();
+                if open_session_view(&client, &launch, &mut app, &mut live, &session_id)
+                    && !left.is_empty()
+                    && left != session_id
+                {
+                    jumps.push(left);
+                }
+            }
+            // Ctrl-O: walk back along the Sessions left by `OpenSession`,
+            // skipping any that are the one already on screen.
+            RunOutcome::JumpBack => {
+                let current = app.session_id.clone();
+                match std::iter::from_fn(|| jumps.pop()).find(|id| *id != current) {
+                    Some(session_id) => {
+                        open_session_view(&client, &launch, &mut app, &mut live, &session_id);
                     }
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not open Session {session_id}: {error:#}"
-                    ))),
+                    None => app.show_action_message("no previous interaction to go back to"),
                 }
             }
             // Return to the blank start screen. Reset has already stopped the
@@ -555,6 +566,31 @@ fn main() -> Result<()> {
 
     terminal.close()?;
     result
+}
+
+/// Switch this client's view to `session_id`, logging on the screen being left
+/// when it cannot be opened. Reports whether the switch happened.
+fn open_session_view(
+    client: &Client,
+    launch: &LaunchPolicy,
+    app: &mut App,
+    live: &mut Attachment,
+    session_id: &str,
+) -> bool {
+    match session::open_session(client, session_id) {
+        Ok((mut new_app, new_live)) => {
+            new_app.launch.interaction = launch.clone();
+            *app = new_app;
+            *live = new_live;
+            true
+        }
+        Err(error) => {
+            app.push_log(LogEntry::error(format!(
+                "could not open Session {session_id}: {error:#}"
+            )));
+            false
+        }
+    }
 }
 
 /// The Workspace `--skip-workspace-list` enters from a directory that has none

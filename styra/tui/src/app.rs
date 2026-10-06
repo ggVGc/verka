@@ -391,6 +391,9 @@ pub enum Request {
     /// skipping the picker — e.g. right after branching one, to look at the
     /// result rather than having to find it again in the list.
     OpenSession(String),
+    /// Return to the Session viewed before the last [`Request::OpenSession`],
+    /// as Ctrl-O does in Vim's jump list.
+    JumpBack,
     /// Open the server's live interactions above the main event timeline.
     Interactions,
     /// Make a newly idle interaction current when one is unseen; otherwise,

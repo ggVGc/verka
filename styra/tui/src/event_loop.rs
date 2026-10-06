@@ -36,6 +36,8 @@ pub enum RunOutcome {
         open_interactions: bool,
     },
     OpenSession(String),
+    /// Reopen the Session viewed before the last [`RunOutcome::OpenSession`].
+    JumpBack,
     Reset,
     NewSession,
 }
@@ -1346,6 +1348,7 @@ pub fn run(
                 }
             }
             Some(Request::OpenSession(id)) => return Ok(RunOutcome::OpenSession(id)),
+            Some(Request::JumpBack) => return Ok(RunOutcome::JumpBack),
             Some(Request::Sessions) => {
                 let mut sessions = client.list_sessions(&workspace_id)?;
                 if sessions.is_empty() {

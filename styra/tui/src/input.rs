@@ -208,6 +208,7 @@ pub fn handle_list_key(
             return app.toggle_entry_log()
         }
         k if GLOBAL_DETAILS.matches(k) => return app.toggle_view(View::Driva),
+        k if GLOBAL_JUMP_BACK.matches(k) => return app.ask(Request::JumpBack),
         k if GLOBAL_AUTO_COMMIT.matches(k) => return toggle_auto_commit(app),
         k if GLOBAL_FILES.matches(k) && app.view != View::Answer => return app.toggle_files(),
         k if GLOBAL_FILES_ALIAS.matches(k)
