@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use nota::{Git, GitTrailerStore, ReviewEntryKind, ReviewStore};
+use nota::{Git, GitTrailerStore, ReviewEntryKind, ReviewQuery, ReviewStore};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -18,6 +18,7 @@ struct State {
     branches: BTreeMap<String, String>,
     /// The checked-out branch; `None` is a detached HEAD.
     head: Option<String>,
+    advance_after_listing: Option<(String, String)>,
 }
 
 /// An in-memory repository at [`ROOT`] whose `main` branch holds one commit,
@@ -129,7 +130,22 @@ impl Git for FakeGit {
     fn branch_tip(&self, _repository: &Path, branch: &str) -> Result<String> {
         let state = self.state.borrow();
         let commit = state.branches.get(branch);
-        commit.cloned().with_context(|| format!("no branch `{branch}`"))
+        commit
+            .cloned()
+            .with_context(|| format!("no branch `{branch}`"))
+    }
+
+    fn local_branches(&self, _repository: &Path) -> Result<Vec<(String, String)>> {
+        let mut state = self.state.borrow_mut();
+        let branches = state
+            .branches
+            .iter()
+            .map(|(branch, tip)| (branch.clone(), tip.clone()))
+            .collect();
+        if let Some((branch, tip)) = state.advance_after_listing.take() {
+            state.branches.insert(branch, tip);
+        }
+        Ok(branches)
     }
 
     fn create_branch(&self, _repository: &Path, branch: &str, commit: &str) -> Result<()> {
@@ -353,4 +369,139 @@ fn a_default_review_of_a_bare_commit_is_named_after_the_commit() {
         .start_review(&root(), &subject, None)
         .unwrap();
     assert_eq!(started.branch, format!("nota/review-{}", &subject[..12]));
+}
+
+#[test]
+fn listing_discovers_custom_names_counts_entries_and_sorts_by_branch() {
+    let git = FakeGit::new();
+    let store = GitTrailerStore::new(&git);
+    assert_eq!(
+        store
+            .list_reviews(&root(), &ReviewQuery::default())
+            .unwrap(),
+        nota::ReviewIndex::default()
+    );
+    git.create_branch(&root(), "nota/ordinary", &git.tip("main"))
+        .unwrap();
+    let z = store
+        .start_review(&root(), "main", Some("z-custom"))
+        .unwrap();
+    store.start_review(&root(), "main", Some("nota/a")).unwrap();
+    store.add_note(&root(), "z-custom", "A note").unwrap();
+    git.switch("z-custom");
+    let tip = git.commit("A suggestion", &["src/lib.rs"]);
+    let index = store
+        .list_reviews(&root(), &ReviewQuery::default())
+        .unwrap();
+    assert!(index.diagnostics.is_empty());
+    assert_eq!(
+        index
+            .reviews
+            .iter()
+            .map(|r| r.branch.as_str())
+            .collect::<Vec<_>>(),
+        ["nota/a", "z-custom"]
+    );
+    assert_eq!(index.reviews[0].notes, 0);
+    assert_eq!(index.reviews[0].suggestions, 0);
+    assert_eq!(index.reviews[1].marker, z.marker);
+    assert_eq!(index.reviews[1].subject, z.subject);
+    assert_eq!(index.reviews[1].tip, tip);
+    assert_eq!(index.reviews[1].notes, 1);
+    assert_eq!(index.reviews[1].suggestions, 1);
+}
+
+#[test]
+fn listing_filters_exact_subject_and_rejects_unknown_revisions() {
+    let git = FakeGit::new();
+    let store = GitTrailerStore::new(&git);
+    store.start_review(&root(), "main", Some("old")).unwrap();
+    git.commit("Next subject", &["src/lib.rs"]);
+    let new = store.start_review(&root(), "main", Some("new")).unwrap();
+    let query = ReviewQuery {
+        subject: Some("HEAD".into()),
+    };
+    let index = store.list_reviews(&root(), &query).unwrap();
+    assert_eq!(index.reviews.len(), 1);
+    assert_eq!(index.reviews[0].branch, "new");
+    assert_eq!(index.reviews[0].subject, new.subject);
+    assert!(store
+        .list_reviews(
+            &root(),
+            &ReviewQuery {
+                subject: Some("missing".into())
+            }
+        )
+        .is_err());
+}
+
+#[test]
+fn listing_reports_invalid_reviews_without_hiding_valid_ones() {
+    let git = FakeGit::new();
+    let store = GitTrailerStore::new(&git);
+    store.start_review(&root(), "main", Some("valid")).unwrap();
+    store
+        .start_review(&root(), "main", Some("bad-entry"))
+        .unwrap();
+    git.switch("bad-entry");
+    git.commit("Invalid note\n\nNota-Note: true", &["src/lib.rs"]);
+    git.create_branch(&root(), "wrong-name", &git.tip("valid"))
+        .unwrap();
+    let subject = git.tip("main");
+    let invalid = git.add_commit(
+        Some(subject.clone()),
+        "Marker\n\nNota-Review: bad-subject\nNota-Subject: wrong",
+        &[],
+    );
+    git.create_branch(&root(), "bad-subject", &invalid).unwrap();
+    let partial = git.add_commit(Some(subject), "Marker\n\nNota-Review: partial", &[]);
+    git.create_branch(&root(), "partial", &partial).unwrap();
+    let index = store
+        .list_reviews(&root(), &ReviewQuery::default())
+        .unwrap();
+    assert_eq!(index.reviews.len(), 1);
+    assert_eq!(index.reviews[0].branch, "valid");
+    assert_eq!(
+        index
+            .diagnostics
+            .iter()
+            .map(|d| d.branch.as_str())
+            .collect::<Vec<_>>(),
+        ["bad-entry", "bad-subject", "partial", "wrong-name"]
+    );
+    assert!(index.diagnostics[0]
+        .message
+        .contains("changes project files"));
+    assert!(index.diagnostics[1].message.contains("invalid subject"));
+    assert!(index.diagnostics[2].message.contains("no subject trailer"));
+    assert!(index.diagnostics[3].message.contains("does not match"));
+}
+
+#[test]
+fn listing_uses_captured_tips_and_refreshes_on_subsequent_reads() {
+    let git = FakeGit::new();
+    let store = GitTrailerStore::new(&git);
+    let started = store.start_review(&root(), "main", Some("review")).unwrap();
+    let next = git.add_commit(
+        Some(started.marker.clone()),
+        "Later\n\nNota-Note: true",
+        &[],
+    );
+    git.state.borrow_mut().advance_after_listing = Some(("review".into(), next.clone()));
+    let first = store
+        .list_reviews(&root(), &ReviewQuery::default())
+        .unwrap();
+    assert_eq!(first.reviews[0].tip, started.marker);
+    assert_eq!(first.reviews[0].notes, 0);
+    let second = store
+        .list_reviews(&root(), &ReviewQuery::default())
+        .unwrap();
+    assert_eq!(second.reviews[0].tip, next);
+    assert_eq!(second.reviews[0].notes, 1);
+    git.state.borrow_mut().branches.remove("review");
+    assert!(store
+        .list_reviews(&root(), &ReviewQuery::default())
+        .unwrap()
+        .reviews
+        .is_empty());
 }

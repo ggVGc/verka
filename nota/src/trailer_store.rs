@@ -5,7 +5,10 @@
 //! `Nota-Note` trailer rather than by the files it changes.
 
 use crate::git::{Git, SystemGit};
-use crate::review::{Review, ReviewEntry, ReviewEntryKind, ReviewStore, StartedReview};
+use crate::review::{
+    Review, ReviewDiagnostic, ReviewEntry, ReviewEntryKind, ReviewIndex, ReviewQuery, ReviewStore,
+    ReviewSummary, StartedReview,
+};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
@@ -113,6 +116,56 @@ impl ReviewStore for GitTrailerStore<'_> {
             entries,
         })
     }
+
+    fn list_reviews(&self, path: &Path, query: &ReviewQuery) -> Result<ReviewIndex> {
+        let repository = self.git.repository_root(path)?;
+        let subject = query
+            .subject
+            .as_deref()
+            .map(|revision| self.git.resolve_commit(&repository, revision))
+            .transpose()?;
+        let mut branches = self.git.local_branches(&repository)?;
+        branches.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut index = ReviewIndex::default();
+        for (branch, tip) in branches {
+            let summary = (|| -> Result<Option<ReviewSummary>> {
+                let Some(review) = self.read_branch_at(&repository, &branch, tip)? else {
+                    return Ok(None);
+                };
+                if subject
+                    .as_ref()
+                    .is_some_and(|subject| *subject != review.marker.subject)
+                {
+                    return Ok(None);
+                }
+                let mut notes = 0;
+                let mut suggestions = 0;
+                for commit in &review.entries {
+                    match self.entry_at(&repository, commit)?.kind {
+                        ReviewEntryKind::Note => notes += 1,
+                        ReviewEntryKind::Suggestion => suggestions += 1,
+                    }
+                }
+                Ok(Some(ReviewSummary {
+                    branch: branch.clone(),
+                    marker: review.marker.commit,
+                    subject: review.marker.subject,
+                    tip: review.tip,
+                    notes,
+                    suggestions,
+                }))
+            })();
+            match summary {
+                Ok(Some(summary)) => index.reviews.push(summary),
+                Ok(None) => {}
+                Err(error) => index.diagnostics.push(ReviewDiagnostic {
+                    branch,
+                    message: format!("{error:#}"),
+                }),
+            }
+        }
+        Ok(index)
+    }
 }
 
 impl GitTrailerStore<'_> {
@@ -142,6 +195,18 @@ impl GitTrailerStore<'_> {
     /// history, and check that it names `branch`.
     fn read_branch(&self, repository: &Path, branch: &str) -> Result<Branch> {
         let tip = self.git.branch_tip(repository, branch)?;
+        self.read_branch_at(repository, branch, tip)?
+            .with_context(|| format!("`{branch}` is not a Nota review (no review marker found)"))
+    }
+
+    /// Inspect a captured tip so ref changes during discovery cannot mix
+    /// versions. No marker is distinct from a malformed review.
+    fn read_branch_at(
+        &self,
+        repository: &Path,
+        branch: &str,
+        tip: String,
+    ) -> Result<Option<Branch>> {
         let mut history = self
             .git
             .first_parent_history(repository, &tip)
@@ -150,12 +215,15 @@ impl GitTrailerStore<'_> {
             let commit = &history[position];
             let message = self.git.commit_message(repository, commit)?;
             let (_, trailers) = split_trailers(&message);
-            let (Some(review), Some(subject)) = (
-                trailer(&trailers, REVIEW_TRAILER),
-                trailer(&trailers, SUBJECT_TRAILER),
-            ) else {
+            let review = trailer(&trailers, REVIEW_TRAILER);
+            let subject = trailer(&trailers, SUBJECT_TRAILER);
+            if review.is_none() && subject.is_none() {
                 continue;
-            };
+            }
+            let review = review
+                .with_context(|| format!("review marker `{commit}` has no review trailer"))?;
+            let subject = subject
+                .with_context(|| format!("review marker `{commit}` has no subject trailer"))?;
             if self.git.first_parent(repository, commit)?.as_deref() != Some(subject) {
                 bail!("review marker `{commit}` has an invalid subject trailer");
             }
@@ -168,13 +236,13 @@ impl GitTrailerStore<'_> {
             };
             history.truncate(position);
             history.reverse();
-            return Ok(Branch {
+            return Ok(Some(Branch {
                 marker,
                 entries: history,
                 tip,
-            });
+            }));
         }
-        bail!("`{branch}` is not a Nota review (no review marker found)")
+        Ok(None)
     }
 
     fn entry_at(&self, repository: &Path, commit: &str) -> Result<ReviewEntry> {

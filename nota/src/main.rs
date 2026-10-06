@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nota::{GitTrailerStore, ReviewEntryKind, ReviewStore};
+use nota::{GitTrailerStore, ReviewEntryKind, ReviewQuery, ReviewStore};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -15,6 +15,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// List local review branches and their entry counts.
+    List {
+        #[arg(long, default_value = ".")]
+        repository: PathBuf,
+        /// Match the exact pinned subject of this Git revision.
+        #[arg(long)]
+        subject: Option<String>,
+        /// Emit reviews and diagnostics as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Start a review branch at a Git revision.
     Start {
         revision: String,
@@ -56,6 +67,32 @@ fn run(cli: Cli) -> Result<()> {
         None => store.current_review(repository),
     };
     match cli.command {
+        Command::List {
+            repository,
+            subject,
+            json,
+        } => {
+            let index = store.list_reviews(&repository, &ReviewQuery { subject })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&index)?);
+            } else {
+                if index.reviews.is_empty() {
+                    println!("reviews  none");
+                }
+                for review in index.reviews {
+                    println!(
+                        "{}  subject {}  {} notes  {} suggestions",
+                        review.branch,
+                        short(&review.subject),
+                        review.notes,
+                        review.suggestions
+                    );
+                }
+                for diagnostic in index.diagnostics {
+                    eprintln!("warning: {}: {}", diagnostic.branch, diagnostic.message);
+                }
+            }
+        }
         Command::Start {
             revision,
             repository,

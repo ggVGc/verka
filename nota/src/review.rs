@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,6 +34,36 @@ pub enum ReviewEntryKind {
     Suggestion,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReviewQuery {
+    /// A Git revision to resolve and match against the exact pinned subject.
+    pub subject: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReviewSummary {
+    pub branch: String,
+    pub marker: String,
+    pub subject: String,
+    /// The captured branch tip used to read this summary.
+    pub tip: String,
+    pub notes: usize,
+    pub suggestions: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReviewDiagnostic {
+    pub branch: String,
+    pub message: String,
+}
+
+/// Valid reviews and per-branch failures. Ordinary branches are omitted.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ReviewIndex {
+    pub reviews: Vec<ReviewSummary>,
+    pub diagnostics: Vec<ReviewDiagnostic>,
+}
+
 /// How Nota records reviews. A review is still a Git branch whose entries are
 /// first-parent commits; a store decides how markers and notes are encoded in
 /// those commits and validates them on load.
@@ -57,4 +88,8 @@ pub trait ReviewStore {
     /// Load and validate the review on `branch` without requiring it to be
     /// checked out.
     fn load_review(&self, path: &Path, branch: &str) -> Result<Review>;
+
+    /// Discover local review branches, ordered by branch name. Invalid reviews
+    /// are reported separately so they do not hide valid reviews.
+    fn list_reviews(&self, path: &Path, query: &ReviewQuery) -> Result<ReviewIndex>;
 }

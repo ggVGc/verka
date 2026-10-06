@@ -29,6 +29,10 @@ pub trait Git {
     /// other ref with the same name is never chosen instead.
     fn branch_tip(&self, repository: &Path, branch: &str) -> Result<String>;
 
+    /// Local branch names and their captured tip object ids. Excludes remote
+    /// tracking refs and tags, even when a short name would be ambiguous.
+    fn local_branches(&self, repository: &Path) -> Result<Vec<(String, String)>>;
+
     /// Create `branch` at `commit` without checking it out. Fails if the
     /// branch already exists.
     fn create_branch(&self, repository: &Path, branch: &str, commit: &str) -> Result<()>;
@@ -103,6 +107,26 @@ impl Git for SystemGit {
 
     fn branch_tip(&self, repository: &Path, branch: &str) -> Result<String> {
         self.resolve_commit(repository, &format!("refs/heads/{branch}"))
+    }
+
+    fn local_branches(&self, repository: &Path) -> Result<Vec<(String, String)>> {
+        let refs = checked(
+            repository,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%09%(objectname)",
+                "refs/heads/",
+            ],
+        )?;
+        refs.lines()
+            .map(|line| {
+                let (name, tip) = line.split_once('\t').context("invalid branch listing")?;
+                let branch = name
+                    .strip_prefix("refs/heads/")
+                    .context("invalid local ref")?;
+                Ok((branch.to_string(), tip.to_string()))
+            })
+            .collect()
     }
 
     fn create_branch(&self, repository: &Path, branch: &str, commit: &str) -> Result<()> {

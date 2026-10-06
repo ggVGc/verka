@@ -64,10 +64,24 @@ expose suggestions that no longer apply cleanly.
 ## Storage
 
 Callers use the `ReviewStore` trait (`start_review`, `current_review`,
-`add_note`, `load_review`). `GitTrailerStore` is the one implementation and
-encodes reviews as described above. Every method names the review branch
-explicitly; `current_review` resolves the checked-out branch for callers that
-want that default.
+`add_note`, `load_review`, `list_reviews`). `GitTrailerStore` is the one
+implementation and encodes reviews as described above. Single-review methods
+name the review branch explicitly; `current_review` resolves the checked-out
+branch for callers that want that default.
+
+`list_reviews` derives an index from all local branches, including custom names
+outside `nota/`. It reads each branch from its captured tip, validates the
+marker and entries, and returns summaries ordered by branch name with branch,
+marker, subject, tip, and note/suggestion counts. Ordinary branches are skipped;
+malformed reviews are reported separately as per-branch diagnostics. An optional
+subject revision is resolved to an exact commit and matched against the pinned
+subject. Entry validation is limited to reviews matching that filter; marker
+and history failures are reported regardless of the filter.
+
+The index is rebuilt on every read, so ordinary Git commits and branch deletions
+are reflected without hooks or a separate database. Remote tracking branches
+and tags are excluded. Listing changes no refs, index, or checkout. Deleted
+review branches are no longer discoverable through this index.
 
 ## Commands
 
@@ -75,6 +89,7 @@ want that default.
 nota start <revision> [--repository <path>] [--branch <name>]
 nota note <message> [--repository <path>] [--branch <name>]
 nota show [--repository <path>] [--branch <name>]
+nota list [--repository <path>] [--subject <revision>] [--json]
 ```
 
 `start` prints the created branch, subject revision, and suggested worktree
@@ -82,6 +97,11 @@ command. `note` and `show` operate on `--branch`, or on the checked-out review
 branch when it is omitted.
 Reviewers record suggested edits with the ordinary `git add` and `git commit`
 workflow. Nota validates those commits when it loads the review.
+
+`list` prints branch names, pinned subjects, and entry counts, with diagnostics
+on stderr. `--json` emits one object containing `reviews` and `diagnostics`,
+using full commit hashes. Malformed branches do not prevent listing valid
+reviews; repository discovery and subject-resolution failures exit nonzero.
 
 ## Non-goals
 
