@@ -118,11 +118,11 @@ impl GitTrailerStore<'_> {
     /// Find the review marker nearest the tip of `branch` on its first-parent
     /// history, and check that it names `branch`.
     fn read_branch(&self, repository: &Path, branch: &str) -> Result<Branch> {
+        let tip = self.git.branch_tip(repository, branch)?;
         let mut history = self
             .git
-            .first_parent_history(repository, branch)
+            .first_parent_history(repository, &tip)
             .with_context(|| format!("reading review history from `{branch}`"))?;
-        let tip = history.first().cloned().context("empty history")?;
         for position in 0..history.len() {
             let commit = &history[position];
             let message = self.git.commit_message(repository, commit)?;

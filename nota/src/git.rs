@@ -25,6 +25,10 @@ pub trait Git {
 
     fn branch_exists(&self, repository: &Path, branch: &str) -> Result<bool>;
 
+    /// The commit `branch` points at. Unlike [`Git::resolve_commit`], a tag or
+    /// other ref with the same name is never chosen instead.
+    fn branch_tip(&self, repository: &Path, branch: &str) -> Result<String>;
+
     /// Create `branch` at `commit` without checking it out. Fails if the
     /// branch already exists.
     fn create_branch(&self, repository: &Path, branch: &str, commit: &str) -> Result<()>;
@@ -95,6 +99,10 @@ impl Git for SystemGit {
                 .status
                 .success(),
         )
+    }
+
+    fn branch_tip(&self, repository: &Path, branch: &str) -> Result<String> {
+        self.resolve_commit(repository, &format!("refs/heads/{branch}"))
     }
 
     fn create_branch(&self, repository: &Path, branch: &str, commit: &str) -> Result<()> {

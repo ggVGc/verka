@@ -126,6 +126,12 @@ impl Git for FakeGit {
         Ok(self.state.borrow().branches.contains_key(branch))
     }
 
+    fn branch_tip(&self, _repository: &Path, branch: &str) -> Result<String> {
+        let state = self.state.borrow();
+        let commit = state.branches.get(branch);
+        commit.cloned().with_context(|| format!("no branch `{branch}`"))
+    }
+
     fn create_branch(&self, _repository: &Path, branch: &str, commit: &str) -> Result<()> {
         let mut state = self.state.borrow_mut();
         if state.branches.contains_key(branch) {
