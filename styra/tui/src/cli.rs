@@ -43,6 +43,13 @@ pub struct Cli {
     /// choose one from the server's store.
     #[arg(long, num_args = 0..=1, value_name = "SESSION")]
     pub view: Option<Option<PathBuf>>,
+    /// Never stop at the Workspace list: in a directory without a Workspace,
+    /// go straight to the interaction view, on the live interaction that
+    /// would be landed on if any is running, else in the Workspace accessed
+    /// most recently. The live-interaction list is opened whenever any
+    /// interaction is live.
+    #[arg(long, conflicts_with_all = ["view", "workspace"])]
+    pub skip_workspace_list: bool,
     #[command(subcommand)]
     pub command: Option<CliCommand>,
     /// Optional first message, sent to seed the opening turn.

@@ -788,11 +788,24 @@ pub fn first_live_in_workspace(
     interactions: &[InteractionSummary],
     workspace_id: &str,
 ) -> Option<InteractionSummary> {
+    first_live_where(interactions, |interaction| {
+        interaction.workspace_id == workspace_id
+    })
+}
+
+/// [`first_live_in_workspace`] across every Workspace: what a launch that
+/// skips the Workspace list lands on when its directory has no Workspace.
+pub fn first_live(interactions: &[InteractionSummary]) -> Option<InteractionSummary> {
+    first_live_where(interactions, |_| true)
+}
+
+fn first_live_where(
+    interactions: &[InteractionSummary],
+    candidate: impl Fn(&InteractionSummary) -> bool,
+) -> Option<InteractionSummary> {
     let mut live = interactions
         .iter()
-        .filter(|interaction| {
-            interaction.activity.accepting() && interaction.workspace_id == workspace_id
-        })
+        .filter(|interaction| interaction.activity.accepting() && candidate(interaction))
         .cloned()
         .collect::<Vec<_>>();
     sort_interactions(&mut live);
@@ -1774,6 +1787,20 @@ mod tests {
 
         assert!(first_live_in_workspace(&interactions, "workspace").is_none());
         assert!(first_live_in_workspace(&interactions, "unknown").is_none());
+        assert!(first_live(&interactions).is_none());
+    }
+
+    #[test]
+    fn first_live_looks_across_every_workspace() {
+        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
+        elsewhere.workspace_id = "other-workspace".into();
+        let interactions = vec![
+            interaction("stopped", InteractionActivity::Stopped),
+            interaction("running", InteractionActivity::Running),
+            elsewhere,
+        ];
+
+        assert_eq!(first_live(&interactions).unwrap().id, "elsewhere");
     }
 
     #[test]

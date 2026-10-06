@@ -311,6 +311,8 @@ fn main() -> Result<()> {
         let mut workspaces = client.list_workspaces()?;
         if let Some(workspace) = session::find_workspace_for_host(&workspaces, &current_directory) {
             workspace
+        } else if cli.skip_workspace_list {
+            workspace_without_list(&client, &workspaces, current_directory)?
         } else {
             let mut term = match terminal.take() {
                 Some(term) => term,
@@ -435,6 +437,14 @@ fn main() -> Result<()> {
                             interaction.id
                         ))),
                     }
+                } else if cli.skip_workspace_list
+                    && client
+                        .list_interactions()
+                        .is_ok_and(|interactions| interactions::first_live(&interactions).is_some())
+                {
+                    // Nothing live here, but there is elsewhere: the operator
+                    // asked to see it rather than pick a Workspace first.
+                    event_loop::open_interaction_navigator(&mut app, &client);
                 }
             }
         }
@@ -545,6 +555,38 @@ fn main() -> Result<()> {
 
     terminal.close()?;
     result
+}
+
+/// The Workspace `--skip-workspace-list` enters from a directory that has none
+/// of its own: that of the live Interaction startup would land on, so it is
+/// joined rather than left behind a blank screen; else the one accessed most
+/// recently, which tops the list being skipped. Only a server with no
+/// Workspaces at all has one created, for the current directory, since there
+/// is nowhere else to go.
+fn workspace_without_list(
+    client: &Client,
+    workspaces: &[WorkspaceSummary],
+    current_directory: PathBuf,
+) -> Result<WorkspaceSummary> {
+    let interactions = client.list_interactions().unwrap_or_default();
+    let chosen = interactions::first_live(&interactions)
+        .and_then(|interaction| {
+            workspaces
+                .iter()
+                .find(|workspace| workspace.id == interaction.workspace_id)
+        })
+        .or_else(|| {
+            workspaces
+                .iter()
+                .max_by_key(|workspace| workspace.last_accessed_at_ms)
+        });
+    match chosen {
+        // Fetched again to record the access, as opening it from the list does.
+        Some(workspace) => Ok(client
+            .workspace(&workspace.id)
+            .unwrap_or_else(|_| workspace.clone())),
+        None => session::create_workspace(client, current_directory, None),
+    }
 }
 
 fn attach_shell(client: &Client, session: &str) -> Result<()> {
@@ -723,6 +765,16 @@ mod cli_tests {
         let cli = Cli::try_parse_from(["styra", "hello"]).unwrap();
         assert!(cli.command.is_none());
         assert_eq!(cli.prompt, vec!["hello"]);
+    }
+
+    #[test]
+    fn skipping_the_workspace_list_does_not_combine_with_an_explicit_target() {
+        let cli = Cli::try_parse_from(["styra", "--skip-workspace-list"]).unwrap();
+        assert!(cli.skip_workspace_list);
+        assert!(
+            Cli::try_parse_from(["styra", "--skip-workspace-list", "--workspace", "/tmp"]).is_err()
+        );
+        assert!(Cli::try_parse_from(["styra", "--skip-workspace-list", "--view"]).is_err());
     }
 
     #[test]

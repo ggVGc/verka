@@ -10,6 +10,7 @@ daemon restarts.
 
 ```sh
 styra                         # open/select the workspace for the current directory
+styra --skip-workspace-list   # go straight to the interaction view, live list open
 styra --workspace /path/to/project -- "implement the parser"
 styra --network --template rust -- "run the tests"
 styra --view                  # browse saved sessions read-only
@@ -34,6 +35,14 @@ Workspace. In a directory without one, it opens the Workspace list with a
 popup asking whether to create a Workspace for the current directory. `Enter`
 or `y` creates it and starts in it; `Esc` or `n` closes the popup, leaving the
 list to open an existing Workspace from.
+
+`--skip-workspace-list` never stops at that list. In a directory without a
+Workspace it goes straight to the interaction view: on the live interaction a
+Workspace would land on if any is running, in whichever Workspace that is,
+and otherwise on a blank screen in the Workspace accessed most recently (a
+Workspace for the current directory is created only when there are none at
+all). Whenever any interaction is live, the live-interaction list (`a`) opens
+with it.
 
 `--standalone` skips the socket entirely and runs the server in the client's own
 process. Its state lives separately at `$XDG_STATE_HOME/styra-standalone` (or
