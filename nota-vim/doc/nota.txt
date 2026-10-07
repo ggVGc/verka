@@ -99,7 +99,8 @@ their own repository and branch context.
 
 :NotaInline                                                  *:NotaInline*
         Neovim only. Turn the inline display of the selected review's
-        suggestions in source buffers on or off. See |nota-inline|.
+        suggestions and notes in source buffers on or off. See
+        |nota-inline|.
 
 :[range]NotaNote [text]                                         *:NotaNote*
         Append [text] as a note to the selected review. Without [text], open
@@ -142,12 +143,14 @@ preserve the draft. Hidden drafts can be recovered with `:buffers!` and
 you select another review later.
 
                                                               *nota-source*
-A range such as `:'<,'>NotaNote` appends `Source: path:10-15` to the
-submitted note. Paths are relative to the worktree and line numbers refer to
-the buffer at the time you run the command; this is prose context, not a
-structured location tracked by Nota. Without a range, a note from a file
-buffer records the cursor line; from any other buffer, such as the review
-buffer, it is a general note. A draft pins its range when opened.
+A range such as `:'<,'>NotaNote` makes a note about those lines. Nota
+records them against the commit checked out in the worktree, carrying them
+over any unsaved or uncommitted edits in the buffer, so that they can be
+found again after the file changes. A line that exists only in your edits is
+recorded as the nearest line that commit has. The file must be in that
+commit. Without a range, a note from a file buffer is about the cursor line;
+from any other buffer, such as the review buffer, it is a general note. A
+draft pins its range and the buffer text when opened.
 
                                                             *nota-quickfix*
 |:NotaQuickfix| lists each note at its |nota-source| lines, and each
@@ -158,10 +161,11 @@ commit: >
         file.txt|1| [note 227bb165] Explain these lines.
         file.txt|3| [suggestion 7c071a3e] Shout the last line.
 <
-Locations open files in this worktree, but their line numbers refer to the
-review: a note to the buffer it was written in, a suggestion to the file as
-its commit leaves it. They match your checkout while it is at the subject and
-the review's earlier suggestions do not shift those lines.
+Lines are where the items are in this worktree's files as saved, placed by
+`nota show --at worktree` as for |nota-inline|: they follow lines that the
+review's other suggestions or your own edits added or removed before them.
+Items whose lines are not as the review left them say so: `(applied)`,
+`(stale)`, or `(changed)`.
 
 ==============================================================================
 7. Suggestions                                            *nota-suggestions*
@@ -203,17 +207,21 @@ commits. See `nota/PROTOTYPE_V1.md` in the Verka repository.
 |:NotaInline| marks each hunk of the review's suggestions in the buffers of
 the files it changes, for the review selected in that worktree or else the
 checked-out review branch, as other commands do. Each hunk gets a sign on
-the lines it covers and its commit and summary at the end of its first line:
+the lines it covers, coloured by whether it only adds lines, only removes
+them, or replaces them, and its commit and summary at the end of its first
+line:
 >
     3     value.unwrap() ✎ 9c4c67c4 Handle the missing value explicitly
 <
 Expanded, a hunk also shows the change itself: the lines it removes are
-highlighted, and the lines it adds appear as virtual lines below them. The
-buffer text is never changed.
+highlighted, and the lines it adds appear as virtual lines below them. Notes
+with a range are shown too; see |nota-inline-notes|. The buffer text is
+never changed.
 
-Hunk lines refer to the file as the suggestion's parent commit had it, so
-they are mapped onto the buffer by diffing that version against the buffer
-text, including unsaved edits. Each hunk is then shown as one of:
+Hunk lines refer to the file as the suggestion's parent commit had it. The
+CLI carries them to this worktree's files through a diff from that version
+(`nota show --at worktree`), and the plugin carries them on to unsaved edits
+in the buffer. Each hunk is then shown as one of:
 
   pending       The lines the hunk replaces are in the buffer, as in your
                 own checkout after |:NotaSuggest|.
@@ -224,12 +232,22 @@ text, including unsaved edits. Each hunk is then shown as one of:
                 near where it was, with `(stale)` after its summary;
                 expanded, it shows the hunk as a small diff.
 
-Notes are not shown inline; use |:NotaQuickfix|.
+                                                          *nota-inline-notes*
+Notes with a |nota-source| location are shown at their lines, with
+a sign, their commit and first line at the end of the first line, and their
+full text below the range when expanded: >
+    4     four ● 2aa53820 Explain these lines.
+<
+Their lines are carried like hunks from the commit Nota recorded them
+against, so a note written in a worktree of the review branch is shown at
+the same line in a checkout of the subject. A note whose lines the file
+changed since is marked `(changed)` where they were. General notes, without
+a source, are not shown inline; use |:NotaQuickfix|.
 
 The display follows selections, |:NotaSuggest|, and refreshes in the review
 buffer, and is redrawn when a buffer is shown, read, written, or changed in
-Normal mode. Commits made outside Vim are picked up the next time a buffer
-is shown.
+Normal mode. Items are placed again when a file is read or written; commits
+made outside Vim are picked up the next time a buffer is shown.
 
                                                        *nota-inline-mappings*
 Buffers with review items define:
@@ -239,16 +257,26 @@ Buffers with review items define:
   <Leader>re    Expand or collapse the item under the cursor.
   <Leader>rE    Expand every item in the buffer, or collapse them all when
                 all are expanded.
+  <Leader>rd    Open the full commit of the entry under the cursor: a
+                suggestion's message and patch across all its files, or a
+                note's message, as <CR> does in the review buffer. Where
+                entries overlap, choose one with |vim.ui.select()|.
 
                                                      *nota-inline-highlights*
 Highlight groups, linked by default:
 
-  NotaInlineSign        Sign of a pending hunk (|hl-DiagnosticInfo|).
-  NotaInlineApplied     Sign of an applied hunk (DiagnosticOk).
+  NotaInlineSignAdd     Sign of a hunk that only adds lines (Added).
+  NotaInlineSignChange  Sign of a hunk that replaces lines (Changed).
+  NotaInlineSignDelete  Sign of a hunk that only removes lines
+                        (Removed).
   NotaInlineStale       Sign of a stale hunk (|hl-Comment|).
   NotaInlineSummary     Commit and summary (DiagnosticVirtualTextInfo).
   NotaInlineAdd         Added lines (|hl-DiffAdd|).
   NotaInlineDelete      Removed lines (|hl-DiffDelete|).
+  NotaInlineNote        Sign of a note (DiagnosticHint).
+  NotaInlineNoteSummary Note commit and first line
+                        (DiagnosticVirtualTextHint).
+  NotaInlineNoteText    Expanded note text (DiagnosticVirtualTextHint).
 
 ==============================================================================
 9. Configuration                                               *nota-config*
@@ -274,6 +302,7 @@ g:nota_inline_mappings  number (default: 1)
                   function() inline.jump(-vim.v.count1) end)
                 vim.keymap.set('n', '<Leader>re', inline.toggle_item)
                 vim.keymap.set('n', '<Leader>rE', inline.toggle_all)
+                vim.keymap.set('n', '<Leader>rd', inline.show_item)
 <
 ==============================================================================
 10. Testing                                                   *nota-testing*

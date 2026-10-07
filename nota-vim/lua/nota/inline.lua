@@ -1,21 +1,21 @@
--- Show the selected review's suggestions inside the files they change.
+-- Show the selected review's suggestions and notes inside the files they
+-- refer to.
 --
--- Each suggestion hunk is placed in every loaded buffer of its file. Hunk
--- lines refer to the suggestion's parent commit, so they are mapped onto the
--- buffer through a diff against that version and then checked: a hunk whose
--- original lines are still there is pending, one whose suggested lines are
--- already there (as in a worktree of the review branch) is applied, and
--- anything else is stale.
+-- `nota show --at worktree` places each suggestion hunk and each note about
+-- lines in the working tree files: a hunk whose original lines are there is
+-- pending, one whose suggested lines are there (as in a worktree of the
+-- review branch) is applied, and anything else is stale. A buffer with
+-- unsaved edits gets the items carried from the file on disk to its text.
+-- General notes have no place in a file.
 
 local M = {}
 
 local ns = vim.api.nvim_create_namespace('nota_inline')
 local diff = (vim.text and vim.text.diff) or vim.diff
 local enabled = false
--- Per repository root: the review last loaded and its tip.
+-- Per repository root: the review last placed, and the branch tip and HEAD
+-- it was placed for.
 local reviews = {}
--- Immutable per commit and path: suggestion hunks and parent file contents.
-local hunk_cache, base_cache = {}, {}
 -- Per buffer: its repository file, rendered items, and expanded hunks.
 local files, buffers = {}, {}
 
@@ -45,12 +45,16 @@ end
 
 local function highlights()
   for name, link in pairs({
-    NotaInlineSign = 'DiagnosticInfo',
-    NotaInlineApplied = 'DiagnosticOk',
+    NotaInlineSignAdd = 'Added',
+    NotaInlineSignChange = 'Changed',
+    NotaInlineSignDelete = 'Removed',
     NotaInlineStale = 'Comment',
     NotaInlineSummary = 'DiagnosticVirtualTextInfo',
     NotaInlineAdd = 'DiffAdd',
     NotaInlineDelete = 'DiffDelete',
+    NotaInlineNote = 'DiagnosticHint',
+    NotaInlineNoteSummary = 'DiagnosticVirtualTextHint',
+    NotaInlineNoteText = 'DiagnosticVirtualTextHint',
   }) do
     vim.api.nvim_set_hl(0, name, { link = link, default = true })
   end
@@ -83,81 +87,47 @@ local function file(buf)
   return info
 end
 
--- The review for this worktree, reloaded when its branch or tip moves. Like
--- the other commands, use the selection or else the checked-out branch.
-local function review(root)
+-- The review for this worktree placed in its files, by path. It is placed
+-- again when `fresh`, as after files are read or written, or when the
+-- review's tip or the checkout moves. Like the other commands, use the
+-- selection or else the checked-out branch.
+local function review(root, fresh)
   local branch = vim.fn['nota#selected'](root)
-  local tip
+  local head = lines(git(root, { 'rev-parse', 'HEAD', '--symbolic-full-name', 'HEAD' }))
+  local tip = head[1]
   if branch == '' then
-    local head = lines(git(root, { 'rev-parse', 'HEAD', '--symbolic-full-name', 'HEAD' }))
     branch = (head[2] or ''):match('^refs/heads/(.+)$')
     if not branch then
-      return { entries = {}, error = 'no review selected and no branch checked out' }
+      return { files = {}, error = 'no review selected and no branch checked out' }
     end
-    tip = head[1]
   else
     tip = vim.trim(git(root, { 'rev-parse', '--verify', 'refs/heads/' .. branch .. '^{commit}' }))
   end
   local cached = reviews[root]
-  if cached and cached.branch == branch and cached.tip == tip then
+  if not fresh and cached and cached.branch == branch and cached.tip == tip
+      and cached.head == head[1] then
     return cached
   end
   local executable = vim.g.nota_executable or 'nota'
   local ok, output = pcall(run, {
-    executable, 'show', '--json', '--repository=' .. root, '--branch=' .. branch,
+    executable, 'show', '--json', '--at=worktree', '--repository=' .. root, '--branch=' .. branch,
   })
-  local loaded = { branch = branch, tip = tip, entries = {} }
+  local loaded = { branch = branch, tip = tip, head = head[1], files = {} }
   if ok then
-    loaded.entries = vim.json.decode(output).entries
+    for _, entry in ipairs(vim.json.decode(output).entries) do
+      for index, location in ipairs(entry.locations) do
+        if location.line ~= vim.NIL then
+          loaded.files[location.path] = loaded.files[location.path] or {}
+          table.insert(loaded.files[location.path],
+            { entry = entry, location = location, index = index })
+        end
+      end
+    end
   else
     loaded.error = output
   end
   reviews[root] = loaded
   return loaded
-end
-
-local function hunks(root, commit, path)
-  local key = commit .. '\0' .. path
-  if hunk_cache[key] then
-    return hunk_cache[key]
-  end
-  local output = git(root, {
-    'diff', '-U0', '--no-color', '--no-ext-diff', '--no-renames', '--no-relative',
-    commit .. '^', commit, '--', path,
-  })
-  local result, hunk = {}, nil
-  for _, line in ipairs(lines(output)) do
-    local old_start, old_count, new_start, new_count =
-      line:match('^@@ %-(%d+),?(%d*) %+(%d+),?(%d*) @@')
-    if old_start then
-      hunk = {
-        index = #result + 1,
-        old_start = tonumber(old_start),
-        old_count = old_count == '' and 1 or tonumber(old_count),
-        new_start = tonumber(new_start),
-        new_count = new_count == '' and 1 or tonumber(new_count),
-        old = {},
-        new = {},
-      }
-      table.insert(result, hunk)
-    elseif hunk and line:sub(1, 1) == '-' then
-      table.insert(hunk.old, line:sub(2))
-    elseif hunk and line:sub(1, 1) == '+' then
-      table.insert(hunk.new, line:sub(2))
-    end
-  end
-  hunk_cache[key] = result
-  return result
-end
-
--- The file as the suggestion found it; empty when the suggestion adds it.
-local function base(root, commit, path)
-  local key = commit .. '\0' .. path
-  if not base_cache[key] then
-    local ok, output = pcall(git, root, { 'cat-file', 'blob', commit .. '^:' .. path })
-    base_cache[key] = ok and lines(output) or {}
-  end
-  return base_cache[key]
 end
 
 local function matches(buffer, first, expected)
@@ -172,15 +142,14 @@ local function matches(buffer, first, expected)
   return true
 end
 
--- Where each hunk lands in the buffer, and whether it is pending, applied,
--- or stale there.
-local function place(changes, old, buffer)
+-- A function carrying a line of `old` to `new` through the changes that
+-- end before it.
+local function mapping(old, new)
   local text = function(list)
     return #list == 0 and '' or table.concat(list, '\n') .. '\n'
   end
-  local moves = diff(text(old), text(buffer), { result_type = 'indices' })
-  -- Map a parent line through the buffer changes that end before it.
-  local function map(line)
+  local moves = diff(text(old), text(new), { result_type = 'indices' })
+  return function(line)
     local result = line
     for _, move in ipairs(moves) do
       local start_a, count_a, _, count_b = unpack(move)
@@ -192,42 +161,37 @@ local function place(changes, old, buffer)
     end
     return result
   end
-  local function deleted(change)
-    for _, move in ipairs(moves) do
-      if move[1] == change.old_start and move[2] == change.old_count and move[4] == 0 then
-        return true
-      end
-    end
-    return false
+end
+
+-- Carry an item placed in the file on disk to the buffer text. Suggestion
+-- items get the shape `draw` takes; with unsaved edits, a hunk whose lines
+-- the buffer changed goes stale.
+local function carry(placed, buffer, map)
+  local location, entry = placed.location, placed.entry
+  local line = location.line
+  if entry.kind == 'note' then
+    local first = map(line)
+    return {
+      line = first,
+      count = math.max(map(line + location.count - 1) - first + 1, 1),
+      changed = location.status == 'changed',
+      note = { body = vim.split(vim.trim(entry.message), '\n', { plain = true }) },
+    }
   end
-  local placed = {}
-  for _, change in ipairs(changes) do
-    local item = { change = change }
-    if change.old_count == 0 then
-      -- An insertion after a parent line, or at the top for line 0.
-      local anchor = change.old_start == 0 and 0 or map(change.old_start)
-      item.line = anchor
-      if matches(buffer, anchor + 1, change.new) then
-        item.status, item.line = 'applied', anchor + 1
-      elseif change.old_start == 0 or buffer[anchor] == old[change.old_start] then
-        item.status = 'pending'
-      else
-        item.status = 'stale'
-      end
-    else
-      item.line = map(change.old_start)
-      if matches(buffer, item.line, change.old) then
-        item.status = 'pending'
-      elseif change.new_count > 0 and matches(buffer, item.line, change.new)
-          or change.new_count == 0 and deleted(change) then
-        item.status = 'applied'
-      else
-        item.status = 'stale'
-      end
-    end
-    table.insert(placed, item)
+  local change = vim.tbl_extend('force', location.hunk, { index = placed.index })
+  local item = { change = change, status = location.status }
+  if location.status == 'applied' and location.count == 0 then
+    -- Removed lines are shown before the line that follows them.
+    item.line = map(line + 1)
+  else
+    item.line = line == 0 and 0 or map(line)
   end
-  return placed
+  local expected = item.status == 'pending' and change.old
+    or item.status == 'applied' and change.new or {}
+  if location.count > 0 and item.status ~= 'stale' and not matches(buffer, item.line, expected) then
+    item.status = 'stale'
+  end
+  return item
 end
 
 -- Virtual text shows tabs literally; expand them one at a time, since each
@@ -265,8 +229,10 @@ end
 local function draw(buf, entry, item, expanded, last_row)
   local change = item.change
   local status = item.status
-  local sign_group = status == 'pending' and 'NotaInlineSign'
-    or status == 'applied' and 'NotaInlineApplied' or 'NotaInlineStale'
+  -- Colour by what the hunk does, as Git signs usually are.
+  local sign_group = status == 'stale' and 'NotaInlineStale'
+    or change.old_count == 0 and 'NotaInlineSignAdd'
+    or change.new_count == 0 and 'NotaInlineSignDelete' or 'NotaInlineSignChange'
   local sign_text = status == 'stale' and '?' or '▎'
   -- The buffer rows this hunk covers: original lines while pending,
   -- suggested lines once applied.
@@ -330,6 +296,31 @@ local function draw(buf, entry, item, expanded, last_row)
   return anchor, first, rows
 end
 
+-- Draw one placed note. Returns the extmark that anchors its first row.
+local function draw_note(buf, entry, item, expanded, last_row)
+  local first = math.min(math.max(item.line - 1, 0), last_row)
+  local rows = math.min(item.count, last_row - first + 1)
+  local label = string.format('● %s %s', entry.commit:sub(1, 8), item.note.body[1])
+  if item.changed then
+    label = label .. ' (changed)'
+  end
+  local anchor = mark(buf, first, {
+    sign_text = '▎',
+    sign_hl_group = 'NotaInlineNote',
+    virt_text = { { label, 'NotaInlineNoteSummary' } },
+    virt_text_pos = 'eol',
+  })
+  for row = first + 1, first + rows - 1 do
+    mark(buf, row, { sign_text = '▎', sign_hl_group = 'NotaInlineNote' })
+  end
+  if expanded then
+    mark(buf, first + rows - 1, {
+      virt_lines = virtual(buf, item.note.body, 'NotaInlineNoteText', '│ '),
+    })
+  end
+  return anchor, rows
+end
+
 local function set_mappings(buf, state)
   if state.mapped or vim.g.nota_inline_mappings == 0 then
     return
@@ -341,6 +332,7 @@ local function set_mappings(buf, state)
   map('[r', function() M.jump(-vim.v.count1) end, 'Previous Nota review item')
   map('<leader>re', function() M.toggle_item() end, 'Expand or collapse Nota review item')
   map('<leader>rE', function() M.toggle_all() end, 'Expand or collapse all Nota review items')
+  map('<leader>rd', function() M.show_item() end, 'Show the Nota review entry under the cursor')
   state.mapped = true
 end
 
@@ -348,7 +340,7 @@ local function clear_mappings(buf, state)
   if not state.mapped then
     return
   end
-  for _, lhs in ipairs({ ']r', '[r', '<leader>re', '<leader>rE' }) do
+  for _, lhs in ipairs({ ']r', '[r', '<leader>re', '<leader>rE', '<leader>rd' }) do
     pcall(vim.keymap.del, 'n', lhs, { buffer = buf })
   end
   state.mapped = false
@@ -368,8 +360,9 @@ local function clear(buf)
 end
 
 -- Draw the review into one buffer. `loaded` caches reviews within one pass;
--- `cached` reuses the last review without asking Git whether it moved.
-local function render(buf, loaded, cached)
+-- `cached` reuses the last review without asking Git whether it moved, and
+-- `fresh` places it again even if it did not.
+local function render(buf, loaded, cached, fresh)
   if not vim.api.nvim_buf_is_loaded(buf) then
     return
   end
@@ -383,8 +376,8 @@ local function render(buf, loaded, cached)
   elseif loaded and loaded[info.root] then
     current = loaded[info.root]
   else
-    local ok, result = pcall(review, info.root)
-    current = ok and result or { entries = {}, error = result }
+    local ok, result = pcall(review, info.root, fresh)
+    current = ok and result or { files = {}, error = result }
     if loaded then
       loaded[info.root] = current
     end
@@ -399,21 +392,35 @@ local function render(buf, loaded, cached)
   local buffer = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local last_row = math.max(#buffer - 1, 0)
   local default = vim.g.nota_inline_expanded == 1
-  for _, entry in ipairs(current.entries) do
-    if entry.kind == 'suggestion' and vim.tbl_contains(entry.paths, info.path) then
-      local ok, changes = pcall(hunks, info.root, entry.commit, info.path)
-      if ok then
-        local old = base(info.root, entry.commit, info.path)
-        for _, item in ipairs(place(changes, old, buffer)) do
-          local key = entry.commit .. ':' .. item.change.index
-          local expanded = state.expanded[key]
-          if expanded == nil then
-            expanded = default
-          end
-          local anchor, _, rows = draw(buf, entry, item, expanded, last_row)
-          table.insert(state.items, { id = anchor, rows = rows, key = key, expanded = expanded })
-        end
-      end
+  local function expanded(key)
+    local value = state.expanded[key]
+    if value == nil then
+      return default
+    end
+    return value
+  end
+  -- Items are placed in the file on disk; unsaved edits move them.
+  local map = function(line) return line end
+  if vim.bo[buf].modified and vim.fn.filereadable(info.name) == 1 then
+    map = mapping(vim.fn.readfile(info.name), buffer)
+  end
+  for _, placed in ipairs(current.files[info.path] or {}) do
+    local entry = placed.entry
+    local item = carry(placed, buffer, map)
+    if entry.kind == 'note' then
+      local key = entry.commit .. ':note'
+      local anchor, rows = draw_note(buf, entry, item, expanded(key), last_row)
+      table.insert(state.items, {
+        id = anchor, rows = rows, key = key, expanded = expanded(key),
+        commit = entry.commit, label = 'note ' .. item.note.body[1],
+      })
+    else
+      local key = entry.commit .. ':' .. item.change.index
+      local anchor, _, rows = draw(buf, entry, item, expanded(key), last_row)
+      table.insert(state.items, {
+        id = anchor, rows = rows, key = key, expanded = expanded(key),
+        commit = entry.commit, label = 'suggestion ' .. summary(entry),
+      })
     end
   end
   if #state.items > 0 then
@@ -496,25 +503,60 @@ function M.jump(count)
   end)
 end
 
+-- The items covering the cursor line.
+local function under_cursor()
+  local list, state, buf = items()
+  local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+  local found = {}
+  for _, item in ipairs(list) do
+    if item.row <= row and row < item.row + item.rows then
+      table.insert(found, item)
+    end
+  end
+  if #found == 0 then
+    fail('no review item under the cursor')
+  end
+  return found, state, buf
+end
+
 function M.toggle_item()
   report(function()
-    local list, state, buf = items()
-    local row = vim.api.nvim_win_get_cursor(0)[1] - 1
-    local found = {}
-    for _, item in ipairs(list) do
-      if item.row <= row and row < item.row + item.rows then
-        table.insert(found, item)
-      end
-    end
-    if #found == 0 then
-      fail('no review item under the cursor')
-    end
+    local found, state, buf = under_cursor()
     -- Overlapping hunks from stacked suggestions toggle together.
     local expand = not found[1].expanded
     for _, item in ipairs(found) do
       state.expanded[item.key] = expand
     end
     render(buf, nil, true)
+  end)
+end
+
+-- Open the full commit of the entry under the cursor, as <CR> does in the
+-- review buffer; offer a choice when entries overlap there.
+function M.show_item()
+  report(function()
+    local found, _, buf = under_cursor()
+    local entries, seen = {}, {}
+    for _, item in ipairs(found) do
+      if not seen[item.commit] then
+        seen[item.commit] = true
+        table.insert(entries, item)
+      end
+    end
+    local info = file(buf)
+    local context = { repository = info.root, branch = reviews[info.root].branch }
+    local function open(item)
+      if item then
+        vim.fn['nota#command']('commit', { context, item.commit })
+      end
+    end
+    if #entries == 1 then
+      return open(entries[1])
+    end
+    vim.ui.select(entries, {
+      prompt = 'Nota entry',
+      format_item = function(item) return item.commit:sub(1, 8) .. ' ' .. item.label end,
+    }, open)
   end)
 end
 
@@ -543,7 +585,7 @@ function M.refresh(root)
   for _, buf in ipairs(file_buffers()) do
     local info = file(buf)
     if not root or info and info.root == root then
-      render(buf, loaded, false)
+      render(buf, loaded, false, true)
     end
   end
 end
@@ -552,9 +594,14 @@ local function enable()
   enabled = true
   highlights()
   local group = vim.api.nvim_create_augroup('nota_inline', { clear = true })
-  vim.api.nvim_create_autocmd({ 'BufReadPost', 'BufWinEnter', 'BufWritePost' }, {
+  -- Reading or writing a file can change where its items are.
+  vim.api.nvim_create_autocmd({ 'BufReadPost', 'BufWritePost' }, {
     group = group,
-    callback = function(event) render(event.buf, nil, false) end,
+    callback = function(event) render(event.buf, nil, false, true) end,
+  })
+  vim.api.nvim_create_autocmd('BufWinEnter', {
+    group = group,
+    callback = function(event) render(event.buf, nil, false, false) end,
   })
   vim.api.nvim_create_autocmd({ 'TextChanged', 'InsertLeave' }, {
     group = group,
@@ -577,7 +624,10 @@ local function enable()
   if current and current.error then
     vim.api.nvim_echo({ { 'Nota: ' .. current.error, 'WarningMsg' } }, true, {})
   elseif current then
-    vim.api.nvim_echo({ { 'Nota: showing ' .. current.branch .. ' inline' } }, true, {})
+    local count = #((buffers[vim.api.nvim_get_current_buf()] or {}).items or {})
+    local here = count == 0 and 'nothing in this file'
+      or count == 1 and '1 item in this file' or count .. ' items in this file'
+    vim.api.nvim_echo({ { 'Nota: showing ' .. current.branch .. ' inline; ' .. here } }, true, {})
   end
 end
 

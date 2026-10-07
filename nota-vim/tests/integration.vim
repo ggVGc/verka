@@ -81,11 +81,11 @@ try
   execute 'NotaNote ' . s:text
   call assert_match('\V' . escape(s:text, '\'), s:message(s:repository, 'nota/first'))
   " Without a range, a note from a file buffer records the cursor line.
-  call assert_match('\nSource: file.txt:1\n', s:message(s:repository, 'nota/first'))
+  call assert_match('\nNota-Source: \x\{40}:file.txt:1-1\n', s:message(s:repository, 'nota/first'))
   call assert_false(filereadable(s:other . '/injected'))
   call assert_false(filereadable(s:repository . '/injected'))
   1,2NotaNote Explain these lines.
-  call assert_match('Source: file.txt:1-2', s:message(s:repository, 'nota/first'))
+  call assert_match('Nota-Source: \x\{40}:file.txt:1-2', s:message(s:repository, 'nota/first'))
   call assert_equal(s:status, s:git(s:repository, ['status', '--porcelain']))
   call assert_equal(s:index, s:git(s:repository, ['write-tree']))
 
@@ -93,7 +93,8 @@ try
   2,3NotaNote
   let s:draft = bufnr('%')
   call assert_equal('acwrite', &buftype)
-  call assert_equal('Source: file.txt:2-3', b:nota_source)
+  call assert_equal(['file.txt', 2, 3],
+        \ [b:nota_source.path, b:nota_source.first, b:nota_source.last])
   let s:tip = s:git(s:repository, ['rev-parse', 'nota/first'])
   write
   call assert_equal(s:draft, bufnr('%'))
@@ -113,7 +114,7 @@ try
   call assert_false(bufexists(s:draft))
   let s:message = s:message(s:repository, 'nota/first')
   call assert_match('Multiline note\n\nDetails:', s:message)
-  call assert_match('Source: file.txt:2-3', s:message)
+  call assert_match('Nota-Source: \x\{40}:file.txt:2-3', s:message)
   call assert_match('Start review', s:message(s:repository, 'nota/second'))
 
   call s:edit(s:repository)
@@ -122,7 +123,7 @@ try
   call search('Multiline note')
   call assert_equal(1, nota#command('entry', []))
   call assert_equal('git', &filetype)
-  call assert_match('Source: file.txt:2-3', join(getline(1, '$'), "\n"))
+  call assert_match('Nota-Source: \x\{40}:file.txt:2-3', join(getline(1, '$'), "\n"))
   close
   NotaNote Added from the review buffer.
   normal r

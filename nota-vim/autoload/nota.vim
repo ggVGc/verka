@@ -236,6 +236,9 @@ function! s:toggle() abort
   return 1
 endfunction
 
+" The lines a note is about, with the buffer text they number: Nota records
+" them against the commit checked out, carrying them over unsaved and
+" uncommitted edits.
 function! s:location(context, first, last) abort
   if &buftype !=# '' || empty(expand('%:p'))
     call s:fail('a line range needs a file buffer')
@@ -245,15 +248,28 @@ function! s:location(context, first, last) abort
   if stridx(l:path, l:prefix) == 0
     let l:path = strpart(l:path, strlen(l:prefix))
   endif
-  let l:range = a:first == a:last ? string(a:first) : a:first . '-' . a:last
-  return 'Source: ' . l:path . ':' . l:range
+  return {'path': l:path, 'first': a:first, 'last': a:last, 'contents': getline(1, '$')}
 endfunction
 
-function! s:add_note(context, text) abort
+function! s:add_note(context, text, source) abort
   if a:text !~# '\S'
     call s:fail('review message must not be empty')
   endif
-  let l:lines = s:cli(a:context, 'note', [a:text])
+  let l:options = []
+  if !empty(a:source)
+    let l:contents = tempname()
+    call writefile(a:source.contents, l:contents)
+    let l:options = ['--path=' . a:source.path,
+          \ '--lines=' . a:source.first . '-' . a:source.last, '--contents=' . l:contents]
+  endif
+  try
+    let l:lines = s:cli(a:context, 'note', [a:text], l:options)
+  finally
+    if exists('l:contents')
+      call delete(l:contents)
+    endif
+  endtry
+  call s:inline(a:context.repository)
   echomsg 'Nota: ' . join(l:lines, "\n")
   return 1
 endfunction
@@ -380,10 +396,9 @@ function! s:note(message, range, first, last) abort
   call s:load(l:context)
   " Without a range, a note from a file buffer points at the cursor line.
   let l:file = &buftype ==# '' && !empty(expand('%:p'))
-  let l:source = a:range || l:file ? s:location(l:context, a:first, a:last) : ''
+  let l:source = a:range || l:file ? s:location(l:context, a:first, a:last) : {}
   if !empty(a:message)
-    let l:text = a:message . (empty(l:source) ? '' : "\n\n" . l:source)
-    return s:add_note(l:context, l:text)
+    return s:add_note(l:context, a:message, l:source)
   endif
   return s:draft('note', l:context, l:source)
 endfunction
@@ -398,7 +413,7 @@ function! s:suggest(message) abort
   if !empty(a:message)
     return s:add_suggestion(l:context, a:message)
   endif
-  return s:draft('suggestion', l:context, '')
+  return s:draft('suggestion', l:context, {})
 endfunction
 
 function! s:submit() abort
@@ -406,13 +421,10 @@ function! s:submit() abort
   if l:text !~# '\S'
     call s:fail('review message must not be empty')
   endif
-  if !empty(b:nota_source)
-    let l:text .= "\n\n" . b:nota_source
-  endif
   if b:nota_kind ==# 'suggestion'
     call s:add_suggestion(b:nota_context, l:text)
   else
-    call s:add_note(b:nota_context, l:text)
+    call s:add_note(b:nota_context, l:text, b:nota_source)
   endif
   setlocal nomodified
   bwipeout
@@ -440,64 +452,39 @@ function! s:entry() abort
   if empty(l:commit)
     call s:fail('put the cursor on the subject, a note, or a suggestion')
   endif
-  let l:context = copy(b:nota_context)
-  let l:lines = s:git(l:context.repository,
-        \ ['--no-pager', 'show', '--no-color', '--no-ext-diff', '--no-textconv', l:commit, '--'])
-  call s:scratch('entry', l:context)
+  return s:commit(b:nota_context, l:commit)
+endfunction
+
+" Show a review entry's full message and patch in a split.
+function! s:commit(context, commit) abort
+  let l:lines = s:git(a:context.repository,
+        \ ['--no-pager', 'show', '--no-color', '--no-ext-diff', '--no-textconv', a:commit, '--'])
+  call s:scratch('entry', a:context)
   call setline(1, l:lines)
   setlocal filetype=git nomodified nomodifiable readonly
   return 1
 endfunction
 
-" A note's location, as recorded by a ranged :NotaNote in its last line.
-function! s:note_items(context, entry, text) abort
-  let l:source = matchlist(a:entry.message,
-        \ '\%(^\|\n\)Source: \(.\+\):\(\d\+\)\%(-\(\d\+\)\)\?$')
-  if empty(l:source)
-    return [{'text': a:text}]
+" One item per location the CLI placed an entry at in the worktree files: a
+" note's lines, or each hunk of a suggestion. A general note has none.
+function! s:items(context, entry) abort
+  let l:text = printf('[%s %s] %s', a:entry.kind, strpart(a:entry.commit, 0, 8),
+        \ s:summary(a:entry))
+  if empty(a:entry.locations)
+    return [{'text': l:text}]
   endif
-  let l:item = {'filename': a:context.repository . '/' . l:source[1],
-        \ 'lnum': str2nr(l:source[2]), 'text': a:text}
-  if !empty(l:source[3])
-    let l:item.end_lnum = str2nr(l:source[3])
-  endif
-  return [l:item]
-endfunction
-
-" One item per hunk a suggestion changes, at its lines in the suggestion.
-function! s:suggestion_items(context, entry, text) abort
-  let l:diff = s:git(a:context.repository, ['-c', 'core.quotePath=false', 'diff',
-        \ '--no-color', '--no-ext-diff', '--no-renames', '--no-relative', '-U0',
-        \ '--src-prefix=a/', '--dst-prefix=b/', a:entry.commit . '^', a:entry.commit, '--'])
   let l:items = []
-  let l:old = ''
-  let l:path = ''
-  let l:hunks = 0
-  for l:line in l:diff + ['diff --git']
-    if l:line =~# '^diff --git '
-      " Files without hunks, such as binary files, are listed once.
-      if !empty(l:path) && !l:hunks
-        call add(l:items, {'filename': a:context.repository . '/' . l:path, 'text': a:text})
-      endif
-      let [l:old, l:path, l:hunks] = ['', '', 0]
-    elseif l:line =~# '^--- a/'
-      " Git ends paths that contain spaces with a tab.
-      let l:old = substitute(strpart(l:line, 6), '\t$', '', '')
-    elseif l:line =~# '^+++ '
-      " A deleted file is listed at its old path.
-      let l:path = l:line =~# '^+++ b/'
-            \ ? substitute(strpart(l:line, 6), '\t$', '', '') : l:old
-    elseif l:line =~# '^@@ '
-      let l:range = matchlist(l:line, '^@@ -\S\+ +\(\d\+\)\%(,\(\d\+\)\)\? @@')
-      let l:first = str2nr(l:range[1])
-      let l:count = empty(l:range[2]) ? 1 : str2nr(l:range[2])
-      " A pure deletion has no new lines; point at the line before it.
-      let l:first = max([l:first, 1])
-      call add(l:items, {'filename': a:context.repository . '/' . l:path,
-            \ 'lnum': l:first, 'end_lnum': l:first + max([l:count, 1]) - 1,
-            \ 'text': a:text})
-      let l:hunks += 1
+  for l:location in a:entry.locations
+    let l:item = {'filename': a:context.repository . '/' . l:location.path,
+          \ 'text': l:text . (index(['applied', 'stale', 'changed'], l:location.status) >= 0
+          \   ? ' (' . l:location.status . ')' : '')}
+    " Files changed without lines, such as binary files, are listed once.
+    if l:location.line isnot v:null
+      " Lines removed or yet to be added sit after `line`; point at it.
+      let l:item.lnum = max([l:location.line, 1])
+      let l:item.end_lnum = l:item.lnum + max([l:location.count, 1]) - 1
     endif
+    call add(l:items, l:item)
   endfor
   return l:items
 endfunction
@@ -508,14 +495,11 @@ function! s:quickfix(...) abort
     let l:context.branch = a:1
   endif
   call s:associate(l:context)
-  let l:review = s:load(l:context)
+  let l:review = json_decode(join(s:cli(l:context, 'show', [], ['--json', '--at=worktree']), "\n"))
+  let l:context.branch = l:review.branch
   let l:items = []
   for l:entry in l:review.entries
-    let l:text = printf('[%s %s] %s', l:entry.kind, strpart(l:entry.commit, 0, 8),
-          \ s:summary(l:entry))
-    let l:items += l:entry.kind ==# 'note'
-          \ ? s:note_items(l:context, l:entry, l:text)
-          \ : s:suggestion_items(l:context, l:entry, l:text)
+    let l:items += s:items(l:context, l:entry)
   endfor
   call setqflist([], ' ', {'title': 'Nota ' . l:review.branch, 'items': l:items})
   if empty(l:items)
