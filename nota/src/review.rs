@@ -26,6 +26,23 @@ pub struct ReviewEntry {
     pub kind: ReviewEntryKind,
     /// The project files a suggestion changes; always empty for a note.
     pub paths: Vec<String>,
+    /// The lines a note refers to; `None` for a general note and for every
+    /// suggestion.
+    pub source: Option<NoteSource>,
+}
+
+/// Lines of a file as one commit has it. Recording the commit keeps the line
+/// numbers meaningful after the file changes: they can be carried to any
+/// other version of the file through a diff.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NoteSource {
+    /// The full id of the commit whose version of `path` the lines number.
+    pub revision: String,
+    /// Relative to the repository root.
+    pub path: String,
+    /// The first and last line, counting from 1.
+    pub first: usize,
+    pub last: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -82,9 +99,16 @@ pub trait ReviewStore {
     /// The review branch checked out in the working tree containing `path`.
     fn current_review(&self, path: &Path) -> Result<String>;
 
-    /// Append one prose note to the review on `branch`. The branch need not be
-    /// checked out, and no working tree or index is touched.
-    fn add_note(&self, path: &Path, branch: &str, message: &str) -> Result<ReviewEntry>;
+    /// Append one prose note to the review on `branch`, about the `source`
+    /// lines when given. The branch need not be checked out, and no working
+    /// tree or index is touched.
+    fn add_note(
+        &self,
+        path: &Path,
+        branch: &str,
+        message: &str,
+        source: Option<&NoteSource>,
+    ) -> Result<ReviewEntry>;
 
     /// Load and validate the review on `branch` without requiring it to be
     /// checked out.

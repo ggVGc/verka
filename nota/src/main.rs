@@ -1,6 +1,8 @@
+use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nota::{GitTrailerStore, ReviewEntryKind, ReviewQuery, ReviewStore};
+use nota::{GitTrailerStore, ReviewEntryKind, ReviewQuery, ReviewStore, SystemGit, Target};
+use std::io::Read;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -42,6 +44,22 @@ enum Command {
         /// The review branch; defaults to the checked-out branch.
         #[arg(long)]
         branch: Option<String>,
+        /// The file the note is about, relative to the repository root.
+        #[arg(long, requires = "lines")]
+        path: Option<String>,
+        /// The lines of `--path` the note is about: `<first>` or
+        /// `<first>-<last>`, numbered as in `--contents`.
+        #[arg(long, requires = "path", value_parser = parse_lines)]
+        lines: Option<(usize, usize)>,
+        /// The commit to record the lines against; they are carried over to
+        /// it from `--contents`.
+        #[arg(long, requires = "path", default_value = "HEAD")]
+        revision: String,
+        /// A file holding the text the lines number, such as an editor's
+        /// unsaved buffer, or `-` for stdin; defaults to the working tree
+        /// file.
+        #[arg(long, requires = "path")]
+        contents: Option<PathBuf>,
     },
     /// Show a review.
     Show {
@@ -53,6 +71,10 @@ enum Command {
         /// Emit the review and its entries as JSON.
         #[arg(long)]
         json: bool,
+        /// Also place each note and suggestion hunk in `worktree`, the files
+        /// in the working tree, or in a revision.
+        #[arg(long, requires = "json", value_name = "worktree|REVISION")]
+        at: Option<String>,
     },
 }
 
@@ -115,18 +137,46 @@ fn run(cli: Cli) -> Result<()> {
             message,
             repository,
             branch,
+            path,
+            lines,
+            revision,
+            contents,
         } => {
             let branch = review_branch(&repository, branch)?;
-            let entry = store.add_note(&repository, &branch, &message)?;
+            let source = match (path, lines) {
+                (Some(path), Some(lines)) => {
+                    let contents = contents.map(read_contents).transpose()?;
+                    Some(nota::note_source(
+                        &SystemGit,
+                        &repository,
+                        &revision,
+                        &path,
+                        lines,
+                        contents.as_deref(),
+                    )?)
+                }
+                _ => None,
+            };
+            let entry = store.add_note(&repository, &branch, &message, source.as_ref())?;
             println!("{}  note", short(&entry.commit));
         }
         Command::Show {
             repository,
             branch,
             json,
+            at,
         } => {
             let branch = review_branch(&repository, branch)?;
             let review = store.load_review(&repository, &branch)?;
+            if let Some(at) = at {
+                let target = match at.as_str() {
+                    "worktree" => Target::Worktree,
+                    _ => Target::Revision(at),
+                };
+                let placed = nota::place(&SystemGit, &repository, review, &target)?;
+                println!("{}", serde_json::to_string_pretty(&placed)?);
+                return Ok(());
+            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&review)?);
                 return Ok(());
@@ -151,6 +201,23 @@ fn run(cli: Cli) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_lines(value: &str) -> Result<(usize, usize), String> {
+    let (first, last) = value.split_once('-').unwrap_or((value, value));
+    match (first.parse(), last.parse()) {
+        (Ok(first), Ok(last)) if first > 0 && last >= first => Ok((first, last)),
+        _ => Err(format!("`{value}` is not `<first>` or `<first>-<last>`")),
+    }
+}
+
+fn read_contents(path: PathBuf) -> Result<String> {
+    if path.as_os_str() == "-" {
+        let mut contents = String::new();
+        std::io::stdin().read_to_string(&mut contents)?;
+        return Ok(contents);
+    }
+    std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))
 }
 
 fn short(commit: &str) -> &str {

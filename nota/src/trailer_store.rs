@@ -2,12 +2,14 @@
 //!
 //! The marker and every note are empty commits, so writing them never touches
 //! a working tree, and a note is told apart from a suggestion by its
-//! `Nota-Note` trailer rather than by the files it changes.
+//! `Nota-Note` trailer rather than by the files it changes. A note about
+//! particular lines records them in a `Nota-Source` trailer as
+//! `<commit>:<path>:<first>-<last>`, numbered as that commit has the file.
 
 use crate::git::{Commit, Git, SystemGit};
 use crate::review::{
-    Review, ReviewDiagnostic, ReviewEntry, ReviewEntryKind, ReviewIndex, ReviewQuery, ReviewStore,
-    ReviewSummary, StartedReview,
+    NoteSource, Review, ReviewDiagnostic, ReviewEntry, ReviewEntryKind, ReviewIndex, ReviewQuery,
+    ReviewStore, ReviewSummary, StartedReview,
 };
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
@@ -16,6 +18,7 @@ use std::path::Path;
 const REVIEW_TRAILER: &str = "Nota-Review";
 const SUBJECT_TRAILER: &str = "Nota-Subject";
 const NOTE_TRAILER: &str = "Nota-Note";
+const SOURCE_TRAILER: &str = "Nota-Source";
 
 /// [`ReviewStore`] whose markers and notes are empty commits carrying
 /// trailers, and whose suggestions are ordinary project commits.
@@ -87,14 +90,24 @@ impl ReviewStore for GitTrailerStore<'_> {
             .context("no review branch is checked out")
     }
 
-    fn add_note(&self, path: &Path, branch: &str, message: &str) -> Result<ReviewEntry> {
+    fn add_note(
+        &self,
+        path: &Path,
+        branch: &str,
+        message: &str,
+        source: Option<&NoteSource>,
+    ) -> Result<ReviewEntry> {
         let text = message.trim();
         if text.is_empty() {
             bail!("review message must not be empty");
         }
         let repository = self.git.repository_root(path)?;
         let review = self.read_branch(&repository, branch)?;
-        let message = format!("{text}\n\n{NOTE_TRAILER}: true\n");
+        let mut message = format!("{text}\n\n{NOTE_TRAILER}: true\n");
+        if let Some(source) = source {
+            self.check_source(&repository, source)?;
+            message.push_str(&format!("{SOURCE_TRAILER}: {}\n", format_source(source)));
+        }
         let commit = self.git.commit_empty(&repository, &review.tip, &message)?;
         self.git
             .update_branch(&repository, branch, &commit, &review.tip)
@@ -275,6 +288,31 @@ impl GitTrailerStore<'_> {
         Ok(None)
     }
 
+    /// Reject a source whose lines are not in its commit's version of the
+    /// file, or that its trailer could not record.
+    fn check_source(&self, repository: &Path, source: &NoteSource) -> Result<()> {
+        let NoteSource {
+            revision,
+            path,
+            first,
+            last,
+        } = source;
+        if self.git.resolve_commit(repository, revision)? != *revision {
+            bail!("a note's source must name a full commit id, not `{revision}`");
+        }
+        if path.is_empty() || path.contains('\n') || path.trim() != path {
+            bail!("invalid source path `{path}`");
+        }
+        let Some(text) = self.git.read_file(repository, revision, path)? else {
+            bail!("`{path}` is not in {revision}");
+        };
+        let length = text.lines().count().max(1);
+        if *first == 0 || last < first || *last > length {
+            bail!("lines {first}-{last} are not in `{path}`, which has {length} lines");
+        }
+        Ok(())
+    }
+
     /// Read and validate the entry `commits`, in order.
     fn entries(&self, repository: &Path, commits: &[String]) -> Result<Vec<ReviewEntry>> {
         let read = self.git.commits(repository, commits)?;
@@ -301,11 +339,18 @@ fn entry(commit: Commit) -> Result<ReviewEntry> {
         if text.trim().is_empty() {
             bail!("note commit `{id}` has no text");
         }
+        let source = trailer(&trailers, SOURCE_TRAILER)
+            .map(|value| {
+                parse_source(value)
+                    .with_context(|| format!("note commit `{id}` has an invalid source `{value}`"))
+            })
+            .transpose()?;
         return Ok(ReviewEntry {
             message: text.to_string(),
             commit: id,
             kind: ReviewEntryKind::Note,
             paths,
+            source,
         });
     }
     if message.trim().is_empty() {
@@ -319,6 +364,39 @@ fn entry(commit: Commit) -> Result<ReviewEntry> {
         message,
         kind: ReviewEntryKind::Suggestion,
         paths,
+        source: None,
+    })
+}
+
+fn format_source(source: &NoteSource) -> String {
+    let NoteSource {
+        revision,
+        path,
+        first,
+        last,
+    } = source;
+    format!("{revision}:{path}:{first}-{last}")
+}
+
+/// Read `<commit>:<path>:<first>-<last>`. The commit has no colon and the
+/// lines have none, so the path may.
+fn parse_source(value: &str) -> Result<NoteSource> {
+    let (revision, rest) = value.split_once(':').context("no commit")?;
+    let (path, lines) = rest.rsplit_once(':').context("no lines")?;
+    let (first, last) = lines.split_once('-').context("no line range")?;
+    let (first, last) = (first.parse()?, last.parse()?);
+    let is_commit = matches!(revision.len(), 40 | 64)
+        && revision
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if !is_commit || path.is_empty() || first == 0 || last < first {
+        bail!("not `<commit>:<path>:<first>-<last>`");
+    }
+    Ok(NoteSource {
+        revision: revision.to_string(),
+        path: path.to_string(),
+        first,
+        last,
     })
 }
 
@@ -356,7 +434,22 @@ fn trailer<'m>(trailers: &[(&str, &'m str)], key: &str) -> Option<&'m str> {
 
 #[cfg(test)]
 mod tests {
-    use super::split_trailers;
+    use super::{format_source, parse_source, split_trailers};
+    use crate::review::NoteSource;
+
+    #[test]
+    fn sources_round_trip_through_their_trailer() {
+        let source = NoteSource {
+            revision: "a".repeat(40),
+            path: "dir/odd:name.rs".into(),
+            first: 3,
+            last: 7,
+        };
+        assert_eq!(parse_source(&format_source(&source)).unwrap(), source);
+        for invalid in ["abc:file:1-2", &format!("{}:file:2-1", "a".repeat(40))] {
+            assert!(parse_source(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn only_a_final_paragraph_of_trailers_is_split_off() {

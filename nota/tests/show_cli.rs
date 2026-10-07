@@ -63,6 +63,7 @@ fn cli_shows_a_review_as_json() {
             repository,
             "nota/json",
             "Please explain\n\nthe error handling.",
+            None,
         )
         .unwrap();
     git(repository, &["switch", "nota/json"]);
@@ -85,12 +86,14 @@ fn cli_shows_a_review_as_json() {
                 "message": "Please explain\n\nthe error handling.",
                 "kind": "note",
                 "paths": [],
+                "source": null,
             },
             {
                 "commit": suggestion,
                 "message": "Clarify behavior\n\nIn detail.",
                 "kind": "suggestion",
                 "paths": ["a.txt", "b.txt"],
+                "source": null,
             },
         ])
     );

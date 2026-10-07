@@ -31,6 +31,9 @@ Implemented:
   non-empty message and change at least one project file.
 - Appending a note checks the branch tip it read with a compare-and-swap ref
   update, so concurrent appends fail instead of being lost.
+- Location-specific notes: a `Nota-Source` trailer records lines against an
+  exact commit, and `nota show --at` places notes and suggestion hunks in any
+  version of their files by diffing from the version they were made for.
 
 Not implemented — the sections below describe these, and no code provides them:
 
@@ -40,7 +43,9 @@ Not implemented — the sections below describe these, and no code provides them
   place.
 - Suggested edits as structured proposals carrying an expected original range.
   A suggestion is an ordinary Git commit; it is applied by cherry-pick, and a
-  Git conflict is the only staleness signal.
+  Git conflict is the only staleness signal when applying. (`nota show --at`
+  reports whether a hunk is pending, applied, or stale in some version, for
+  display only.)
 - Reply, resolution-transition, and follow-up-request entry kinds, and any
   resolved/actionable state.
 - The cross-backend contract test suite. The prototype tests the Git behaviour

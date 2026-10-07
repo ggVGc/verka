@@ -35,7 +35,11 @@ the `Nota-Review` and `Nota-Subject` trailers.
 Every later first-parent commit is one review entry:
 
 - A prose note is an empty commit whose message is the note text followed by a
-  `Nota-Note: true` trailer. Nota writes it with `commit-tree` and moves the
+  `Nota-Note: true` trailer. A note about particular lines adds a
+  `Nota-Source: <commit>:<path>:<first>-<last>` trailer: the lines as the full
+  `<commit>` has the file, which must contain them. Recording the commit keeps
+  the lines meaningful after the file changes; that commit should stay
+  reachable, as the subject and review commits do. Nota writes it with `commit-tree` and moves the
   branch with a compare-and-swap `update-ref`, so the branch need not be
   checked out, no working tree or index is touched, and a concurrent write to
   the branch makes the note fail rather than be lost. A note commit must not
@@ -88,13 +92,21 @@ review branches are no longer discoverable through this index.
 ```text
 nota start <revision> [--repository <path>] [--branch <name>]
 nota note <message> [--repository <path>] [--branch <name>]
-nota show [--repository <path>] [--branch <name>] [--json]
+          [--path <path> --lines <first>[-<last>] [--revision <rev>] [--contents <file>]]
+nota show [--repository <path>] [--branch <name>] [--json [--at worktree|<revision>]]
 nota list [--repository <path>] [--subject <revision>] [--json]
 ```
 
 `start` prints the created branch, subject revision, and suggested worktree
 command. `note` and `show` operate on `--branch`, or on the checked-out review
 branch when it is omitted.
+
+`note --path --lines` makes a note about those lines of a file, with `--path`
+relative to the repository root. The lines number the working tree file, or
+the text in `--contents` (`-` for stdin), such as an editor's unsaved buffer;
+Nota carries them through a diff to `--revision` (default `HEAD`) and records
+them against that commit. A line that exists only in the given text is
+recorded as the nearest line the commit has.
 Reviewers record suggested edits with the ordinary `git add` and `git commit`
 workflow. Nota validates those commits when it loads the review.
 
@@ -106,8 +118,39 @@ reviews; repository discovery and subject-resolution failures exit nonzero.
 `show --json` emits one object with the review's `branch`, `marker`, and
 `subject`, and its `entries` in review order. Each entry has its full `commit`
 hash, `kind` (`note` or `suggestion`), full `message` (a note's without its
-trailers), and the `paths` a suggestion changes. A malformed review exits
-nonzero.
+trailers), the `paths` a suggestion changes, and a note's `source` (`revision`,
+`path`, `first`, `last`) or `null`. A malformed review exits nonzero.
+
+## Placing items
+
+Every item is numbered against the version of a file it was made for: a
+suggestion's hunks against its parent and itself, a note against its source
+commit. `show --json --at <target>` places them all in one target version:
+`worktree`, the working tree files with uncommitted edits, or a revision. The
+output adds `at` (`worktree` or the full target commit) and gives each entry
+`locations`: one for a note's lines, one per hunk of a suggestion, none for a
+general note. A location has a `path`, a `line` and `count` (a `count` of 0
+means after `line`, 0 for the top; `line` is `null` when the item cannot be
+placed), a `status`, and for a suggestion the `hunk` with its old and new
+ranges and lines.
+
+An item is carried by a diff from its version to the target, so it follows
+lines added or removed before it, including by the review's other
+suggestions. Statuses:
+
+- `current`: a note whose lines the target still has.
+- `changed`: a note whose lines the target changed, placed where they were.
+- `pending`: a hunk whose original lines the target has, as in a checkout of
+  the subject.
+- `applied`: a hunk whose suggested lines the target has, as in a checkout of
+  the review branch.
+- `stale`: a hunk whose lines the target has neither way, placed where its
+  original lines were.
+- `unknown`: a change without lines, such as to a binary file, or a note whose
+  commit is no longer in the repository.
+
+Renamed files are not followed: an item in a file renamed since is placed as
+in a deleted file.
 
 ## Non-goals
 

@@ -71,6 +71,7 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
             &review_tree,
             &started.review.branch,
             "The candidate looks correct.",
+            None,
         )
         .unwrap();
 

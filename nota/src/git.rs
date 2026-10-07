@@ -5,6 +5,7 @@
 //! in-memory implementation instead.
 
 use anyhow::{bail, Context, Result};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -66,6 +67,51 @@ pub trait Git {
 
     /// Read `commits`, in the order given.
     fn commits(&self, repository: &Path, commits: &[String]) -> Result<Vec<Commit>>;
+
+    /// The text of `path` as `revision` has it, or `None` when it has no such
+    /// file.
+    fn read_file(&self, repository: &Path, revision: &str, path: &str) -> Result<Option<String>>;
+
+    /// Store `contents` as a blob, converted as Git would convert a file at
+    /// `path`, and return its id.
+    fn write_blob(&self, repository: &Path, path: &str, contents: &str) -> Result<String>;
+
+    /// The line changes from `from` to `to` in `paths`, without context, for
+    /// each file that differs. `to` is a revision, or the working tree for
+    /// `None`. Renames are reported as a deletion and an addition.
+    fn diff(
+        &self,
+        repository: &Path,
+        from: &str,
+        to: Option<&str>,
+        paths: &[String],
+    ) -> Result<Vec<FileDiff>>;
+
+    /// The line changes from blob `from` to blob `to`, without context. Either
+    /// may be any name Git resolves to a blob, such as `<revision>:<path>`.
+    fn diff_blobs(&self, repository: &Path, from: &str, to: &str) -> Result<Vec<Hunk>>;
+}
+
+/// The changes to one file, as [`Git::diff`] reports them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileDiff {
+    /// The file's path on the `to` side, or on the `from` side when deleted.
+    pub path: String,
+    /// In file order; empty when only binary content or the mode changed.
+    pub hunks: Vec<Hunk>,
+}
+
+/// One change of a line diff without context, numbered as Git numbers it: a
+/// side with no lines starts at the line it follows, 0 for the top.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Hunk {
+    pub old_start: usize,
+    pub old_count: usize,
+    pub new_start: usize,
+    pub new_count: usize,
+    /// The lines removed and added, without line endings.
+    pub old: Vec<String>,
+    pub new: Vec<String>,
 }
 
 /// A commit as Nota reads it.
@@ -192,6 +238,191 @@ impl Git for SystemGit {
     fn commits(&self, repository: &Path, commits: &[String]) -> Result<Vec<Commit>> {
         log(repository, &["--no-walk=unsorted".to_string()], commits)
     }
+
+    fn read_file(&self, repository: &Path, revision: &str, path: &str) -> Result<Option<String>> {
+        // A `^{blob}` suffix would be read as part of the path.
+        let blob = format!("{revision}:{path}");
+        let args = ["rev-parse", "--verify", "--quiet", &blob];
+        // `--quiet` makes a missing object exit 1 silently.
+        if output(repository, &args)?.status.code() == Some(1) {
+            return Ok(None);
+        }
+        let id = checked(repository, &args)?;
+        raw(repository, &["cat-file", "blob", &id]).map(Some)
+    }
+
+    fn write_blob(&self, repository: &Path, path: &str, contents: &str) -> Result<String> {
+        checked_with_input(
+            repository,
+            &["hash-object", "-w", "--stdin", &format!("--path={path}")],
+            contents,
+        )
+    }
+
+    fn diff(
+        &self,
+        repository: &Path,
+        from: &str,
+        to: Option<&str>,
+        paths: &[String],
+    ) -> Result<Vec<FileDiff>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut args = vec!["--literal-pathspecs"];
+        args.extend(DIFF);
+        args.push(from);
+        args.extend(to);
+        args.push("--");
+        args.extend(paths.iter().map(String::as_str));
+        parse_diff(&raw(repository, &args)?)
+    }
+
+    fn diff_blobs(&self, repository: &Path, from: &str, to: &str) -> Result<Vec<Hunk>> {
+        let mut args = DIFF.to_vec();
+        args.extend([from, to]);
+        let files = parse_diff(&raw(repository, &args)?)?;
+        Ok(files.into_iter().flat_map(|file| file.hunks).collect())
+    }
+}
+
+/// `git diff` with output that [`parse_diff`] can read, whatever the user's
+/// configuration.
+const DIFF: [&str; 15] = [
+    "-c",
+    "core.quotePath=false",
+    "-c",
+    "diff.mnemonicPrefix=false",
+    "-c",
+    "diff.noprefix=false",
+    "diff",
+    "--unified=0",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--no-relative",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+];
+
+/// Read the files and hunks of `git diff --unified=0` output.
+fn parse_diff(output: &str) -> Result<Vec<FileDiff>> {
+    let mut files: Vec<FileDiff> = Vec::new();
+    let mut old_path = None;
+    // Lines still to read of the current hunk's old and new sides; content
+    // lines may themselves start with `---` or `+++`.
+    let mut pending = (0, 0);
+    for line in output.lines() {
+        if pending != (0, 0) {
+            let hunk = files
+                .last_mut()
+                .and_then(|file| file.hunks.last_mut())
+                .context("invalid `git diff` output: lines outside a hunk")?;
+            if let Some(text) = line.strip_prefix('-').filter(|_| pending.0 > 0) {
+                hunk.old.push(text.to_string());
+                pending.0 -= 1;
+            } else if let Some(text) = line.strip_prefix('+').filter(|_| pending.1 > 0) {
+                hunk.new.push(text.to_string());
+                pending.1 -= 1;
+            } else if !line.starts_with('\\') {
+                bail!("invalid `git diff` output: unexpected line `{line}`");
+            }
+            continue;
+        }
+        if line.starts_with("diff --git ") {
+            old_path = None;
+        } else if let Some(path) = line.strip_prefix("--- ") {
+            old_path = diff_path(path, "a/");
+        } else if let Some(path) = line.strip_prefix("+++ ") {
+            let path = diff_path(path, "b/")
+                .or(old_path.take())
+                .context("invalid `git diff` output: a file without a path")?;
+            files.push(FileDiff {
+                path,
+                hunks: Vec::new(),
+            });
+        } else if let Some(header) = line.strip_prefix("@@ -") {
+            let file = files
+                .last_mut()
+                .context("invalid `git diff` output: a hunk without a file")?;
+            let (ranges, _) = header
+                .split_once(" @@")
+                .context("invalid `git diff` hunk header")?;
+            let (old, new) = ranges
+                .split_once(" +")
+                .context("invalid `git diff` hunk header")?;
+            let (old_start, old_count) = hunk_range(old)?;
+            let (new_start, new_count) = hunk_range(new)?;
+            pending = (old_count, new_count);
+            file.hunks.push(Hunk {
+                old_start,
+                old_count,
+                new_start,
+                new_count,
+                old: Vec::new(),
+                new: Vec::new(),
+            });
+        }
+    }
+    if pending != (0, 0) {
+        bail!("invalid `git diff` output: a truncated hunk");
+    }
+    Ok(files)
+}
+
+/// A `---` or `+++` path, or `None` for `/dev/null`. Git quotes unusual
+/// paths, and ends paths containing spaces with a tab.
+fn diff_path(value: &str, prefix: &str) -> Option<String> {
+    let value = value.strip_suffix('\t').unwrap_or(value);
+    let value = match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        Some(quoted) => unquote(quoted),
+        None => value.to_string(),
+    };
+    value.strip_prefix(prefix).map(str::to_string)
+}
+
+/// Undo Git's C-style quoting of a path.
+fn unquote(quoted: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut chars = quoted.bytes().peekable();
+    while let Some(byte) = chars.next() {
+        if byte != b'\\' {
+            bytes.push(byte);
+            continue;
+        }
+        match chars.next() {
+            Some(b'n') => bytes.push(b'\n'),
+            Some(b't') => bytes.push(b'\t'),
+            Some(b'a') => bytes.push(7),
+            Some(b'b') => bytes.push(8),
+            Some(b'f') => bytes.push(12),
+            Some(b'v') => bytes.push(11),
+            Some(b'r') => bytes.push(b'\r'),
+            Some(digit @ b'0'..=b'7') => {
+                let mut value = u32::from(digit - b'0');
+                for _ in 0..2 {
+                    if let Some(next @ b'0'..=b'7') = chars.peek().copied() {
+                        value = value * 8 + u32::from(next - b'0');
+                        chars.next();
+                    }
+                }
+                bytes.push(value as u8);
+            }
+            Some(other) => bytes.push(other),
+            None => bytes.push(b'\\'),
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// `start,count` from a hunk header; a missing count is 1.
+fn hunk_range(range: &str) -> Result<(usize, usize)> {
+    let (start, count) = range.split_once(',').unwrap_or((range, "1"));
+    Ok((
+        start.parse().context("invalid `git diff` hunk header")?,
+        count.parse().context("invalid `git diff` hunk header")?,
+    ))
 }
 
 /// One `git log` over `revisions`, which are passed on stdin so their number
@@ -258,6 +489,11 @@ fn output(repository: &Path, args: &[&str]) -> Result<Output> {
 }
 
 fn checked(repository: &Path, args: &[&str]) -> Result<String> {
+    Ok(raw(repository, args)?.trim().to_string())
+}
+
+/// The output of a successful command, untrimmed.
+fn raw(repository: &Path, args: &[&str]) -> Result<String> {
     let result = output(repository, args)?;
     if !result.status.success() {
         bail!(
@@ -267,7 +503,7 @@ fn checked(repository: &Path, args: &[&str]) -> Result<String> {
             String::from_utf8_lossy(&result.stderr).trim()
         );
     }
-    Ok(String::from_utf8_lossy(&result.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&result.stdout).into_owned())
 }
 
 fn checked_with_input(repository: &Path, args: &[&str], input: &str) -> Result<String> {
@@ -302,4 +538,37 @@ fn checked_with_input(repository: &Path, args: &[&str], input: &str) -> Result<S
         );
     }
     Ok(String::from_utf8_lossy(&result.stdout).trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diffs_keep_content_that_looks_like_headers() {
+        let output = "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n\
+            @@ -1,2 +1 @@\n--- a\n-+++ b\n\\ No newline at end of file\n+@@ c\n\
+            diff --git \"a/sp\\303\\244ce \\\"q\\\"\" \"b/sp\\303\\244ce \\\"q\\\"\"\n\
+            deleted file mode 100644\n--- \"a/sp\\303\\244ce \\\"q\\\"\"\n+++ /dev/null\n\
+            @@ -3 +2,0 @@\n-gone\n";
+        let files = parse_diff(output).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, "x");
+        assert_eq!(
+            files[0].hunks,
+            vec![Hunk {
+                old_start: 1,
+                old_count: 2,
+                new_start: 1,
+                new_count: 1,
+                old: vec!["-- a".into(), "+++ b".into()],
+                new: vec!["@@ c".into()],
+            }]
+        );
+        assert_eq!(files[1].path, "späce \"q\"");
+        assert_eq!(
+            (files[1].hunks[0].old_start, files[1].hunks[0].new_count),
+            (3, 0)
+        );
+    }
 }

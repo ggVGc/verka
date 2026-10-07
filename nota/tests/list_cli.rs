@@ -53,7 +53,7 @@ fn cli_lists_local_reviews_from_git_and_linked_worktrees() {
         .start_review(repository, "HEAD", Some("custom/review"))
         .unwrap();
     store
-        .add_note(repository, "custom/review", "Please explain")
+        .add_note(repository, "custom/review", "Please explain", None)
         .unwrap();
     git(repository, &["switch", "custom/review"]);
     std::fs::write(repository.join("suggestion.txt"), "Suggested change\n").unwrap();

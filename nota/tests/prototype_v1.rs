@@ -215,6 +215,35 @@ impl Git for FakeGit {
     fn commits(&self, _repository: &Path, commits: &[String]) -> Result<Vec<nota::Commit>> {
         commits.iter().map(|commit| self.read(commit)).collect()
     }
+
+    // The fake has no file contents; notes about lines are tested in real
+    // repositories.
+    fn read_file(
+        &self,
+        _repository: &Path,
+        _revision: &str,
+        _path: &str,
+    ) -> Result<Option<String>> {
+        bail!("the fake repository has no file contents")
+    }
+
+    fn write_blob(&self, _repository: &Path, _path: &str, _contents: &str) -> Result<String> {
+        bail!("the fake repository has no file contents")
+    }
+
+    fn diff(
+        &self,
+        _repository: &Path,
+        _from: &str,
+        _to: Option<&str>,
+        _paths: &[String],
+    ) -> Result<Vec<nota::FileDiff>> {
+        bail!("the fake repository has no file contents")
+    }
+
+    fn diff_blobs(&self, _repository: &Path, _from: &str, _to: &str) -> Result<Vec<nota::Hunk>> {
+        bail!("the fake repository has no file contents")
+    }
 }
 
 impl FakeGit {
@@ -289,7 +318,12 @@ fn review_branch_records_notes_and_ordinary_project_commits_as_suggestions() {
 
     git.switch("nota/review-one");
     let note = store
-        .add_note(&root(), "nota/review-one", "Please explain this behavior.")
+        .add_note(
+            &root(),
+            "nota/review-one",
+            "Please explain this behavior.",
+            None,
+        )
         .unwrap();
     assert_eq!(note.kind, ReviewEntryKind::Note);
     assert_eq!(note.message, "Please explain this behavior.");
@@ -320,7 +354,7 @@ fn notes_are_added_without_checking_out_the_review_branch() {
         .unwrap();
 
     let note = store
-        .add_note(&root(), "nota/elsewhere", "Seen from main.")
+        .add_note(&root(), "nota/elsewhere", "Seen from main.", None)
         .unwrap();
     assert_eq!(git.tip("nota/elsewhere"), note.commit);
     assert_eq!(
@@ -335,7 +369,7 @@ fn notes_are_added_without_checking_out_the_review_branch() {
 fn notes_cannot_be_added_to_a_branch_that_is_not_a_review() {
     let git = FakeGit::new();
     let error = GitTrailerStore::new(&git)
-        .add_note(&root(), "main", "Not a review.")
+        .add_note(&root(), "main", "Not a review.", None)
         .unwrap_err();
     assert!(format!("{error:#}").contains("not a Nota review"));
 }
@@ -346,7 +380,12 @@ fn a_note_keeps_its_own_trailer_like_text() {
     let store = GitTrailerStore::new(&git);
     review_on(&git, "nota/trailers");
     let note = store
-        .add_note(&root(), "nota/trailers", "Looks off.\n\nSee-Also: issue 3")
+        .add_note(
+            &root(),
+            "nota/trailers",
+            "Looks off.\n\nSee-Also: issue 3",
+            None,
+        )
         .unwrap();
     assert_eq!(note.message, "Looks off.\n\nSee-Also: issue 3");
 }
@@ -420,7 +459,7 @@ fn listing_discovers_custom_names_counts_entries_and_sorts_by_branch() {
         .start_review(&root(), "main", Some("z-custom"))
         .unwrap();
     store.start_review(&root(), "main", Some("nota/a")).unwrap();
-    store.add_note(&root(), "z-custom", "A note").unwrap();
+    store.add_note(&root(), "z-custom", "A note", None).unwrap();
     git.switch("z-custom");
     let tip = git.commit("A suggestion", &["src/lib.rs"]);
     let index = store
