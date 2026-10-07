@@ -66,6 +66,52 @@ function! s:cli(context, command, arguments, ...) abort
   return s:run(l:args + ['--'] + a:arguments)
 endfunction
 
+" Reviews started from the checked-out branch, as named by `nota start`:
+" nota/review-<branch>, or a numbered sibling that is not the review of
+" another branch.
+function! s:associated(repository, current, reviews) abort
+  let l:base = 'nota/review-' . a:current
+  let l:branches = s:git(a:repository, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/'])
+  return filter(copy(a:reviews), {_, review -> review ==# l:base
+        \ || stridx(review, l:base . '-') == 0 && review[len(l:base) + 1 :] =~# '^\d\+$'
+        \ && index(l:branches, a:current . review[len(l:base) :]) < 0})
+endfunction
+
+" With no selection and no review checked out, select the review of the
+" checked-out branch, asking which when there are several.
+function! s:associate(context) abort
+  if !empty(a:context.branch)
+    return
+  endif
+  let l:current = get(s:git(a:context.repository, ['branch', '--show-current']), 0, '')
+  if empty(l:current)
+    return
+  endif
+  let l:index = json_decode(join(s:run([get(g:, 'nota_executable', 'nota'), 'list',
+        \ '--repository=' . a:context.repository, '--json']), "\n"))
+  let l:reviews = map(copy(l:index.reviews), 'v:val.branch')
+  if index(l:reviews, l:current) >= 0
+    return
+  endif
+  let l:candidates = s:associated(a:context.repository, l:current, l:reviews)
+  if empty(l:candidates)
+    return
+  endif
+  let l:choice = 1
+  if len(l:candidates) > 1
+    let l:choice = inputlist(['Nota: select a review of ' . l:current . ':']
+          \ + map(copy(l:candidates), {i, branch -> (i + 1) . '. ' . branch}))
+    redraw
+    if l:choice < 1 || l:choice > len(l:candidates)
+      call s:fail('no review selected')
+    endif
+  endif
+  let a:context.branch = l:candidates[l:choice - 1]
+  let s:branches[a:context.repository] = a:context.branch
+  call s:inline(a:context.repository)
+  echomsg 'Nota: selected ' . a:context.branch . ', the review of ' . l:current
+endfunction
+
 function! s:review_branch(lines) abort
   for l:line in a:lines
     let l:branch = matchstr(l:line, '^review\s\+\zs\S\+\ze\s*$')
@@ -150,6 +196,7 @@ function! s:show(...) abort
   if a:0
     let l:context.branch = a:1
   endif
+  call s:associate(l:context)
   let l:review = s:load(l:context)
   let s:branches[l:context.repository] = l:context.branch
   call s:inline(l:context.repository)
@@ -170,6 +217,22 @@ function! s:branch(...) abort
     echomsg 'Nota: selected ' . l:context.branch
   endif
   call s:inline(l:context.repository)
+  return 1
+endfunction
+
+function! s:toggle() abort
+  if !luaeval("require('nota.inline').enabled()")
+    " Outside a repository there is nothing to select.
+    try
+      let l:context = s:context()
+    catch /^nota:/
+      let l:context = {}
+    endtry
+    if !empty(l:context)
+      call s:associate(l:context)
+    endif
+  endif
+  lua require('nota.inline').toggle()
   return 1
 endfunction
 
@@ -312,6 +375,7 @@ endfunction
 
 function! s:note(message, range, first, last) abort
   let l:context = s:context()
+  call s:associate(l:context)
   " Resolve the checked-out default now, so an open draft keeps its target.
   call s:load(l:context)
   " Without a range, a note from a file buffer points at the cursor line.
@@ -326,6 +390,7 @@ endfunction
 
 function! s:suggest(message) abort
   let l:context = s:context()
+  call s:associate(l:context)
   if empty(l:context.branch)
     call s:fail('no review started; use :NotaStart, or select one with :NotaBranch')
   endif
@@ -442,6 +507,7 @@ function! s:quickfix(...) abort
   if a:0
     let l:context.branch = a:1
   endif
+  call s:associate(l:context)
   let l:review = s:load(l:context)
   let l:items = []
   for l:entry in l:review.entries

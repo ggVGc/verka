@@ -262,6 +262,32 @@ try
   close
   call assert_equal(s:status, s:git(s:repository, ['status', '--porcelain']))
   call assert_equal(s:index, s:git(s:repository, ['write-tree']))
+
+  " Without a selection, commands select the review of the checked-out branch.
+  call s:run([s:executable, 'start', '--repository=' . s:repository, 'HEAD'])
+  call s:git(s:repository, ['branch', 'main-3'])
+  call s:run([s:executable, 'start', '--repository=' . s:repository, 'main-3'])
+  call s:edit(s:repository)
+  NotaBranch
+  NotaNote Found the branch's review.
+  call assert_equal('nota/review-main', nota#selected(s:repository))
+  call assert_match('Found the branch', s:message(s:repository, 'nota/review-main'))
+  call assert_match('selected nota/review-main, the review of main',
+        \ execute('messages'))
+  " With several, ask which; nota/review-main-3 belongs to main-3.
+  call s:run([s:executable, 'start', '--repository=' . s:repository, 'HEAD'])
+  " Vim's Ex mode reads inputlist() from stdin rather than typeahead.
+  if has('nvim')
+    NotaBranch
+    call feedkeys("2\<CR>", 't')
+    NotaQuickfix
+    call assert_equal('Nota nota/review-main-2', getqflist({'title': 1}).title)
+    call assert_equal('nota/review-main-2', nota#selected(s:repository))
+    call feedkeys("\<CR>", 't')
+  endif
+  NotaBranch
+  call assert_equal(0, nota#command('show', []))
+  call assert_equal('', nota#selected(s:repository))
 catch
   call add(v:errors, v:exception . ' at ' . v:throwpoint)
 finally

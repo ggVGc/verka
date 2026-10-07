@@ -9,6 +9,6 @@ command! -nargs=? NotaQuickfix call nota#command('quickfix', [<f-args>])
 command! -nargs=? NotaBranch call nota#command('branch', [<f-args>])
 command! -nargs=* NotaSuggest call nota#command('suggest', [<q-args>])
 if has('nvim')
-  command! -nargs=0 NotaInline lua require('nota.inline').toggle()
+  command! -nargs=0 NotaInline call nota#command('toggle', [])
 endif
 command! -range -nargs=* NotaNote call nota#command('note', [<q-args>, <range>, <line1>, <line2>])
