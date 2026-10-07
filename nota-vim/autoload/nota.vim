@@ -247,6 +247,63 @@ function! s:toggle_preview() abort
   return s:preview()
 endfunction
 
+" Compare this file beside the review's version of it: the file as the
+" review branch leaves it, or as the subject had it where the review branch
+" is checked out, since the buffer already holds the review's changes.
+function! s:diff() abort
+  if &buftype !=# '' || empty(expand('%:p'))
+    call s:fail('open a file to compare with the review')
+  endif
+  let l:context = s:context()
+  call s:associate(l:context)
+  let l:review = s:load(l:context)
+  let l:repository = l:context.repository
+  let l:path = expand('%:p')
+  let l:prefix = l:repository . '/'
+  if stridx(l:path, l:prefix) != 0
+    call s:fail('this file is outside ' . l:repository)
+  endif
+  let l:path = strpart(l:path, strlen(l:prefix))
+  let l:head = get(s:git(l:repository, ['rev-parse', '--symbolic-full-name', 'HEAD']), 0, '')
+  if l:head ==# 'refs/heads/' . l:context.branch
+    let [l:revision, l:label] = [l:review.subject, 'subject']
+  else
+    let [l:revision, l:label] = ['refs/heads/' . l:context.branch, l:context.branch]
+  endif
+  " A file the other side lacks compares as empty.
+  try
+    let l:lines = s:blob(l:repository, l:revision . ':' . l:path).lines
+  catch /^nota:/
+    let l:lines = []
+  endtry
+  let l:filetype = &filetype
+  let l:source = win_getid()
+  diffthis
+  rightbelow vertical new
+  let s:buffer_id += 1
+  execute 'file ' . fnameescape('nota://diff/' . s:buffer_id . '/' . l:label . '/' . l:path)
+  setlocal buftype=nofile bufhidden=wipe noswapfile nobuflisted
+  let b:nota_context = copy(l:context)
+  call setline(1, l:lines)
+  let &l:filetype = l:filetype
+  setlocal nomodified nomodifiable readonly
+  diffthis
+  nnoremap <silent><buffer> q :close<CR>
+  " Closing the review's side ends the comparison in the file's window.
+  augroup nota_diff
+    autocmd! * <buffer>
+    execute 'autocmd BufWipeout <buffer> call s:diff_closed(' . l:source . ')'
+  augroup END
+  call win_gotoid(l:source)
+  return 1
+endfunction
+
+function! s:diff_closed(window) abort
+  if win_id2win(a:window)
+    call win_execute(a:window, 'diffoff')
+  endif
+endfunction
+
 function! s:start(...) abort
   if a:0 > 2
     call s:fail('usage: NotaStart [revision] [branch]')

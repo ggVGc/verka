@@ -8,6 +8,7 @@ command! -nargs=? NotaShow call nota#command('show', [<f-args>])
 command! -nargs=? NotaQuickfix call nota#command('quickfix', [<f-args>])
 command! -nargs=? NotaBranch call nota#command('branch', [<f-args>])
 command! -nargs=* NotaSuggest call nota#command('suggest', [<q-args>])
+command! -nargs=0 NotaDiff call nota#command('diff', [])
 if has('nvim')
   command! -nargs=0 NotaInline call nota#command('toggle', [])
 endif

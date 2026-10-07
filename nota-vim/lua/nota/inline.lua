@@ -333,6 +333,7 @@ local function set_mappings(buf, state)
   map('<leader>re', function() M.toggle_item() end, 'Expand or collapse Nota review item')
   map('<leader>rE', function() M.toggle_all() end, 'Expand or collapse all Nota review items')
   map('<leader>rd', function() M.show_item() end, 'Show the Nota review entry under the cursor')
+  map('<leader>rD', '<Cmd>NotaDiff<CR>', "Compare the file with the Nota review's version")
   state.mapped = true
 end
 
@@ -340,7 +341,7 @@ local function clear_mappings(buf, state)
   if not state.mapped then
     return
   end
-  for _, lhs in ipairs({ ']r', '[r', '<leader>re', '<leader>rE', '<leader>rd' }) do
+  for _, lhs in ipairs({ ']r', '[r', '<leader>re', '<leader>rE', '<leader>rd', '<leader>rD' }) do
     pcall(vim.keymap.del, 'n', lhs, { buffer = buf })
   end
   state.mapped = false

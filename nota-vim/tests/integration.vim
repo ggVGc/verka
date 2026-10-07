@@ -280,6 +280,27 @@ try
   call assert_equal(1, line('.'))
   cnext
   call assert_equal(2, line('.'))
+
+  " :NotaDiff compares the file with the review's version beside it.
+  NotaDiff
+  call assert_equal(s:repository . '/file.txt', expand('%:p'))
+  call assert_true(&diff)
+  let s:review_window = win_getid(winnr('l'))
+  call assert_equal(['suggested', 'two', 'THREE'], getbufline(winbufnr(s:review_window), 1, '$'))
+  call assert_true(getwinvar(s:review_window, '&diff'))
+  call assert_false(getwinvar(s:review_window, '&modifiable'))
+  call win_execute(s:review_window, 'close')
+  call assert_false(&diff)
+  " Where the review is checked out, compare with the subject instead.
+  call s:git(s:repository, ['worktree', 'add', s:temporary . '/diff', 'nota/first'])
+  call s:edit(s:temporary . '/diff')
+  NotaDiff
+  let s:review_window = win_getid(winnr('l'))
+  call assert_equal(['one', 'two', 'three'], getbufline(winbufnr(s:review_window), 1, '$'))
+  call assert_match('/subject/file.txt$', bufname(winbufnr(s:review_window)))
+  call win_execute(s:review_window, 'close')
+  call s:git(s:repository, ['worktree', 'remove', s:temporary . '/diff'])
+  call s:edit(s:repository)
   NotaBranch
   let s:status = s:git(s:repository, ['status', '--porcelain'])
   let s:index = s:git(s:repository, ['write-tree'])

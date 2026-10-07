@@ -114,6 +114,17 @@ their own repository and branch context.
         checkout. Without [text], open an editable Markdown draft. Fails
         when no review is selected. See |nota-suggest|.
 
+:NotaDiff                                                      *:NotaDiff*
+        Compare the current file side by side with the review's version of
+        it, using |diff-mode|: the file as the review branch leaves it, with
+        every suggestion applied. Where the review branch is checked out,
+        the buffer already holds the review's changes, so the other side is
+        the file as the subject had it. The other side is read-only and
+        opens on the right; the cursor stays in your file, so |]c| and |[c|
+        step through the changes and |do| takes one into your buffer as an
+        ordinary edit. `q` in the other side, or closing it, ends the
+        comparison.
+
 ==============================================================================
 5. Mappings                                                  *nota-mappings*
 
@@ -269,6 +280,8 @@ Buffers with review items define:
                 suggestion's message and patch across all its files, or a
                 note's message, as <CR> does in the review buffer. Where
                 entries overlap, choose one with |vim.ui.select()|.
+  <Leader>rD    Compare the whole file with the review's version, as
+                |:NotaDiff|.
 
                                                      *nota-inline-highlights*
 Highlight groups, linked by default:
@@ -316,6 +329,7 @@ g:nota_inline_mappings  number (default: 1)
                 vim.keymap.set('n', '<Leader>re', inline.toggle_item)
                 vim.keymap.set('n', '<Leader>rE', inline.toggle_all)
                 vim.keymap.set('n', '<Leader>rd', inline.show_item)
+                vim.keymap.set('n', '<Leader>rD', '<Cmd>NotaDiff<CR>')
 <
 ==============================================================================
 10. Testing                                                   *nota-testing*
