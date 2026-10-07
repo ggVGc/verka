@@ -650,7 +650,7 @@ fn the_reported_floor_is_what_the_invocation_lays_down() {
             .map(|entry| (entry.kind, entry.path.display().to_string()))
             .collect::<Vec<_>>(),
         [
-            (FloorKind::Tmpfs, "/".to_owned()),
+            (FloorKind::PrivateRoot, "/".to_owned()),
             (FloorKind::Proc, "/proc".to_owned()),
             (FloorKind::Devices, "/dev".to_owned()),
             (FloorKind::Tmpfs, "/tmp".to_owned()),
@@ -673,7 +673,7 @@ fn the_reported_floor_is_what_the_invocation_lays_down() {
         .collect();
     for entry in &floor {
         let flag = match entry.kind {
-            FloorKind::Tmpfs => "--tmpfs",
+            FloorKind::PrivateRoot | FloorKind::Tmpfs => "--tmpfs",
             FloorKind::Proc => "--proc",
             FloorKind::Devices => "--dev",
             FloorKind::Directory => "--dir",
@@ -765,5 +765,120 @@ fn the_reported_environment_is_the_whole_of_it() {
             .map(|entry| (entry.value.as_str(), entry.origin))
             .collect::<Vec<_>>(),
         [("/opt/bin", EnvironmentOrigin::Request)]
+    );
+}
+
+/// Bubblewrap creates the parents of every mount destination in the private
+/// root, so a workspace deep in a home directory leaves that home directory
+/// there. The root is made read-only after every mount is laid, so those
+/// parents cannot be written while the mounts on top keep their own access.
+#[test]
+fn the_private_root_is_sealed_after_every_mount() {
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: None,
+        base: BaseConfig::default(),
+    };
+    let request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/home/someone/src/project".into(),
+        mounts: vec![Mount::Bind {
+            source: "/host/project".into(),
+            destination: "/home/someone/src/project".into(),
+            access: MountAccess::ReadWrite,
+        }],
+        writable_mounts: WritableMountMode::Direct,
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: false,
+        new_session: true,
+    };
+
+    let args: Vec<String> = backend
+        .command(&request)
+        .unwrap()
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect();
+    let seal = args
+        .windows(2)
+        .position(|window| window[0] == "--remount-ro" && window[1] == "/")
+        .unwrap_or_else(|| panic!("the private root is never sealed: {args:?}"));
+    let bind = args.iter().position(|arg| arg == "--bind").unwrap();
+    let chdir = args.iter().position(|arg| arg == "--chdir").unwrap();
+    assert!(bind < seal && seal < chdir, "{args:?}");
+
+    assert!(!backend.floor(&request).unwrap()[0].kind.writable());
+}
+
+/// A prepared rootfs is already bound read-only, so there is nothing to seal.
+#[test]
+fn a_prepared_rootfs_is_not_remounted() {
+    let rootfs = TestRootfs::new();
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
+    };
+    let request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/work".into(),
+        mounts: Vec::new(),
+        writable_mounts: WritableMountMode::Direct,
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: false,
+        new_session: true,
+    };
+
+    let command = backend.command(&request).unwrap();
+    assert!(!command.get_args().any(|arg| arg == "--remount-ro"));
+}
+
+/// Run for real where Bubblewrap can: only the writable mount and the scratch
+/// space take writes, not the directories created to hold the mount.
+#[test]
+fn only_granted_paths_are_writable_in_a_running_sandbox() {
+    let host = std::env::temp_dir().join(format!("driva-seal-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&host);
+    std::fs::create_dir_all(&host).unwrap();
+    let backend = BwrapIsolation::new();
+    let request = ExecutionRequest {
+        command: vec![
+            "sh".into(),
+            "-c".into(),
+            "for path in /home/someone/x /home/someone/src/project/x /tmp/x /x; do \
+               if (: > \"$path\") 2>/dev/null; then echo \"rw $path\"; else echo \"ro $path\"; fi; \
+             done"
+                .into(),
+        ],
+        working_directory: "/home/someone/src/project".into(),
+        mounts: vec![Mount::Bind {
+            source: host.clone(),
+            destination: "/home/someone/src/project".into(),
+            access: MountAccess::ReadWrite,
+        }],
+        writable_mounts: WritableMountMode::Direct,
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: false,
+        new_session: true,
+    };
+
+    let output = backend.command(&request).unwrap().output();
+    let _ = std::fs::remove_dir_all(&host);
+    let output = match output {
+        Ok(output) if output.status.success() => output,
+        other => {
+            eprintln!("skipping: Bubblewrap cannot run here: {other:?}");
+            return;
+        }
+    };
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "ro /home/someone/x\n\
+         rw /home/someone/src/project/x\n\
+         rw /tmp/x\n\
+         ro /x\n"
     );
 }

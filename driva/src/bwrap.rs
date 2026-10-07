@@ -113,14 +113,12 @@ impl BwrapIsolation {
             None => Some(crate::base::resolve_base(&self.base)?),
         };
 
+        let floor = floor(rootfs.as_deref(), request, &temporary_mounts);
         let mut command = Command::new(&self.executable);
         append_isolation_options(&mut command, request, &environment(request, base.as_ref()));
-        append_floor(
-            &mut command,
-            &floor(rootfs.as_deref(), request, &temporary_mounts),
-            base.as_ref(),
-        );
+        append_floor(&mut command, &floor, base.as_ref());
         append_mounts(&mut command, mounts);
+        seal_private_root(&mut command, &floor);
         command
             .arg("--chdir")
             .arg(&request.working_directory)
@@ -133,9 +131,9 @@ impl BwrapIsolation {
     /// beyond the mounts the request names and the base it is built from.
     ///
     /// Reported rather than only built so a caller can state the whole of what
-    /// a sandbox holds: the tmpfs root, the `/tmp` every execution gets, and a
-    /// created working directory are all writable, and all of them are absent
-    /// from the mount list. [`Self::command`] renders its invocation from this
+    /// a sandbox holds: the private root, the `/tmp` every execution gets, and
+    /// a created working directory are all absent from the mount list, and
+    /// `/tmp` is writable. [`Self::command`] renders its invocation from this
     /// same list, so the two cannot disagree.
     pub fn floor(&self, request: &ExecutionRequest) -> Result<Vec<FloorEntry>> {
         let rootfs = self.resolve_rootfs()?;
@@ -302,7 +300,7 @@ fn floor(
             source: Some(rootfs.to_path_buf()),
         },
         None => FloorEntry {
-            kind: FloorKind::Tmpfs,
+            kind: FloorKind::PrivateRoot,
             path: PathBuf::from("/"),
             source: None,
         },
@@ -352,7 +350,7 @@ fn floor(
 fn append_floor(command: &mut Command, floor: &[FloorEntry], base: Option<&Base>) {
     for entry in floor {
         match entry.kind {
-            FloorKind::Tmpfs => {
+            FloorKind::PrivateRoot | FloorKind::Tmpfs => {
                 command.arg("--tmpfs").arg(&entry.path);
             }
             FloorKind::RootFs => {
@@ -378,6 +376,22 @@ fn append_floor(command: &mut Command, floor: &[FloorEntry], base: Option<&Base>
                 append_base(command, base);
             }
         }
+    }
+}
+
+/// Make a private root read-only once everything has been laid inside it.
+///
+/// Bubblewrap creates the parents of every mount destination in the root, so
+/// a workspace at `/home/me/src/project` leaves `/home` and `/home/me` there
+/// as writable directories no mount granted. Remounting only the root keeps
+/// the mounts on top of it — writable binds, `/tmp`, temporary mounts and
+/// overlays — as they were, so what can be written is what was asked for.
+fn seal_private_root(command: &mut Command, floor: &[FloorEntry]) {
+    if floor
+        .iter()
+        .any(|entry| entry.kind == FloorKind::PrivateRoot)
+    {
+        command.arg("--remount-ro").arg("/");
     }
 }
 

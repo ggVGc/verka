@@ -1905,7 +1905,7 @@ mod tests {
     }
 
     /// The mounts are not the whole of what the sandbox holds: the backend
-    /// lays down a floor of its own under them, and most of it is writable.
+    /// lays down a floor of its own under them, and part of it is writable.
     /// A profile that pins `HOME` under `/tmp` is the case that makes this
     /// matter — the agent's entire home is then scratch space no mount row
     /// anywhere accounts for.
@@ -1920,8 +1920,8 @@ mod tests {
             .map(|entry| (entry.kind, entry.path.display().to_string()))
             .collect();
         assert!(
-            floor.contains(&(driva::FloorKind::Tmpfs, "/".to_owned())),
-            "the private root is a writable tmpfs and has to be said: {floor:?}"
+            floor.contains(&(driva::FloorKind::PrivateRoot, "/".to_owned())),
+            "the private root has to be said: {floor:?}"
         );
         assert!(
             floor.contains(&(driva::FloorKind::Tmpfs, "/tmp".to_owned())),

@@ -198,10 +198,16 @@ clears the inherited host environment, and shares the host network namespace
 only when networking is granted.
 
 Those additions are the sandbox **floor**: what the backend puts there without
-being asked, under every mount. Most of it is writable — the tmpfs root, the
-`/tmp` every execution gets, a created working directory — so a caller that
-described a sandbox from its mounts alone would understate what a program in it
-can write. `BwrapIsolation::floor` and `BwrapIsolation::environment` report the
+being asked, under every mount. A caller that described a sandbox from its
+mounts alone would leave part of it out — the private root, the `/tmp` every
+execution gets, a created working directory — and `/tmp` is writable.
+
+The private root is a tmpfs, and Bubblewrap creates the parents of every mount
+destination in it, so a workspace at `/home/me/src/project` leaves `/home` and
+`/home/me` there. Once the base and every mount are in place the root is
+remounted read-only. Mounts on top of it keep their own access, so the only
+writable paths are the ones a mount or the floor's `/tmp` granted.
+`BwrapIsolation::floor` and `BwrapIsolation::environment` report the
 floor and the complete environment for a request, from the same lists the
 invocation is rendered from, so a caller can state either without re-deriving
 it and without the two drifting apart.

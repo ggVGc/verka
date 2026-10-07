@@ -957,7 +957,7 @@ M.types.BaseCapability = {
 --- backend needs there regardless — the root the mounts are laid on, the
 --- `/proc` a process reads about itself through, the scratch space every
 --- program assumes at `/tmp`. Nothing here exposes host content except the
---- prepared rootfs an execution was configured with, but several of these are
+--- prepared rootfs an execution was configured with, but some of these are
 --- *writable*, and a caller that only reported the mounts would be saying the
 --- sandbox holds less than it does.
 ---
@@ -1438,6 +1438,7 @@ M.types.FloorKind = {
   tagging = { style = "external" },
   plain = true,
   variants = {
+    { name = "private-root", payload = { kind = "unit" } },
     { name = "tmpfs", payload = { kind = "unit" } },
     { name = "root-fs", payload = { kind = "unit" } },
     { name = "proc", payload = { kind = "unit" } },
@@ -1892,9 +1893,10 @@ M.Mount = {
   OVERLAY = "overlay",
 }
 
-M.enums.FloorKind = { "tmpfs", "root-fs", "proc", "devices", "directory" }
+M.enums.FloorKind = { "private-root", "tmpfs", "root-fs", "proc", "devices", "directory" }
 --- Wire spellings of `FloorKind`.
 M.FloorKind = {
+  PRIVATE_ROOT = "private-root",
   TMPFS = "tmpfs",
   ROOT_FS = "root-fs",
   PROC = "proc",

@@ -114,7 +114,7 @@ pub enum MountAccess {
 /// backend needs there regardless — the root the mounts are laid on, the
 /// `/proc` a process reads about itself through, the scratch space every
 /// program assumes at `/tmp`. Nothing here exposes host content except the
-/// prepared rootfs an execution was configured with, but several of these are
+/// prepared rootfs an execution was configured with, but some of these are
 /// *writable*, and a caller that only reported the mounts would be saying the
 /// sandbox holds less than it does.
 ///
@@ -135,6 +135,11 @@ pub struct FloorEntry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FloorKind {
+    /// The empty in-memory filesystem a private root is built in. The base and
+    /// every mount point are laid down inside it, and it is then made
+    /// read-only, so the directories created to hold mount points cannot be
+    /// written to.
+    PrivateRoot,
     /// An empty in-memory filesystem: writable, private to this execution, and
     /// discarded when it exits. Nothing written here reaches the host.
     Tmpfs,
@@ -147,7 +152,8 @@ pub enum FloorKind {
     /// host's devices.
     Devices,
     /// A directory created so the execution has somewhere to start. Empty
-    /// unless a mount lands on it.
+    /// unless a mount lands on it, and read-only unless that mount is
+    /// writable or it lies beneath a temporary mount.
     Directory,
 }
 
@@ -155,11 +161,12 @@ impl FloorKind {
     /// What this kind is, in one line an operator can read.
     pub fn description(self) -> &'static str {
         match self {
+            Self::PrivateRoot => "empty, in memory, read-only once the mounts are in place",
             Self::Tmpfs => "empty, writable, in memory, discarded when the run ends",
             Self::RootFs => "the prepared root filesystem, read-only",
             Self::Proc => "this sandbox's own process table",
             Self::Devices => "a private /dev, not the host's devices",
-            Self::Directory => "created so the run has a working directory",
+            Self::Directory => "created so the run has a working directory, read-only unless a mount makes it writable",
         }
     }
 
@@ -167,7 +174,7 @@ impl FloorKind {
     /// entry never reach the host, but they do reach other programs in the
     /// same sandbox, which is why it is worth saying.
     pub fn writable(self) -> bool {
-        matches!(self, Self::Tmpfs | Self::Devices | Self::Directory)
+        matches!(self, Self::Tmpfs | Self::Devices)
     }
 }
 

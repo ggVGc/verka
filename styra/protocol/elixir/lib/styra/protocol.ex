@@ -967,7 +967,7 @@ defmodule Styra.Protocol do
     # backend needs there regardless — the root the mounts are laid on, the
     # `/proc` a process reads about itself through, the scratch space every
     # program assumes at `/tmp`. Nothing here exposes host content except the
-    # prepared rootfs an execution was configured with, but several of these are
+    # prepared rootfs an execution was configured with, but some of these are
     # *writable*, and a caller that only reported the mounts would be saying the
     # sandbox holds less than it does.
     #
@@ -1448,6 +1448,7 @@ defmodule Styra.Protocol do
       tagging: %{style: :external},
       plain: true,
       variants: [
+        %{name: "private-root", payload: %{kind: :unit}},
         %{name: "tmpfs", payload: %{kind: :unit}},
         %{name: "root-fs", payload: %{kind: :unit}},
         %{name: "proc", payload: %{kind: :unit}},
@@ -4089,6 +4090,7 @@ defmodule Styra.Protocol.FloorKind do
   """
 
   @spellings [
+    {:"private-root", "private-root"},
     {:tmpfs, "tmpfs"},
     {:"root-fs", "root-fs"},
     {:proc, "proc"},
@@ -4138,7 +4140,8 @@ defmodule Styra.Protocol.FloorKind do
 
   @doc ~S"""
   A directory created so the execution has somewhere to start. Empty
-  unless a mount lands on it.
+  unless a mount lands on it, and read-only unless that mount is
+  writable or it lies beneath a temporary mount.
   """
   def directory, do: "directory"
 end

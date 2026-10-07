@@ -581,7 +581,7 @@ fn floor_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
         let (label, colour) = match entry.kind {
             FloorKind::Tmpfs => ("tmp ", theme::INFO),
             FloorKind::Directory => ("dir ", theme::INFO),
-            FloorKind::RootFs => ("ro  ", theme::MUTED_TEXT),
+            FloorKind::PrivateRoot | FloorKind::RootFs => ("ro  ", theme::MUTED_TEXT),
             FloorKind::Proc | FloorKind::Devices => ("sys ", theme::MUTED_TEXT),
         };
         let mut detail = match &entry.source {
