@@ -388,6 +388,132 @@ function! s:reload(repository) abort
   endtry
 endfunction
 
+" A text blob as its lines and whether the last one ends in a newline.
+function! s:blob(repository, object) abort
+  let l:text = system(join(map(['git', '-C', a:repository, 'cat-file', 'blob', a:object],
+        \ 'shellescape(v:val)'), ' '))
+  if v:shell_error
+    call s:fail(l:text)
+  endif
+  let l:lines = split(l:text, "\n", 1)
+  let l:newline = l:lines[-1] ==# ''
+  return {'lines': l:newline ? l:lines[: -2] : l:lines, 'newline': l:newline}
+endfunction
+
+" The changes from one blob to another, as base line ranges and their
+" replacements; v:null for a binary file. A change of as many lines as it
+" replaces is split into single lines, so edits beside each one still merge;
+" the last line's newline is left to the caller.
+function! s:hunks(repository, base, other) abort
+  let l:changes = []
+  let l:lines = a:other.lines
+  let l:diff = s:git(a:repository, ['diff', '-U0', '--no-color', '--no-ext-diff',
+        \ '--no-textconv', a:base.object, a:other.object])
+  for l:line in l:diff
+    if l:line =~# '^Binary files '
+      return v:null
+    endif
+    let l:match = matchlist(l:line, '^@@ -\(\d\+\)\%(,\(\d\+\)\)\? +\(\d\+\)\%(,\(\d\+\)\)\? @@')
+    if empty(l:match)
+      continue
+    endif
+    let l:count = l:match[2] ==# '' ? 1 : str2nr(l:match[2])
+    let l:added = l:match[4] ==# '' ? 1 : str2nr(l:match[4])
+    " A pure insertion follows base line a; a change starts at line a.
+    let l:start = str2nr(l:match[1]) - (l:count ? 1 : 0)
+    let l:from = str2nr(l:match[3]) - 1
+    let l:replacement = l:added ? l:lines[l:from : l:from + l:added - 1] : []
+    if l:count == l:added
+      for l:index in range(l:count)
+        " A last line that only gained or lost its newline is unchanged here.
+        if l:replacement[l:index] !=# a:base.lines[l:start + l:index]
+          call add(l:changes, {'start': l:start + l:index, 'count': 1,
+                \ 'lines': [l:replacement[l:index]]})
+        endif
+      endfor
+    else
+      call add(l:changes, {'start': l:start, 'count': l:count, 'lines': l:replacement})
+    endif
+  endfor
+  return l:changes
+endfunction
+
+" Merge two sets of changes to the base lines; v:null when they change the
+" same lines or insert at the same place.
+function! s:merge(base, ours, theirs) abort
+  let l:changes = sort(a:ours + a:theirs,
+        \ {a, b -> a.start != b.start ? a.start - b.start : a.count - b.count})
+  let l:lines = []
+  let l:next = 0
+  let l:previous = {}
+  for l:change in l:changes
+    if l:change ==# l:previous
+      continue
+    endif
+    if l:change.start < l:next || !l:change.count && !empty(l:previous)
+          \ && !l:previous.count && l:previous.start == l:change.start
+      return v:null
+    endif
+    if l:change.start > l:next
+      call extend(l:lines, a:base[l:next : l:change.start - 1])
+    endif
+    call extend(l:lines, l:change.lines)
+    let l:next = l:change.start + l:change.count
+    let l:previous = l:change
+  endfor
+  return l:lines + a:base[l:next :]
+endfunction
+
+" Git's merge also refuses edits beside lines the other side changed. Merge
+" each conflicted file in the index again, line by line, refusing only edits
+" to the same lines. Returns whether every conflict was resolved.
+function! s:resolve(index, repository) abort
+  let l:paths = {}
+  for l:entry in s:git_index(a:index, a:repository, ['ls-files', '--unmerged'])
+    let l:match = matchlist(l:entry, '^\(\d\+\) \(\x\+\) \([123]\)\t\(.*\)$')
+    " Quoted paths hold characters this cannot pass back to Git.
+    if empty(l:match) || l:match[4] =~# '^"'
+      return 0
+    endif
+    let l:stages = get(l:paths, l:match[4], {})
+    let l:stages[l:match[3]] = {'mode': l:match[1], 'object': l:match[2]}
+    let l:paths[l:match[4]] = l:stages
+  endfor
+  if empty(l:paths)
+    return 0
+  endif
+  let l:file = tempname()
+  try
+    for [l:path, l:stages] in items(l:paths)
+      if len(l:stages) != 3
+        return 0
+      endif
+      let [l:base, l:ours, l:theirs] = [l:stages[1], l:stages[2], l:stages[3]]
+      call extend(l:base, s:blob(a:repository, l:base.object))
+      call extend(l:ours, s:blob(a:repository, l:ours.object))
+      call extend(l:theirs, s:blob(a:repository, l:theirs.object))
+      let l:mine = s:hunks(a:repository, l:base, l:ours)
+      let l:yours = s:hunks(a:repository, l:base, l:theirs)
+      if l:mine is v:null || l:yours is v:null
+        return 0
+      endif
+      let l:lines = s:merge(l:base.lines, l:mine, l:yours)
+      if l:lines is v:null
+        return 0
+      endif
+      let l:newline = l:theirs.newline != l:base.newline ? l:theirs.newline : l:ours.newline
+      let l:mode = l:theirs.mode !=# l:base.mode ? l:theirs.mode : l:ours.mode
+      call writefile(l:lines + (l:newline ? [''] : []), l:file, 'b')
+      let l:object = s:git(a:repository, ['hash-object', '-w', '--no-filters', '--', l:file])[0]
+      call s:git_index(a:index, a:repository,
+            \ ['update-index', '--cacheinfo', l:mode . ',' . l:object . ',' . l:path])
+    endfor
+  finally
+    call delete(l:file)
+  endtry
+  return 1
+endfunction
+
 " Commit the worktree's uncommitted edits to the review branch, then undo
 " them in the checkout and index: they now live in the review. The edits are
 " merged onto the review as a patch against HEAD, so they keep the review's
@@ -420,8 +546,10 @@ function! s:add_suggestion(context, text) abort
       call s:git_index(l:files.index, l:repository,
             \ ['apply', '--cached', '--3way', l:files.patch])
     catch /^nota:/
-      call s:fail('your edits conflict with the review:'
-            \ . substitute(v:exception, '^nota:', '', ''))
+      if !s:resolve(l:files.index, l:repository)
+        call s:fail('your edits conflict with the review:'
+              \ . substitute(v:exception, '^nota:', '', ''))
+      endif
     endtry
     let l:tree = s:git_index(l:files.index, l:repository, ['write-tree'])[0]
     if l:tree ==# s:git(l:repository, ['rev-parse', l:tip . '^{tree}'])[0]

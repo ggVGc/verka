@@ -190,10 +190,12 @@ as a patch against your HEAD, so they keep the review's earlier changes and
 suggestions. Once committed, the edited files are reset to HEAD in your
 checkout and index, and their buffers reloaded: the edits now live in the
 review, and the next |:NotaSuggest| holds only what you edit after it.
-Untracked files are not included; write modified buffers first. Nota
-refuses edits that conflict with the review, including changes on lines
-next to ones the review changed, and refuses when the review branch is
-checked out in this worktree; commit there with Git instead. Without text,
+Untracked files are not included; write modified buffers first. Edits
+beside lines the review changed merge line by line, and a change to as
+many lines as it replaces counts line by line. Nota refuses edits to lines
+the review changed and insertions where the review inserted, and refuses
+when the review branch is checked out in this worktree; commit there with
+Git instead. Without text,
 |:NotaSuggest| opens a draft like |nota-draft|; the edits are taken when you
 |:write| it.
 

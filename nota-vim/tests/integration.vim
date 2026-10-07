@@ -317,6 +317,31 @@ try
   NotaBranch
   call assert_equal(0, nota#command('show', []))
   call assert_equal('', nota#selected(s:repository))
+
+  " Edits beside lines the review changed merge; edits to them conflict.
+  call s:run([s:executable, 'start', '--repository=' . s:repository,
+        \ '--branch=nota/adjacent', 'HEAD'])
+  NotaBranch nota/adjacent
+  call s:edit(s:repository)
+  call setline(1, ['ONE', 'two', 'THREE'])
+  write
+  NotaSuggest Shout the outer lines.
+  call setline(1, ['one', 'inserted', 'TWO', 'three'])
+  write
+  NotaSuggest Shout the middle line.
+  call assert_equal(['ONE', 'inserted', 'TWO', 'THREE'],
+        \ split(s:git(s:repository, ['show', 'nota/adjacent:file.txt']), "\n"))
+  call assert_equal('', s:git(s:repository, ['status', '--porcelain']))
+  let s:tip = s:git(s:repository, ['rev-parse', 'nota/adjacent'])
+  call assert_equal(['one', 'two', 'three'], getline(1, '$'))
+  call setline(2, 'Two')
+  write
+  call assert_equal(0, nota#command('suggest', ['Conflicts with the middle line.']))
+  call setline(1, ['one', 'inserted too', 'two', 'three'])
+  write
+  call assert_equal(0, nota#command('suggest', ['Inserts at the same place.']))
+  call assert_equal(s:tip, s:git(s:repository, ['rev-parse', 'nota/adjacent']))
+  call s:git(s:repository, ['checkout', '--', 'file.txt'])
 catch
   call add(v:errors, v:exception . ' at ' . v:throwpoint)
 finally
