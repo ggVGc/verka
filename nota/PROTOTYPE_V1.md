@@ -88,7 +88,7 @@ review branches are no longer discoverable through this index.
 ```text
 nota start <revision> [--repository <path>] [--branch <name>]
 nota note <message> [--repository <path>] [--branch <name>]
-nota show [--repository <path>] [--branch <name>]
+nota show [--repository <path>] [--branch <name>] [--json]
 nota list [--repository <path>] [--subject <revision>] [--json]
 ```
 
@@ -102,6 +102,12 @@ workflow. Nota validates those commits when it loads the review.
 on stderr. `--json` emits one object containing `reviews` and `diagnostics`,
 using full commit hashes. Malformed branches do not prevent listing valid
 reviews; repository discovery and subject-resolution failures exit nonzero.
+
+`show --json` emits one object with the review's `branch`, `marker`, and
+`subject`, and its `entries` in review order. Each entry has its full `commit`
+hash, `kind` (`note` or `suggestion`), full `message` (a note's without its
+trailers), and the `paths` a suggestion changes. A malformed review exits
+nonzero.
 
 ## Non-goals
 

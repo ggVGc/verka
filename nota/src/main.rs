@@ -50,6 +50,9 @@ enum Command {
         /// The review branch; defaults to the checked-out branch.
         #[arg(long)]
         branch: Option<String>,
+        /// Emit the review and its entries as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -117,9 +120,17 @@ fn run(cli: Cli) -> Result<()> {
             let entry = store.add_note(&repository, &branch, &message)?;
             println!("{}  note", short(&entry.commit));
         }
-        Command::Show { repository, branch } => {
+        Command::Show {
+            repository,
+            branch,
+            json,
+        } => {
             let branch = review_branch(&repository, branch)?;
             let review = store.load_review(&repository, &branch)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&review)?);
+                return Ok(());
+            }
             println!("review   {}", review.branch);
             println!("subject  {}", review.subject);
             println!("marker   {}", review.marker);

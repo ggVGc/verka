@@ -10,7 +10,7 @@ pub struct StartedReview {
     pub repository: PathBuf,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Review {
     pub branch: String,
     pub marker: String,
@@ -18,7 +18,7 @@ pub struct Review {
     pub entries: Vec<ReviewEntry>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ReviewEntry {
     pub commit: String,
     /// The note text, or the suggestion's full commit message.
@@ -28,7 +28,8 @@ pub struct ReviewEntry {
     pub paths: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ReviewEntryKind {
     Note,
     Suggestion,
