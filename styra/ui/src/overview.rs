@@ -60,7 +60,14 @@ struct Grid {
 }
 
 fn grid(area: Rect, tiles: usize) -> Grid {
-    let columns = ((area.width / MIN_TILE_WIDTH).max(1) as usize).min(tiles.max(1));
+    // Three or four interactions use two columns, with a full-width last
+    // tile when there are three.
+    let max_columns = if matches!(tiles, 3 | 4) {
+        2
+    } else {
+        tiles.max(1)
+    };
+    let columns = ((area.width / MIN_TILE_WIDTH).max(1) as usize).min(max_columns);
     let rows = tiles.div_ceil(columns).max(1);
     let fit = (area.height / MIN_TILE_HEIGHT).max(1) as usize;
     Grid {
@@ -374,7 +381,7 @@ mod tests {
     /// not divide evenly, and a short last row stretches across the width.
     #[test]
     fn the_tiles_fill_the_whole_frame() {
-        let view = OverviewView {
+        let mut view = OverviewView {
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
@@ -384,17 +391,26 @@ mod tests {
             // thick then.
             selected: 0,
         };
-        let (screen, feedback) = draw(&view, 101, 31);
+        let (screen, feedback) = draw(&view, 151, 31);
         assert_eq!(feedback.columns, 2, "{screen}");
         let cell = |x: usize, y: usize| screen.lines().nth(y).unwrap().chars().nth(x).unwrap();
-        // The frame's inner area runs from (1, 1) to (99, 29).
+        // The frame is wide enough for three columns, but three tiles use
+        // two above one. Its inner area runs from (1, 1) to (149, 29).
         assert_eq!(
-            cell(99, 1),
+            cell(149, 1),
             '╮',
             "second tile meets the right border\n{screen}"
         );
         assert_eq!(cell(1, 29), '╰', "third tile meets the bottom\n{screen}");
-        assert_eq!(cell(99, 29), '╯', "third tile spans the width\n{screen}");
+        assert_eq!(cell(149, 29), '╯', "third tile spans the width\n{screen}");
+
+        view.tiles.push(tile("fourth", InteractionStatus::Idle));
+        let (screen, feedback) = draw(&view, 201, 31);
+        assert_eq!(feedback.columns, 2, "{screen}");
+        let row = |name: &str| screen.lines().position(|line| line.contains(name)).unwrap();
+        assert_eq!(row("first"), row("second"), "{screen}");
+        assert_eq!(row("third"), row("fourth"), "{screen}");
+        assert!(row("first") < row("third"), "{screen}");
     }
 
     #[test]
