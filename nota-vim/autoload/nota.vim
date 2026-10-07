@@ -172,7 +172,79 @@ function! s:display(context, review) abort
   nnoremap <silent><buffer> gq :NotaQuickfix<CR>
   nnoremap <silent><buffer> n :NotaNote<CR>
   nnoremap <silent><buffer> s :NotaSuggest<CR>
+  nnoremap <silent><buffer> p :call nota#command('toggle_preview', [])<CR>
+  let b:nota_preview = get(g:, 'nota_preview', 1)
+  let b:nota_preview_window = 0
+  let b:nota_previewed = ''
+  let b:nota_patches = {}
+  augroup nota_preview
+    autocmd! * <buffer>
+    autocmd CursorMoved <buffer> call nota#command('preview', [])
+    autocmd BufWinLeave <buffer> call s:close_preview(str2nr(expand('<abuf>')))
+  augroup END
+  return s:preview()
+endfunction
+
+" Show the entry under the cursor in a split beside the review buffer. Lines
+" without an entry keep the last one shown.
+function! s:preview() abort
+  if !b:nota_preview
+    return 1
+  endif
+  if b:nota_preview_window && !win_id2win(b:nota_preview_window)
+    " Closed by hand: stay closed until toggled on again.
+    let b:nota_preview = 0
+    let b:nota_preview_window = 0
+    return 1
+  endif
+  let l:commit = get(b:nota_commits, line('.') - 1, '')
+  if empty(l:commit) || l:commit ==# b:nota_previewed
+    return 1
+  endif
+  " Commits never change, so each is read from Git once.
+  if !has_key(b:nota_patches, l:commit)
+    let b:nota_patches[l:commit] = s:patch(b:nota_context, l:commit)
+  endif
+  let l:lines = b:nota_patches[l:commit]
+  if !b:nota_preview_window
+    let l:review = win_getid()
+    rightbelow vertical new
+    let s:buffer_id += 1
+    execute 'file nota://preview/' . s:buffer_id
+    setlocal buftype=nofile bufhidden=wipe noswapfile nobuflisted filetype=git
+    let l:window = win_getid()
+    call win_gotoid(l:review)
+    let b:nota_preview_window = l:window
+  endif
+  let l:buffer = winbufnr(b:nota_preview_window)
+  call setbufvar(l:buffer, '&modifiable', 1)
+  call deletebufline(l:buffer, 1, '$')
+  call setbufline(l:buffer, 1, l:lines)
+  call setbufvar(l:buffer, '&modifiable', 0)
+  call setbufvar(l:buffer, '&modified', 0)
+  call win_execute(b:nota_preview_window, 'call cursor(1, 1)')
+  let b:nota_previewed = l:commit
   return 1
+endfunction
+
+function! s:close_preview(buffer) abort
+  let l:window = win_id2win(getbufvar(a:buffer, 'nota_preview_window', 0))
+  if l:window
+    execute l:window . 'close'
+  endif
+  call setbufvar(a:buffer, 'nota_preview_window', 0)
+  call setbufvar(a:buffer, 'nota_previewed', '')
+endfunction
+
+function! s:toggle_preview() abort
+  if b:nota_preview && win_id2win(b:nota_preview_window)
+    call s:close_preview(bufnr('%'))
+    let b:nota_preview = 0
+    return 1
+  endif
+  let b:nota_preview = 1
+  let b:nota_preview_window = 0
+  return s:preview()
 endfunction
 
 function! s:start(...) abort
@@ -455,10 +527,14 @@ function! s:entry() abort
   return s:commit(b:nota_context, l:commit)
 endfunction
 
+function! s:patch(context, commit) abort
+  return s:git(a:context.repository,
+        \ ['--no-pager', 'show', '--no-color', '--no-ext-diff', '--no-textconv', a:commit, '--'])
+endfunction
+
 " Show a review entry's full message and patch in a split.
 function! s:commit(context, commit) abort
-  let l:lines = s:git(a:context.repository,
-        \ ['--no-pager', 'show', '--no-color', '--no-ext-diff', '--no-textconv', a:commit, '--'])
+  let l:lines = s:patch(a:context, a:commit)
   call s:scratch('entry', a:context)
   call setline(1, l:lines)
   setlocal filetype=git nomodified nomodifiable readonly

@@ -125,6 +125,34 @@ try
   call assert_equal('git', &filetype)
   call assert_match('Nota-Source: \x\{40}:file.txt:2-3', join(getline(1, '$'), "\n"))
   close
+  " The entry under the cursor is shown beside the review buffer.
+  let s:review = win_getid()
+  let s:windows = winnr('$')
+  call nota#command('preview', [])
+  call assert_equal(s:windows + 1, winnr('$'))
+  call assert_equal(s:review, win_getid())
+  let s:preview = winbufnr(b:nota_preview_window)
+  call assert_equal('git', getbufvar(s:preview, '&filetype'))
+  call assert_match('Multiline note', join(getbufline(s:preview, 1, '$'), "\n"))
+  " Lines without an entry keep the last one shown.
+  call cursor(1, 1)
+  call nota#command('preview', [])
+  call assert_match('Multiline note', join(getbufline(s:preview, 1, '$'), "\n"))
+  call search('Explain these lines')
+  call nota#command('preview', [])
+  call assert_equal(s:preview, winbufnr(b:nota_preview_window))
+  call assert_match('Explain these lines', join(getbufline(s:preview, 1, '$'), "\n"))
+  call assert_notmatch('Multiline note', join(getbufline(s:preview, 1, '$'), "\n"))
+  normal p
+  call assert_equal(s:windows, winnr('$'))
+  normal p
+  call assert_equal(s:windows + 1, winnr('$'))
+  " Closing the review buffer closes the preview.
+  close
+  call assert_equal(s:windows - 1, winnr('$'))
+  call assert_false(bufexists(s:preview))
+  NotaShow nota/first
+  call search('Multiline note')
   NotaNote Added from the review buffer.
   normal r
   call assert_match('Added from the review buffer', join(getline(1, '$'), "\n"))

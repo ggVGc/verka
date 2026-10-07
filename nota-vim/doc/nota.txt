@@ -119,6 +119,12 @@ their own repository and branch context.
 
 The review buffer opened by |:NotaShow| and |:NotaStart| defines:
 
+  p             Show or hide the preview: a split beside the review buffer
+                holding the full commit message and patch of the subject or
+                entry under the cursor, following it as you move. Lines
+                without an entry keep the last one shown. Closing the
+                preview by hand turns it off until `p`; closing the review
+                buffer closes it. See |g:nota_preview|.
   <CR>          Open the subject or the entry under the cursor, showing its
                 full commit message and patch.
   gq            Fill the quickfix list, as |:NotaQuickfix|.
@@ -287,6 +293,11 @@ g:nota_executable       string (default: 'nota')
         on your PATH: >vim
                 let g:nota_executable = '/path/to/verka/target/debug/nota'
 <
+                                                           *g:nota_preview*
+g:nota_preview          number (default: 1)
+        When 0, review buffers open with the preview hidden; `p` shows it.
+        See |nota-mappings|.
+
                                                     *g:nota_inline_expanded*
 g:nota_inline_expanded  number (default: 0)
         When 1, |nota-inline| hunks start expanded.
