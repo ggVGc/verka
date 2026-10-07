@@ -77,8 +77,11 @@ try
 
   " Shell metacharacters, Ex separators, and leading CLI options are prose.
   let s:text = "--literal % # ! 'quoted' \"double\"; $(touch injected) `touch injected` | more"
+  call cursor(1, 1)
   execute 'NotaNote ' . s:text
   call assert_match('\V' . escape(s:text, '\'), s:message(s:repository, 'nota/first'))
+  " Without a range, a note from a file buffer records the cursor line.
+  call assert_match('\nSource: file.txt:1\n', s:message(s:repository, 'nota/first'))
   call assert_false(filereadable(s:other . '/injected'))
   call assert_false(filereadable(s:repository . '/injected'))
   1,2NotaNote Explain these lines.
@@ -230,9 +233,12 @@ try
   call map(s:items, '[fnamemodify(v:val[0], ":t"), v:val[1], v:val[2]]')
   call assert_equal(['file.txt', 1, '[note '], [s:items[1][0], s:items[1][1], s:items[1][2][:5]])
   call assert_match('Explain these lines', s:items[1][2])
-  call assert_equal(['', 0], s:items[0][:1])
+  call assert_equal(['file.txt', 1], s:items[0][:1])
   call assert_equal(['file.txt', 2], s:items[2][:1])
   call assert_match('^\[note \x\{8}\] Multiline note$', s:items[2][2])
+  " A note from the review buffer is general, without a location.
+  call assert_equal([['', 0]], map(filter(copy(s:items),
+        \ 'v:val[2] =~# "Added from the review buffer"'), 'v:val[:1]'))
   let s:suggestions = filter(copy(s:items), 'v:val[2] =~# "^\\[suggestion"')
   call assert_equal([['file.txt', 1], ['file.txt', 3], ['staged.txt', 1], ['added.txt', 1]],
         \ map(copy(s:suggestions), 'v:val[:1]'))
@@ -240,7 +246,6 @@ try
   cclose
   close
   enew
-  " The first entry is a general note without a location.
   2cc
   call assert_equal(s:repository . '/file.txt', expand('%:p'))
   call assert_equal(1, line('.'))

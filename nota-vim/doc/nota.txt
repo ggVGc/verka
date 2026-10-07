@@ -94,7 +94,8 @@ their own repository and branch context.
 
 :[range]NotaNote [text]                                         *:NotaNote*
         Append [text] as a note to the selected review. Without [text], open
-        an editable Markdown draft. With [range], record the source lines.
+        an editable Markdown draft. Record [range], or the cursor line in a
+        file buffer, as the note's source lines.
         See |nota-notes|.
 
 :NotaSuggest [text]                                          *:NotaSuggest*
@@ -135,8 +136,9 @@ you select another review later.
 A range such as `:'<,'>NotaNote` appends `Source: path:10-15` to the
 submitted note. Paths are relative to the worktree and line numbers refer to
 the buffer at the time you run the command; this is prose context, not a
-structured location tracked by Nota. Plain `:NotaNote` writes a general
-note. A draft pins its range when opened.
+structured location tracked by Nota. Without a range, a note from a file
+buffer records the cursor line; from any other buffer, such as the review
+buffer, it is a general note. A draft pins its range when opened.
 
                                                             *nota-quickfix*
 |:NotaQuickfix| lists each note at its |nota-source| lines, and each

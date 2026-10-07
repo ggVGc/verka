@@ -314,7 +314,9 @@ function! s:note(message, range, first, last) abort
   let l:context = s:context()
   " Resolve the checked-out default now, so an open draft keeps its target.
   call s:load(l:context)
-  let l:source = a:range ? s:location(l:context, a:first, a:last) : ''
+  " Without a range, a note from a file buffer points at the cursor line.
+  let l:file = &buftype ==# '' && !empty(expand('%:p'))
+  let l:source = a:range || l:file ? s:location(l:context, a:first, a:last) : ''
   if !empty(a:message)
     let l:text = a:message . (empty(l:source) ? '' : "\n\n" . l:source)
     return s:add_note(l:context, l:text)
