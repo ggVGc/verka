@@ -144,8 +144,8 @@ available directly in the event view), `c` shows or hides those rows again, and
 `D` deletes a stopped
 interaction (the durable Session remains). `/` filters the list as you type —
 case-insensitively, by name, tag, branch, provider, or Workspace name. The
-arrows still move the cursor while you type. `Enter` keeps the filter and gives
-the keys back to the list, and `Esc` clears it (a second `Esc` closes the list).
+arrows still move the cursor while you type. `Enter` opens the interaction under
+the cursor, and `Esc` clears the filter (a second `Esc` closes the list).
 The interaction under the cursor is
 loaded once the cursor rests on it, so the list can be crossed without waiting
 for every row on the way; the row being loaded says so, and any other key acts

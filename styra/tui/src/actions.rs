@@ -429,7 +429,7 @@ impl Action {
             Self::InteractionsStop => "stop the selected interaction",
             Self::InteractionsDelete => "delete it once stopped",
             Self::InteractionsFilter => {
-                "filter by name, tag, branch, provider or Workspace (Enter keeps it, Esc clears it)"
+                "filter by name, tag, branch, provider or Workspace (Enter opens the selection, Esc clears it)"
             }
             Self::InteractionsClose => "clear the filter, or close the list",
             Self::OverviewLeft => "previous tile",

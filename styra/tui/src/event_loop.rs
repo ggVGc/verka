@@ -1037,12 +1037,15 @@ pub fn run(
             let session_id = app.session_id.clone();
             // The `/` filter is modal while it is being typed, as the event
             // list's search is: every printable key is part of the term. The
-            // arrows still walk what it leaves standing.
-            if app.interactions.typing_filter() {
+            // arrows still walk what it leaves standing. Enter ends the typing
+            // and goes on to open the row under the cursor, as Enter on the
+            // list does, rather than needing a second press.
+            if app.interactions.typing_filter() && key.code == KeyCode::Enter {
+                app.interactions.finish_filter();
+            } else if app.interactions.typing_filter() {
                 let workspace_id = app.workspace.id.clone();
                 match key.code {
                     KeyCode::Esc => app.interactions.clear_filter(),
-                    KeyCode::Enter => app.interactions.finish_filter(),
                     KeyCode::Down => app
                         .interactions
                         .cursor_next(&session_id, workspace_id.as_deref()),
