@@ -813,6 +813,7 @@ mod tests {
             uncommitted_changes: false,
             checkout,
             last_message: None,
+            recent_messages: Vec::new(),
             events: 0,
             branched_from: None,
             completed: styra_protocol::CompletionState::Active,

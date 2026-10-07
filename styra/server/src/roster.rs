@@ -358,6 +358,7 @@ mod tests {
                 commit: "0123456789abcdef0123456789abcdef01234567".into(),
             }),
             last_message: Some("still going".into()),
+            recent_messages: Vec::new(),
             auto_retry: false,
             auto_commit: false,
             events: 12,

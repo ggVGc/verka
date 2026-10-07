@@ -5,7 +5,7 @@ use crate::app::App;
 use std::borrow::Cow;
 use std::time::Duration;
 use styra_protocol::{InteractionActivity, InteractionSummary};
-use styra_ui::overview::{OverviewTile, OverviewView};
+use styra_ui::overview::{OverviewMessage, OverviewTile, OverviewView};
 
 pub(crate) fn view(app: &App) -> OverviewView<'_> {
     let now_ms = super::quota::now_ms();
@@ -53,8 +53,32 @@ fn tile<'a>(app: &'a App, interaction: &'a InteractionSummary, now_ms: u64) -> O
         rate_limited,
         uncommitted: interaction.uncommitted_changes,
         tags: &interaction.tags,
-        last_message: interaction.last_message.as_deref(),
+        messages: messages(interaction),
     }
+}
+
+/// The conversation's tail, or just the agent's last message from a server
+/// too old to send more.
+fn messages(interaction: &InteractionSummary) -> Vec<OverviewMessage<'_>> {
+    if interaction.recent_messages.is_empty() {
+        return interaction
+            .last_message
+            .as_deref()
+            .map(|text| OverviewMessage {
+                from_operator: false,
+                text,
+            })
+            .into_iter()
+            .collect();
+    }
+    interaction
+        .recent_messages
+        .iter()
+        .map(|message| OverviewMessage {
+            from_operator: message.from_operator,
+            text: &message.text,
+        })
+        .collect()
 }
 
 /// How long a working interaction has been at its turn, by the server's

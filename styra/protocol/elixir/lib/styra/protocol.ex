@@ -821,6 +821,7 @@ defmodule Styra.Protocol do
         %{name: "checkout", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "CheckoutState"}}},
         %{name: "branched_from", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "BranchPoint"}}},
         %{name: "last_message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "recent_messages", required: false, type: %{kind: :list, item: %{kind: :ref, name: "RecentMessage"}}},
         %{name: "auto_retry", required: false, type: %{kind: :boolean}},
         %{name: "auto_commit", required: false, type: %{kind: :boolean}},
         %{name: "events", required: false, type: %{kind: :number, integer: true}},
@@ -1159,6 +1160,16 @@ defmodule Styra.Protocol do
         %{name: "worktree", required: true, type: %{kind: :string, path: true}},
         %{name: "repository", required: true, type: %{kind: :string, path: true}},
         %{name: "branch", required: false, type: %{kind: :optional, inner: %{kind: :string}}}
+      ]
+    },
+
+    # One message of an interaction's conversation, as
+    # `InteractionSummary::recent_messages` lists them.
+    "RecentMessage" => %{
+      kind: :struct,
+      fields: [
+        %{name: "from_operator", required: false, type: %{kind: :boolean}},
+        %{name: "text", required: true, type: %{kind: :string}}
       ]
     },
 

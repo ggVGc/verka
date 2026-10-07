@@ -856,6 +856,7 @@ mod tests {
             uncommitted_changes: false,
             checkout: None,
             last_message: None,
+            recent_messages: Vec::new(),
             auto_retry: false,
             auto_commit: false,
             events: 0,

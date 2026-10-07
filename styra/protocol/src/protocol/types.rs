@@ -774,6 +774,17 @@ pub struct CheckoutState {
     pub branch: Option<String>,
 }
 
+/// One message of an interaction's conversation, as
+/// [`InteractionSummary::recent_messages`] lists them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecentMessage {
+    /// Whether the operator sent it, rather than the agent.
+    #[serde(default)]
+    pub from_operator: bool,
+    /// The message flattened to a single line and clipped.
+    pub text: String,
+}
+
 /// The branch and commit a Session's own branch was created from, recorded
 /// when Styra created it.
 ///
@@ -976,6 +987,13 @@ pub struct InteractionSummary {
     /// talking about. `None` before the agent has said anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
+    /// The tail of the conversation, oldest first: the latest messages from
+    /// the operator and the agent, each flattened and clipped as
+    /// [`Self::last_message`] is, so a view with room for more than one line
+    /// can show how the conversation got there. Empty before anything was
+    /// said, and from a server too old to report it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_messages: Vec<RecentMessage>,
     /// Whether a plan window refusing this interaction's work should be waited
     /// out: the Session resumed and asked again once the window turns over.
     /// See [`crate::protocol::Request::SetInteractionAutoRetry`].

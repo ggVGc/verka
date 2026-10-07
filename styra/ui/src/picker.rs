@@ -1192,6 +1192,7 @@ mod tests {
             checkout: None,
             branched_from: None,
             last_message: None,
+            recent_messages: Vec::new(),
             events: 0,
             completed: styra_protocol::CompletionState::Active,
             focus_requested: false,

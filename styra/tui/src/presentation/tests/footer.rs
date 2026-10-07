@@ -34,6 +34,7 @@ mod tests {
             uncommitted_changes: false,
             checkout: None,
             last_message: None,
+            recent_messages: Vec::new(),
             events: 0,
             branched_from: None,
             completed: CompletionState::Active,

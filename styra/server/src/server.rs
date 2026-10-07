@@ -10,8 +10,9 @@ use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
     Answer, CheckoutState, CleanedWorktree, CompletionState, Contract, DrivaOptions,
     InteractionActivity, InteractionActivityReason, InteractionSummary, InteractionUpdate,
-    LaunchMount, LaunchPolicy, LogEntry, ModelSummary, QueuedMessage, SendMessage, SessionOrigin,
-    SessionSummary, TemplateSummary, WorktreeCleanup, WorktreeSession, WorktreeSummary,
+    LaunchMount, LaunchPolicy, LogEntry, ModelSummary, QueuedMessage, RecentMessage, SendMessage,
+    SessionOrigin, SessionSummary, TemplateSummary, WorktreeCleanup, WorktreeSession,
+    WorktreeSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
@@ -780,6 +781,7 @@ impl ManagedInteraction {
             activity_reason: state.reason,
             activity_since_ms: state.since_ms,
             last_message: self.last_message(),
+            recent_messages: self.recent_messages(),
             auto_retry: self.auto_retry.load(Ordering::Acquire),
             auto_commit: self.auto_commit.load(Ordering::Acquire),
             events: self.events.load(Ordering::Acquire),
@@ -972,6 +974,41 @@ impl ManagedInteraction {
                 _ => None,
             })
     }
+
+    /// The latest messages from either side, oldest first, for
+    /// [`InteractionSummary::recent_messages`]. Scanned from the tail as
+    /// [`Self::last_message`] is.
+    fn recent_messages(&self) -> Vec<RecentMessage> {
+        recent_messages(&self.updates.lock().expect("interaction updates poisoned"))
+    }
+}
+
+/// The last messages from either side in `updates`, oldest first.
+fn recent_messages(updates: &[SequencedUpdate]) -> Vec<RecentMessage> {
+    /// More than the tallest overview tile shows lines.
+    const LIMIT: usize = 24;
+    let mut messages = updates
+        .iter()
+        .rev()
+        .filter_map(|sequenced| match &sequenced.update {
+            InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage { text }) => {
+                Some(RecentMessage {
+                    from_operator: false,
+                    text: one_line(text),
+                })
+            }
+            InteractionUpdate::Event(crate::event::AgentEvent::UserMessage { text }) => {
+                Some(RecentMessage {
+                    from_operator: true,
+                    text: one_line(text),
+                })
+            }
+            _ => None,
+        })
+        .take(LIMIT)
+        .collect::<Vec<_>>();
+    messages.reverse();
+    messages
 }
 
 /// The message a turn's work is committed under: the start of the agent's
@@ -2965,6 +3002,7 @@ impl ServerState {
             idle_unseen: false,
             uncommitted_changes: false,
             last_message: None,
+            recent_messages: Vec::new(),
             auto_retry: false,
             auto_commit,
             events: 0,
@@ -4870,6 +4908,44 @@ mod tests {
         );
     }
 
+    /// Both sides of the conversation, oldest first and each on one line,
+    /// with the tool traffic between them left out.
+    #[test]
+    fn recent_messages_are_the_conversations_tail() {
+        let mut updates = Vec::new();
+        push_sequenced(
+            &mut updates,
+            InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
+                text: "Fix the\nflaky test".into(),
+            }),
+        );
+        push_sequenced(
+            &mut updates,
+            InteractionUpdate::Event(crate::event::AgentEvent::CommandStarted {
+                command: "cargo test".into(),
+            }),
+        );
+        push_sequenced(
+            &mut updates,
+            InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage {
+                text: "It raced the clock.".into(),
+            }),
+        );
+        assert_eq!(
+            recent_messages(&updates),
+            [
+                RecentMessage {
+                    from_operator: true,
+                    text: "Fix the flaky test".into(),
+                },
+                RecentMessage {
+                    from_operator: false,
+                    text: "It raced the clock.".into(),
+                },
+            ]
+        );
+    }
+
     #[test]
     fn a_commit_subject_is_one_clipped_line() {
         let long = "word ".repeat(40);
@@ -5638,6 +5714,7 @@ mod tests {
                 checkout: None,
                 branched_from: None,
                 last_message: None,
+                recent_messages: Vec::new(),
                 auto_retry: false,
                 auto_commit: false,
                 events: 0,

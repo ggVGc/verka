@@ -35,7 +35,14 @@ pub struct OverviewTile<'a> {
     pub rate_limited: Option<Cow<'a, str>>,
     pub uncommitted: bool,
     pub tags: &'a [String],
-    pub last_message: Option<&'a str>,
+    /// The tail of the conversation, oldest first. As many as fit are shown,
+    /// counted back from the latest.
+    pub messages: Vec<OverviewMessage<'a>>,
+}
+
+pub struct OverviewMessage<'a> {
+    pub from_operator: bool,
+    pub text: &'a str,
 }
 
 pub struct OverviewView<'a> {
@@ -240,16 +247,58 @@ fn render_tile(frame: &mut Frame, tile: &OverviewTile<'_>, selected: bool, area:
             Style::default().fg(theme::INTERACTION_TAG),
         )));
     }
-    if let Some(text) = tile.last_message {
-        lines.push(Line::from(Span::styled(
-            format!("« {text}"),
-            Style::default().fg(theme::SUBORDINATE_TEXT),
-        )));
-    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let description = Paragraph::new(lines).wrap(Wrap { trim: true });
+    let description_height = (description.line_count(inner.width.max(1)) as u16).min(inner.height);
     frame.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
-        area,
+        description,
+        Rect {
+            height: description_height,
+            ..inner
+        },
     );
+    let room = inner.height - description_height;
+    // The latest message first, then as many before it as fit whole above
+    // it. A latest one too long for the room is shown from its start.
+    let mut shown = Vec::new();
+    let mut used = 0;
+    for message in tile.messages.iter().rev() {
+        let line = message_line(message);
+        let height = Paragraph::new(line.clone())
+            .wrap(Wrap { trim: true })
+            .line_count(inner.width.max(1));
+        if used + height > usize::from(room) && !shown.is_empty() {
+            break;
+        }
+        used += height;
+        shown.push(line);
+    }
+    shown.reverse();
+    frame.render_widget(
+        Paragraph::new(shown).wrap(Wrap { trim: true }),
+        Rect {
+            y: inner.y + description_height,
+            height: room,
+            ..inner
+        },
+    );
+}
+
+fn message_line(message: &OverviewMessage<'_>) -> Line<'static> {
+    if message.from_operator {
+        Line::from(Span::styled(
+            format!("» {}", message.text),
+            Style::default()
+                .fg(theme::MUTED_TEXT)
+                .bg(theme::USER_MESSAGE_BACKGROUND),
+        ))
+    } else {
+        Line::from(Span::styled(
+            format!("« {}", message.text),
+            Style::default().fg(theme::SUBORDINATE_TEXT),
+        ))
+    }
 }
 
 /// What the interaction is doing, and the marks that ask for the operator.
@@ -312,7 +361,7 @@ mod tests {
             rate_limited: None,
             uncommitted: false,
             tags: &[],
-            last_message: None,
+            messages: Vec::new(),
         }
     }
 
@@ -341,7 +390,10 @@ mod tests {
         working.branch = Some("styra/fix");
         working.elapsed = Some("2m14s".into());
         working.tags = &tags;
-        working.last_message = Some("The checks are green.");
+        working.messages = vec![OverviewMessage {
+            from_operator: false,
+            text: "The checks are green.",
+        }];
         let mut waiting = tile("write the docs", InteractionStatus::Idle);
         waiting.newly_idle = true;
         let view = OverviewView {
@@ -359,6 +411,34 @@ mod tests {
         assert!(screen.contains("● write the docs"), "{screen}");
         assert!(screen.contains("idle · NEWLY IDLE"), "{screen}");
         assert!(screen.contains("1 running · 1 idle"), "{screen}");
+    }
+
+    /// A tile shows the conversation's latest messages, as many as its room
+    /// holds counted back from the end.
+    #[test]
+    fn tiles_show_as_much_of_the_conversation_as_fits() {
+        let mut talking = tile("talking", InteractionStatus::Idle);
+        talking.messages = ["oldest", "older", "fix the checkout", "newer", "newest"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, text)| OverviewMessage {
+                from_operator: index == 2,
+                text,
+            })
+            .collect();
+        let view = OverviewView {
+            tiles: vec![talking],
+            selected: 0,
+        };
+        // Three description lines and three of messages inside the borders.
+        let (screen, _) = draw(&view, 40, 10);
+        assert!(screen.contains("» fix the checkout"), "{screen}");
+        assert!(screen.contains("« newer"), "{screen}");
+        assert!(screen.contains("« newest"), "{screen}");
+        assert!(!screen.contains("older"), "{screen}");
+        let row = |text: &str| screen.lines().position(|line| line.contains(text));
+        assert!(row("fix the checkout") < row("newer"), "{screen}");
+        assert!(row("newer") < row("newest"), "{screen}");
     }
 
     #[test]
