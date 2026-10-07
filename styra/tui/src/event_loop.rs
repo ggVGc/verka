@@ -1475,6 +1475,23 @@ pub fn run(
                     );
                 }
             }
+            // As above, but the grid stays up behind the message box, so the
+            // operator can go on to the next tile once this one is answered.
+            Some(Request::MessageInteraction(id)) => {
+                let Some(interaction) = app.interactions.current(&id).cloned() else {
+                    app.show_action_message("that interaction is no longer running");
+                    continue;
+                };
+                make_interaction_current(app, live, client, standing_launch, interaction);
+                app.view = crate::app::View::Overview;
+                if app.session_id == id {
+                    app.enter_input();
+                } else {
+                    app.show_action_message(
+                        "could not open that interaction; the log (ctrl-l) says why",
+                    );
+                }
+            }
             // The interaction is loaded outright rather than cursored, and the
             // navigator is left as it was: open or closed. Newly idle work
             // takes priority; otherwise this walks every live interaction.
