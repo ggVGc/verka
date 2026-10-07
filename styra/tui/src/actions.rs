@@ -216,6 +216,7 @@ pub(crate) enum Action {
     WorkspacesNew,
     WorkspacesCreate,
     WorkspacesRename,
+    WorkspacesDirectory,
     WorkspacesFilter,
     WorkspacesDeleteWord,
     WorkspacesCancel,
@@ -489,6 +490,7 @@ impl Action {
             Self::WorkspacesNew => "start a new interaction in the selected Workspace",
             Self::WorkspacesCreate => "create a Workspace for the current directory",
             Self::WorkspacesRename => "rename the selected Workspace",
+            Self::WorkspacesDirectory => "change the selected Workspace's directory",
             Self::WorkspacesFilter => {
                 "narrow the list by name or path to what is typed (Esc clears)"
             }

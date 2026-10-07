@@ -261,6 +261,38 @@ pub fn set_git_repository(
     summary_from_meta(&path, meta, now_ms())
 }
 
+/// Point a Workspace at a different host directory.
+///
+/// The Workspace keeps its identity, Sessions, worktrees and policy; only the
+/// directory later launches run in changes. Interactions already running stay
+/// in the directory they were spawned in. The path must be absolute for the
+/// same reason as in [`for_path`]: the server resolves it, not the caller.
+pub fn set_host_path(store_root: &Path, id: &str, host_path: &Path) -> Result<WorkspaceSummary> {
+    let path = workspace_dir(store_root, id);
+    if !path.is_dir() {
+        anyhow::bail!("Workspace {id:?} was not found");
+    }
+    if !host_path.is_absolute() {
+        anyhow::bail!(
+            "{} must be an absolute path; the server resolves it, not the caller's shell",
+            host_path.display()
+        );
+    }
+    let host_path = host_path
+        .canonicalize()
+        .with_context(|| format!("workspace directory {} must exist", host_path.display()))?;
+    if !host_path.is_dir() {
+        anyhow::bail!(
+            "workspace directory {} is not a directory",
+            host_path.display()
+        );
+    }
+    let mut meta = read_meta(&path)?;
+    meta.host_path = host_path;
+    write_meta(&path, &meta)?;
+    summary_from_meta(&path, meta, now_ms())
+}
+
 /// Change a Workspace's optional operator-facing name.
 pub fn rename(store_root: &Path, id: &str, name: Option<&str>) -> Result<WorkspaceSummary> {
     let path = workspace_dir(store_root, id);
@@ -492,6 +524,44 @@ mod tests {
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn moving_a_workspace_keeps_its_identity_and_finds_it_from_the_new_directory() {
+        let store = temp_dir("move-store");
+        let old_host = temp_dir("move-old-host");
+        let new_host = temp_dir("move-new-host");
+        let workspace = create(&store, &old_host, Some("moved".into())).unwrap();
+
+        let moved = set_host_path(&store, &workspace.id, &new_host).unwrap();
+        assert_eq!(moved.id, workspace.id);
+        assert_eq!(moved.name.as_deref(), Some("moved"));
+        assert_eq!(moved.host_path, new_host.canonicalize().unwrap());
+        assert_eq!(
+            get(&store, &workspace.id).unwrap().host_path,
+            moved.host_path
+        );
+        assert_eq!(
+            for_path(&store, &new_host).unwrap().map(|found| found.id),
+            Some(workspace.id.clone())
+        );
+        assert!(for_path(&store, &old_host).unwrap().is_none());
+
+        // A directory that is missing, relative, or a file is refused, and the
+        // stored directory is left as it was.
+        assert!(set_host_path(&store, &workspace.id, &new_host.join("missing")).is_err());
+        assert!(set_host_path(&store, &workspace.id, Path::new("src")).is_err());
+        let file = new_host.join("file");
+        std::fs::write(&file, "").unwrap();
+        assert!(set_host_path(&store, &workspace.id, &file).is_err());
+        assert_eq!(
+            get(&store, &workspace.id).unwrap().host_path,
+            moved.host_path
+        );
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(old_host).ok();
+        std::fs::remove_dir_all(new_host).ok();
     }
 
     /// Metadata written before Workspaces carried a policy must still read, as

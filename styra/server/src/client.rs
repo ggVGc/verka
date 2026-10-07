@@ -311,6 +311,22 @@ impl Client {
         }
     }
 
+    /// Point a Workspace at a different host directory. `host_path` must be
+    /// absolute: the server resolves it in its own process.
+    pub fn set_workspace_host_path(
+        &self,
+        workspace_id: &str,
+        host_path: &Path,
+    ) -> Result<WorkspaceSummary> {
+        match self.request(Request::SetWorkspaceHostPath {
+            workspace_id: workspace_id.to_owned(),
+            host_path: host_path.to_path_buf(),
+        })? {
+            Response::WorkspaceHostPathUpdated(value) => Ok(value),
+            other => unexpected("workspace_host_path_updated", other),
+        }
+    }
+
     /// Fetch the server-owned launch policy without recording a Workspace
     /// access. The UI uses this to observe edits made by other clients.
     pub fn workspace_launch(&self, workspace_id: &str) -> Result<LaunchPolicy> {
@@ -696,12 +712,16 @@ fn request_operation(request: &Request) -> &'static str {
         Request::WorkspaceForPath { .. } => "workspace_for_path",
         Request::RenameWorkspace(_) => "rename_workspace",
         Request::SetWorkspaceGitRepository { .. } => "set_workspace_git_repository",
+        Request::SetWorkspaceHostPath { .. } => "set_workspace_host_path",
         Request::WorkspaceLaunch { .. } => "workspace_launch",
         Request::CreateSession(_) => "create_session",
         Request::PlanSession(_) => "plan_session",
         Request::ListTemplates { .. } => "list_templates",
+        Request::ListModels => "list_models",
         Request::ResumeSession(_) => "resume_session",
         Request::CreateSessionWorktree { .. } => "create_session_worktree",
+        Request::CleanWorktrees { .. } => "clean_worktrees",
+        Request::ListWorktrees { .. } => "list_worktrees",
         Request::ConvertSessionProvider { .. } => "convert_session_provider",
         Request::BranchSession { .. } => "branch_session",
         Request::RenameSession(_) => "rename_session",
@@ -716,6 +736,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::SetSessionSelection { .. } => "set_session_selection",
         Request::SetInteractionWorkingDirectory { .. } => "set_interaction_working_directory",
         Request::SetInteractionAutoRetry { .. } => "set_interaction_auto_retry",
+        Request::SetInteractionAutoCommit { .. } => "set_interaction_auto_commit",
         Request::QueueMessage { .. } => "queue_message",
         Request::SendQueuedMessage { .. } => "send_queued_message",
         Request::ClearQueuedMessages { .. } => "clear_queued_messages",

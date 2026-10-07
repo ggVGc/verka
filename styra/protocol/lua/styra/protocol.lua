@@ -67,6 +67,14 @@ M.types.Request = {
         { name = "git_repository", required = true, type = { kind = "optional", inner = { kind = "string", path = true } } },
       },
     } },
+    { name = "set_workspace_host_path", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "workspace_id", required = true, type = { kind = "string" } },
+        { name = "host_path", required = true, type = { kind = "string", path = true } },
+      },
+    } },
     { name = "workspace_launch", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -313,6 +321,7 @@ M.types.Response = {
     { name = "workspace_for_path", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "ref", name = "WorkspaceSummary" } } } },
     { name = "workspace_renamed", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
     { name = "workspace_git_repository_updated", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
+    { name = "workspace_host_path_updated", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
     { name = "workspace_launch", payload = { kind = "newtype", type = { kind = "ref", name = "LaunchPolicy" } } },
     { name = "session_created", payload = { kind = "newtype", type = { kind = "ref", name = "SessionInfo" } } },
     { name = "session_plan", payload = { kind = "newtype", type = { kind = "ref", name = "DrivaOptions" } } },
@@ -1607,7 +1616,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1617,6 +1626,7 @@ M.Request = {
   WORKSPACE_FOR_PATH = "workspace_for_path",
   RENAME_WORKSPACE = "rename_workspace",
   SET_WORKSPACE_GIT_REPOSITORY = "set_workspace_git_repository",
+  SET_WORKSPACE_HOST_PATH = "set_workspace_host_path",
   WORKSPACE_LAUNCH = "workspace_launch",
   CREATE_SESSION = "create_session",
   PLAN_SESSION = "plan_session",
@@ -1660,7 +1670,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
@@ -1670,6 +1680,7 @@ M.Response = {
   WORKSPACE_FOR_PATH = "workspace_for_path",
   WORKSPACE_RENAMED = "workspace_renamed",
   WORKSPACE_GIT_REPOSITORY_UPDATED = "workspace_git_repository_updated",
+  WORKSPACE_HOST_PATH_UPDATED = "workspace_host_path_updated",
   WORKSPACE_LAUNCH = "workspace_launch",
   SESSION_CREATED = "session_created",
   SESSION_PLAN = "session_plan",
@@ -2347,6 +2358,18 @@ end
 ---   git_repository  path|null
 function M.request.set_workspace_git_repository(data)
   return M.build("set_workspace_git_repository", data)
+end
+
+--- Point a Workspace at a different host directory. The path must be
+--- absolute and must exist; the server stores it canonicalized. The
+--- Workspace keeps its id, Sessions and policy; Interactions already
+--- running stay where they were spawned.
+---
+--- Fields of `data`:
+---   workspace_id  string
+---   host_path     path
+function M.request.set_workspace_host_path(data)
+  return M.build("set_workspace_host_path", data)
 end
 
 --- Read the server-owned Workspace launch policy without touching the

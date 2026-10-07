@@ -77,6 +77,14 @@ defmodule Styra.Protocol do
             %{name: "git_repository", required: true, type: %{kind: :optional, inner: %{kind: :string, path: true}}}
           ]
         }},
+        %{name: "set_workspace_host_path", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "workspace_id", required: true, type: %{kind: :string}},
+            %{name: "host_path", required: true, type: %{kind: :string, path: true}}
+          ]
+        }},
         %{name: "workspace_launch", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -323,6 +331,7 @@ defmodule Styra.Protocol do
         %{name: "workspace_for_path", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "WorkspaceSummary"}}}},
         %{name: "workspace_renamed", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
         %{name: "workspace_git_repository_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
+        %{name: "workspace_host_path_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
         %{name: "workspace_launch", payload: %{kind: :newtype, type: %{kind: :ref, name: "LaunchPolicy"}}},
         %{name: "session_created", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionInfo"}}},
         %{name: "session_plan", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}},
@@ -1634,6 +1643,7 @@ defmodule Styra.Protocol do
     "workspace_for_path",
     "rename_workspace",
     "set_workspace_git_repository",
+    "set_workspace_host_path",
     "workspace_launch",
     "create_session",
     "plan_session",
@@ -2212,6 +2222,22 @@ defmodule Styra.Protocol do
 
     @doc "`set_workspace_git_repository/1`, raising on a request the server would refuse."
     def set_workspace_git_repository!(data), do: Styra.Protocol.build!("set_workspace_git_repository", data)
+
+    @doc ~S"""
+    Point a Workspace at a different host directory. The path must be
+    absolute and must exist; the server stores it canonicalized. The
+    Workspace keeps its id, Sessions and policy; Interactions already
+    running stay where they were spawned.
+
+    Fields of `data`:
+
+      * `workspace_id`  string
+      * `host_path   `  path
+    """
+    def set_workspace_host_path(data), do: Styra.Protocol.build("set_workspace_host_path", data)
+
+    @doc "`set_workspace_host_path/1`, raising on a request the server would refuse."
+    def set_workspace_host_path!(data), do: Styra.Protocol.build!("set_workspace_host_path", data)
 
     @doc ~S"""
     Read the server-owned Workspace launch policy without touching the
@@ -2800,6 +2826,7 @@ defmodule Styra.Protocol.Response do
     {:workspace_for_path, "workspace_for_path"},
     {:workspace_renamed, "workspace_renamed"},
     {:workspace_git_repository_updated, "workspace_git_repository_updated"},
+    {:workspace_host_path_updated, "workspace_host_path_updated"},
     {:workspace_launch, "workspace_launch"},
     {:session_created, "session_created"},
     {:session_plan, "session_plan"},
@@ -2869,6 +2896,8 @@ defmodule Styra.Protocol.Response do
   def workspace_renamed, do: "workspace_renamed"
 
   def workspace_git_repository_updated, do: "workspace_git_repository_updated"
+
+  def workspace_host_path_updated, do: "workspace_host_path_updated"
 
   def workspace_launch, do: "workspace_launch"
 

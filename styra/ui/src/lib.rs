@@ -205,13 +205,14 @@ pub trait Ui {
         view: &worktrees::WorktreePickerView<'_>,
     ) -> UiResult<RenderFeedback>;
 
-    fn render_workspace_picker_name_prompt(
+    fn render_workspace_picker_prompt(
         &mut self,
         workspaces: &[styra_protocol::WorkspaceSummary],
         selected: usize,
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
+        title: &str,
         value: &str,
     ) -> UiResult<RenderFeedback>;
 
@@ -482,13 +483,14 @@ where
         })
     }
 
-    fn render_workspace_picker_name_prompt(
+    fn render_workspace_picker_prompt(
         &mut self,
         workspaces: &[styra_protocol::WorkspaceSummary],
         selected: usize,
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
+        title: &str,
         value: &str,
     ) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
@@ -500,7 +502,7 @@ where
                 preview,
                 filter,
             );
-            picker::render_workspace_name_prompt(frame, value);
+            picker::render_workspace_prompt(frame, title, value);
             RenderFeedback::default()
         })
     }
@@ -679,22 +681,24 @@ where
         )
     }
 
-    fn render_workspace_picker_name_prompt(
+    fn render_workspace_picker_prompt(
         &mut self,
         workspaces: &[styra_protocol::WorkspaceSummary],
         selected: usize,
         interactions: &[styra_protocol::InteractionSummary],
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
+        title: &str,
         value: &str,
     ) -> UiResult<RenderFeedback> {
-        TerminalUi::render_workspace_picker_name_prompt(
+        TerminalUi::render_workspace_picker_prompt(
             self,
             workspaces,
             selected,
             interactions,
             preview,
             filter,
+            title,
             value,
         )
     }

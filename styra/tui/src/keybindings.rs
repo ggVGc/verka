@@ -307,6 +307,7 @@ bindings! { WORKSPACE_PICKER = "Workspaces";
     WORKSPACES_NEW: [Key::ctrl('n')] => Action::WorkspacesNew;
     WORKSPACES_CREATE: [Key::ctrl('c')] => Action::WorkspacesCreate;
     WORKSPACES_RENAME: [Key::ctrl('r')] => Action::WorkspacesRename;
+    WORKSPACES_DIRECTORY: [Key::ctrl('d')] => Action::WorkspacesDirectory;
     WORKSPACES_CANCEL: [Key::code(KeyCode::Esc)] => Action::WorkspacesCancel;
 }
 

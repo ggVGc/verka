@@ -316,6 +316,14 @@ pub enum Request {
         workspace_id: String,
         git_repository: Option<PathBuf>,
     },
+    /// Point a Workspace at a different host directory. The path must be
+    /// absolute and must exist; the server stores it canonicalized. The
+    /// Workspace keeps its id, Sessions and policy; Interactions already
+    /// running stay where they were spawned.
+    SetWorkspaceHostPath {
+        workspace_id: String,
+        host_path: PathBuf,
+    },
     /// Read the server-owned Workspace launch policy without touching the
     /// Workspace's last-accessed timestamp. Used as a lightweight change feed
     /// by clients displaying the Driva options view.
@@ -591,6 +599,7 @@ pub enum Response {
     WorkspaceForPath(Option<WorkspaceSummary>),
     WorkspaceRenamed(WorkspaceSummary),
     WorkspaceGitRepositoryUpdated(WorkspaceSummary),
+    WorkspaceHostPathUpdated(WorkspaceSummary),
     WorkspaceLaunch(LaunchPolicy),
     SessionCreated(SessionInfo),
     SessionPlan(DrivaOptions),
@@ -995,6 +1004,19 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_workspace_host_path_can_be_changed() {
+        let request = Request::SetWorkspaceHostPath {
+            workspace_id: "w-1".into(),
+            host_path: PathBuf::from("/srv/elsewhere"),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "set_workspace_host_path");
+        assert_eq!(json["data"]["workspace_id"], "w-1");
+        assert_eq!(json["data"]["host_path"], "/srv/elsewhere");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 
     #[test]

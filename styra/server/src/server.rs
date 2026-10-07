@@ -3537,6 +3537,23 @@ impl ServerState {
                     )?,
                 ))
             }
+            Request::SetWorkspaceHostPath {
+                workspace_id,
+                host_path,
+            } => {
+                let _metadata = self
+                    .inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned");
+                Ok(Response::WorkspaceHostPathUpdated(
+                    crate::workspace::set_host_path(
+                        &self.inner.store_root,
+                        &workspace_id,
+                        &host_path,
+                    )?,
+                ))
+            }
             Request::WorkspaceLaunch { workspace_id } => {
                 let _metadata = self
                     .inner

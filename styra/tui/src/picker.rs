@@ -594,7 +594,8 @@ fn read_session_name(
 /// narrows it by name or host path, so the commands are on the arrows (or
 /// Ctrl+J/K), Enter to open a Workspace, and control chords — Ctrl+N to start a
 /// new interaction, Ctrl+C to create a Workspace for the current directory,
-/// Ctrl+R to rename — with `?` for that list on screen. Esc clears the filter, then backs out.
+/// Ctrl+R to rename, Ctrl+D to change its directory — with `?` for that list
+/// on screen. Esc clears the filter, then backs out.
 ///
 /// The list is ordered once on entry, by [`sort_workspaces`]. A Workspace the
 /// operator opens is not reordered under them while they look at it — but its
@@ -755,14 +756,16 @@ pub fn run_workspace_picker(
                 return Ok(Some(WorkspaceChoice::CreateCurrentDirectory))
             }
             k if keys::WORKSPACES_RENAME.matches(k) && !workspaces.is_empty() => {
-                if let Some(name) = read_workspace_name(
+                if let Some(name) = read_workspace_text(
                     terminal,
                     &workspaces,
                     selected,
                     &interactions,
                     preview,
                     Some(&filter),
+                    "Workspace name",
                     workspaces[selected].name.as_deref().unwrap_or(""),
+                    80,
                 )? {
                     let renamed = client.rename_workspace(
                         &workspaces[selected].id,
@@ -778,28 +781,74 @@ pub fn run_workspace_picker(
                     }
                 }
             }
+            k if keys::WORKSPACES_DIRECTORY.matches(k) && !workspaces.is_empty() => {
+                // A directory that does not resolve keeps the prompt open with
+                // what was typed and why it failed, so a typo is fixed in place
+                // rather than retyped.
+                let mut title = "Workspace directory".to_owned();
+                let mut value = workspaces[selected].host_path.display().to_string();
+                while let Some(typed) = read_workspace_text(
+                    terminal,
+                    &workspaces,
+                    selected,
+                    &interactions,
+                    preview,
+                    Some(&filter),
+                    &title,
+                    &value,
+                    4096,
+                )? {
+                    let moved = crate::session::resolve_workspace(Some(
+                        &crate::mount::expand_home(typed.trim()),
+                    ))
+                    .and_then(|host_path| {
+                        client.set_workspace_host_path(&workspaces[selected].id, &host_path)
+                    });
+                    match moved {
+                        Ok(moved) => {
+                            let id = moved.id.clone();
+                            workspaces[selected] = moved.clone();
+                            if let Some(index) = all_workspaces
+                                .iter()
+                                .position(|workspace| workspace.id == id)
+                            {
+                                all_workspaces[index] = moved;
+                            }
+                            break;
+                        }
+                        Err(error) => {
+                            title = format!("Workspace directory · {error:#}");
+                            value = typed;
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
 }
 
-fn read_workspace_name(
+#[allow(clippy::too_many_arguments)]
+fn read_workspace_text(
     terminal: &mut dyn Ui,
     workspaces: &[WorkspaceSummary],
     selected: usize,
     interactions: &[InteractionSummary],
     preview: presentation::SessionsPreview<'_>,
     filter: Option<&str>,
+    title: &str,
     initial: &str,
+    max_chars: usize,
 ) -> Result<Option<String>> {
     let mut value = initial.to_owned();
     loop {
-        terminal.render_workspace_picker_name_prompt(
+        terminal.render_workspace_picker_prompt(
             workspaces,
             selected,
             interactions,
             preview,
             filter,
+            title,
             &value,
         )?;
         let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
@@ -814,7 +863,9 @@ fn read_workspace_name(
             KeyCode::Backspace => {
                 value.pop();
             }
-            KeyCode::Char(ch) if value.chars().count() < 80 && !ch.is_control() => value.push(ch),
+            KeyCode::Char(ch) if value.chars().count() < max_chars && !ch.is_control() => {
+                value.push(ch)
+            }
             _ => {}
         }
     }

@@ -320,8 +320,9 @@ pub fn render_name_prompt(frame: &mut Frame, value: &str) {
     text_prompt::render(frame, &prompt, frame.area());
 }
 
-pub fn render_workspace_name_prompt(frame: &mut Frame, value: &str) {
-    let prompt = TextPrompt::new(" Workspace name · Enter save · Esc cancel ", value);
+/// A one-line text field over the Workspace picker: its name, or its directory.
+pub fn render_workspace_prompt(frame: &mut Frame, title: &str, value: &str) {
+    let prompt = TextPrompt::new(format!(" {title} · Enter save · Esc cancel "), value);
     text_prompt::render(frame, &prompt, frame.area());
 }
 

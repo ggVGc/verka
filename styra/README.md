@@ -184,6 +184,7 @@ Operations:
 | `workspace_for_path` | an absolute host directory, the Workspace's own or anywhere beneath it | `workspace_for_path` (the innermost Workspace over it, or null) |
 | `rename_workspace` | Workspace id and optional name | `workspace_renamed` |
 | `set_workspace_git_repository` | Workspace id and optional Git repository path | `workspace_git_repository_updated` |
+| `set_workspace_host_path` | Workspace id and an absolute, existing host directory | `workspace_host_path_updated` (same Workspace, Sessions and policy; later launches run in the new directory) |
 | `create_session` | Workspace id, provider/model/effort selection, this launch's own policy, optional message | `session_created` |
 | `plan_session` | Workspace id and the same launch inputs, creating nothing | `session_plan` |
 | `list_templates` | Workspace id | `templates` |
