@@ -232,9 +232,12 @@ bindings! { OVERVIEW = "Overview";
     OVERVIEW_RIGHT: [Key::ch('l'), Key::code(KeyCode::Right)] => Action::OverviewRight;
     OVERVIEW_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::OverviewDown;
     OVERVIEW_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::OverviewUp;
+    OVERVIEW_NEXT: [Key::code(KeyCode::Tab)] => Action::OverviewNext;
+    OVERVIEW_PREV: [Key::code(KeyCode::BackTab)] => Action::OverviewPrev;
     OVERVIEW_FIRST: [Key::ch('g')] => Action::OverviewFirst;
     OVERVIEW_LAST: [Key::ch('G')] => Action::OverviewLast;
     OVERVIEW_OPEN: [Key::code(KeyCode::Enter)] => Action::OverviewOpen;
+    OVERVIEW_MESSAGE: [Key::ch('i')] => Action::OverviewMessage;
     OVERVIEW_CLOSE: [Key::ch('v'), Key::code(KeyCode::Esc)] => Action::OverviewClose;
 }
 

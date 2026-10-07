@@ -419,6 +419,9 @@ pub enum Request {
     /// Make the interaction with this id current, as choosing its tile in the
     /// overview does, and return to its event list.
     ShowInteraction(String),
+    /// Make the interaction with this id current while staying on the
+    /// overview, and open its message box, as `i` on a tile does.
+    MessageInteraction(String),
     /// Choose a Session by the worktree it works in.
     Worktrees,
     /// Make a newly idle interaction current when one is unseen; otherwise,

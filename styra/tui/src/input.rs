@@ -259,8 +259,8 @@ pub fn handle_list_key(
         // standing where the interaction is working. That works with no live
         // interaction — a finished one still has a directory to look at.
         k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
-        // Not from the overview, which shows no conversation for the message
-        // to join.
+        // Not from the preview. The overview takes `i` itself, for the tile
+        // under its cursor.
         k if GLOBAL_FOCUS_MESSAGE.matches(k)
             && !matches!(app.view, View::Preview | View::Overview) =>
         {
@@ -642,6 +642,8 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
         k if OVERVIEW_RIGHT.matches(k) => app.overview.right(&app.interactions, &current),
         k if OVERVIEW_DOWN.matches(k) => app.overview.down(&app.interactions, &current),
         k if OVERVIEW_UP.matches(k) => app.overview.up(&app.interactions, &current),
+        k if OVERVIEW_NEXT.matches(k) => app.overview.next(&app.interactions, &current),
+        k if OVERVIEW_PREV.matches(k) => app.overview.prev(&app.interactions, &current),
         k if OVERVIEW_FIRST.matches(k) => app.overview.first(&app.interactions),
         k if OVERVIEW_LAST.matches(k) => app.overview.last(&app.interactions),
         // Loading another interaction is a server round-trip the event loop
@@ -651,6 +653,18 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
                 Some(id) => {
                     let id = id.to_owned();
                     app.ask(Request::ShowInteraction(id))
+                }
+                None => app.show_action_message("no interaction is running or idle"),
+            }
+        }
+        // The message box sends to the interaction on screen, so the tile's
+        // has to be made current first — unless it already is.
+        k if OVERVIEW_MESSAGE.matches(k) => {
+            match app.overview.selected_id(&app.interactions, &current) {
+                Some(id) if id == current => app.enter_input(),
+                Some(id) => {
+                    let id = id.to_owned();
+                    app.ask(Request::MessageInteraction(id))
                 }
                 None => app.show_action_message("no interaction is running or idle"),
             }
@@ -1095,8 +1109,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// The grid takes `l` from the launcher to move right, `Enter` asks for
-    /// the tile's interaction, and `v` toggles the overview from both sides.
+    /// The grid takes `l` from the launcher to move right, Tab and Shift-Tab
+    /// cycle the tiles, `Enter` asks for the tile's interaction, `i` for its
+    /// message box, and `v` toggles the overview from both sides.
     #[test]
     fn the_overview_walks_its_grid_and_opens_the_chosen_tile() {
         use styra_protocol::InteractionActivity;
@@ -1131,6 +1146,22 @@ mod tests {
         assert_eq!(
             app.take_request(),
             Some(Request::ShowInteraction("1-right".into()))
+        );
+
+        press(&mut app, KeyCode::BackTab);
+        press(&mut app, KeyCode::BackTab);
+        press(&mut app, KeyCode::Char('i'));
+        assert_eq!(
+            app.take_request(),
+            Some(Request::MessageInteraction("1-right".into())),
+            "Shift-Tab wraps back to the last tile, and `i` messages it"
+        );
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('i'));
+        assert_eq!(
+            app.take_request(),
+            Some(Request::MessageInteraction("2-left".into())),
+            "Tab wraps on to the first"
         );
 
         press(&mut app, KeyCode::Char('v'));

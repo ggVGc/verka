@@ -86,6 +86,21 @@ impl Overview {
         }
     }
 
+    /// The next tile in reading order, wrapping from the last to the first,
+    /// as Tab moves between windows.
+    pub fn next(&mut self, interactions: &LiveInteractions, current: &str) {
+        let tiles = interactions.overview_indices().len().max(1);
+        let at = self.selected(interactions, current);
+        self.select(interactions, (at + 1) % tiles);
+    }
+
+    /// The previous tile, wrapping from the first to the last.
+    pub fn prev(&mut self, interactions: &LiveInteractions, current: &str) {
+        let tiles = interactions.overview_indices().len().max(1);
+        let at = self.selected(interactions, current);
+        self.select(interactions, (at + tiles - 1) % tiles);
+    }
+
     pub fn first(&mut self, interactions: &LiveInteractions) {
         self.select(interactions, 0);
     }
@@ -190,5 +205,34 @@ mod tests {
             overview.selected_id(&interactions, current),
             Some("96-tile")
         );
+    }
+
+    #[test]
+    fn tab_walks_the_tiles_in_order_and_wraps() {
+        let interactions = fleet(&[InteractionActivity::Pending; 3]);
+        let mut overview = Overview::default();
+        overview.note_columns(2);
+        let current = "99-tile";
+
+        overview.next(&interactions, current);
+        assert_eq!(
+            overview.selected(&interactions, current),
+            2,
+            "across the row break"
+        );
+        overview.next(&interactions, current);
+        assert_eq!(
+            overview.selected(&interactions, current),
+            0,
+            "wraps to the first"
+        );
+        overview.prev(&interactions, current);
+        assert_eq!(
+            overview.selected(&interactions, current),
+            2,
+            "wraps to the last"
+        );
+        overview.prev(&interactions, current);
+        assert_eq!(overview.selected(&interactions, current), 1);
     }
 }

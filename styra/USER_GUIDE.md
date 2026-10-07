@@ -169,8 +169,11 @@ doing (with how long a turn has been running), carries the same `NEWLY IDLE`,
 the agent said. The grid takes as many columns as the terminal's width allows
 and scrolls by rows when there are more tiles than fit. `h`/`j`/`k`/`l` or the
 arrows move between tiles (in the overview `l` moves rather than opening the
-launcher), `g`/`G` jump to the first and last, and `Enter` opens the selected
-interaction in the event list. `v` or `Esc` goes back without switching.
+launcher), `Tab`/`Shift-Tab` step to the next and previous tile, wrapping at
+the ends, `g`/`G` jump to the first and last, and `Enter` opens the selected
+interaction in the event list. `i` opens the message box for the selected
+interaction, as it does on the event list, while the grid stays up behind it;
+after sending or `Esc` you are back on the grid. `v` or `Esc` goes back without switching.
 Stopped and completed interactions are left out; `a` still lists them.
 
 An interaction that stops with uncommitted changes in its Git checkout — edits
