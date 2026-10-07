@@ -267,10 +267,13 @@ interaction (from either side of a branch). Otherwise, `Space`/`Enter`/`o`
 folds the selected event; `O` expands only it, `z R` expands all, `z M`
 collapses all, and `m` hides/shows minor events. With a preview open, side or
 full-screen, `↑`/`↓` scroll it ten lines and `PgUp`/`PgDn` half its height;
-in the full-screen preview `j`/`k` scroll too. On a conversation line (a message, an error, a model change or a
-branch marker), the side preview shows the file changes the agent made during
+in the full-screen preview `j`/`k` scroll too. On a conversation line (a message, an error or a model
+change), the side preview shows the file changes the agent made during
 that entry's turn — the same stretch `e` lists — rather than the line itself;
-the full-screen preview (`P`) still shows the entry.
+the full-screen preview (`P`) still shows the entry. On a `branch` marker,
+both previews show the linked interaction's conversation instead: a branch
+from where its own history begins, after what it copied from this one, and a
+source in full. A live interaction's log keeps growing while it is shown.
 Diffs mark additions and removals with a green `+` and a red `-` and highlight
 the code in the language of each file's extension, with each line's number in
 the file beside it; only the changed lines are shown. Claude's edits carry no line numbers, so they are found in

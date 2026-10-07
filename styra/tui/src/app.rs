@@ -368,6 +368,9 @@ pub struct App {
     pub link_menu: Option<LinkMenu>,
     /// The modal choice of how the selected entry seeds a new Session.
     pub branch_prompt: Option<BranchPrompt>,
+    /// The linked Session's log, while the preview is on a `branch` marker;
+    /// see [`crate::branch_log`].
+    pub branch_log: Option<crate::branch_log::BranchLog>,
     /// The microphone capture that is running, if one is; see [`Recorded`].
     /// While it is set the message box is the level meter, and the keys that
     /// would type into the box finish, cancel, or boost the recording instead:
@@ -572,6 +575,7 @@ impl App {
             link_highlight: None,
             link_menu: None,
             branch_prompt: None,
+            branch_log: None,
             recording: None,
             busy: None,
             insert: None,
@@ -1419,6 +1423,28 @@ impl App {
             }
         }
         self.timeline.selected_entry()
+    }
+
+    /// The Session named by the `branch` marker the preview is on, and which
+    /// way the marker points, while the preview is on screen. A marker that
+    /// names this Session has nothing else to show.
+    pub(crate) fn preview_branch_target(
+        &self,
+    ) -> Option<(&str, styra_protocol::event::BranchDirection)> {
+        let shown = match self.view {
+            View::Preview => true,
+            View::Events | View::Files => self.preview.open,
+            _ => false,
+        };
+        if !shown {
+            return None;
+        }
+        match self.preview_entry()?.event() {
+            AgentEvent::Branched {
+                direction, session, ..
+            } if *session != self.session_id => Some((session, *direction)),
+            _ => None,
+        }
     }
 
     /// What the preview shows in place of [`Self::preview_entry`]'s content

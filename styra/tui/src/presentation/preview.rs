@@ -42,11 +42,13 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
             // The preview is for reading the entry in full, wherever it sits.
             inherited: false,
         });
+    let branch_log = branch_log(app);
     styra_ui::preview::PreviewView {
         entry,
         // The side panel shows a message's turn diff beside the list that
-        // already shows the message; `P` is for reading the entry itself.
-        changes: (!fullscreen)
+        // already shows the message; `P` is for reading the entry itself. A
+        // branch marker is read for the Session it leads to instead.
+        changes: (!fullscreen && branch_log.is_none())
             .then(|| app.preview_changes())
             .flatten()
             .map(|changes| {
@@ -69,10 +71,35 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
             .link_highlight
             .filter(|highlight| highlight.entry == app.timeline.selected)
             .map(|highlight| highlight.link),
+        branch_log,
         file_target,
         requested_scroll: app.preview.scroll.offset,
         fullscreen,
     }
+}
+
+/// The linked Session's log while the preview is on a `branch` marker. Until
+/// the event loop has started loading the marker the cursor just reached, it
+/// reads as loading rather than as the log of the one it left.
+fn branch_log(app: &App) -> Option<styra_ui::preview::BranchLog<'_>> {
+    use crate::branch_log::{shown_from, Contents};
+    use styra_ui::preview::BranchLog;
+    let (target, direction) = app.preview_branch_target()?;
+    let Some(log) = app
+        .branch_log
+        .as_ref()
+        .filter(|log| log.session_id() == target)
+    else {
+        return Some(BranchLog::Loading);
+    };
+    Some(match log.contents() {
+        Contents::Loading => BranchLog::Loading,
+        Contents::Ready { events, protocol } => BranchLog::Ready {
+            events: shown_from(direction, events),
+            protocol: *protocol,
+        },
+        Contents::Failed(error) => BranchLog::Failed(error),
+    })
 }
 
 /// Where the agent's reported paths can place the Workspace: inside its

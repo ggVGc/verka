@@ -255,34 +255,41 @@ fn render_session_log_preview(
     let lines = entries
         .into_iter()
         .rev()
-        .map(|event| {
-            let tag = event.tag();
-            let marker = match event {
-                styra_protocol::event::AgentEvent::UserMessage { .. } => "»",
-                _ => "«",
-            };
-            Line::from(vec![
-                Span::styled(
-                    format!("{marker:<8} "),
-                    Style::default()
-                        .fg(tag_color(tag))
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    protocol
-                        .map(|protocol| {
-                            protocol.presented_summary(
-                                event,
-                                styra_protocol::event::PresentationMode::Pretty,
-                            )
-                        })
-                        .unwrap_or_else(|| event.summary()),
-                    Style::default().fg(message_text_color(tag)),
-                ),
-            ])
-        })
+        .filter_map(|event| conversation_line(event, protocol))
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// One message of another Session's conversation, as a single line: who
+/// spoke, and the gist of what they said. `None` for anything that is not a
+/// message — a conversation previewed from outside is read by its exchange.
+pub(crate) fn conversation_line(
+    event: &styra_protocol::event::AgentEvent,
+    protocol: Option<styra_protocol::event::Protocol>,
+) -> Option<Line<'static>> {
+    let marker = match event {
+        styra_protocol::event::AgentEvent::UserMessage { .. } => "»",
+        styra_protocol::event::AgentEvent::AgentMessage { .. } => "«",
+        _ => return None,
+    };
+    let tag = event.tag();
+    Some(Line::from(vec![
+        Span::styled(
+            format!("{marker:<8} "),
+            Style::default()
+                .fg(tag_color(tag))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            protocol
+                .map(|protocol| {
+                    protocol
+                        .presented_summary(event, styra_protocol::event::PresentationMode::Pretty)
+                })
+                .unwrap_or_else(|| event.summary()),
+            Style::default().fg(message_text_color(tag)),
+        ),
+    ]))
 }
 
 /// A dismissable one-line notice (e.g. a conversion failure), overlaid on top

@@ -43,6 +43,10 @@ pub struct PreviewView<'a> {
     pub target: PreviewTarget,
     pub links: LinkDisplay,
     pub link_highlight: Option<EntryIndex>,
+    /// The log of the Session a `branch` marker names, shown under the marker
+    /// in place of its own detail: the marker only says where the other side
+    /// is, and what happened there is what the operator wants to read.
+    pub branch_log: Option<BranchLog<'a>>,
     /// The local destination being inspected while Markdown-link navigation is
     /// active. This supersedes the conversation entry in the preview pane.
     pub file_target: Option<FileTarget>,
@@ -59,6 +63,20 @@ pub struct ChangeView<'a> {
     /// differ from what the provider sent: a snippet that gave no position
     /// can have had one found for it, so its lines can be numbered.
     pub diff: Option<Cow<'a, str>>,
+}
+
+/// Whether the linked Session's log has been read yet. Loading is a round
+/// trip to the server, so an unread log and an empty one must not read the
+/// same.
+#[derive(Clone, Copy, Debug)]
+pub enum BranchLog<'a> {
+    Loading,
+    /// Its events, presented as its own provider presents them.
+    Ready {
+        events: &'a [AgentEvent],
+        protocol: Protocol,
+    },
+    Failed(&'a str),
 }
 
 pub struct FileTarget {
@@ -102,6 +120,8 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
         };
         let shown = if view.changes.is_some() {
             "turn diff"
+        } else if view.branch_log.is_some() {
+            "branch log"
         } else {
             shown
         };
@@ -177,6 +197,11 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         lines.extend(change_lines(change, &view.workspace_roots));
         return lines;
     }
+    if let Some(log) = view.branch_log {
+        lines.push(Line::from(""));
+        lines.extend(branch_log_lines(log));
+        return lines;
+    }
     let suspicious = suspicious_shell_success(entry.event);
     lines.extend(detail_lines(
         entry.event,
@@ -186,6 +211,34 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         entry.branch_name,
     ));
     lines
+}
+
+/// The linked Session's conversation, one line per message, oldest first.
+fn branch_log_lines(log: BranchLog<'_>) -> Vec<Line<'static>> {
+    let muted = |text: String| {
+        vec![Line::from(Span::styled(
+            text,
+            Style::default().fg(theme::MUTED_TEXT),
+        ))]
+    };
+    match log {
+        BranchLog::Loading => muted(format!("{DETAIL_INDENT}loading…")),
+        BranchLog::Failed(error) => vec![Line::from(Span::styled(
+            format!("{DETAIL_INDENT}could not load the branch's log: {error}"),
+            Style::default().fg(theme::ERROR),
+        ))],
+        BranchLog::Ready { events, protocol } => {
+            let lines: Vec<_> = events
+                .iter()
+                .filter_map(|event| crate::picker::conversation_line(event, Some(protocol)))
+                .collect();
+            if lines.is_empty() {
+                muted(format!("{DETAIL_INDENT}no messages yet"))
+            } else {
+                lines
+            }
+        }
+    }
 }
 
 /// A file change's paths and its diff, drawn by [`diff_block_lines`] so each

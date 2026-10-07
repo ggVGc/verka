@@ -19,7 +19,7 @@ mod preview;
 pub(crate) mod quota;
 mod raw;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use styra_ui::picker::{Preview, SessionsPreview};
 
