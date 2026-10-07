@@ -11,8 +11,9 @@ CONTENTS                                                     *nota-contents*
   5. Mappings ............................................ |nota-mappings|
   6. Notes ............................................... |nota-notes|
   7. Suggestions ......................................... |nota-suggestions|
-  8. Configuration ....................................... |nota-config|
-  9. Testing ............................................. |nota-testing|
+  8. Inline review (Neovim) .............................. |nota-inline|
+  9. Configuration ....................................... |nota-config|
+ 10. Testing ............................................. |nota-testing|
 
 ==============================================================================
 1. Introduction                                                 *nota-intro*
@@ -82,6 +83,15 @@ their own repository and branch context.
         [branch], clear the selection so commands use the checked-out
         branch again.
 
+:NotaQuickfix [branch]                                      *:NotaQuickfix*
+        Fill the quickfix list with the entries of the review on [branch],
+        or of the |nota-selection|, in review order, and open it. See
+        |nota-quickfix|.
+
+:NotaInline                                                  *:NotaInline*
+        Neovim only. Turn the inline display of the selected review's
+        suggestions in source buffers on or off. See |nota-inline|.
+
 :[range]NotaNote [text]                                         *:NotaNote*
         Append [text] as a note to the selected review. Without [text], open
         an editable Markdown draft. With [range], record the source lines.
@@ -100,6 +110,7 @@ The review buffer opened by |:NotaShow| and |:NotaStart| defines:
 
   <CR>          Open the subject or the entry under the cursor, showing its
                 full commit message and patch.
+  gq            Fill the quickfix list, as |:NotaQuickfix|.
   r             Refresh the review. Use after recording notes or committing
                 suggestions.
   n             Compose a note, as |:NotaNote| without arguments.
@@ -126,6 +137,20 @@ submitted note. Paths are relative to the worktree and line numbers refer to
 the buffer at the time you run the command; this is prose context, not a
 structured location tracked by Nota. Plain `:NotaNote` writes a general
 note. A draft pins its range when opened.
+
+                                                            *nota-quickfix*
+|:NotaQuickfix| lists each note at its |nota-source| lines, and each
+suggestion once per changed hunk, so |:cnext| and |:cprevious| step through
+everything the review points at. Notes without a source are listed without
+a location; |:cnext| skips them. Items are labelled with their kind and
+commit: >
+        file.txt|1| [note 227bb165] Explain these lines.
+        file.txt|3| [suggestion 7c071a3e] Shout the last line.
+<
+Locations open files in this worktree, but their line numbers refer to the
+review: a note to the buffer it was written in, a suggestion to the file as
+its commit leaves it. They match your checkout while it is at the subject and
+the review's earlier suggestions do not shift those lines.
 
 ==============================================================================
 7. Suggestions                                            *nota-suggestions*
@@ -161,7 +186,60 @@ Published reviews are append-only; do not amend, rebase, or force-push their
 commits. See `nota/PROTOTYPE_V1.md` in the Verka repository.
 
 ==============================================================================
-8. Configuration                                               *nota-config*
+8. Inline review (Neovim)                                      *nota-inline*
+
+|:NotaInline| marks each hunk of the review's suggestions in the buffers of
+the files it changes, for the review selected in that worktree or else the
+checked-out review branch, as other commands do. Each hunk gets a sign on
+the lines it covers and its commit and summary at the end of its first line:
+>
+    3     value.unwrap() ✎ 9c4c67c4 Handle the missing value explicitly
+<
+Expanded, a hunk also shows the change itself: the lines it removes are
+highlighted, and the lines it adds appear as virtual lines below them. The
+buffer text is never changed.
+
+Hunk lines refer to the file as the suggestion's parent commit had it, so
+they are mapped onto the buffer by diffing that version against the buffer
+text, including unsaved edits. Each hunk is then shown as one of:
+
+  pending       The lines the hunk replaces are in the buffer, as in your
+                own checkout after |:NotaSuggest|.
+  applied       The lines it suggests are in the buffer, as in a worktree of
+                the review branch. Expanded, the lines it removed appear as
+                virtual lines above.
+  stale         Neither: the buffer changed those lines. The hunk is shown
+                near where it was, with `(stale)` after its summary;
+                expanded, it shows the hunk as a small diff.
+
+Notes are not shown inline; use |:NotaQuickfix|.
+
+The display follows selections, |:NotaSuggest|, and refreshes in the review
+buffer, and is redrawn when a buffer is shown, read, written, or changed in
+Normal mode. Commits made outside Vim are picked up the next time a buffer
+is shown.
+
+                                                       *nota-inline-mappings*
+Buffers with review items define:
+
+  ]r            Go to the [count]th next review item.
+  [r            Go to the [count]th previous review item.
+  <Leader>re    Expand or collapse the item under the cursor.
+  <Leader>rE    Expand every item in the buffer, or collapse them all when
+                all are expanded.
+
+                                                     *nota-inline-highlights*
+Highlight groups, linked by default:
+
+  NotaInlineSign        Sign of a pending hunk (|hl-DiagnosticInfo|).
+  NotaInlineApplied     Sign of an applied hunk (DiagnosticOk).
+  NotaInlineStale       Sign of a stale hunk (|hl-Comment|).
+  NotaInlineSummary     Commit and summary (DiagnosticVirtualTextInfo).
+  NotaInlineAdd         Added lines (|hl-DiffAdd|).
+  NotaInlineDelete      Removed lines (|hl-DiffDelete|).
+
+==============================================================================
+9. Configuration                                               *nota-config*
 
                                                          *g:nota_executable*
 g:nota_executable       string (default: 'nota')
@@ -169,14 +247,31 @@ g:nota_executable       string (default: 'nota')
         on your PATH: >vim
                 let g:nota_executable = '/path/to/verka/target/debug/nota'
 <
+                                                    *g:nota_inline_expanded*
+g:nota_inline_expanded  number (default: 0)
+        When 1, |nota-inline| hunks start expanded.
+
+                                                    *g:nota_inline_mappings*
+g:nota_inline_mappings  number (default: 1)
+        When 0, |nota-inline-mappings| are not defined. The functions are
+        available to map yourself: >lua
+                local inline = require('nota.inline')
+                vim.keymap.set('n', ']r',
+                  function() inline.jump(vim.v.count1) end)
+                vim.keymap.set('n', '[r',
+                  function() inline.jump(-vim.v.count1) end)
+                vim.keymap.set('n', '<Leader>re', inline.toggle_item)
+                vim.keymap.set('n', '<Leader>rE', inline.toggle_all)
+<
 ==============================================================================
-9. Testing                                                    *nota-testing*
+10. Testing                                                   *nota-testing*
 
 The integration test uses the real CLI and disposable Git worktrees. From
 the repository root: >sh
         cargo build -p nota
         vim -Nu NONE -n -es -S nota-vim/tests/integration.vim
         nvim --headless -u NONE -n -S nota-vim/tests/integration.vim
+        nvim --headless -u NONE -n -S nota-vim/tests/inline.vim
 <
 Set `$NOTA_TEST_EXECUTABLE` to test a different CLI binary.
 

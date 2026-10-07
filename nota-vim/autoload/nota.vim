@@ -13,6 +13,18 @@ function! nota#command(action, arguments) abort
   endtry
 endfunction
 
+" The review selected for a worktree root, or '' for the checked-out branch.
+function! nota#selected(repository) abort
+  return get(s:branches, a:repository, '')
+endfunction
+
+" Redraw inline review items after the selection or the review changes.
+function! s:inline(repository) abort
+  if has('nvim')
+    call luaeval("require('nota.inline').refresh(_A)", a:repository)
+  endif
+endfunction
+
 function! s:fail(message) abort
   throw 'nota: ' . a:message
 endfunction
@@ -44,9 +56,9 @@ function! s:context() abort
   return {'repository': l:root, 'branch': get(s:branches, l:root, '')}
 endfunction
 
-function! s:cli(context, command, arguments) abort
+function! s:cli(context, command, arguments, ...) abort
   let l:args = [get(g:, 'nota_executable', 'nota'), a:command,
-        \ '--repository=' . a:context.repository]
+        \ '--repository=' . a:context.repository] + get(a:, 1, [])
   if !empty(a:context.branch)
     call add(l:args, '--branch=' . a:context.branch)
   endif
@@ -64,10 +76,36 @@ function! s:review_branch(lines) abort
   call s:fail('nota did not report a review branch')
 endfunction
 
+" Load and validate the review, resolving the context's default branch.
 function! s:load(context) abort
-  let l:lines = s:cli(a:context, 'show', [])
-  let a:context.branch = s:review_branch(l:lines)
-  return l:lines
+  let l:review = json_decode(join(s:cli(a:context, 'show', [], ['--json']), "\n"))
+  let a:context.branch = l:review.branch
+  return l:review
+endfunction
+
+function! s:summary(entry) abort
+  return get(split(a:entry.message, "\n"), 0, '')
+endfunction
+
+" The review as text, and the commit each line opens with <CR>.
+function! s:render(review) abort
+  let l:lines = ['review   ' . a:review.branch, 'subject  ' . a:review.subject,
+        \ 'marker   ' . a:review.marker]
+  let l:commits = ['', a:review.subject, '']
+  if empty(a:review.entries)
+    call add(l:lines, 'entries  none')
+    call add(l:commits, '')
+  endif
+  for l:entry in a:review.entries
+    call add(l:lines, printf('%s  %-10s %s', strpart(l:entry.commit, 0, 12),
+          \ l:entry.kind, s:summary(l:entry)))
+    call add(l:commits, l:entry.commit)
+    for l:path in l:entry.paths
+      call add(l:lines, repeat(' ', 13) . l:path)
+      call add(l:commits, l:entry.commit)
+    endfor
+  endfor
+  return [l:lines, l:commits]
 endfunction
 
 function! s:scratch(kind, context) abort
@@ -79,12 +117,13 @@ function! s:scratch(kind, context) abort
   nnoremap <silent><buffer> q :close<CR>
 endfunction
 
-function! s:display(context, lines) abort
+function! s:display(context, review) abort
   call s:scratch('review', a:context)
-  call setline(1, a:lines)
-  setlocal filetype=nota nomodified nomodifiable readonly
+  call s:fill(a:review)
+  setlocal filetype=nota
   nnoremap <silent><buffer> r :call nota#command('refresh', [])<CR>
   nnoremap <silent><buffer> <CR> :call nota#command('entry', [])<CR>
+  nnoremap <silent><buffer> gq :NotaQuickfix<CR>
   nnoremap <silent><buffer> n :NotaNote<CR>
   nnoremap <silent><buffer> s :NotaSuggest<CR>
   return 1
@@ -99,6 +138,7 @@ function! s:start(...) abort
   let l:lines = s:cli(l:context, 'start', [a:0 ? a:1 : 'HEAD'])
   let l:context.branch = s:review_branch(l:lines)
   let s:branches[l:context.repository] = l:context.branch
+  call s:inline(l:context.repository)
   for l:line in l:lines
     echomsg l:line
   endfor
@@ -110,9 +150,10 @@ function! s:show(...) abort
   if a:0
     let l:context.branch = a:1
   endif
-  let l:lines = s:load(l:context)
+  let l:review = s:load(l:context)
   let s:branches[l:context.repository] = l:context.branch
-  return s:display(l:context, l:lines)
+  call s:inline(l:context.repository)
+  return s:display(l:context, l:review)
 endfunction
 
 function! s:branch(...) abort
@@ -128,6 +169,7 @@ function! s:branch(...) abort
     let s:branches[l:context.repository] = l:context.branch
     echomsg 'Nota: selected ' . l:context.branch
   endif
+  call s:inline(l:context.repository)
   return 1
 endfunction
 
@@ -247,6 +289,7 @@ function! s:add_suggestion(context, text) abort
     endfor
   endtry
   call s:reload(l:repository)
+  call s:inline(l:repository)
   echomsg 'Nota: ' . strpart(l:commit, 0, 12) . '  suggestion'
   return 1
 endfunction
@@ -309,23 +352,24 @@ function! s:submit() abort
   return 1
 endfunction
 
-function! s:refresh() abort
-  let l:context = copy(b:nota_context)
-  let l:lines = s:load(l:context)
+function! s:fill(review) abort
+  let [l:lines, b:nota_commits] = s:render(a:review)
   setlocal modifiable noreadonly
   call setline(1, l:lines)
   if line('$') > len(l:lines)
     execute (len(l:lines) + 1) . ',$delete _'
   endif
   setlocal nomodified nomodifiable readonly
+endfunction
+
+function! s:refresh() abort
+  call s:fill(s:load(copy(b:nota_context)))
+  call s:inline(b:nota_context.repository)
   return 1
 endfunction
 
 function! s:entry() abort
-  let l:commit = matchstr(getline('.'), '^\x\{12,64}\ze\s\+\%(note\|suggestion\)\>')
-  if empty(l:commit)
-    let l:commit = matchstr(getline('.'), '^subject\s\+\zs\x\{40,64}\ze\s*$')
-  endif
+  let l:commit = get(b:nota_commits, line('.') - 1, '')
   if empty(l:commit)
     call s:fail('put the cursor on the subject, a note, or a suggestion')
   endif
@@ -335,5 +379,81 @@ function! s:entry() abort
   call s:scratch('entry', l:context)
   call setline(1, l:lines)
   setlocal filetype=git nomodified nomodifiable readonly
+  return 1
+endfunction
+
+" A note's location, as recorded by a ranged :NotaNote in its last line.
+function! s:note_items(context, entry, text) abort
+  let l:source = matchlist(a:entry.message,
+        \ '\%(^\|\n\)Source: \(.\+\):\(\d\+\)\%(-\(\d\+\)\)\?$')
+  if empty(l:source)
+    return [{'text': a:text}]
+  endif
+  let l:item = {'filename': a:context.repository . '/' . l:source[1],
+        \ 'lnum': str2nr(l:source[2]), 'text': a:text}
+  if !empty(l:source[3])
+    let l:item.end_lnum = str2nr(l:source[3])
+  endif
+  return [l:item]
+endfunction
+
+" One item per hunk a suggestion changes, at its lines in the suggestion.
+function! s:suggestion_items(context, entry, text) abort
+  let l:diff = s:git(a:context.repository, ['-c', 'core.quotePath=false', 'diff',
+        \ '--no-color', '--no-ext-diff', '--no-renames', '--no-relative', '-U0',
+        \ '--src-prefix=a/', '--dst-prefix=b/', a:entry.commit . '^', a:entry.commit, '--'])
+  let l:items = []
+  let l:old = ''
+  let l:path = ''
+  let l:hunks = 0
+  for l:line in l:diff + ['diff --git']
+    if l:line =~# '^diff --git '
+      " Files without hunks, such as binary files, are listed once.
+      if !empty(l:path) && !l:hunks
+        call add(l:items, {'filename': a:context.repository . '/' . l:path, 'text': a:text})
+      endif
+      let [l:old, l:path, l:hunks] = ['', '', 0]
+    elseif l:line =~# '^--- a/'
+      " Git ends paths that contain spaces with a tab.
+      let l:old = substitute(strpart(l:line, 6), '\t$', '', '')
+    elseif l:line =~# '^+++ '
+      " A deleted file is listed at its old path.
+      let l:path = l:line =~# '^+++ b/'
+            \ ? substitute(strpart(l:line, 6), '\t$', '', '') : l:old
+    elseif l:line =~# '^@@ '
+      let l:range = matchlist(l:line, '^@@ -\S\+ +\(\d\+\)\%(,\(\d\+\)\)\? @@')
+      let l:first = str2nr(l:range[1])
+      let l:count = empty(l:range[2]) ? 1 : str2nr(l:range[2])
+      " A pure deletion has no new lines; point at the line before it.
+      let l:first = max([l:first, 1])
+      call add(l:items, {'filename': a:context.repository . '/' . l:path,
+            \ 'lnum': l:first, 'end_lnum': l:first + max([l:count, 1]) - 1,
+            \ 'text': a:text})
+      let l:hunks += 1
+    endif
+  endfor
+  return l:items
+endfunction
+
+function! s:quickfix(...) abort
+  let l:context = s:context()
+  if a:0
+    let l:context.branch = a:1
+  endif
+  let l:review = s:load(l:context)
+  let l:items = []
+  for l:entry in l:review.entries
+    let l:text = printf('[%s %s] %s', l:entry.kind, strpart(l:entry.commit, 0, 8),
+          \ s:summary(l:entry))
+    let l:items += l:entry.kind ==# 'note'
+          \ ? s:note_items(l:context, l:entry, l:text)
+          \ : s:suggestion_items(l:context, l:entry, l:text)
+  endfor
+  call setqflist([], ' ', {'title': 'Nota ' . l:review.branch, 'items': l:items})
+  if empty(l:items)
+    echomsg 'Nota: ' . l:review.branch . ' has no entries'
+  else
+    botright copen
+  endif
   return 1
 endfunction

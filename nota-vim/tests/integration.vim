@@ -216,7 +216,36 @@ try
   call assert_equal('', s:git(s:repository, ['status', '--porcelain']))
   NotaShow
   call assert_match('suggestion Shout the middle line', join(getline(1, '$'), "\n"))
+  call search('added.txt')
+  call assert_equal(1, nota#command('entry', []))
+  call assert_match('+added', join(getline(1, '$'), "\n"))
   close
+
+  " The quickfix list holds every entry, at its source lines or hunks.
+  normal gq
+  call assert_equal('qf', &filetype)
+  call assert_equal('Nota nota/first', getqflist({'title': 1}).title)
+  let s:items = map(getqflist(),
+        \ '[v:val.bufnr ? bufname(v:val.bufnr) : "", v:val.lnum, v:val.text]')
+  call map(s:items, '[fnamemodify(v:val[0], ":t"), v:val[1], v:val[2]]')
+  call assert_equal(['file.txt', 1, '[note '], [s:items[1][0], s:items[1][1], s:items[1][2][:5]])
+  call assert_match('Explain these lines', s:items[1][2])
+  call assert_equal(['', 0], s:items[0][:1])
+  call assert_equal(['file.txt', 2], s:items[2][:1])
+  call assert_match('^\[note \x\{8}\] Multiline note$', s:items[2][2])
+  let s:suggestions = filter(copy(s:items), 'v:val[2] =~# "^\\[suggestion"')
+  call assert_equal([['file.txt', 1], ['file.txt', 3], ['staged.txt', 1], ['added.txt', 1]],
+        \ map(copy(s:suggestions), 'v:val[:1]'))
+  call assert_match('Shout the last line', s:suggestions[2][2])
+  cclose
+  close
+  enew
+  " The first entry is a general note without a location.
+  2cc
+  call assert_equal(s:repository . '/file.txt', expand('%:p'))
+  call assert_equal(1, line('.'))
+  cnext
+  call assert_equal(2, line('.'))
   NotaBranch
   let s:status = s:git(s:repository, ['status', '--porcelain'])
   let s:index = s:git(s:repository, ['write-tree'])
