@@ -14,6 +14,7 @@ use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Server-side adapter for a client that shares its process with the server.
 pub trait InProcessServer: Send + Sync {
@@ -616,10 +617,34 @@ impl Client {
     }
 
     fn request(&self, request: Request) -> Result<Response> {
-        match &self.transport {
+        let operation = request_operation(&request);
+        let started = Instant::now();
+        tracing::debug!(
+            target: "styra_client::request",
+            operation,
+            transport = transport_name(&self.transport),
+            "starting server request"
+        );
+        let result = match &self.transport {
             Transport::Socket(socket) => Self::request_over_socket(socket, request),
             Transport::InProcess(server) => server.handle(request),
+        };
+        match &result {
+            Ok(_) => tracing::debug!(
+                target: "styra_client::request",
+                operation,
+                elapsed_ms = started.elapsed().as_millis(),
+                "finished server request"
+            ),
+            Err(error) => tracing::warn!(
+                target: "styra_client::request",
+                operation,
+                elapsed_ms = started.elapsed().as_millis(),
+                error = %error,
+                "server request failed"
+            ),
         }
+        result
     }
 
     fn request_over_socket(socket: &Path, request: Request) -> Result<Response> {
@@ -628,12 +653,100 @@ impl Client {
         crate::transport::write_message(&mut stream, &request)
             .context("writing the Styra request")?;
 
-        let response = crate::transport::read_message(&mut BufReader::new(stream))
-            .context("reading the Styra response")?;
+        tracing::debug!(
+            target: "styra_client::response",
+            socket = %socket.display(),
+            "decoding server response"
+        );
+        let response: WireResponse =
+            match crate::transport::read_message(&mut BufReader::new(stream))
+                .context("reading the Styra response")
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "styra_client::response",
+                        socket = %socket.display(),
+                        error = %error,
+                        "failed to decode server response"
+                    );
+                    return Err(error);
+                }
+            };
+        tracing::debug!(
+            target: "styra_client::response",
+            status = wire_response_status(&response),
+            "decoded server response"
+        );
         match response {
             WireResponse::Ok { response } => Ok(response),
             WireResponse::Error { error } => bail!("Styra server: {error}"),
         }
+    }
+}
+
+/// A non-sensitive protocol operation label. Keep payloads (particularly
+/// prompts and provider output) out of diagnostic logs.
+fn request_operation(request: &Request) -> &'static str {
+    match request {
+        Request::Health => "health",
+        Request::CreateWorkspace(_) => "create_workspace",
+        Request::ListWorkspaces => "list_workspaces",
+        Request::Workspace { .. } => "workspace",
+        Request::WorkspaceForPath { .. } => "workspace_for_path",
+        Request::RenameWorkspace(_) => "rename_workspace",
+        Request::SetWorkspaceGitRepository { .. } => "set_workspace_git_repository",
+        Request::WorkspaceLaunch { .. } => "workspace_launch",
+        Request::CreateSession(_) => "create_session",
+        Request::PlanSession(_) => "plan_session",
+        Request::ListTemplates { .. } => "list_templates",
+        Request::ResumeSession(_) => "resume_session",
+        Request::CreateSessionWorktree { .. } => "create_session_worktree",
+        Request::ConvertSessionProvider { .. } => "convert_session_provider",
+        Request::BranchSession { .. } => "branch_session",
+        Request::RenameSession(_) => "rename_session",
+        Request::SetSessionTags(_) => "set_session_tags",
+        Request::ListTags => "list_tags",
+        Request::TranscribeAudio { .. } => "transcribe_audio",
+        Request::AudioRecordingStarted => "audio_recording_started",
+        Request::AudioRecordingStopped => "audio_recording_stopped",
+        Request::AudioTranscriptionError { .. } => "audio_transcription_error",
+        Request::ChangeWorkspaceLaunch { .. } => "change_workspace_launch",
+        Request::SendMessage { .. } => "send_message",
+        Request::SetSessionSelection { .. } => "set_session_selection",
+        Request::SetInteractionWorkingDirectory { .. } => "set_interaction_working_directory",
+        Request::SetInteractionAutoRetry { .. } => "set_interaction_auto_retry",
+        Request::QueueMessage { .. } => "queue_message",
+        Request::SendQueuedMessage { .. } => "send_queued_message",
+        Request::ClearQueuedMessages { .. } => "clear_queued_messages",
+        Request::InterruptInteraction { .. } => "interrupt_interaction",
+        Request::StopInteraction { .. } => "stop_interaction",
+        Request::SetSessionCompleted { .. } => "set_session_completed",
+        Request::CloseInteraction { .. } => "close_interaction",
+        Request::LoadInteraction { .. } => "load_interaction",
+        Request::Updates { .. } => "updates",
+        Request::ListInteractions => "list_interactions",
+        Request::ListSessions { .. } => "list_sessions",
+        Request::StoredSession { .. } => "stored_session",
+        Request::ProviderRaw { .. } => "provider_raw",
+        Request::Shell { .. } => "shell",
+        Request::TurnAnswer { .. } => "turn_answer",
+        Request::QuotaLog => "quota_log",
+        Request::Shutdown => "shutdown",
+    }
+}
+
+fn transport_name(transport: &Transport) -> &'static str {
+    match transport {
+        Transport::Socket(_) => "socket",
+        Transport::InProcess(_) => "in_process",
+    }
+}
+
+fn wire_response_status(response: &WireResponse) -> &'static str {
+    match response {
+        WireResponse::Ok { .. } => "ok",
+        WireResponse::Error { .. } => "error",
     }
 }
 
