@@ -16,7 +16,7 @@ pub struct EventView<'a> {
     pub entry_log: Option<&'a event_list::EntryLogView<'a>>,
     pub preview: Option<&'a preview::PreviewView<'a>>,
     /// Whether link navigation is on, which washes out everything in the
-    /// view but the links and file references it walks.
+    /// event list but the links and file references it walks.
     pub link_mode: bool,
 }
 
@@ -205,11 +205,13 @@ fn render_events(
     area: Rect,
     feedback: &mut RenderFeedback,
 ) {
+    let mut tint_area = area;
     let interaction_area = if view.preview.is_some() && view.entry_log.is_some() {
         let panes = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
+        tint_area.width = panes[0].width;
         let measured = preview::render(frame, view.preview.unwrap(), panes[1]);
         note_preview_scroll(
             feedback,
@@ -257,6 +259,7 @@ fn render_events(
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(event_area);
+            tint_area.width = panes[0].width;
             let measured = preview::render(frame, preview_view, panes[1]);
             note_preview_scroll(
                 feedback,
@@ -275,7 +278,7 @@ fn render_events(
         feedback.list_row_offset = Some(list.effective_row_offset);
     }
     if view.link_mode {
-        tint_all_but_entries(frame, area);
+        tint_all_but_entries(frame, tint_area);
     }
 }
 
