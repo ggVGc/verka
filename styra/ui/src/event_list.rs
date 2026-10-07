@@ -990,6 +990,7 @@ struct RowKey {
     link_highlight: Option<EntryIndex>,
     inherited: bool,
     search: Option<String>,
+    branch_name: Option<String>,
     branch_provider_switch: Option<(
         styra_protocol::agent::Provider,
         styra_protocol::agent::Provider,
@@ -1044,6 +1045,7 @@ fn entry_rows_with_max_rows(
         link_highlight: entry.link_highlight,
         inherited: entry.inherited,
         search: render.search.map(str::to_owned),
+        branch_name: entry.branch_name.map(str::to_owned),
         branch_provider_switch: entry.branch_provider_switch,
     };
     ROW_CACHE.with(|cache| {
@@ -1784,6 +1786,15 @@ pub fn summary_line(
                 summary = first_line.to_owned();
             }
         }
+        // The marker reads by where it leads, under the name the operator
+        // knows that Session by; the id it is followed by is in the detail.
+        if let AgentEvent::Branched { direction, .. } = entry.event {
+            let way = match direction {
+                styra_protocol::event::BranchDirection::To => "to",
+                styra_protocol::event::BranchDirection::From => "from",
+            };
+            summary = format!("Branch {way}: {}", entry.branch_name.unwrap_or("untitled"));
+        }
         if let Some((from, to)) = entry.branch_provider_switch {
             let sealed = if matches!(entry.event, AgentEvent::Branched {
                 direction: styra_protocol::event::BranchDirection::To, ..
@@ -2405,6 +2416,43 @@ mod tests {
             Some(theme::SELECTED_INTERACTION_TEXT)
         );
         assert_ne!(fg(true, "«"), Some(theme::SELECTED_INTERACTION_TEXT));
+    }
+
+    #[test]
+    fn a_branch_marker_reads_by_the_name_of_where_it_leads() {
+        use styra_protocol::event::BranchDirection;
+        let marker = |direction| AgentEvent::Branched {
+            direction,
+            session: "4f1c-session-id".into(),
+            name: Some("stale snapshot".into()),
+        };
+        let summary = |event: &AgentEvent, branch_name| {
+            let entry = EventEntry {
+                event,
+                version: version(),
+                expanded: false,
+                has_detail: true,
+                contract: None,
+                selected: false,
+                link_highlight: None,
+                branch_name,
+                branch_provider_switch: None,
+                inherited: false,
+            };
+            summary_line(&entry, false, true, true, Protocol::default())
+                .spans
+                .into_iter()
+                .map(|span| span.content.into_owned())
+                .collect::<String>()
+        };
+        let to = summary(&marker(BranchDirection::To), Some("Retry backoff"));
+        assert!(to.contains("Branch to: Retry backoff"), "{to}");
+        assert!(!to.contains("4f1c-session-id"), "{to}");
+        let from = summary(&marker(BranchDirection::From), Some("Payments"));
+        assert!(from.contains("Branch from: Payments"), "{from}");
+        let unnamed = summary(&marker(BranchDirection::To), None);
+        assert!(unnamed.contains("Branch to: untitled"), "{unnamed}");
+        assert!(!unnamed.contains("stale snapshot"), "{unnamed}");
     }
 
     #[test]
