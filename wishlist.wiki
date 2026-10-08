@@ -1,3 +1,8 @@
+- Easy way to merge an interaction into where it was branched from:
+  - resolve rebase conflicts if any occur
+  - squash
+  - Summarize commit message, optionally
+  - mark complete if successful
 - Some workflow for doing quick edits within vim:
   - Should be apparent when work is running and when it is finished.
   - Easy to get the diff of that work.
