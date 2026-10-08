@@ -149,9 +149,8 @@ provider resume. In the main interaction view, `T` edits the current
 interaction's tags. `a` opens the live-interaction list; there, `w` switches
 current/all-Workspace scope, `j`/`k` selects, `T` edits the selected
 interaction's tags, `C` / `Z` marks it completed / abandoned and stops it (also
-available directly in the event view), `c` shows or hides those rows again, and
-`D` deletes a stopped
-interaction (the durable Session remains). `/` filters the list as you type —
+available directly in the event view), and `c` shows or hides those rows
+again. `/` filters the list as you type —
 case-insensitively, by name, tag, branch, provider, or Workspace name. The
 arrows still move the cursor while you type. `Enter` opens the interaction under
 the cursor, and `Esc` clears the filter (a second `Esc` closes the list).

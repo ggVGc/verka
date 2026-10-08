@@ -168,7 +168,6 @@ pub(crate) enum Action {
     InteractionsAbandon,
     InteractionsTags,
     InteractionsStop,
-    InteractionsDelete,
     InteractionsFilter,
     InteractionsTagFilter,
     InteractionsClose,
@@ -453,7 +452,6 @@ impl Action {
             Self::InteractionsAbandon => "mark selected abandoned and stop it",
             Self::InteractionsTags => "edit the selected interaction's tags",
             Self::InteractionsStop => "stop the selected interaction",
-            Self::InteractionsDelete => "delete it once stopped",
             Self::InteractionsFilter => {
                 "filter by name, tag, branch, provider or Workspace (Enter opens the selection, Esc clears it)"
             }

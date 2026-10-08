@@ -261,8 +261,9 @@ pub fn handle_list_key(
         // interaction — a finished one still has a directory to look at.
         k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
         // `d` reads the diff into a view of its own and, like the other
-        // views, goes back to events when pressed there again. `Ctrl-d` hands
-        // the same diff to the configured tool in a window of its own.
+        // views, goes back to events when pressed there again. `D` hands the
+        // same diff to the configured tool in a window of its own — except in
+        // the details view, which keeps `D` for saving the launch default.
         k if GLOBAL_DIFF.matches(k) => {
             if app.view == View::CheckoutDiff {
                 app.view = View::Events;
@@ -270,7 +271,9 @@ pub fn handle_list_key(
             }
             return ask_for_diff(app, Request::ShowDiff);
         }
-        k if GLOBAL_DIFF_EXTERNAL.matches(k) => return ask_for_diff(app, Request::OpenDiff),
+        k if GLOBAL_DIFF_EXTERNAL.matches(k) && app.view != View::Driva => {
+            return ask_for_diff(app, Request::OpenDiff)
+        }
         // Not from the preview. The overview takes `i` itself, for the tile
         // under its cursor.
         k if GLOBAL_FOCUS_MESSAGE.matches(k)
@@ -1721,22 +1724,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// `Ctrl-d` asks for the same diff in the configured tool instead.
+    /// `D` asks for the same diff in the configured tool instead.
     #[test]
-    fn ctrl_d_asks_for_the_same_diff_in_the_configured_tool() {
+    fn shift_d_asks_for_the_same_diff_in_the_configured_tool() {
         let root = tree("diff-external");
         let mut app = app_with_diffable_interaction(&root);
 
         press_list_key(
             &mut app,
             &root,
-            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
         );
 
         assert_eq!(
             app.take_request(),
             Some(Request::OpenDiff(diffable_target()))
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The details view keeps `D` for saving the launch default, so no diff
+    /// is asked for there.
+    #[test]
+    fn shift_d_in_the_details_view_is_not_a_diff() {
+        let root = tree("diff-details");
+        let mut app = app_with_diffable_interaction(&root);
+        app.view = View::Driva;
+
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
+        );
+
+        assert!(!matches!(app.take_request(), Some(Request::OpenDiff(_))));
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -1,5 +1,5 @@
 //! An interaction's checkout diffed against the commit its branch was made
-//! at: what `d` shows inside Styra, and what `Ctrl-d` hands to the configured
+//! at: what `d` shows inside Styra, and what `D` hands to the configured
 //! tool instead (see [`crate::config::Configuration::open_diff`]).
 
 use std::path::{Path, PathBuf};

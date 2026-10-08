@@ -25,8 +25,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_SHELL: [Key::ch('!')] => Action::GlobalShell;
     GLOBAL_DIRECTORY: [Key::ch('~')] => Action::GlobalDirectory;
     GLOBAL_DIFF: [Key::ch('d')] ("checkout with a branch point") => Action::GlobalDiff;
-    GLOBAL_DIFF_EXTERNAL: [Key::ctrl('d')] ("checkout with a branch point")
-        => Action::GlobalDiffExternal;
+    GLOBAL_DIFF_EXTERNAL: [Key::ch('D')] ("not in details") => Action::GlobalDiffExternal;
     GLOBAL_INTERACTIONS: [Key::ch('a')] => Action::GlobalInteractions;
     GLOBAL_OVERVIEW: [Key::ch('v')] ("not in raw") => Action::GlobalOverview;
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
@@ -232,7 +231,6 @@ bindings! { INTERACTIONS = "Interactions";
     INTERACTIONS_ABANDON: [Key::ch('Z')] => Action::InteractionsAbandon;
     INTERACTIONS_TAGS: [Key::ch('T')] => Action::InteractionsTags;
     INTERACTIONS_STOP: [Key::ch('S')] => Action::InteractionsStop;
-    INTERACTIONS_DELETE: [Key::ch('D')] => Action::InteractionsDelete;
     INTERACTIONS_FILTER: [Key::ch('/')] => Action::InteractionsFilter;
     INTERACTIONS_TAG_FILTER: [Key::ctrl('t')] => Action::InteractionsTagFilter;
     INTERACTIONS_CLOSE: [Key::code(KeyCode::Enter), Key::ch('a'), Key::code(KeyCode::Esc)]

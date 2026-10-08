@@ -1275,33 +1275,6 @@ fn run_rounds(
                     make_interaction_current(app, live, client, standing_launch, next);
                     continue;
                 }
-                k if keys::INTERACTIONS_DELETE.matches(k) => {
-                    let Some(interaction) = app.interactions.current(&app.session_id).cloned()
-                    else {
-                        continue;
-                    };
-                    if interaction.activity.accepting() {
-                        app.show_action_message("only stopped interactions can be deleted");
-                        continue;
-                    }
-                    if let Err(error) = client.close_interaction(&interaction.id) {
-                        app.push_log(LogEntry::error(format!(
-                            "could not delete interaction {}: {error:#}",
-                            interaction.id
-                        )));
-                        continue;
-                    }
-                    let workspace_id = app.workspace.id.clone();
-                    let Some(next) = app
-                        .interactions
-                        .remove_and_select_next(&interaction.id, workspace_id.as_deref())
-                    else {
-                        app.interactions.close();
-                        return Ok(RunOutcome::Reset);
-                    };
-                    make_interaction_current(app, live, client, standing_launch, next);
-                    continue;
-                }
                 k if keys::INTERACTIONS_TAGS.matches(k) => {
                     let Some(interaction) = app.interactions.current(&app.session_id) else {
                         continue;

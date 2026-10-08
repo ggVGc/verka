@@ -804,28 +804,6 @@ impl LiveInteractions {
         self.show_completed = !self.show_completed;
     }
 
-    /// Remove an interaction and select the entry now occupying its place.
-    /// If the current Workspace has no entries left, reveal All so the next
-    /// interaction can still become current without closing the navigator.
-    pub fn remove_and_select_next(
-        &mut self,
-        id: &str,
-        workspace_id: Option<&str>,
-    ) -> Option<InteractionSummary> {
-        let removed = self
-            .items
-            .iter()
-            .position(|interaction| interaction.id == id)?;
-        self.items.remove(removed);
-        if self.items.is_empty() {
-            // Whatever the caller does next, the cursor is not left on the
-            // entry that no longer exists.
-            self.rest();
-            return None;
-        }
-        self.select_from(removed, workspace_id)
-    }
-
     /// Select the entry that takes the place of one still listed but no longer
     /// shown — the interaction the operator just completed, with completed
     /// rows hidden. The row itself stays: it is the listing that filters it,
@@ -2254,46 +2232,6 @@ pub(crate) mod tests {
         ];
 
         assert_eq!(first_live(&interactions).unwrap().id, "elsewhere");
-    }
-
-    #[test]
-    fn deleting_an_interaction_selects_the_entry_that_replaces_it() {
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                interaction("one", InteractionActivity::Pending),
-                interaction("two", InteractionActivity::Running),
-                interaction("stopped", InteractionActivity::Stopped),
-            ],
-            vec![],
-        );
-
-        let next = live
-            .remove_and_select_next("stopped", Some("workspace"))
-            .unwrap();
-
-        assert_eq!(next.id, "two");
-        assert!(live.open);
-    }
-
-    #[test]
-    fn deleting_the_last_scoped_interaction_falls_back_to_all() {
-        let mut other = interaction("other", InteractionActivity::Pending);
-        other.workspace_id = "other-workspace".into();
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![interaction("current", InteractionActivity::Stopped), other],
-            vec![],
-        );
-        live.toggle_workspace_scope();
-
-        let next = live
-            .remove_and_select_next("current", Some("workspace"))
-            .unwrap();
-
-        assert_eq!(next.id, "other");
-        assert!(!live.only_current_workspace);
-        assert!(live.open);
     }
 
     fn named(id: &str, name: &str) -> InteractionSummary {
