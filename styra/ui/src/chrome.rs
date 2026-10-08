@@ -122,7 +122,7 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
         spans.push(Span::styled(
             workspace.clone(),
             Style::default()
-                .fg(theme::TEXT)
+                .fg(theme::WORKSPACE_NAME)
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(" · ", text));
@@ -182,6 +182,36 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
+
+    fn chrome(workspace: Option<&str>) -> PanelChrome {
+        PanelChrome {
+            focused: true,
+            workspace: workspace.map(str::to_owned),
+            session: None,
+            worktree: None,
+            agent: "codex".into(),
+            model: "default model".into(),
+            model_reported: false,
+            effort: None,
+            effort_reported: false,
+            status: "idle".into(),
+            status_tone: StatusTone::Idle,
+            elapsed: None,
+            suffix: None,
+        }
+    }
+
+    #[test]
+    fn workspace_name_uses_the_navigator_heading_color() {
+        let area = Rect::new(0, 0, 80, 3);
+        let mut buffer = Buffer::empty(area);
+        panel_block(&chrome(Some("payments"))).render(area, &mut buffer);
+
+        for x in 2..10 {
+            assert_eq!(buffer[(x, 0)].fg, theme::WORKSPACE_NAME);
+        }
+    }
 
     /// The point of the tones is telling one ending from another, so no two
     /// reasons may share a color.
