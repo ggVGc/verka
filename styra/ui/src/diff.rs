@@ -214,7 +214,7 @@ fn flush(
                         .into_iter()
                         .filter(|span| !span.content.is_empty()),
                 );
-                lines.push(Line::from(spans));
+                lines.push(tinted(Line::from(spans), line));
             }
         }
         None => {
@@ -227,11 +227,60 @@ fn flush(
                 let mut spans: Vec<Span<'static>> = number(at).into_iter().collect();
                 spans.push(sign(line));
                 spans.push(Span::styled(code, Style::default().fg(color)));
-                lines.push(Line::from(spans));
+                lines.push(tinted(Line::from(spans), line));
             }
         }
     }
     hunk.clear();
+}
+
+/// An added or removed row with its background hint. Context is left on
+/// whatever it is drawn over.
+///
+/// The hint is on every span as well as on the row: the event list and the
+/// preview re-wrap rows span by span, which keeps the spans' styles but not
+/// the row's. [`fill_changed_rows`] then carries it to the panel's edge.
+fn tinted(row: Line<'static>, line: &str) -> Line<'static> {
+    let background = match line.chars().next() {
+        Some('+') => theme::DIFF_ADDED_BACKGROUND,
+        Some('-') => theme::DIFF_REMOVED_BACKGROUND,
+        _ => return row,
+    };
+    let spans = row
+        .spans
+        .into_iter()
+        .map(|span| {
+            let style = span.style.bg(background);
+            span.style(style)
+        })
+        .collect::<Vec<_>>();
+    Line::from(spans).style(Style::default().bg(background))
+}
+
+/// Pad each changed diff row out to `width`, so its background hint is a band
+/// across the panel rather than stopping where the code does — `Paragraph`
+/// colors only the cells it writes. For rows already wrapped to `width`.
+pub(crate) fn fill_changed_rows(lines: &mut [Line<'static>], width: usize) {
+    for line in lines {
+        let Some(background) = line
+            .spans
+            .iter()
+            .rev()
+            .find_map(|span| span.style.bg)
+            .filter(|bg| {
+                [theme::DIFF_ADDED_BACKGROUND, theme::DIFF_REMOVED_BACKGROUND].contains(bg)
+            })
+        else {
+            continue;
+        };
+        let pad = width.saturating_sub(line.width());
+        if pad > 0 {
+            line.spans.push(Span::styled(
+                " ".repeat(pad),
+                Style::default().bg(background),
+            ));
+        }
+    }
 }
 
 /// A code line's first column: green for an addition, red for a removal, and
@@ -280,6 +329,49 @@ mod tests {
         assert_eq!(lines[2].spans[0].style.fg, Some(theme::SUCCESS));
         assert!(lines[2].spans.len() > 3, "tokenized: {:?}", lines[2].spans);
         assert_eq!(text(&lines[2]), "+fn new() -> u32 { 2 }");
+    }
+
+    /// Padding a changed row to the panel's width fills it without pushing it
+    /// onto a second row where the preview wraps.
+    #[test]
+    fn a_filled_row_still_takes_one_row() {
+        use ratatui::widgets::{Paragraph, Wrap};
+        let mut lines = diff_body_lines("@@ edit @@\n-old\n+new", Some("notes.unknown"), false);
+        fill_changed_rows(&mut lines, 30);
+
+        assert_eq!(lines[1].width(), 30);
+        assert_eq!(lines[2].width(), 30);
+        assert_eq!(
+            lines[0].width(),
+            "@@ edit @@".len(),
+            "headers are left alone"
+        );
+        let rows = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .line_count(30);
+        assert_eq!(rows, 3);
+    }
+
+    /// Changed rows carry a faint band of their sign's hue; context and
+    /// headers do not. Code with no grammar is banded the same way.
+    #[test]
+    fn changed_rows_have_a_background_hint_and_context_does_not() {
+        for path in ["src/lib.rs", "notes.unknown"] {
+            let lines = diff_body_lines("@@ edit @@\n same\n-old\n+new", Some(path), false);
+
+            assert_eq!(lines[0].style.bg, None, "{path}: header");
+            assert_eq!(lines[1].style.bg, None, "{path}: context");
+            assert_eq!(
+                lines[2].style.bg,
+                Some(theme::DIFF_REMOVED_BACKGROUND),
+                "{path}"
+            );
+            assert_eq!(
+                lines[3].style.bg,
+                Some(theme::DIFF_ADDED_BACKGROUND),
+                "{path}"
+            );
+        }
     }
 
     /// Each file in a multi-file diff is highlighted as what it is, which only

@@ -7,7 +7,7 @@
 //! while the diff below it scrolls.
 
 use crate::chrome::{panel_block, PanelChrome};
-use crate::diff::diff_block_lines;
+use crate::diff::{diff_block_lines, fill_changed_rows};
 use crate::theme;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -56,7 +56,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> u16
         ),
         top,
     );
-    let lines = match view.diff {
+    let mut lines = match view.diff {
         Ok(text) if text.trim().is_empty() => {
             vec![muted("  no changes since the branch was made")]
         }
@@ -66,6 +66,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> u16
             Style::default().fg(theme::ERROR),
         ))],
     };
+    fill_changed_rows(&mut lines, usize::from(body.width));
     let limit = (lines.len() as u16).saturating_sub(body.height);
     frame.render_widget(
         Paragraph::new(lines).scroll((view.requested_scroll.min(limit), 0)),
@@ -233,6 +234,39 @@ index 1111111..2222222 100644
         assert!(output.contains("/state/worktrees/styra-7"), "{output}");
         assert!(output.contains("1 file changed  +2 -1"), "{output}");
         assert!(output.contains("fn c() {}"), "{output}");
+    }
+
+    /// The hint fills the row out to the panel's edge, not just the text.
+    #[test]
+    fn a_changed_row_is_tinted_across_the_panel() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &CheckoutDiffView {
+                        chrome: chrome(),
+                        worktree: "/w",
+                        branch: None,
+                        base_branch: None,
+                        base_commit: "4bf5c35d",
+                        diff: Ok(DIFF),
+                        requested_scroll: 0,
+                    },
+                    frame.area(),
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = (0..16u16)
+            .find(|&y| {
+                (0..80u16)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("fn c()")
+            })
+            .unwrap();
+        assert_eq!(buffer[(70, row)].bg, theme::DIFF_ADDED_BACKGROUND);
     }
 
     #[test]
