@@ -1,3 +1,6 @@
+- When auto-commit on, associate each interaction entry with the commit that was made:
+  - Some way of viewing the diff of that commit
+- Experiment: Snapshotting of git status before each turn starts
 - Easy way to merge an interaction into where it was branched from:
   - resolve rebase conflicts if any occur
   - squash
