@@ -16,12 +16,9 @@
 -- and leaving Insert mode is the step that says the prompt is finished. The
 -- other two mean nothing else, so work from either.
 --
--- The model picker is shown in the same window, one step replacing the
--- prompt and handing back to it. The window offers it as `select` and `input`
--- with `vim.ui`'s signatures, so the code doing the asking does not need to
--- know where it is being asked. Each step is a buffer of its own shown in the
--- one window, so each has its own keys and the prompt is still there to come
--- back to.
+-- The model is chosen with whatever picker `vim.ui` is configured with —
+-- Telescope, fzf-lua, or Neovim's own list — opened over the window, which
+-- stays open under it and takes the focus back once the choice is made.
 
 local M = {}
 
@@ -30,13 +27,10 @@ M.placeholder = "Enter to send · Ctrl+Enter to send in a new Git workspace"
 M.no_model = "no model · Ctrl+L"
 M.starting = "starting…"
 M.branching = "creating a Git workspace and branch…"
-M.list_hint = " Enter choose · Esc back "
-M.input_hint = " Enter confirm · Esc back "
 
 -- Styra's box: as wide as prose wants, and at least one line of text.
 local max_width = 80
 local min_lines = 1
-local list_lines = 15
 
 local spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 
@@ -79,23 +73,22 @@ end
 --- meanwhile only stops showing the wait; the start goes on regardless.
 ---
 --- `model` is what the border names, nil when there is nothing to name yet.
---- `choose_model(ui, done)` is what Ctrl+L runs: it asks through `ui` —
---- `{ select, input }`, shaped like `vim.ui`'s and shown in this window — and
---- calls `done(label)` with the new model to name, or `done(nil)` if the
---- operator backed out. Sending with no model runs it first, and sends once it
---- has one.
+--- `choose_model(done)` is what Ctrl+L runs: it asks however it likes —
+--- `vim.ui`, in practice — and calls `done(label)` with the new model to name,
+--- or `done(nil)` if the operator backed out. The window is left for the
+--- picker meanwhile without that counting as closing it. Sending with no model
+--- runs it first, and sends once it has one.
 ---
 --- `initial` is put in the buffer to start from, so `:SvaraNew some words`
 --- still means something: the beginning of the prompt rather than all of it.
 --- An empty prompt is not sent; the window stays open and says why.
----@param options { initial?: string, model?: string, choose_model?: fun(ui: table, done: fun(label?: string)), on_send: fun(prompt: string, create_worktree: boolean, progress: { done: fun(), failed: fun(message: string) }), on_cancel?: fun() }
+---@param options { initial?: string, model?: string, choose_model?: fun(done: fun(label?: string)), on_send: fun(prompt: string, create_worktree: boolean, progress: { done: fun(), failed: fun(message: string) }), on_cancel?: fun() }
 ---@return integer window
 ---@return integer buffer the prompt's
 function M.open(options)
   local model = options.model
   local prompt_buffer = vim.api.nvim_create_buf(false, true)
-  -- Hidden rather than wiped while the picker is shown over it, so it is
-  -- found as it was left. Wiped by hand when the window goes.
+  -- Wiped by hand when the window goes.
   vim.bo[prompt_buffer].bufhidden = "hide"
   vim.bo[prompt_buffer].filetype = "markdown"
   local initial = options.initial or ""
@@ -133,10 +126,9 @@ function M.open(options)
 
   local group = vim.api.nvim_create_augroup("svara_compose_" .. window, { clear = true })
   local finished = false
-  local on_prompt = true
-  -- Counts the steps shown, so an answer that asked nothing more can be told
-  -- from one that did: the first goes back to the prompt, the second stays.
-  local steps = 0
+  -- Whether a picker Ctrl+L opened is up, so leaving the window for it is not
+  -- closing it.
+  local picking = false
   -- A send waiting on a model to send with: whether it was Ctrl+Enter's.
   local waiting_to_send = nil
   -- Where the cursor was, and in which mode, when the prompt was left.
@@ -156,7 +148,7 @@ function M.open(options)
   end
 
   local function fit()
-    if on_prompt and vim.api.nvim_win_is_valid(window) then
+    if vim.api.nvim_win_is_valid(window) then
       vim.api.nvim_win_set_config(window, placement(prompt_rows()))
     end
   end
@@ -239,18 +231,13 @@ function M.open(options)
 
   local send
 
-  --- Back to the prompt, where and as it was left.
+  --- Back to the prompt, where and as it was left, naming the model.
   local function show_prompt()
-    steps = steps + 1
-    on_prompt = true
-    waiting_to_send = nil
-    vim.api.nvim_win_set_buf(window, prompt_buffer)
-    local config = placement(prompt_rows())
-    config.title = M.title_chunks(width, model)
-    config.title_pos = "left"
-    config.footer = ""
-    vim.api.nvim_win_set_config(window, config)
-    vim.wo[window].cursorline = false
+    if finished or not vim.api.nvim_win_is_valid(window) then
+      return
+    end
+    vim.api.nvim_set_current_win(window)
+    vim.api.nvim_win_set_config(window, { title = M.title_chunks(width, model), title_pos = "left" })
     if left_at then
       pcall(vim.api.nvim_win_set_cursor, window, left_at)
     end
@@ -260,100 +247,32 @@ function M.open(options)
     end
   end
 
-  --- Run an answer, then go back to the prompt unless it asked something more.
-  local function answer(callback, ...)
-    local before = steps
-    callback(...)
-    if not finished and steps == before then
-      show_prompt()
-    end
-  end
-
-  local function show_step(buffer, title, hint, rows)
-    steps = steps + 1
-    on_prompt = false
-    vim.api.nvim_win_set_buf(window, buffer)
-    local config = placement(math.max(min_lines, math.min(list_lines, rows)))
-    config.title = title
-    config.title_pos = "center"
-    config.footer = hint
-    config.footer_pos = "center"
-    vim.api.nvim_win_set_config(window, config)
-  end
-
-  local ui = {}
-
-  --- A list, one item to a line, chosen with the cursor.
-  function ui.select(items, opts, on_choice)
-    opts = opts or {}
-    local format = opts.format_item or tostring
-    local lines = {}
-    for index, item in ipairs(items) do
-      lines[index] = format(item)
-    end
-    local buffer = vim.api.nvim_create_buf(false, true)
-    vim.bo[buffer].bufhidden = "wipe"
-    vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
-    vim.bo[buffer].modifiable = false
-    local title = opts.prompt and (" " .. opts.prompt .. " ") or M.title
-    show_step(buffer, title, M.list_hint, #lines)
-    vim.wo[window].cursorline = true
-    vim.api.nvim_win_set_cursor(window, { 1, 0 })
-
-    map(buffer, "n", "<CR>", function()
-      local index = vim.api.nvim_win_get_cursor(window)[1]
-      answer(on_choice, items[index], index)
-    end, "Choose this one")
-    local function back()
-      answer(on_choice, nil, nil)
-    end
-    map(buffer, "n", "q", back, "Back to the prompt")
-    map(buffer, "n", "<Esc>", back, "Back to the prompt")
-    map(buffer, "n", "<BS>", back, "Back to the prompt")
-  end
-
-  --- One line to type in, confirmed with Enter from either mode: there is no
-  --- second line for Enter to make.
-  function ui.input(opts, on_confirm)
-    opts = opts or {}
-    local buffer = vim.api.nvim_create_buf(false, true)
-    vim.bo[buffer].bufhidden = "wipe"
-    vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { opts.default or "" })
-    local title = opts.prompt and (" " .. vim.trim(opts.prompt) .. " ") or M.title
-    show_step(buffer, title, M.input_hint, 1)
-    vim.wo[window].cursorline = false
-    vim.api.nvim_win_set_cursor(window, { 1, #(opts.default or "") })
-
-    map(buffer, { "n", "i" }, "<CR>", function()
-      vim.cmd.stopinsert()
-      answer(on_confirm, vim.api.nvim_buf_get_lines(buffer, 0, 1, false)[1])
-    end, "Confirm")
-    local function back()
-      answer(on_confirm, nil)
-    end
-    map(buffer, "n", "q", back, "Back to the prompt")
-    map(buffer, "n", "<Esc>", back, "Back to the prompt")
-    vim.cmd.startinsert({ bang = true })
-  end
-
   local function choose_model()
-    if not options.choose_model or busy then
+    if not options.choose_model or busy or picking then
       return
     end
     left_at = vim.api.nvim_win_get_cursor(window)
     left_inserting = vim.fn.mode() == "i"
     vim.cmd.stopinsert()
-    answer(options.choose_model, ui, function(label)
-      local resend = waiting_to_send
-      waiting_to_send = nil
-      if label then
-        model = label
-      end
-      if label and resend ~= nil then
-        send(resend)
-      elseif not finished then
+    picking = true
+    options.choose_model(function(label)
+      -- Scheduled, so the picker has closed its own windows and handed focus
+      -- back before this one takes it.
+      vim.schedule(function()
+        picking = false
+        local resend = waiting_to_send
+        waiting_to_send = nil
+        if finished then
+          return
+        end
+        if label then
+          model = label
+        end
         show_prompt()
-      end
+        if label and resend ~= nil then
+          send(resend)
+        end
+      end)
     end)
   end
 
@@ -434,7 +353,7 @@ function M.open(options)
   vim.api.nvim_create_autocmd("WinLeave", {
     group = group,
     callback = function()
-      if vim.api.nvim_get_current_win() == window then
+      if vim.api.nvim_get_current_win() == window and not picking then
         vim.schedule(cancel)
       end
     end,

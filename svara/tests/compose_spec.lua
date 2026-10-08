@@ -190,50 +190,44 @@ do
   assert(not vim.api.nvim_win_is_valid(opened.window))
 end
 
--- Ctrl+L: the model picker, in the same window ----------------------------
+-- Ctrl+L: the configured picker, over the window ---------------------------
 
---- What `:SvaraNew` gives Ctrl+L, cut down: a model list, then for `haiku`
---- an effort list, naming whatever ends up chosen.
-local function picker(asked)
-  return function(ui, done)
-    asked.count = (asked.count or 0) + 1
-    ui.select({ "opus", "haiku" }, {
-      prompt = "Model for this interaction",
-      format_item = function(item)
-        return "claude:" .. item
-      end,
-    }, function(item)
-      if not item then
-        return done(nil)
-      end
-      if item == "opus" then
-        return done("claude-opus-5 · high")
-      end
-      ui.select({ "low", "high" }, { prompt = "Effort" }, function(effort)
-        if not effort then
-          return done(nil)
-        end
-        done("claude-haiku · " .. effort)
-      end)
-    end)
+--- A picker as Telescope and its like are: a window of its own, taking the
+--- focus, answered later. `picked.answer(label)` closes it and gives the
+--- answer, `nil` for backing out.
+local function picker(picked)
+  return function(done)
+    picked.count = (picked.count or 0) + 1
+    local buffer = vim.api.nvim_create_buf(false, true)
+    local window = vim.api.nvim_open_win(buffer, true, {
+      relative = "editor",
+      width = 20,
+      height = 3,
+      row = 1,
+      col = 1,
+    })
+    picked.window = window
+    picked.answer = function(label)
+      vim.api.nvim_win_close(window, true)
+      done(label)
+      vim.wait(20)
+    end
   end
 end
 
 do
-  local asked = {}
-  local opened = open({ choose_model = picker(asked) })
+  local picked = {}
+  local opened = open({ choose_model = picker(picked) })
   keys("ia prompt<C-l>")
-  assert(asked.count == 1)
-  assert(vim.api.nvim_get_current_win() == opened.window, "the list is in the same window")
-  assert(vim.deep_equal(shown_lines(), { "claude:opus", "claude:haiku" }), vim.inspect(shown_lines()))
+  assert(picked.count == 1)
+  vim.wait(20)
+  assert(vim.api.nvim_get_current_win() == picked.window, "the picker has the focus")
+  assert(vim.api.nvim_win_is_valid(opened.window), "the window stays open under the picker")
+  assert(not opened.cancelled, "leaving for the picker is not closing")
 
-  -- An answer that asks again stays in the window, showing the next list.
-  keys("j<CR>")
-  assert(vim.deep_equal(shown_lines(), { "low", "high" }), vim.inspect(shown_lines()))
-
-  -- The last answer goes back to the prompt as it was, naming the new model.
-  keys("G<CR>")
-  assert(vim.api.nvim_get_current_buf() == opened.buffer, "back at the prompt")
+  -- The answer goes back to the prompt as it was, naming the new model.
+  picked.answer("claude-haiku · high")
+  assert(vim.api.nvim_get_current_win() == opened.window, "back at the prompt")
   assert(vim.deep_equal(shown_lines(), { "a prompt" }), vim.inspect(shown_lines()))
   local title = border_title(opened.window)
   assert(title:find(" claude%-haiku · high $"), title)
@@ -251,64 +245,44 @@ end
 -- Backing out of the picker goes back to the prompt, model unchanged ------
 
 do
-  local opened = open({ choose_model = picker({}) })
+  local picked = {}
+  local opened = open({ choose_model = picker(picked) })
   keys("ikeep me<Esc><C-l>")
-  keys("q")
-  assert(vim.api.nvim_win_is_valid(opened.window), "q in the list is not q in the prompt")
-  assert(vim.api.nvim_get_current_buf() == opened.buffer)
+  picked.answer(nil)
+  assert(vim.api.nvim_win_is_valid(opened.window))
+  assert(vim.api.nvim_get_current_win() == opened.window)
   assert(border_title(opened.window):find(" claude%-opus%-5 · high $"))
   assert(not opened.cancelled)
 
-  keys("<C-l>j<BS>")
-  assert(vim.api.nvim_get_current_buf() == opened.buffer, "Backspace backs out too")
-  keys("<C-l><Esc>")
-  assert(vim.api.nvim_get_current_buf() == opened.buffer, "and Escape, as in Styra's picker")
-  assert(not opened.cancelled, "Escape in the list is not Escape in the prompt")
-  keys("q")
-  assert(opened.cancelled)
+  -- Leaving the window once the picker is done is closing it again.
+  vim.api.nvim_set_current_win(opened.editing)
+  vim.wait(100, function()
+    return opened.cancelled
+  end)
+  assert(opened.cancelled, "leaving after the picker still closes")
 end
 
 -- With no model to name, sending asks for one first ----------------------
 
 do
-  local asked = {}
-  local opened = open({ model = false, choose_model = picker(asked) })
+  local picked = {}
+  local opened = open({ model = false, choose_model = picker(picked) })
   local title = border_title(opened.window)
   assert(title:find(compose.no_model, 1, true), title)
   keys("ifind it<C-CR>")
-  assert(asked.count == 1, "the picker is the answer to sending without a model")
+  assert(picked.count == 1, "the picker is the answer to sending without a model")
   assert(opened.prompt == nil)
-  keys("<CR>")
+  picked.answer("claude-opus-5 · high")
   assert(opened.prompt == "find it", vim.inspect(opened.prompt))
   assert(opened.create_worktree == true, "sent the way it was asked to be")
 
   -- Backing out instead leaves the prompt unsent and the window open.
-  opened = open({ model = false, choose_model = picker({}) })
+  picked = {}
+  opened = open({ model = false, choose_model = picker(picked) })
   keys("ifind it<Esc><CR>")
-  keys("q")
+  picked.answer(nil)
   assert(opened.prompt == nil)
   assert(vim.api.nvim_get_current_buf() == opened.buffer)
-  keys("q")
-end
-
--- Typing a model out, in the window too -----------------------------------
-
-do
-  local typed
-  local opened = open({
-    choose_model = function(ui, done)
-      ui.input({ prompt = "Model (provider:model/effort): ", default = "claude:" }, function(text)
-        typed = text
-        done(text and "typed" or nil)
-      end)
-    end,
-  })
-  keys("ihello<Esc><C-l>")
-  assert(vim.api.nvim_get_current_win() == opened.window)
-  keys("Aclaude-opus-5/xhigh<CR>")
-  assert(typed == "claude:claude-opus-5/xhigh", tostring(typed))
-  assert(vim.api.nvim_get_current_buf() == opened.buffer)
-  assert(border_title(opened.window):find(" typed $"))
   keys("q")
 end
 

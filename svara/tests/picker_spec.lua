@@ -69,7 +69,7 @@ compose.open = function(options)
     })
   end
   if ctrl_l or not options.model then
-    options.choose_model(vim.ui, function(label)
+    options.choose_model(function(label)
       window.answered = true
       if label then
         window.model = label

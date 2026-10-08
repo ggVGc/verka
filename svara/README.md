@@ -222,21 +222,19 @@ fails, the prompt is handed back to be edited and sent again, with the reason
 under it. Closing the box while it waits only stops the showing: the start
 goes on, and says when it has finished.
 
-The model named in the border is the one the rules below give. `Ctrl+L` puts
-the model picker in the same window, as one list: that model at the top, said
-with where it came from, then every model the server offers, then "another
-model…" for typing a profile name out — a catalog is not a closed set, and an
-id newer than the server's tables is still launchable. Choosing the first entry
-keeps it and stores nothing, leaving the rules in charge. Anything else asks
-for a reasoning effort next, from the rungs that model accepts, and is
-remembered in `vim.g.svara_selection`, so it is chosen once for a stretch of
-work rather than at every `:SvaraNew`. Either way the window goes back to the
-prompt as it was left, naming the model chosen.
+The model named in the border is the one the rules below give. `Ctrl+L` opens
+the model picker over the box, with `vim.ui.select` — so in Telescope, fzf-lua
+or whatever else `vim.ui` is configured with — as one list: that model at the
+top, said with where it came from, then every model the server offers, then
+"another model…" for typing a profile name out with `vim.ui.input` — a catalog
+is not a closed set, and an id newer than the server's tables is still
+launchable. Choosing the first entry keeps it and stores nothing, leaving the
+rules in charge. Anything else asks for a reasoning effort next, from the rungs
+that model accepts, and is remembered in `vim.g.svara_selection`, so it is
+chosen once for a stretch of work rather than at every `:SvaraNew`. The box
+stays open under the picker, and once it closes — chosen or backed out of —
+goes back to the prompt as it was left, naming the model chosen.
 
-The lists are buffers too: move with any motion, `Enter` chooses the line under
-the cursor, and `Esc`, `q` or `Backspace` goes back to the prompt with the
-model unchanged. Typing a model out is a one-line buffer in the same window,
-confirmed with `Enter` from either mode, and `Esc` from Normal mode goes back.
 When there is nothing to name — no `vim.g.svara_selection` and no Session in
 the Workspace — the border says
 `no model · Ctrl+L`, and sending opens the picker first and sends once a model

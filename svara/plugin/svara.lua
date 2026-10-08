@@ -43,12 +43,9 @@ end
 --- still launchable. A model chosen here is remembered, so it is picked at
 --- the start of a stretch of work and not at every `:SvaraNew` in it.
 ---
---- `ui` is where the questions are asked, `vim.ui` unless given another with
---- its `select` and `input`: `:SvaraNew` asks them in its own window.
---- `on_cancel` is called when a question is backed out of instead.
-local function choose_selection(directory, on_chosen, ui, on_cancel)
-  ui = ui or vim.ui
-  on_cancel = on_cancel or function() end
+--- The questions are asked with `vim.ui`, so in whatever picker the operator
+--- has configured. `on_cancel` is called when one is backed out of instead.
+local function choose_selection(directory, on_chosen, on_cancel)
   local core = require("svara.core")
   local typed_out = "another model…"
 
@@ -63,7 +60,7 @@ local function choose_selection(directory, on_chosen, ui, on_cancel)
   end
 
   local function ask_for_one(default)
-    ui.input({ prompt = "Model (provider:model/effort): ", default = default }, function(typed)
+    vim.ui.input({ prompt = "Model (provider:model/effort): ", default = default }, function(typed)
       if not typed or typed:match("^%s*$") then
         on_cancel()
         return
@@ -83,7 +80,7 @@ local function choose_selection(directory, on_chosen, ui, on_cancel)
       settle(chosen)
       return
     end
-    ui.select(efforts, {
+    vim.ui.select(efforts, {
       prompt = string.format("Effort for %s:%s", summary.provider, summary.model),
       format_item = function(effort)
         return effort == summary.default_effort and (effort .. " (default)") or effort
@@ -130,7 +127,7 @@ local function choose_selection(directory, on_chosen, ui, on_cancel)
   end
   choices[#choices + 1] = typed_out
 
-  ui.select(choices, {
+  vim.ui.select(choices, {
     prompt = "Model for this interaction",
     format_item = function(choice)
       if choice == typed_out then
@@ -229,11 +226,11 @@ vim.api.nvim_create_user_command("SvaraNew", function(command)
   require("svara.compose").open({
     initial = command.args,
     model = selection and model_label(selection),
-    choose_model = function(ui, done)
+    choose_model = function(done)
       choose_selection(directory, function(chosen)
         selection = chosen
         done(model_label(chosen))
-      end, ui, function()
+      end, function()
         done(nil)
       end)
     end,
