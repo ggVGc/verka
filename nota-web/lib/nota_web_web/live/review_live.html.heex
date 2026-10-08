@@ -1,0 +1,193 @@
+<Layouts.app flash={@flash}>
+  <div class="mx-auto max-w-[1500px] px-4 py-6 lg:px-8">
+    <header class="flex flex-wrap items-end justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <span class="grid size-10 place-items-center rounded-2xl bg-slate-900 text-white shadow-sm">
+          <.icon name="hero-clipboard-document-list" class="size-5" />
+        </span>
+        <div>
+          <h1 class="text-lg font-semibold tracking-tight text-slate-900">Nota reviews</h1>
+          <p class="text-sm text-slate-500">
+            Notes and suggested edits recorded on Git branches.
+          </p>
+        </div>
+      </div>
+
+      <div class="flex w-full items-end gap-2 sm:w-auto">
+        <.form
+          for={@repo_form}
+          id="repository-form"
+          phx-submit="set_repository"
+          class="flex w-full items-end gap-2 sm:w-auto"
+        >
+          <.input
+            field={@repo_form[:path]}
+            type="text"
+            label="Repository"
+            placeholder="/path/to/repo"
+            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 sm:w-72"
+          />
+          <button
+            type="submit"
+            class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+          >
+            Open
+          </button>
+        </.form>
+        <button
+          type="button"
+          phx-click="refresh"
+          title="Reload reviews"
+          class="grid size-9 shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-slate-300 hover:text-slate-800"
+        >
+          <.icon name="hero-arrow-path" class="size-4" />
+        </button>
+      </div>
+    </header>
+
+    <div class="mt-6 grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <aside class="space-y-3">
+        <%= if @repository_root do %>
+          <p
+            class="flex items-center gap-1.5 truncate font-mono text-[11px] text-slate-400"
+            title={@repository_root}
+          >
+            <.icon name="hero-folder" class="size-3.5 shrink-0" />
+            <span class="truncate">{@repository_root}</span>
+          </p>
+        <% end %>
+
+        <%= if @index_error do %>
+          <div class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+            <p class="flex items-center gap-1.5 font-medium">
+              <.icon name="hero-exclamation-triangle" class="size-4" /> Could not read reviews
+            </p>
+            <p class="mt-1 break-words text-rose-600">{@index_error}</p>
+          </div>
+        <% end %>
+
+        <%= if @index_error == nil and @reviews == [] do %>
+          <.empty_reviews />
+        <% end %>
+
+        <ul class="space-y-2">
+          <%= for summary <- @reviews do %>
+            <li>
+              <button
+                type="button"
+                phx-click="select_branch"
+                phx-value-branch={summary.branch}
+                class={[
+                  "group w-full rounded-xl border p-3 text-left transition",
+                  summary.branch == @selected_branch &&
+                    "border-indigo-300 bg-indigo-50/70 shadow-sm",
+                  summary.branch != @selected_branch &&
+                    "border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm"
+                ]}
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="truncate font-mono text-sm font-medium text-slate-800">
+                    {summary.branch}
+                  </span>
+                  <span class="shrink-0 font-mono text-[11px] text-slate-400">
+                    {NotaWeb.Nota.Git.short(summary.subject)}
+                  </span>
+                </div>
+                <div class="mt-2 flex items-center gap-2.5 text-xs text-slate-500">
+                  <span>{summary.notes} notes</span>
+                  <span class="text-slate-300">•</span>
+                  <span>{summary.suggestions} suggestions</span>
+                </div>
+              </button>
+            </li>
+          <% end %>
+        </ul>
+
+        <%= if @diagnostics != [] do %>
+          <div class="rounded-xl border border-amber-200 bg-amber-50 p-3">
+            <p class="text-xs font-semibold tracking-wide text-amber-700 uppercase">
+              Invalid review branches
+            </p>
+            <%= for diagnostic <- @diagnostics do %>
+              <p class="mt-1 break-words text-xs text-amber-800">
+                <span class="font-mono">{diagnostic.branch}</span> — {diagnostic.message}
+              </p>
+            <% end %>
+          </div>
+        <% end %>
+      </aside>
+
+      <section class="min-w-0 space-y-5">
+        <%= if @review_error do %>
+          <div class="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-rose-700">
+            <p class="flex items-center gap-2 font-medium">
+              <.icon name="hero-exclamation-triangle" class="size-5" /> Could not load this review
+            </p>
+            <p class="mt-2 break-words text-sm text-rose-600">{@review_error}</p>
+          </div>
+        <% end %>
+
+        <%= if @review_error == nil and @index_error == nil and is_nil(@review) do %>
+          <div class="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-10 text-center">
+            <.icon name="hero-cursor-arrow-rays" class="mx-auto size-6 text-slate-400" />
+            <p class="mt-2 text-sm font-medium text-slate-700">Select a review branch</p>
+            <p class="mt-1 text-xs text-slate-500">
+              Branches with a nota marker are listed on the left.
+            </p>
+          </div>
+        <% end %>
+
+        <%= if @review do %>
+          <.review_header review={@review} changed_files={NotaWeb.Nota.changed_files(@review)} />
+
+          <div class="flex items-center justify-between gap-3">
+            <p class="text-sm text-slate-500">
+              {length(@review.entries)}
+              {if length(@review.entries) == 1, do: "entry", else: "entries"} in review order
+            </p>
+            <%= if NotaWeb.Nota.changed_files(@review) != [] do %>
+              <div class="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  phx-click="expand_all"
+                  class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+                >
+                  Expand changes
+                </button>
+                <button
+                  type="button"
+                  phx-click="collapse_all"
+                  class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 transition hover:text-slate-900"
+                >
+                  Collapse
+                </button>
+              </div>
+            <% end %>
+          </div>
+
+          <%= if @review.entries == [] do %>
+            <div class="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-10 text-center">
+              <.icon name="hero-document-text" class="mx-auto size-6 text-slate-400" />
+              <p class="mt-2 text-sm font-medium text-slate-700">This review has no entries</p>
+              <p class="mt-1 text-xs text-slate-500">
+                Add one with <code class="rounded bg-slate-100 px-1 py-0.5 font-mono">nota note "..."</code>.
+              </p>
+            </div>
+          <% end %>
+
+          <div class="space-y-4">
+            <%= for entry <- @review.entries do %>
+              <.entry_card
+                entry={entry}
+                html={@messages[entry.commit] || ""}
+                expanded={MapSet.member?(@expanded, entry.commit)}
+                diff={@diffs[entry.commit]}
+                source={@sources[entry.commit]}
+              />
+            <% end %>
+          </div>
+        <% end %>
+      </section>
+    </div>
+  </div>
+</Layouts.app>
