@@ -160,8 +160,7 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
         }
         MainView::Answer(answer_view) => answer::render(frame, answer_view, chunks[0]),
         MainView::Overview(overview_view) => {
-            feedback.overview_columns =
-                Some(overview::render(frame, overview_view, chunks[0]).columns);
+            feedback.overview_rows = Some(overview::render(frame, overview_view, chunks[0]).rows);
         }
         MainView::Preview(_) => unreachable!(),
     }

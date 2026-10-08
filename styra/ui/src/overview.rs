@@ -63,34 +63,52 @@ pub struct OverviewView<'a> {
 }
 
 /// How the grid was laid out, which the application needs to move the cursor
-/// up and down a column.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// up and down between rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OverviewFeedback {
-    pub columns: usize,
+    /// How many tiles each row holds, top to bottom.
+    pub rows: Vec<usize>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Grid {
-    columns: usize,
-    rows: usize,
+    /// How many tiles each row holds, top to bottom.
+    rows: Vec<usize>,
     /// How many rows of tiles fit at once.
     visible_rows: usize,
 }
 
+impl Grid {
+    /// The row tile `index` is on.
+    fn row_of(&self, index: usize) -> usize {
+        let mut start = 0;
+        for (row, length) in self.rows.iter().enumerate() {
+            start += length;
+            if index < start {
+                return row;
+            }
+        }
+        self.rows.len().saturating_sub(1)
+    }
+}
+
+/// The tiles laid out as evenly as they go: as many columns as make the grid
+/// square, or as fit across when fewer do, and the tiles shared out between
+/// the rows so no two differ by more than one, the longer rows first. Five
+/// tiles are three over two, seven three over two over two.
 fn grid(area: Rect, tiles: usize) -> Grid {
-    // Three or four interactions use two columns, with a full-width last
-    // tile when there are three.
-    let max_columns = if matches!(tiles, 3 | 4) {
-        2
-    } else {
-        tiles.max(1)
-    };
-    let columns = ((area.width / MIN_TILE_WIDTH).max(1) as usize).min(max_columns);
-    let rows = tiles.div_ceil(columns).max(1);
+    let tiles = tiles.max(1);
+    let square = (1..=tiles)
+        .find(|columns| columns * columns >= tiles)
+        .unwrap_or(tiles);
+    let columns = square.min((area.width / MIN_TILE_WIDTH).max(1) as usize);
+    let rows = tiles.div_ceil(columns);
+    let (base, extra) = (tiles / rows, tiles % rows);
     let fit = (area.height / MIN_TILE_HEIGHT).max(1) as usize;
     Grid {
-        columns,
-        rows,
+        rows: (0..rows)
+            .map(|row| base + usize::from(row < extra))
+            .collect(),
         visible_rows: rows.min(fit),
     }
 }
@@ -142,24 +160,22 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
             ))),
             inner,
         );
-        return OverviewFeedback { columns: 1 };
+        return OverviewFeedback { rows: Vec::new() };
     }
     let grid = grid(inner, view.tiles.len());
     let selected = view.selected.min(view.tiles.len() - 1);
     // Scrolled by whole rows of tiles, just far enough to keep the cursor's
     // row on screen.
-    let first_row = (selected / grid.columns + 1).saturating_sub(grid.visible_rows);
+    let first_row = (grid.row_of(selected) + 1).saturating_sub(grid.visible_rows);
     let heights = split(inner.height, grid.visible_rows);
+    let mut start = grid.rows[..first_row].iter().sum::<usize>();
     for (screen_row, (y, height)) in heights.into_iter().enumerate() {
-        let row = first_row + screen_row;
-        if row >= grid.rows {
+        let Some(&length) = grid.rows.get(first_row + screen_row) else {
             break;
-        }
-        let start = row * grid.columns;
-        let end = (start + grid.columns).min(view.tiles.len());
-        // A short last row shares the whole width between its tiles rather
-        // than leaving the cells of the missing ones empty.
-        for (offset, (x, width)) in split(inner.width, end - start).into_iter().enumerate() {
+        };
+        // A shorter row shares the whole width between its tiles rather than
+        // leaving the cells of the missing ones empty.
+        for (offset, (x, width)) in split(inner.width, length).into_iter().enumerate() {
             let index = start + offset;
             let tile_area = Rect {
                 x: inner.x + x,
@@ -175,10 +191,9 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
                 view.links,
             );
         }
+        start += length;
     }
-    OverviewFeedback {
-        columns: grid.columns,
-    }
+    OverviewFeedback { rows: grid.rows }
 }
 
 fn render_tile(
@@ -425,7 +440,7 @@ mod tests {
         };
         let (screen, feedback) = draw(&view, 100, 14);
 
-        assert_eq!(feedback.columns, 2, "{screen}");
+        assert_eq!(feedback.rows, vec![2], "{screen}");
         assert!(screen.contains("·•· repair checkout"), "{screen}");
         assert!(screen.contains("Payments · styra/fix"), "{screen}");
         assert!(screen.contains("running 2m14s"), "{screen}");
@@ -513,7 +528,7 @@ mod tests {
             links: LinkDisplay::Compact,
         };
         let (screen, feedback) = draw(&view, 50, 20);
-        assert_eq!(feedback.columns, 1);
+        assert_eq!(feedback.rows, vec![1, 1], "{screen}");
         let first = screen.lines().position(|line| line.contains("first"));
         let second = screen.lines().position(|line| line.contains("second"));
         assert!(first < second, "{screen}");
@@ -535,7 +550,7 @@ mod tests {
             links: LinkDisplay::Compact,
         };
         let (screen, feedback) = draw(&view, 151, 31);
-        assert_eq!(feedback.columns, 2, "{screen}");
+        assert_eq!(feedback.rows, vec![2, 1], "{screen}");
         let cell = |x: usize, y: usize| screen.lines().nth(y).unwrap().chars().nth(x).unwrap();
         // The frame is wide enough for three columns, but three tiles use
         // two above one. Its inner area runs from (1, 1) to (149, 29).
@@ -549,11 +564,64 @@ mod tests {
 
         view.tiles.push(tile("fourth", InteractionStatus::Idle));
         let (screen, feedback) = draw(&view, 201, 31);
-        assert_eq!(feedback.columns, 2, "{screen}");
+        assert_eq!(feedback.rows, vec![2, 2], "{screen}");
         let row = |name: &str| screen.lines().position(|line| line.contains(name)).unwrap();
         assert_eq!(row("first"), row("second"), "{screen}");
         assert_eq!(row("third"), row("fourth"), "{screen}");
         assert!(row("first") < row("third"), "{screen}");
+    }
+
+    /// The grid is as square as the width allows, and its rows differ by at
+    /// most one tile, the longer ones on top.
+    #[test]
+    fn tiles_are_shared_out_as_evenly_as_they_go() {
+        let wide = Rect::new(0, 0, 400, 100);
+        let rows = |tiles| grid(wide, tiles).rows;
+        assert_eq!(rows(1), [1]);
+        assert_eq!(rows(2), [2]);
+        assert_eq!(rows(3), [2, 1]);
+        assert_eq!(rows(4), [2, 2]);
+        assert_eq!(rows(5), [3, 2]);
+        assert_eq!(rows(6), [3, 3]);
+        assert_eq!(rows(7), [3, 2, 2]);
+        assert_eq!(rows(8), [3, 3, 2]);
+        assert_eq!(rows(9), [3, 3, 3]);
+        assert_eq!(rows(10), [4, 3, 3]);
+        assert_eq!(rows(13), [4, 3, 3, 3]);
+        // Only two tiles fit across, so seven take four rows of two.
+        let narrow = Rect::new(0, 0, 2 * MIN_TILE_WIDTH, 100);
+        assert_eq!(grid(narrow, 7).rows, [2, 2, 2, 1]);
+    }
+
+    /// Seven tiles are drawn three over two over two, the second and third
+    /// rows sharing the width between two tiles each.
+    #[test]
+    fn a_short_row_stretches_its_tiles_across() {
+        let names = ["one", "two", "three", "four", "five", "six", "seven"];
+        let view = OverviewView {
+            tiles: names
+                .iter()
+                .map(|name| tile(name, InteractionStatus::Idle))
+                .collect(),
+            selected: 0,
+            links: LinkDisplay::Compact,
+        };
+        let (screen, feedback) = draw(&view, 150, 30);
+        assert_eq!(feedback.rows, vec![3, 2, 2], "{screen}");
+        let row = |name: &str| screen.lines().position(|line| line.contains(name)).unwrap();
+        assert_eq!(row("one"), row("three"), "{screen}");
+        assert_eq!(row("four"), row("five"), "{screen}");
+        assert_eq!(row("six"), row("seven"), "{screen}");
+        assert!(row("three") < row("four"), "{screen}");
+        assert!(row("five") < row("six"), "{screen}");
+        let column = |name: &str| {
+            let line = screen.lines().nth(row(name)).unwrap();
+            line[..line.find(name).unwrap()].chars().count()
+        };
+        // Two tiles split the row at its middle, between where the top
+        // row's second and third tiles start.
+        assert!(column("two") < column("five"), "{screen}");
+        assert!(column("five") < column("three"), "{screen}");
     }
 
     #[test]
