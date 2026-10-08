@@ -1,6 +1,6 @@
 use crate::fuzzy_list::{marked, FuzzyList};
-use crate::theme;
 use crate::text_prompt::{self, TextPrompt};
+use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};

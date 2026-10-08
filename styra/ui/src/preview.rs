@@ -137,10 +137,7 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme::INACTIVE))
-                    .title(Span::styled(
-                        title,
-                        Style::default().fg(theme::MUTED_TEXT),
-                    )),
+                    .title(Span::styled(title, Style::default().fg(theme::MUTED_TEXT))),
             ),
         )
     };
@@ -287,10 +284,7 @@ fn changed_path_line(path: &str, workspace_roots: &[String]) -> Line<'static> {
     match relative {
         Some(relative) => Line::from(vec![
             Span::raw(DETAIL_INDENT),
-            Span::styled(
-                WORKSPACE_SHORTHAND,
-                Style::default().fg(theme::MUTED_TEXT),
-            ),
+            Span::styled(WORKSPACE_SHORTHAND, Style::default().fg(theme::MUTED_TEXT)),
             Span::styled(relative.to_owned(), style),
         ]),
         None => Line::from(Span::styled(format!("{DETAIL_INDENT}{path}"), style)),
@@ -309,7 +303,8 @@ fn detail_lines(
     let mut entries_before = 0;
     let blocks = crate::event_list::with_live_branch_name(
         event,
-        view.protocol.presented_detail(event, PresentationMode::Pretty),
+        view.protocol
+            .presented_detail(event, PresentationMode::Pretty),
         branch_name,
     );
     for (index, block) in blocks.into_iter().enumerate() {

@@ -2,8 +2,8 @@
 //! [`crate::app::App`] because each overlays before (or instead of) any loaded
 //! session, so they render from their own borrowed data rather than app state.
 
-use crate::theme;
 use crate::text_prompt::{self, TextPrompt};
+use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -577,10 +577,7 @@ fn preview_session_item(session: &SessionSummary, live: bool) -> ListItem<'stati
             format!("{display_name:<20} "),
             Style::default().fg(theme::TEXT),
         ),
-        Span::styled(
-            session.age.clone(),
-            Style::default().fg(theme::MUTED_TEXT),
-        ),
+        Span::styled(session.age.clone(), Style::default().fg(theme::MUTED_TEXT)),
     ]))
 }
 
@@ -712,10 +709,7 @@ fn session_item(
                 .fg(theme::TEXT)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!(" · {provider}"),
-            Style::default().fg(theme::ACCENT),
-        ),
+        Span::styled(format!(" · {provider}"), Style::default().fg(theme::ACCENT)),
         Span::styled(
             format!(" · {age}"),
             Style::default().fg(theme::ADDITIONAL_INFO),

@@ -567,10 +567,7 @@ struct StyraStyleSheet;
 impl StyleSheet for StyraStyleSheet {
     fn heading(&self, level: u8) -> Style {
         match level {
-            1 => Style::new()
-                .fg(theme::MARKDOWN_HEADING)
-                .bold()
-                .underlined(),
+            1 => Style::new().fg(theme::MARKDOWN_HEADING).bold().underlined(),
             2 => Style::new().fg(theme::MARKDOWN_HEADING).bold(),
             3 => Style::new().fg(theme::ACCENT).bold().italic(),
             _ => Style::new().fg(theme::LIGHT_ACCENT).italic(),
@@ -901,10 +898,7 @@ mod tests {
             background("Provider::x()"),
             Some(theme::INLINE_CODE_BACKGROUND)
         );
-        assert_eq!(
-            background("Cargo.toml"),
-            Some(theme::ENTRY_CODE_BACKGROUND)
-        );
+        assert_eq!(background("Cargo.toml"), Some(theme::ENTRY_CODE_BACKGROUND));
         assert_eq!(background("app.rs"), Some(theme::ENTRY_CODE_BACKGROUND));
     }
 

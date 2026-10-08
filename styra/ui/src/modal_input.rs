@@ -177,8 +177,7 @@ pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
         };
     }
 
-    let mut input_lines =
-        wrapped_input_lines(input.text, width, Style::default().fg(theme::TEXT));
+    let mut input_lines = wrapped_input_lines(input.text, width, Style::default().fg(theme::TEXT));
     let mut cursor_col = input_lines
         .last()
         .map(|line| line.width())

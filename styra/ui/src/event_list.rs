@@ -8,9 +8,9 @@ use crate::markdown::{
     markdown_block_render, parse_inline_spans_with_highlight, structural_indent, EntryIndex,
     LinkDisplay,
 };
-use crate::theme;
 use crate::render_cache::{Memo, Weigh};
 use crate::search::{self, SearchView};
+use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -207,10 +207,7 @@ pub fn render_entry_log(
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border))
-        .title(Span::styled(
-            title,
-            Style::default().fg(theme::MUTED_TEXT),
-        ));
+        .title(Span::styled(title, Style::default().fg(theme::MUTED_TEXT)));
     if view.entries.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -1185,15 +1182,14 @@ fn build_entry_rows(
             .collect();
     }
     let mut lines = vec![summary];
-    let mut detail =
-        detail_lines_with_links(
-            entry.event,
-            protocol,
-            None,
-            links,
-            entry.link_highlight,
-            entry.branch_name,
-        );
+    let mut detail = detail_lines_with_links(
+        entry.event,
+        protocol,
+        None,
+        links,
+        entry.link_highlight,
+        entry.branch_name,
+    );
     // The first detail line is the summary already shown above. Link focus is
     // rendered on that summary, so it never needs a duplicate body line.
     if !detail.is_empty() {
@@ -1827,9 +1823,13 @@ pub fn summary_line(
             summary = format!("Branch {way}: {}", entry.branch_name.unwrap_or("untitled"));
         }
         if let Some((from, to)) = entry.branch_provider_switch {
-            let sealed = if matches!(entry.event, AgentEvent::Branched {
-                direction: styra_protocol::event::BranchDirection::To, ..
-            }) {
+            let sealed = if matches!(
+                entry.event,
+                AgentEvent::Branched {
+                    direction: styra_protocol::event::BranchDirection::To,
+                    ..
+                }
+            ) {
                 "; source sealed"
             } else {
                 ""
@@ -1986,7 +1986,11 @@ pub fn detail_lines_with_links(
     let text_color = message_text_color(event.tag());
     let suspicious_shell = suspicious_shell_success(event);
     let mut entries_before = 0;
-    for block in with_live_branch_name(event, protocol.presented_detail(event, PresentationMode::Pretty), branch_name) {
+    for block in with_live_branch_name(
+        event,
+        protocol.presented_detail(event, PresentationMode::Pretty),
+        branch_name,
+    ) {
         match block {
             DetailBlock::Text(text) => {
                 let base_style = Style::default().fg(text_color);
@@ -2534,7 +2538,11 @@ mod tests {
         };
         entry.event = &destination_marker;
         let destination_summary = text(vec![summary_line(
-            &entry, false, true, true, Protocol::default(),
+            &entry,
+            false,
+            true,
+            true,
+            Protocol::default(),
         )]);
         assert!(destination_summary.contains("provider switch: claude → codex"));
         assert!(!destination_summary.contains("sealed"));

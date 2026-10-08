@@ -781,10 +781,7 @@ mod tests {
         app.workspace.name = Some("payments".into());
         app.interactions.note_name("s1", Some("Fix retries".into()));
         let title = test_support::screen(&app).title();
-        assert!(
-            title.starts_with("┌ payments · Fix retries · "),
-            "{title}"
-        );
+        assert!(title.starts_with("┌ payments · Fix retries · "), "{title}");
     }
 
     fn interaction_with_checkout(id: &str, checkout: Option<CheckoutState>) -> InteractionSummary {

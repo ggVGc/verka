@@ -20,8 +20,8 @@
 //! mount, the profile's credential mounts, the broker's control mount.
 
 use crate::chrome::{panel_block, PanelChrome};
-use crate::theme;
 use crate::text_prompt::{self, TextPrompt};
+use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};

@@ -46,9 +46,7 @@ pub fn term(query: &str) -> Option<&str> {
 /// a match is not where the cursor is, and the two are routinely on screen at
 /// once — the selected row can hold matches of its own.
 fn match_style() -> Style {
-    Style::new()
-        .fg(theme::CODE_BACKGROUND)
-        .bg(theme::ACCENT)
+    Style::new().fg(theme::CODE_BACKGROUND).bg(theme::ACCENT)
 }
 
 /// Mark every word of `lines` containing `term`, case-insensitively.

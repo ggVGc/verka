@@ -107,10 +107,7 @@ pub fn render(frame: &mut Frame, view: &RawView<'_>, area: Rect) -> RawFeedback 
     let block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::ALL)
         .border_style(Style::default().fg(theme::INACTIVE))
-        .title(Span::styled(
-            title,
-            Style::default().fg(theme::MUTED_TEXT),
-        ));
+        .title(Span::styled(title, Style::default().fg(theme::MUTED_TEXT)));
     frame.render_widget(
         Paragraph::new(lines)
             .block(block)
@@ -297,9 +294,7 @@ impl JsonWriter {
             serde_json::Value::Null => self.push("null", theme::JSON_LITERAL),
             serde_json::Value::Bool(value) => self.push(value.to_string(), theme::JSON_LITERAL),
             serde_json::Value::Number(value) => self.push(value.to_string(), theme::JSON_NUMBER),
-            serde_json::Value::String(value) => {
-                self.push(format!("{value:?}"), theme::JSON_STRING)
-            }
+            serde_json::Value::String(value) => self.push(format!("{value:?}"), theme::JSON_STRING),
             serde_json::Value::Array(items) => self.seq(
                 items.iter(),
                 items.len(),

@@ -74,7 +74,11 @@ pub struct PanelChrome {
 /// among them — with all events on, that is the other half of what is on
 /// screen.
 pub fn all_events_title(show_minor: bool) -> Line<'static> {
-    let minor = if show_minor { "minor shown" } else { "minor hidden" };
+    let minor = if show_minor {
+        "minor shown"
+    } else {
+        "minor hidden"
+    };
     Line::from(Span::styled(
         format!(" all events · {minor} "),
         Style::default()
@@ -137,7 +141,10 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
         spans.push(Span::styled(" · ", text));
     }
     if let Some(worktree) = &chrome.worktree {
-        spans.push(Span::styled(worktree.clone(), Style::default().fg(theme::ACCENT)));
+        spans.push(Span::styled(
+            worktree.clone(),
+            Style::default().fg(theme::ACCENT),
+        ));
         spans.push(Span::styled(" · ", text));
     }
     spans.push(Span::styled(format!("{} · ", chrome.agent), text));
