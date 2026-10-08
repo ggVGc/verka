@@ -565,8 +565,8 @@ fn draw_main(
 }
 
 pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback) {
-    if let Some(columns) = feedback.overview_columns {
-        app.overview.note_columns(columns);
+    if let Some(rows) = &feedback.overview_rows {
+        app.overview.note_rows(rows);
     }
     if let Some(offset) = feedback.list_offset {
         app.timeline.list_offset = offset;

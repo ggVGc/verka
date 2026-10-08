@@ -1160,6 +1160,7 @@ M.types.RecentMessage = {
   fields = {
     { name = "from_operator", required = false, type = { kind = "boolean" } },
     { name = "text", required = true, type = { kind = "string" } },
+    { name = "contract", required = false, type = { kind = "optional", inner = { kind = "ref", name = "Contract" } } },
   },
 }
 

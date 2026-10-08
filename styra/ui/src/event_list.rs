@@ -1117,6 +1117,37 @@ fn entry_item_slice(
     ListItem::new(rows)
 }
 
+/// The rows a conversation message is drawn as in the event list, expanded
+/// as its conversation-only mode shows it, for a view that shows messages
+/// outside the list. Uncapped: what to cut is up to the view.
+pub fn message_rows(
+    event: &AgentEvent,
+    contract: Option<&Contract>,
+    width: usize,
+    protocol: Protocol,
+    links: LinkDisplay,
+) -> Vec<Line<'static>> {
+    let entry = EventEntry {
+        event,
+        // Not rendered through the row cache, so never compared.
+        version: EntryVersion { id: 0, revision: 0 },
+        expanded: true,
+        has_detail: false,
+        contract,
+        selected: false,
+        link_highlight: None,
+        branch_name: None,
+        branch_provider_switch: None,
+        inherited: false,
+    };
+    let render = EntryRender {
+        protocol,
+        links,
+        search: None,
+    };
+    build_entry_rows(&entry, width, usize::MAX, render)
+}
+
 /// [`entry_item_with_max_rows`] proper, behind its cache: every finished row
 /// of one entry.
 fn build_entry_rows(

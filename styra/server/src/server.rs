@@ -994,13 +994,19 @@ fn recent_messages(updates: &[SequencedUpdate]) -> Vec<RecentMessage> {
             InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage { text }) => {
                 Some(RecentMessage {
                     from_operator: false,
-                    text: one_line(text),
+                    text: clipped(text),
+                    contract: None,
                 })
             }
             InteractionUpdate::Event(crate::event::AgentEvent::UserMessage { text }) => {
+                let (written, contract) = match crate::contract::unframe(text) {
+                    Some((written, contract)) => (written, Some(contract)),
+                    None => (text.as_str(), None),
+                };
                 Some(RecentMessage {
                     from_operator: true,
-                    text: one_line(text),
+                    text: clipped(written),
+                    contract,
                 })
             }
             _ => None,
@@ -1009,6 +1015,18 @@ fn recent_messages(updates: &[SequencedUpdate]) -> Vec<RecentMessage> {
         .collect::<Vec<_>>();
     messages.reverse();
     messages
+}
+
+/// A message cut short enough that a summary of many stays small, with its
+/// line breaks kept so it still renders as the Markdown it was written as.
+/// More than a tile has room to show of it.
+fn clipped(text: &str) -> String {
+    const LIMIT: usize = 1500;
+    let text = text.trim_end();
+    match text.char_indices().nth(LIMIT) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
+    }
 }
 
 /// The message a turn's work is committed under: the start of the agent's
@@ -4908,15 +4926,15 @@ mod tests {
         );
     }
 
-    /// Both sides of the conversation, oldest first and each on one line,
-    /// with the tool traffic between them left out.
+    /// Both sides of the conversation, oldest first and as written, with the
+    /// tool traffic between them left out and the operator's message unframed.
     #[test]
     fn recent_messages_are_the_conversations_tail() {
         let mut updates = Vec::new();
         push_sequenced(
             &mut updates,
             InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
-                text: "Fix the\nflaky test".into(),
+                text: crate::contract::frame("Fix the\nflaky test", Contract::Text),
             }),
         );
         push_sequenced(
@@ -4928,7 +4946,7 @@ mod tests {
         push_sequenced(
             &mut updates,
             InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage {
-                text: "It raced the clock.".into(),
+                text: "It raced **the clock**.\n".into(),
             }),
         );
         assert_eq!(
@@ -4936,14 +4954,25 @@ mod tests {
             [
                 RecentMessage {
                     from_operator: true,
-                    text: "Fix the flaky test".into(),
+                    text: "Fix the\nflaky test".into(),
+                    contract: Some(Contract::Text),
                 },
                 RecentMessage {
                     from_operator: false,
-                    text: "It raced the clock.".into(),
+                    text: "It raced **the clock**.".into(),
+                    contract: None,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_recent_message_is_clipped_at_its_end() {
+        let long = "word\n".repeat(400);
+        let text = clipped(&long);
+        assert_eq!(text.chars().count(), 1501);
+        assert!(text.starts_with("word\nword"));
+        assert!(text.ends_with('…'));
     }
 
     #[test]

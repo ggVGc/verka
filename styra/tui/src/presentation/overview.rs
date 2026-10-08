@@ -18,6 +18,7 @@ pub(crate) fn view(app: &App) -> OverviewView<'_> {
     OverviewView {
         tiles,
         selected: app.overview.selected(&app.interactions, &app.session_id),
+        links: super::list::ui_link_display(app.link_display),
     }
 }
 
@@ -53,6 +54,7 @@ fn tile<'a>(app: &'a App, interaction: &'a InteractionSummary, now_ms: u64) -> O
         rate_limited,
         uncommitted: interaction.uncommitted_changes,
         tags: &interaction.tags,
+        protocol: interaction.selection.provider.protocol(),
         messages: messages(interaction),
     }
 }
@@ -67,6 +69,7 @@ fn messages(interaction: &InteractionSummary) -> Vec<OverviewMessage<'_>> {
             .map(|text| OverviewMessage {
                 from_operator: false,
                 text,
+                contract: None,
             })
             .into_iter()
             .collect();
@@ -77,6 +80,7 @@ fn messages(interaction: &InteractionSummary) -> Vec<OverviewMessage<'_>> {
         .map(|message| OverviewMessage {
             from_operator: message.from_operator,
             text: &message.text,
+            contract: message.contract,
         })
         .collect()
 }

@@ -11,10 +11,10 @@ pub struct Overview {
     /// The interaction under the cursor. `None` — what opening resets it to —
     /// means the one on screen, or the first tile when that is not one.
     cursor: Option<String>,
-    /// How many tiles a row of the grid held when it was last drawn, which is
-    /// what moving up or down a column steps over. The renderer decides it
-    /// from the terminal's width, so it is learned from the draw.
-    columns: usize,
+    /// How many tiles each row of the grid held when it was last drawn, top
+    /// to bottom, which is what moving up or down steps between. The renderer
+    /// decides it from the terminal's size, so it is learned from the draw.
+    rows: Vec<usize>,
 }
 
 impl Overview {
@@ -23,8 +23,8 @@ impl Overview {
         self.cursor = None;
     }
 
-    pub fn note_columns(&mut self, columns: usize) {
-        self.columns = columns;
+    pub fn note_rows(&mut self, rows: &[usize]) {
+        self.rows = rows.to_vec();
     }
 
     /// The cursor's position in [`LiveInteractions::overview_indices`]. A
@@ -66,24 +66,42 @@ impl Overview {
         self.select(interactions, at + 1);
     }
 
-    /// Down a column. From the row above a short last row, where there is no
-    /// tile straight below, the cursor drops onto that row's last tile rather
-    /// than refusing to leave.
+    /// Onto the tile in the row below that sits most nearly under this one.
+    /// Rows of different lengths have tiles of different widths, so that is
+    /// the one under this tile's middle.
     pub fn down(&mut self, interactions: &LiveInteractions, current: &str) {
-        let columns = self.columns.max(1);
         let at = self.selected(interactions, current);
-        let last = interactions.overview_indices().len().saturating_sub(1);
-        if at / columns < last / columns {
-            self.select(interactions, at + columns);
+        if let Some(position) = self.vertical(at, 1) {
+            self.select(interactions, position);
         }
     }
 
     pub fn up(&mut self, interactions: &LiveInteractions, current: &str) {
-        let columns = self.columns.max(1);
         let at = self.selected(interactions, current);
-        if at >= columns {
-            self.select(interactions, at - columns);
+        if let Some(position) = self.vertical(at, -1) {
+            self.select(interactions, position);
         }
+    }
+
+    /// The tile `step` rows from tile `at` under its middle, or `None` when
+    /// there is no such row.
+    fn vertical(&self, at: usize, step: isize) -> Option<usize> {
+        let mut start = 0;
+        let row = self.rows.iter().position(|length| {
+            start += length;
+            at < start
+        })?;
+        let length = self.rows[row];
+        let column = at - (start - length);
+        let target = row.checked_add_signed(step)?;
+        let target_length = *self.rows.get(target)?;
+        let target_start = self.rows[..target].iter().sum::<usize>();
+        // The middle of this tile, as a fraction of the width, is
+        // (column + ½) / length; the tile below it is that times the target
+        // row's length, rounded down.
+        let target_column =
+            ((2 * column + 1) * target_length / (2 * length)).min(target_length - 1);
+        Some(target_start + target_column)
     }
 
     /// The next tile in reading order, wrapping from the last to the first,
@@ -165,14 +183,19 @@ mod tests {
         assert_eq!(overview.selected(&interactions, "elsewhere"), 0);
     }
 
-    /// Five tiles three to a row: the second row is short, and down from
-    /// above its gap lands on its last tile.
+    /// Five tiles three over two: down and up land on the tile under the
+    /// middle of the one the cursor leaves, the bottom row's being wider.
     #[test]
     fn the_cursor_moves_across_and_down_the_grid() {
         let interactions = fleet(&[InteractionActivity::Pending; 5]);
         let mut overview = Overview::default();
-        overview.note_columns(3);
+        overview.note_rows(&[3, 2]);
         let current = "100-tile";
+
+        overview.down(&interactions, current);
+        assert_eq!(overview.selected(&interactions, current), 3);
+        overview.up(&interactions, current);
+        assert_eq!(overview.selected(&interactions, current), 0);
 
         overview.right(&interactions, current);
         assert_eq!(overview.selected(&interactions, current), 1);
@@ -181,17 +204,15 @@ mod tests {
         overview.down(&interactions, current);
         assert_eq!(overview.selected(&interactions, current), 4, "no row below");
         overview.up(&interactions, current);
-        assert_eq!(overview.selected(&interactions, current), 1);
-        overview.up(&interactions, current);
-        assert_eq!(overview.selected(&interactions, current), 1, "no row above");
-
-        overview.right(&interactions, current);
-        overview.down(&interactions, current);
         assert_eq!(
             overview.selected(&interactions, current),
-            4,
-            "nothing straight below the third tile"
+            2,
+            "the right half of the top row"
         );
+        overview.up(&interactions, current);
+        assert_eq!(overview.selected(&interactions, current), 2, "no row above");
+        overview.down(&interactions, current);
+        assert_eq!(overview.selected(&interactions, current), 4);
         overview.right(&interactions, current);
         assert_eq!(overview.selected(&interactions, current), 4, "at the end");
 
@@ -211,7 +232,7 @@ mod tests {
     fn tab_walks_the_tiles_in_order_and_wraps() {
         let interactions = fleet(&[InteractionActivity::Pending; 3]);
         let mut overview = Overview::default();
-        overview.note_columns(2);
+        overview.note_rows(&[2, 1]);
         let current = "99-tile";
 
         overview.next(&interactions, current);
