@@ -1,3 +1,7 @@
+- Svara: Ask using structured format and have quickfix filled
+- Svara: Ask question and have answer show up inline until seen and closed:
+  - Maybe same for edits? Accept/No/Change?
+- When associations between interaction entries and commits have stabilized: Some way of reverting an interaction (and change state) to an earlier point.
 - When auto-commit on, associate each interaction entry with the commit that was made:
   - Some way of viewing the diff of that commit
 - Experiment: Snapshotting of git status before each turn starts
