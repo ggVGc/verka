@@ -93,6 +93,9 @@ pub enum View {
     /// The plan-quota readings the server has seen, newest last.
     Quota,
     Transcript,
+    /// The interaction's checkout diffed against where its branch started,
+    /// as last read into [`App::checkout_diff`].
+    CheckoutDiff,
     Driva,
     Files,
     /// The last turn's typed answer, rendered as the shape it was asked for.
@@ -354,6 +357,9 @@ pub struct App {
     /// Unlike the raw/log views, the transcript reads as a document from the
     /// beginning rather than anchoring to the tail.
     pub transcript: Scroll,
+    /// The diff [`View::CheckoutDiff`] shows. Kept after the view is left, but
+    /// read afresh each time it is opened.
+    pub checkout_diff: Option<crate::checkout_diff::CheckoutDiff>,
     /// The entry-log pane below the event list: whether it is open, which of
     /// the two windows has the navigation keys, and where it is; see
     /// [`EntryLog`]. It is deliberately a pane state, not a [`View`]: it and
@@ -453,12 +459,12 @@ pub enum Request {
     /// configured, so the event loop runs it.
     OpenDirectory,
     /// Show what the interaction's checkout has changed since its branch was
-    /// made, in the configured diff tool. Both are resolved by the key
-    /// handler, which refuses an interaction lacking either.
-    OpenDiff {
-        worktree: PathBuf,
-        base: String,
-    },
+    /// made, in the configured diff tool. The key handler resolves the
+    /// target, refusing an interaction that has none.
+    OpenDiff(crate::checkout_diff::DiffTarget),
+    /// The same diff read into [`View::CheckoutDiff`] instead. Reading it runs
+    /// `git`, so the event loop does it rather than the key handler.
+    ShowDiff(crate::checkout_diff::DiffTarget),
     /// Open a Markdown link's resolved path in the configured editor.
     OpenPath(PathBuf),
     /// Open a web address in the configured browser.
@@ -583,6 +589,7 @@ impl App {
             auto_retry: false,
             auto_commit: false,
             transcript: Scroll::default(),
+            checkout_diff: None,
             entry_log: EntryLog::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
@@ -1575,6 +1582,11 @@ impl App {
             // rather than navigated copies the whole value, which is what an
             // operator reaching for `y` on a JSON or prose answer wants.
             View::Answer => self.answer.copy_text(),
+            // The whole diff, ready to paste into a message or a patch.
+            View::CheckoutDiff => self
+                .checkout_diff
+                .as_ref()
+                .and_then(|diff| diff.diff.as_ref().ok().cloned()),
             View::Log | View::Quota | View::Transcript | View::Driva | View::Overview => None,
         }
     }

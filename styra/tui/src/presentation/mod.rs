@@ -206,6 +206,7 @@ pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
         View::Log => Window::Log,
         View::Quota => Window::Quota,
         View::Transcript => Window::Transcript,
+        View::CheckoutDiff => Window::CheckoutDiff,
         View::Driva => Window::Driva,
         View::Files => Window::Files,
         View::Answer => Window::Answer,
@@ -391,6 +392,30 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 requested_scroll: app.transcript.offset,
             };
             draw_main(ui, app, MainView::Transcript(&transcript))
+        }
+        View::CheckoutDiff => {
+            let missing = Err("no diff read yet");
+            let view = app.checkout_diff.as_ref().map(|diff| {
+                let worktree = diff.target.worktree.display().to_string();
+                (diff, worktree)
+            });
+            let diff = styra_ui::checkout_diff::CheckoutDiffView {
+                chrome: panel_chrome(app, Some("diff")),
+                worktree: view.as_ref().map_or("", |(_, worktree)| worktree),
+                branch: view
+                    .as_ref()
+                    .and_then(|(diff, _)| diff.target.branch.as_deref()),
+                base_branch: view
+                    .as_ref()
+                    .and_then(|(diff, _)| diff.target.base_branch.as_deref()),
+                base_commit: view.as_ref().map_or("", |(diff, _)| &diff.target.base),
+                diff: view.as_ref().map_or(missing, |(diff, _)| match &diff.diff {
+                    Ok(text) => Ok(text.as_str()),
+                    Err(error) => Err(error.as_str()),
+                }),
+                requested_scroll: view.as_ref().map_or(0, |(diff, _)| diff.scroll.clamped()),
+            };
+            draw_main(ui, app, MainView::CheckoutDiff(&diff))
         }
         View::Driva => {
             let driva = driva::view(app);
@@ -625,6 +650,12 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
                 } else {
                     app.launch.scroll.offset = scroll.effective_offset;
                     app.launch.scroll.note_limit(scroll.limit);
+                }
+            }
+            styra_ui::PanelId::CheckoutDiff { .. } => {
+                if let Some(diff) = &mut app.checkout_diff {
+                    diff.scroll.offset = scroll.effective_offset;
+                    diff.scroll.note_limit(scroll.limit);
                 }
             }
             styra_ui::PanelId::EntryLog => {
@@ -1009,5 +1040,33 @@ mod tests {
             assert!(rendered(&app).contains(&named), "{}", rendered(&app));
             toggle(&mut app);
         }
+    }
+
+    /// The diff view says what it compares before it shows the diff.
+    #[test]
+    fn the_checkout_diff_names_both_branches_above_the_diff() {
+        let mut app = test_support::app("s1");
+        app.checkout_diff = Some(crate::checkout_diff::CheckoutDiff {
+            target: crate::checkout_diff::DiffTarget {
+                worktree: "/state/worktrees/styra-7".into(),
+                branch: Some("styra/rename".into()),
+                base_branch: Some("main".into()),
+                base: "4bf5c35d".into(),
+            },
+            diff: Ok(
+                "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n"
+                    .into(),
+            ),
+            scroll: Default::default(),
+        });
+        app.view = View::CheckoutDiff;
+
+        let screen = rendered(&app);
+        assert!(
+            screen.contains("styra/rename  against  main at 4bf5c35d"),
+            "{screen}"
+        );
+        assert!(screen.contains("1 file changed  +1 -1"), "{screen}");
+        assert!(screen.contains("new"), "{screen}");
     }
 }

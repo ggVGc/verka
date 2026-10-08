@@ -1,8 +1,8 @@
 //! Top-level main-application layout and overlay ordering.
 
 use crate::{
-    answer, busy, driva, event_list, files, footer, interactions, launcher, log, messages,
-    modal_input, overlays, overview, preview, quota, raw, recording, transcript, PanelId,
+    answer, busy, checkout_diff, driva, event_list, files, footer, interactions, launcher, log,
+    messages, modal_input, overlays, overview, preview, quota, raw, recording, transcript, PanelId,
     RenderFeedback, ScrollFeedback,
 };
 use crate::{markdown, theme};
@@ -40,6 +40,7 @@ pub enum MainView<'a> {
     },
     Quota(&'a quota::QuotaView<'a>),
     Transcript(&'a transcript::TranscriptView<'a>),
+    CheckoutDiff(&'a checkout_diff::CheckoutDiffView<'a>),
     Driva(&'a driva::DrivaView<'a>),
     Files(FilesView<'a>),
     Answer(&'a answer::AnswerView<'a>),
@@ -142,6 +143,17 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
                 },
                 limit,
                 transcript_view.requested_scroll.min(limit),
+            );
+        }
+        MainView::CheckoutDiff(diff_view) => {
+            let limit = checkout_diff::render(frame, diff_view, chunks[0]);
+            note_scroll(
+                &mut feedback,
+                PanelId::CheckoutDiff {
+                    session: view.session_id.into(),
+                },
+                limit,
+                diff_view.requested_scroll.min(limit),
             );
         }
         MainView::Driva(driva_view) => {

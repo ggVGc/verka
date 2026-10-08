@@ -1830,17 +1830,21 @@ fn run_rounds(
                     ))),
                 }
             }
-            Some(Request::OpenDiff { worktree, base }) => {
-                match crate::terminal::open_diff(&worktree, &base, config) {
+            Some(Request::OpenDiff(target)) => {
+                let worktree = target.worktree.display();
+                match crate::terminal::open_diff(&target.worktree, &target.base, config) {
                     Ok(program) => app.show_action_message(format!(
-                        "opened {program} on {} against {base}",
-                        worktree.display()
+                        "opened {program} on {worktree} against {}",
+                        target.base
                     )),
                     Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not open a diff of {}: {error:#}",
-                        worktree.display()
+                        "could not open a diff of {worktree}: {error:#}"
                     ))),
                 }
+            }
+            Some(Request::ShowDiff(target)) => {
+                app.checkout_diff = Some(crate::checkout_diff::CheckoutDiff::read(target));
+                app.view = crate::app::View::CheckoutDiff;
             }
             Some(Request::OpenShell) => {
                 match crate::terminal::open_shell(client, &app.session_id, config) {

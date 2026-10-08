@@ -13,6 +13,7 @@ mod app;
 mod audio;
 mod branch;
 mod branch_log;
+mod checkout_diff;
 mod cli;
 mod clipboard;
 mod composer;

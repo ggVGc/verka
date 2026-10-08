@@ -11,6 +11,7 @@ use std::path::Path;
 
 use crate::activity::Status;
 use crate::app::{App, Request, View};
+use crate::checkout_diff::DiffTarget;
 use crate::insert;
 use crate::launch;
 use crate::link_menu::LinkAction;
@@ -259,7 +260,17 @@ pub fn handle_list_key(
         // standing where the interaction is working. That works with no live
         // interaction — a finished one still has a directory to look at.
         k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
-        k if GLOBAL_DIFF.matches(k) => return open_diff(app),
+        // `d` reads the diff into a view of its own and, like the other
+        // views, goes back to events when pressed there again. `Ctrl-d` hands
+        // the same diff to the configured tool in a window of its own.
+        k if GLOBAL_DIFF.matches(k) => {
+            if app.view == View::CheckoutDiff {
+                app.view = View::Events;
+                return;
+            }
+            return ask_for_diff(app, Request::ShowDiff);
+        }
+        k if GLOBAL_DIFF_EXTERNAL.matches(k) => return ask_for_diff(app, Request::OpenDiff),
         // Not from the preview. The overview takes `i` itself, for the tile
         // under its cursor.
         k if GLOBAL_FOCUS_MESSAGE.matches(k)
@@ -476,6 +487,23 @@ pub fn handle_list_key(
             k if READING_UP.matches(k) => app.quota.scroll_up(),
             _ => {}
         },
+        View::CheckoutDiff => {
+            let Some(diff) = app.checkout_diff.as_mut() else {
+                return;
+            };
+            match key {
+                k if READING_DOWN.matches(k) => diff.scroll.offset = diff.scroll.clamped() + 1,
+                k if READING_UP.matches(k) => {
+                    diff.scroll.offset = diff.scroll.clamped().saturating_sub(1)
+                }
+                k if READING_FIRST.matches(k) => diff.scroll.reset(),
+                k if READING_LAST.matches(k) => diff.scroll.scroll_to_end(),
+                k if READING_PAGE_DOWN.matches(k) => diff.scroll.page_down(),
+                k if READING_PAGE_UP.matches(k) => diff.scroll.page_up(),
+                k if READING_COPY.matches(k) => copy_selection(app),
+                _ => {}
+            }
+        }
         View::Transcript => match key {
             k if READING_LINKS.matches(k) => app.highlight_first_link(),
             k if READING_ALL_EVENTS.matches(k) => app.toggle_all_events(),
@@ -833,25 +861,16 @@ fn toggle_auto_commit(app: &mut App) {
 }
 
 /// Ask for a diff of the interaction's checkout against the commit its branch
-/// was made at. Both come from the interaction as the server last reported it:
-/// one outside a repository has no checkout, and one Styra made no branch for
-/// has nowhere recorded to measure from, so either is refused here rather than
-/// guessed at.
-fn open_diff(app: &mut App) {
+/// was made at, as `request` — in this window or another. An interaction with
+/// nothing to diff says why instead (see [`DiffTarget::of`]).
+fn ask_for_diff(app: &mut App, request: fn(DiffTarget) -> Request) {
     let Some(interaction) = app.interactions.current(&app.session_id) else {
         return app.show_action_message("no interaction to diff");
     };
-    let Some(checkout) = interaction.checkout.as_ref() else {
-        return app.show_action_message("this interaction has no Git checkout to diff");
-    };
-    let Some(branched_from) = interaction.branched_from.as_ref() else {
-        return app.show_action_message("no recorded start commit to diff this checkout against");
-    };
-    let request = Request::OpenDiff {
-        worktree: checkout.worktree.clone(),
-        base: branched_from.commit.clone(),
-    };
-    app.ask(request);
+    match DiffTarget::of(interaction) {
+        Ok(target) => app.ask(request(target)),
+        Err(reason) => app.show_action_message(reason),
+    }
 }
 
 pub fn handle_input_key(
@@ -1633,7 +1652,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    fn press_d(app: &mut App, root: &Path) {
+    fn press_list_key(app: &mut App, root: &Path, key: KeyEvent) {
         let client = Client::new(root.join("missing.sock"));
         let mut live = Attachment::Detached;
         let mut pending_fold = false;
@@ -1641,18 +1660,22 @@ mod tests {
             app,
             &client,
             &mut live,
-            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+            key,
             &mut pending_fold,
             &root.join("preferences.toml"),
         );
     }
 
-    /// `d` diffs the checkout the interaction works in against the commit its
-    /// branch was made at — not the origin branch's name, which has moved on.
-    #[test]
-    fn d_asks_for_a_diff_of_the_checkout_against_its_start_commit() {
-        let root = tree("diff-checkout");
-        let mut app = app(&root);
+    fn press_d(app: &mut App, root: &Path) {
+        press_list_key(
+            app,
+            root,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        );
+    }
+
+    fn app_with_diffable_interaction(root: &Path) -> App {
+        let mut app = app(root);
         app.enter_list();
         app.session_id = "styra-7".into();
         let mut interaction = crate::interactions::tests::interaction(
@@ -1669,16 +1692,66 @@ mod tests {
             commit: "4bf5c35d".into(),
         });
         app.interactions.items = vec![interaction];
+        app
+    }
+
+    fn diffable_target() -> DiffTarget {
+        DiffTarget {
+            worktree: PathBuf::from("/state/worktrees/styra-7"),
+            branch: Some("styra/rename".into()),
+            base_branch: Some("main".into()),
+            base: "4bf5c35d".into(),
+        }
+    }
+
+    /// `d` diffs the checkout the interaction works in against the commit its
+    /// branch was made at — not the origin branch's name, which has moved on —
+    /// and carries both branch names along for the view to say what it shows.
+    #[test]
+    fn d_asks_for_a_diff_of_the_checkout_against_its_start_commit() {
+        let root = tree("diff-checkout");
+        let mut app = app_with_diffable_interaction(&root);
 
         press_d(&mut app, &root);
 
         assert_eq!(
             app.take_request(),
-            Some(Request::OpenDiff {
-                worktree: PathBuf::from("/state/worktrees/styra-7"),
-                base: "4bf5c35d".into(),
-            })
+            Some(Request::ShowDiff(diffable_target()))
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `Ctrl-d` asks for the same diff in the configured tool instead.
+    #[test]
+    fn ctrl_d_asks_for_the_same_diff_in_the_configured_tool() {
+        let root = tree("diff-external");
+        let mut app = app_with_diffable_interaction(&root);
+
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenDiff(diffable_target()))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Like the other views, `d` pressed in the diff goes back to events
+    /// rather than reading the diff again.
+    #[test]
+    fn d_in_the_diff_view_returns_to_events() {
+        let root = tree("diff-toggle");
+        let mut app = app_with_diffable_interaction(&root);
+        app.view = View::CheckoutDiff;
+
+        press_d(&mut app, &root);
+
+        assert_eq!(app.view, View::Events);
+        assert_eq!(app.take_request(), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

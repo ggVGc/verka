@@ -25,6 +25,8 @@ bindings! { GLOBAL = "Global";
     GLOBAL_SHELL: [Key::ch('!')] => Action::GlobalShell;
     GLOBAL_DIRECTORY: [Key::ch('~')] => Action::GlobalDirectory;
     GLOBAL_DIFF: [Key::ch('d')] ("checkout with a branch point") => Action::GlobalDiff;
+    GLOBAL_DIFF_EXTERNAL: [Key::ctrl('d')] ("checkout with a branch point")
+        => Action::GlobalDiffExternal;
     GLOBAL_INTERACTIONS: [Key::ch('a')] => Action::GlobalInteractions;
     GLOBAL_OVERVIEW: [Key::ch('v')] ("not in raw") => Action::GlobalOverview;
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
@@ -104,7 +106,7 @@ bindings! { READING = "Raw, log, quota, and transcript";
     READING_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::ReadingPageUp;
     READING_PROVIDER_RAW: [Key::ch('v')] ("raw")
         => Action::ReadingProviderRaw;
-    READING_COPY: [Key::ch('y')] ("raw") => Action::ReadingCopy;
+    READING_COPY: [Key::ch('y')] ("raw, diff") => Action::ReadingCopy;
 }
 
 bindings! { PREVIEW = "Full-screen preview";
@@ -390,6 +392,7 @@ pub(crate) enum Window {
     Log,
     Quota,
     Transcript,
+    CheckoutDiff,
     Driva,
     Files,
     Answer,
@@ -417,6 +420,7 @@ impl Window {
             Self::Log => "log",
             Self::Quota => "quota",
             Self::Transcript => "transcript",
+            Self::CheckoutDiff => "diff",
             Self::Driva => "details",
             Self::Files => "files",
             Self::Answer => "typed answer",
@@ -439,7 +443,7 @@ impl Window {
     fn sections(self) -> &'static [&'static [ReferenceRow]] {
         match self {
             Self::Events => &[EVENTS, MESSAGE_EDITOR, GLOBAL],
-            Self::Raw | Self::Log | Self::Quota | Self::Transcript => {
+            Self::Raw | Self::Log | Self::Quota | Self::Transcript | Self::CheckoutDiff => {
                 &[READING, MESSAGE_EDITOR, GLOBAL]
             }
             Self::Preview => &[PREVIEW, MESSAGE_EDITOR, GLOBAL],
@@ -478,12 +482,13 @@ mod reference_tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
 
-    const WINDOWS: [Window; 19] = [
+    const WINDOWS: [Window; 20] = [
         Window::Events,
         Window::Raw,
         Window::Log,
         Window::Quota,
         Window::Transcript,
+        Window::CheckoutDiff,
         Window::Driva,
         Window::Files,
         Window::Answer,

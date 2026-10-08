@@ -22,6 +22,7 @@ pub(crate) enum Action {
     GlobalShell,
     GlobalDirectory,
     GlobalDiff,
+    GlobalDiffExternal,
     GlobalInteractions,
     GlobalOverview,
     GlobalSessions,
@@ -283,7 +284,10 @@ impl Action {
             Self::GlobalLauncher => "choose agent, model and effort for an idle agent turn",
             Self::GlobalShell => "open session shell in a new terminal",
             Self::GlobalDirectory => "open a terminal in the interaction's working directory",
-            Self::GlobalDiff => "diff the interaction's checkout against where its branch started",
+            Self::GlobalDiff => {
+                "diff the checkout against where its branch started; press again for events"
+            }
+            Self::GlobalDiffExternal => "the same diff in the configured tool, in a new terminal",
             Self::GlobalInteractions => "live interactions",
             Self::GlobalOverview => "overview: every running and idle interaction as a grid",
             Self::GlobalSessions => "stored sessions",
