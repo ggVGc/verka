@@ -124,7 +124,7 @@ transcript, details, files, answer, preview) stack over the event list, and
 | `W` (existing session) | create and associate a linked workspace and branch, then restart the interaction in it; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `s` / `S` | interrupt the active turn / stop its interaction |
-| `n` / `N` / `Ctrl+N` | go to a newly idle interaction, or the next running one / cycle actively running interactions / start a new session in the current Session's checkout when it has one |
+| `n` / `N` / `Ctrl+N` | go to a newly idle interaction, or the next running one / cycle actively running interactions / start a new session in the current Session's checkout when it has one; pressed again on that still-blank screen, it starts at the Workspace root instead |
 | `B` | branch from history through, or only, the selected entry; opens the branch and leaves the source running |
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |

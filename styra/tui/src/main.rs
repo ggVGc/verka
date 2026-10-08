@@ -141,6 +141,11 @@ fn pending_app(
 /// Workspace can differ when the one being viewed has since gone away, and a
 /// checkout is the Workspace's to lend — the server refuses to cross that line,
 /// so a blank screen must not ask it to.
+///
+/// Only a started Session lends its checkout. Pressing `n` again on a blank
+/// screen, which has no Session yet, opens the next one at the Workspace root
+/// even if the first was standing in a worktree. A second press is therefore
+/// the way back out of a checkout.
 fn pending_app_from_session(app: &App, workspace: &WorkspaceSummary) -> App {
     let mut pending = pending_app(
         app.selection.clone(),
@@ -961,6 +966,28 @@ mod cli_tests {
             pending.workspace.working_directory_or_current(),
             Some(checkout.to_path_buf())
         );
+    }
+
+    /// `n` pressed again on the blank screen a worktree Session led to steps
+    /// back out to the Workspace root: that screen has no Session of its own
+    /// to lend a checkout, so the one it was going to share is not carried on.
+    #[test]
+    fn a_second_new_session_from_a_blank_screen_returns_to_the_workspace_root() {
+        let viewed = workspace("viewed", "/work/viewed");
+        let checkout = Path::new("/state/worktrees/viewed/rename-the-picker-styra-7");
+        let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+        let mut app = App::pending(selection);
+        app.workspace.id = Some(viewed.id.clone());
+        app.session_id = "styra-7".into();
+        app.workspace.enter(checkout.to_path_buf());
+
+        let first = pending_app_from_session(&app, &viewed);
+        assert_eq!(first.checkout_from.as_deref(), Some("styra-7"));
+        assert_eq!(first.workspace.root(), Some(checkout));
+
+        let second = pending_app_from_session(&first, &viewed);
+        assert_eq!(second.checkout_from, None);
+        assert_eq!(second.workspace.root(), Some(Path::new("/work/viewed")));
     }
 
     /// The Workspace being viewed can be gone by the time `n` is pressed, in
