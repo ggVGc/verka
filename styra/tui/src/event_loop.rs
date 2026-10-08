@@ -1830,6 +1830,18 @@ fn run_rounds(
                     ))),
                 }
             }
+            Some(Request::OpenDiff { worktree, base }) => {
+                match crate::terminal::open_diff(&worktree, &base, config) {
+                    Ok(program) => app.show_action_message(format!(
+                        "opened {program} on {} against {base}",
+                        worktree.display()
+                    )),
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not open a diff of {}: {error:#}",
+                        worktree.display()
+                    ))),
+                }
+            }
             Some(Request::OpenShell) => {
                 match crate::terminal::open_shell(client, &app.session_id, config) {
                     Ok(program) => app.show_action_message(format!("opened shell in {program}")),

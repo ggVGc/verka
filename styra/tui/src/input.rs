@@ -259,6 +259,7 @@ pub fn handle_list_key(
         // standing where the interaction is working. That works with no live
         // interaction — a finished one still has a directory to look at.
         k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
+        k if GLOBAL_DIFF.matches(k) => return open_diff(app),
         // Not from the preview. The overview takes `i` itself, for the tile
         // under its cursor.
         k if GLOBAL_FOCUS_MESSAGE.matches(k)
@@ -829,6 +830,28 @@ fn toggle_auto_commit(app: &mut App) {
         );
     }
     app.ask(Request::SetAutoCommit(!app.auto_commit));
+}
+
+/// Ask for a diff of the interaction's checkout against the commit its branch
+/// was made at. Both come from the interaction as the server last reported it:
+/// one outside a repository has no checkout, and one Styra made no branch for
+/// has nowhere recorded to measure from, so either is refused here rather than
+/// guessed at.
+fn open_diff(app: &mut App) {
+    let Some(interaction) = app.interactions.current(&app.session_id) else {
+        return app.show_action_message("no interaction to diff");
+    };
+    let Some(checkout) = interaction.checkout.as_ref() else {
+        return app.show_action_message("this interaction has no Git checkout to diff");
+    };
+    let Some(branched_from) = interaction.branched_from.as_ref() else {
+        return app.show_action_message("no recorded start commit to diff this checkout against");
+    };
+    let request = Request::OpenDiff {
+        worktree: checkout.worktree.clone(),
+        base: branched_from.commit.clone(),
+    };
+    app.ask(request);
 }
 
 pub fn handle_input_key(
@@ -1607,6 +1630,80 @@ mod tests {
 
         assert_eq!(app.take_request(), Some(Request::OpenDirectory));
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn press_d(app: &mut App, root: &Path) {
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+        handle_list_key(
+            app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+    }
+
+    /// `d` diffs the checkout the interaction works in against the commit its
+    /// branch was made at — not the origin branch's name, which has moved on.
+    #[test]
+    fn d_asks_for_a_diff_of_the_checkout_against_its_start_commit() {
+        let root = tree("diff-checkout");
+        let mut app = app(&root);
+        app.enter_list();
+        app.session_id = "styra-7".into();
+        let mut interaction = crate::interactions::tests::interaction(
+            "styra-7",
+            styra_protocol::InteractionActivity::Pending,
+        );
+        interaction.checkout = Some(styra_protocol::CheckoutState {
+            worktree: PathBuf::from("/state/worktrees/styra-7"),
+            repository: PathBuf::from("/home/me/project"),
+            branch: Some("styra/rename".into()),
+        });
+        interaction.branched_from = Some(styra_protocol::BranchPoint {
+            branch: Some("main".into()),
+            commit: "4bf5c35d".into(),
+        });
+        app.interactions.items = vec![interaction];
+
+        press_d(&mut app, &root);
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenDiff {
+                worktree: PathBuf::from("/state/worktrees/styra-7"),
+                base: "4bf5c35d".into(),
+            })
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Without a recorded start commit there is nothing to diff against, so
+    /// nothing is opened rather than a guess at a base.
+    #[test]
+    fn d_without_a_start_commit_asks_for_nothing() {
+        let root = tree("diff-no-branch-point");
+        let mut app = app(&root);
+        app.enter_list();
+        app.session_id = "styra-7".into();
+        let mut interaction = crate::interactions::tests::interaction(
+            "styra-7",
+            styra_protocol::InteractionActivity::Pending,
+        );
+        interaction.checkout = Some(styra_protocol::CheckoutState {
+            worktree: PathBuf::from("/home/me/project"),
+            repository: PathBuf::from("/home/me/project"),
+            branch: Some("main".into()),
+        });
+        app.interactions.items = vec![interaction];
+
+        press_d(&mut app, &root);
+
+        assert_eq!(app.take_request(), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

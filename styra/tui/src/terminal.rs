@@ -69,6 +69,19 @@ pub fn open_directory(directory: &Path, config: &dyn Configuration) -> Result<St
     Ok(program)
 }
 
+/// Open the configured diff of `worktree` against the commit its branch was
+/// made at, and report the program it was opened with.
+///
+/// Spawned standing in the worktree as well as told it, so a configured tool
+/// that only looks at its current directory still diffs the right checkout.
+pub fn open_diff(worktree: &Path, base: &str, config: &dyn Configuration) -> Result<String> {
+    let mut command = config.open_diff(worktree, base);
+    command.current_dir(worktree);
+    let program = command.get_program().to_string_lossy().into_owned();
+    spawn_detached(&mut command)?;
+    Ok(program)
+}
+
 /// The command [`open_directory`] runs, built apart from running it so what it
 /// asks for can be examined.
 fn shell_in(directory: &Path, config: &dyn Configuration) -> Command {

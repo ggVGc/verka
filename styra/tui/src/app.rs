@@ -452,6 +452,13 @@ pub enum Request {
     /// terminal window of its own. Like [`Request::OpenShell`] the window is
     /// configured, so the event loop runs it.
     OpenDirectory,
+    /// Show what the interaction's checkout has changed since its branch was
+    /// made, in the configured diff tool. Both are resolved by the key
+    /// handler, which refuses an interaction lacking either.
+    OpenDiff {
+        worktree: PathBuf,
+        base: String,
+    },
     /// Open a Markdown link's resolved path in the configured editor.
     OpenPath(PathBuf),
     /// Open a web address in the configured browser.

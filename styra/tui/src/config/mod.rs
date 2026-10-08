@@ -49,4 +49,16 @@ pub trait Configuration {
     /// is a program name and its arguments, so a shell that needs to be told
     /// not to read a profile can say so.
     fn shell(&self) -> Vec<OsString>;
+
+    /// The command that shows what an interaction's checkout has changed since
+    /// its branch was made — what the `d` key opens.
+    ///
+    /// `worktree` is the root of the working tree the agent works in, and
+    /// `base` the commit its branch was created at (see
+    /// `styra_protocol::BranchPoint`). The commit rather than the origin
+    /// branch's name, because that branch moves on and what the Session did is
+    /// measured from where it started. A whole command for the same reason
+    /// [`Self::open_file`] is: a terminal diff needs an emulator around it, a
+    /// graphical one does not.
+    fn open_diff(&self, worktree: &Path, base: &str) -> Command;
 }
