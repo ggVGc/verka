@@ -583,6 +583,9 @@ mod tests {
         assert_eq!(rows(4), [2, 2]);
         assert_eq!(rows(5), [3, 2]);
         assert_eq!(rows(6), [3, 3]);
+        for (width, height) in [(200, 50), (300, 40), (250, 20), (400, 14)] {
+            assert_eq!(grid(Rect::new(0, 0, width, height), 6).rows, [3, 3]);
+        }
         assert_eq!(rows(7), [3, 2, 2]);
         assert_eq!(rows(8), [3, 3, 2]);
         assert_eq!(rows(9), [3, 3, 3]);
