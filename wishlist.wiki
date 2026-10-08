@@ -1,3 +1,7 @@
+- Some workflow for doing quick edits within vim:
+  - Should be apparent when work is running and when it is finished.
+  - Easy to get the diff of that work.
+  - Accept or not (follow-up changes)
 - Interaction types:
   - Something like tags, but with functionality associated
   - Example: Question, make everything read-only. Same with Design.
