@@ -781,8 +781,13 @@ pub struct RecentMessage {
     /// Whether the operator sent it, rather than the agent.
     #[serde(default)]
     pub from_operator: bool,
-    /// The message flattened to a single line and clipped.
+    /// The message as written, Markdown and line breaks included, clipped
+    /// at its end when long. An operator message is unframed: the
+    /// instructions the server appended for [`Self::contract`] are left out.
     pub text: String,
+    /// The answer shape an operator message asked for, if it asked for one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<Contract>,
 }
 
 /// The branch and commit a Session's own branch was created from, recorded
@@ -988,9 +993,10 @@ pub struct InteractionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
     /// The tail of the conversation, oldest first: the latest messages from
-    /// the operator and the agent, each flattened and clipped as
-    /// [`Self::last_message`] is, so a view with room for more than one line
-    /// can show how the conversation got there. Empty before anything was
+    /// the operator and the agent, each as written so a view can render it as
+    /// the interaction's own event list does, and long ones clipped. A view
+    /// with room for more than one line can show how the conversation got
+    /// there. Empty before anything was
     /// said, and from a server too old to report it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_messages: Vec<RecentMessage>,

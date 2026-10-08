@@ -1,7 +1,9 @@
 //! The overview: every active interaction laid out as a tile in a grid, so
 //! the whole fleet can be watched at once instead of one row at a time.
 
+use crate::event_list::message_rows;
 use crate::interactions::{status_marker, InteractionStatus};
+use crate::markdown::LinkDisplay;
 use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -9,6 +11,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use std::borrow::Cow;
+use styra_protocol::event::{AgentEvent, Protocol};
+use styra_protocol::Contract;
 
 /// Narrower than this and a tile cannot hold its name and selection on a line
 /// each, so the grid takes fewer columns instead.
@@ -35,6 +39,9 @@ pub struct OverviewTile<'a> {
     pub rate_limited: Option<Cow<'a, str>>,
     pub uncommitted: bool,
     pub tags: &'a [String],
+    /// How the interaction's provider presents its events, so its messages
+    /// read as they do in its own event list.
+    pub protocol: Protocol,
     /// The tail of the conversation, oldest first. As many as fit are shown,
     /// counted back from the latest.
     pub messages: Vec<OverviewMessage<'a>>,
@@ -43,12 +50,16 @@ pub struct OverviewTile<'a> {
 pub struct OverviewMessage<'a> {
     pub from_operator: bool,
     pub text: &'a str,
+    /// The answer shape an operator message asked for, if it asked for one.
+    pub contract: Option<Contract>,
 }
 
 pub struct OverviewView<'a> {
     pub tiles: Vec<OverviewTile<'a>>,
     /// The tile under the cursor, an index into [`Self::tiles`].
     pub selected: usize,
+    /// How links in the messages are drawn, as in the event list.
+    pub links: LinkDisplay,
 }
 
 /// How the grid was laid out, which the application needs to move the cursor
@@ -156,7 +167,13 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
                 width,
                 height,
             };
-            render_tile(frame, &view.tiles[index], index == selected, tile_area);
+            render_tile(
+                frame,
+                &view.tiles[index],
+                index == selected,
+                tile_area,
+                view.links,
+            );
         }
     }
     OverviewFeedback {
@@ -164,7 +181,13 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
     }
 }
 
-fn render_tile(frame: &mut Frame, tile: &OverviewTile<'_>, selected: bool, area: Rect) {
+fn render_tile(
+    frame: &mut Frame,
+    tile: &OverviewTile<'_>,
+    selected: bool,
+    area: Rect,
+    links: LinkDisplay,
+) {
     let (marker, marker_color) = status_marker(tile.status);
     let running = matches!(tile.status, InteractionStatus::Running { .. });
     let mut title = vec![
@@ -260,23 +283,27 @@ fn render_tile(frame: &mut Frame, tile: &OverviewTile<'_>, selected: bool, area:
     );
     let room = inner.height - description_height;
     // The latest message first, then as many before it as fit whole above
-    // it. A latest one too long for the room is shown from its start.
+    // it. A latest one too long for the room is shown from its start. Each
+    // is drawn as the event list draws it, already wrapped to the width.
     let mut shown = Vec::new();
     let mut used = 0;
     for message in tile.messages.iter().rev() {
-        let line = message_line(message);
-        let height = Paragraph::new(line.clone())
-            .wrap(Wrap { trim: true })
-            .line_count(inner.width.max(1));
-        if used + height > usize::from(room) && !shown.is_empty() {
+        let rows = message_rows(
+            &message_event(message),
+            message.contract.as_ref(),
+            usize::from(inner.width.max(1)),
+            tile.protocol,
+            links,
+        );
+        if used + rows.len() > usize::from(room) && !shown.is_empty() {
             break;
         }
-        used += height;
-        shown.push(line);
+        used += rows.len();
+        shown.push(rows);
     }
-    shown.reverse();
+    let shown = shown.into_iter().rev().flatten().collect::<Vec<_>>();
     frame.render_widget(
-        Paragraph::new(shown).wrap(Wrap { trim: true }),
+        Paragraph::new(shown),
         Rect {
             y: inner.y + description_height,
             height: room,
@@ -285,19 +312,12 @@ fn render_tile(frame: &mut Frame, tile: &OverviewTile<'_>, selected: bool, area:
     );
 }
 
-fn message_line(message: &OverviewMessage<'_>) -> Line<'static> {
+fn message_event(message: &OverviewMessage<'_>) -> AgentEvent {
+    let text = message.text.to_owned();
     if message.from_operator {
-        Line::from(Span::styled(
-            format!("» {}", message.text),
-            Style::default()
-                .fg(theme::MUTED_TEXT)
-                .bg(theme::USER_MESSAGE_BACKGROUND),
-        ))
+        AgentEvent::UserMessage { text }
     } else {
-        Line::from(Span::styled(
-            format!("« {}", message.text),
-            Style::default().fg(theme::SUBORDINATE_TEXT),
-        ))
+        AgentEvent::AgentMessage { text }
     }
 }
 
@@ -361,6 +381,7 @@ mod tests {
             rate_limited: None,
             uncommitted: false,
             tags: &[],
+            protocol: Protocol::default(),
             messages: Vec::new(),
         }
     }
@@ -393,12 +414,14 @@ mod tests {
         working.messages = vec![OverviewMessage {
             from_operator: false,
             text: "The checks are green.",
+            contract: None,
         }];
         let mut waiting = tile("write the docs", InteractionStatus::Idle);
         waiting.newly_idle = true;
         let view = OverviewView {
             tiles: vec![working, waiting],
             selected: 0,
+            links: LinkDisplay::Compact,
         };
         let (screen, feedback) = draw(&view, 100, 14);
 
@@ -424,11 +447,13 @@ mod tests {
             .map(|(index, text)| OverviewMessage {
                 from_operator: index == 2,
                 text,
+                contract: None,
             })
             .collect();
         let view = OverviewView {
             tiles: vec![talking],
             selected: 0,
+            links: LinkDisplay::Compact,
         };
         // Three description lines and three of messages inside the borders.
         let (screen, _) = draw(&view, 40, 10);
@@ -441,6 +466,42 @@ mod tests {
         assert!(row("newer") < row("newest"), "{screen}");
     }
 
+    /// A message reads as it does in the interaction's own event list: its
+    /// Markdown rendered over as many rows as it has lines, and an operator
+    /// message marked with the answer shape it asked for.
+    #[test]
+    fn tile_messages_are_rendered_as_the_event_list_renders_them() {
+        let mut talking = tile("talking", InteractionStatus::Idle);
+        talking.messages = vec![
+            OverviewMessage {
+                from_operator: true,
+                text: "List the flaky tests",
+                contract: Some(Contract::Lines),
+            },
+            OverviewMessage {
+                from_operator: false,
+                text: "Two **flaky** tests:\n\n- `checkout`\n- `refund`",
+                contract: None,
+            },
+        ];
+        let view = OverviewView {
+            tiles: vec![talking],
+            selected: 0,
+            links: LinkDisplay::Compact,
+        };
+        let (screen, _) = draw(&view, 50, 14);
+        assert!(
+            screen.contains("» List the flaky tests ⟨lines⟩"),
+            "{screen}"
+        );
+        assert!(screen.contains("« Two flaky tests:"), "{screen}");
+        assert!(!screen.contains("**"), "{screen}");
+        assert!(!screen.contains('`'), "{screen}");
+        let row = |text: &str| screen.lines().position(|line| line.contains(text));
+        assert!(row("Two flaky") < row("checkout"), "{screen}");
+        assert!(row("checkout") < row("refund"), "{screen}");
+    }
+
     #[test]
     fn a_narrow_screen_stacks_the_tiles_in_one_column() {
         let view = OverviewView {
@@ -449,6 +510,7 @@ mod tests {
                 tile("second", InteractionStatus::Idle),
             ],
             selected: 0,
+            links: LinkDisplay::Compact,
         };
         let (screen, feedback) = draw(&view, 50, 20);
         assert_eq!(feedback.columns, 1);
@@ -470,6 +532,7 @@ mod tests {
             // Off the tiles whose corners are checked, which are not drawn
             // thick then.
             selected: 0,
+            links: LinkDisplay::Compact,
         };
         let (screen, feedback) = draw(&view, 151, 31);
         assert_eq!(feedback.columns, 2, "{screen}");
@@ -510,6 +573,7 @@ mod tests {
                 .map(|name| tile(name, InteractionStatus::Idle))
                 .collect(),
             selected: 5,
+            links: LinkDisplay::Compact,
         };
         // One column, two seven-row tiles high.
         let (screen, _) = draw(&view, 40, 16);
@@ -522,6 +586,7 @@ mod tests {
         let view = OverviewView {
             tiles: Vec::new(),
             selected: 0,
+            links: LinkDisplay::Compact,
         };
         let (screen, _) = draw(&view, 60, 5);
         assert!(
