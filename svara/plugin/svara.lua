@@ -42,9 +42,14 @@ end
 --- catalog is not a closed set — an id newer than the server's tables is
 --- still launchable. A model chosen here is remembered, so it is picked at
 --- the start of a stretch of work and not at every `:SvaraNew` in it.
-local function choose_selection(directory, on_chosen)
+---
+--- `ui` is where the questions are asked, `vim.ui` unless given another with
+--- its `select` and `input`: `:SvaraNew` asks them in its own window.
+--- `on_cancel` is called when a question is backed out of instead.
+local function choose_selection(directory, on_chosen, ui, on_cancel)
+  ui = ui or vim.ui
+  on_cancel = on_cancel or function() end
   local core = require("svara.core")
-  local nothing_started = "Svara: nothing started"
   local typed_out = "another model…"
 
   local function settle(value)
@@ -58,9 +63,9 @@ local function choose_selection(directory, on_chosen)
   end
 
   local function ask_for_one(default)
-    vim.ui.input({ prompt = "Model (provider:model/effort): ", default = default }, function(typed)
+    ui.input({ prompt = "Model (provider:model/effort): ", default = default }, function(typed)
       if not typed or typed:match("^%s*$") then
-        vim.notify(nothing_started, vim.log.levels.INFO)
+        on_cancel()
         return
       end
       settle(vim.trim(typed))
@@ -78,14 +83,14 @@ local function choose_selection(directory, on_chosen)
       settle(chosen)
       return
     end
-    vim.ui.select(efforts, {
+    ui.select(efforts, {
       prompt = string.format("Effort for %s:%s", summary.provider, summary.model),
       format_item = function(effort)
         return effort == summary.default_effort and (effort .. " (default)") or effort
       end,
     }, function(effort)
       if not effort then
-        vim.notify(nothing_started, vim.log.levels.INFO)
+        on_cancel()
         return
       end
       chosen.effort = effort
@@ -125,7 +130,7 @@ local function choose_selection(directory, on_chosen)
   end
   choices[#choices + 1] = typed_out
 
-  vim.ui.select(choices, {
+  ui.select(choices, {
     prompt = "Model for this interaction",
     format_item = function(choice)
       if choice == typed_out then
@@ -138,7 +143,7 @@ local function choose_selection(directory, on_chosen)
     end,
   }, function(choice)
     if not choice then
-      vim.notify(nothing_started, vim.log.levels.INFO)
+      on_cancel()
     elseif choice == typed_out then
       ask_for_one(said)
     elseif choice == in_use then
@@ -148,6 +153,17 @@ local function choose_selection(directory, on_chosen)
       pick_effort(choice)
     end
   end)
+end
+
+--- A selection as Styra's message box names it: the model, then the effort.
+--- One that does not parse is shown as it was given, since saying what is set
+--- is the point and the start will say what is wrong with it.
+local function model_label(selection)
+  local picked = require("svara.api").selection(selection)
+  if not picked then
+    return require("svara.core").selection_said(selection)
+  end
+  return picked.model .. " · " .. picked.effort
 end
 
 vim.api.nvim_create_user_command("Svara", function(command)
@@ -201,25 +217,62 @@ vim.api.nvim_create_user_command("SvaraNew", function(command)
     vim.notify("Svara: " .. directory_error, vim.log.levels.ERROR)
     return
   end
-  -- Taken before the asking, so the location is where the operator was when
-  -- they typed the prompt rather than wherever the cursor ends up.
-  local prompt = core.prompt_from_view(command.args, core.viewing())
-  choose_selection(directory, function(selection)
-    local session, err = core.start(prompt, { directory = directory, selection = selection })
-    if not session then
-      vim.notify("Svara: " .. err, vim.log.levels.ERROR)
-      return
-    end
-    vim.notify(
-      "Svara: "
-        .. session.id
-        .. " started on "
-        .. require("svara").selection_name(session.selection),
-      vim.log.levels.INFO
-    )
-  end)
+  -- Taken before the window opens, so the location is the file the operator
+  -- was in when they asked rather than the window they are typing in.
+  local location = core.viewing()
+  -- The model is worked out before the window opens and named in its border,
+  -- as Styra's message box names it: what Enter will start on is in sight
+  -- while the prompt is written, and Ctrl+L is there to change it. Nothing to
+  -- name means no `vim.g.svara_selection` and no Session to take one from;
+  -- sending then asks first.
+  local selection = core.selection_for_directory(directory)
+  require("svara.compose").open({
+    initial = command.args,
+    model = selection and model_label(selection),
+    choose_model = function(ui, done)
+      choose_selection(directory, function(chosen)
+        selection = chosen
+        done(model_label(chosen))
+      end, ui, function()
+        done(nil)
+      end)
+    end,
+    on_cancel = function()
+      vim.notify("Svara: nothing started", vim.log.levels.INFO)
+    end,
+    on_send = function(typed, create_worktree, progress)
+      -- Run so the editor is not held while the server works — a new Git
+      -- workspace is a worktree and a branch name made before the reply — and
+      -- the window can show it working. A raise is a failure like any other,
+      -- rather than a spinner that never stops.
+      require("svara.nvim").run(function()
+        local called, session, err = pcall(core.start, core.prompt_from_view(typed, location), {
+          directory = directory,
+          selection = selection,
+          create_worktree = create_worktree,
+        })
+        if not called then
+          session, err = nil, tostring(session)
+        end
+        if not session then
+          progress.failed(err)
+          vim.notify("Svara: " .. err, vim.log.levels.ERROR)
+          return
+        end
+        progress.done()
+        vim.notify(
+          "Svara: "
+            .. session.id
+            .. " started on "
+            .. require("svara").selection_name(session.selection)
+            .. (create_worktree and " in a new Git workspace" or ""),
+          vim.log.levels.INFO
+        )
+      end)
+    end,
+  })
 end, {
-  nargs = "+",
+  nargs = "*",
   desc = "Start a new Styra interaction in the Workspace over the current file",
 })
 

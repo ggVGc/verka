@@ -472,9 +472,11 @@ end
 --- is the first turn, sent as the session comes up, and `contract` is the
 --- shape that turn's answer is asked to come back in. `focus` asks every Styra
 --- showing an interaction in that Workspace to switch to the new one.
+--- `create_worktree` gives the Session a Git branch and linked checkout of its
+--- own, as sending with Ctrl+Enter does in the Styra TUI.
 ---@param workspace_id string
 ---@param selection string|table
----@param options? { launch?: table, message?: string, name?: string, contract?: string, focus?: boolean }
+---@param options? { launch?: table, message?: string, name?: string, contract?: string, focus?: boolean, create_worktree?: boolean }
 function Client:create_session(workspace_id, selection, options)
   local id, err = text_argument(workspace_id, "the Workspace id")
   if not id then
@@ -492,10 +494,18 @@ function Client:create_session(workspace_id, selection, options)
       return nil, contract_error
     end
   end
+  local create_worktree, worktree_error
+  if options.create_worktree ~= nil then
+    create_worktree, worktree_error = flag_argument(options.create_worktree, "create_worktree")
+    if create_worktree == nil then
+      return nil, worktree_error
+    end
+  end
   return operate(self, "create_session", {
     workspace_id = id,
     selection = picked,
     launch = options.launch,
+    create_worktree = create_worktree,
     message = options.message,
     name = options.name,
     contract = contract,

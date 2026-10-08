@@ -11,6 +11,7 @@ the command-line program are both written against it.
 | `lua/svara/nvim.lua` | Neovim, as the six fields the API asks a *host* for. |
 | `lua/svara/protocol.lua` | Where the generated `styra.protocol` is found. |
 | `lua/svara/core.lua` | What the commands do: sending to a selected interaction, `start` behind `:SvaraNew`, and `info` behind `:SvaraInfo`. |
+| `lua/svara/compose.lua` | The floating message box `:SvaraNew` takes its prompt and model in. |
 | `../styra/protocol/lua/styra/protocol.lua` | **The vocabulary**, generated, living where it is generated from. |
 
 ## The vocabulary, which is not here
@@ -182,27 +183,64 @@ blocking with it.
 Add this directory to Neovim's runtime path with your plugin manager, then run:
 
 ```vim
-:SvaraNew Why does resuming a branched session lose its tags?
+:SvaraNew
 ```
 
 Run `:Svara` with no argument to choose from the active interactions in the
 Workspace covering the currently viewed file. The choice is remembered per
 Workspace until Neovim exits. Thereafter `:Svara Review this buffer` sends to
-that interaction. `:SvaraNew` starts a new interaction with the rest of its
-line as the first prompt. Both commands use the Workspace covering the viewed
+that interaction. `:SvaraNew` starts a new interaction. Both commands use the Workspace covering the viewed
 file, rather than Neovim's working directory.
 
-`:SvaraNew` asks which model to run under before it starts anything, as one
-list: the model it would have used at the top, said with where it came from,
-then every model the server offers, then "another model…" for typing a
-profile name out — a catalog is not a closed set, and an id newer than the
-server's tables is still launchable. Choosing the first entry starts on it and
-stores nothing, leaving the rules below in charge. Anything else asks for a
-reasoning effort next, from the rungs that model accepts, and is remembered in
-`vim.g.svara_selection`, so the question is answered once for a stretch of
-work rather than at every `:SvaraNew`. When there is nothing in use to put at
-the top — no `vim.g.svara_selection` and no Session in the Workspace — the
-reason is shown and the catalog is the whole list.
+`:SvaraNew` opens Styra's message box as a floating window: ` message ` at the
+top left of its border, the model and effort it will start on at the top right,
+and "Enter to send · Ctrl+Enter to send in a new Git workspace" until something
+is typed. It is centred, at most 80 columns wide, and grows with the prompt
+for as long as the screen has room, so all of it stays in sight. It is an
+ordinary buffer, in Insert mode to begin with, so the whole of Vim is there to
+write it with, and it is driven the way Styra's box is:
+
+| Key | Mode | Does |
+|---|---|---|
+| `Enter` | Normal | send, starting in this Workspace |
+| `Ctrl+Enter` | Normal or Insert | send, starting in a new Git workspace and branch — a linked checkout of its own |
+| `Ctrl+L` | Normal or Insert | choose the model |
+| `Enter` | Insert | a newline, as anywhere else |
+| `Esc` or `q` | Normal | close without sending |
+
+`Esc` in Insert mode only leaves Insert mode, as anywhere else. Closing the
+window any other way — `:close`, moving to another window — sends nothing too.
+Anything after `:SvaraNew` on the command line is where the prompt starts.
+`Ctrl+Enter` needs a terminal that tells it apart from `Enter`, as it does in
+Styra.
+
+Sending does not hold the editor while the server works. The box stays open,
+read-only, with a spinner, what is happening — `starting…`, or `creating a Git
+workspace and branch…`, which takes a few seconds — and how long it has taken
+in its bottom border. It closes once the interaction has started. If the start
+fails, the prompt is handed back to be edited and sent again, with the reason
+under it. Closing the box while it waits only stops the showing: the start
+goes on, and says when it has finished.
+
+The model named in the border is the one the rules below give. `Ctrl+L` puts
+the model picker in the same window, as one list: that model at the top, said
+with where it came from, then every model the server offers, then "another
+model…" for typing a profile name out — a catalog is not a closed set, and an
+id newer than the server's tables is still launchable. Choosing the first entry
+keeps it and stores nothing, leaving the rules in charge. Anything else asks
+for a reasoning effort next, from the rungs that model accepts, and is
+remembered in `vim.g.svara_selection`, so it is chosen once for a stretch of
+work rather than at every `:SvaraNew`. Either way the window goes back to the
+prompt as it was left, naming the model chosen.
+
+The lists are buffers too: move with any motion, `Enter` chooses the line under
+the cursor, and `Esc`, `q` or `Backspace` goes back to the prompt with the
+model unchanged. Typing a model out is a one-line buffer in the same window,
+confirmed with `Enter` from either mode, and `Esc` from Normal mode goes back.
+When there is nothing to name — no `vim.g.svara_selection` and no Session in
+the Workspace — the border says
+`no model · Ctrl+L`, and sending opens the picker first and sends once a model
+is chosen.
 
 The prompt goes out with the file, line and column being viewed after it —
 `Source: /path/to/file.lua:42:7` — because a prompt typed in an editor is nearly always
@@ -298,9 +336,10 @@ is required.
 ## Test
 
 ```sh
-nvim --headless -u NONE -l tests/core_spec.lua   # send_message over a socket
-nvim --headless -u NONE -l tests/api_spec.lua    # the API, on a host of its own
-nvim --headless -u NONE -l tests/nvim_spec.lua   # the Neovim host, for real
-nvim --headless -u NONE -l tests/info_spec.lua   # what :SvaraInfo answers
-nvim --headless -u NONE -l tests/picker_spec.lua # the model list :SvaraNew offers
+nvim --headless -u NONE -l tests/core_spec.lua    # send_message over a socket
+nvim --headless -u NONE -l tests/api_spec.lua     # the API, on a host of its own
+nvim --headless -u NONE -l tests/nvim_spec.lua    # the Neovim host, for real
+nvim --headless -u NONE -l tests/info_spec.lua    # what :SvaraInfo answers
+nvim --headless -u NONE -l tests/picker_spec.lua  # the model list :SvaraNew offers
+nvim --headless -u NONE -l tests/compose_spec.lua # the window its prompt and model are chosen in
 ```

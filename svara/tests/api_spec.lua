@@ -254,6 +254,33 @@ do
   -- Started from the editor to be watched, so a Styra showing the Workspace
   -- is asked to switch to it.
   assert(requested[3].data.focus == true)
+  -- Enter, not Ctrl+Enter: no Git workspace unless one is asked for.
+  assert(requested[3].data.create_worktree == nil)
+
+  -- Ctrl+Enter's answer: a branch and checkout of its own.
+  local branching = fake_host({
+    ok({ type = "workspace_for_path", data = { id = "workspace-1", name = "verka" } }),
+    ok({
+      type = "session_created",
+      data = {
+        id = "styra-11",
+        workspace_id = "workspace-1",
+        selection = { provider = "claude", model = "claude-opus-5", effort = "xhigh" },
+        workspace = "/home/me/verka",
+        journal_path = "/store/styra-11/journal.jsonl",
+        driva = {},
+      },
+    }),
+  })
+  assert(core.start("branch this", {
+    directory = "/home/me/verka",
+    selection = "claude:claude-opus-5/xhigh",
+    create_worktree = true,
+    host = branching,
+    socket = "/tmp/test.sock",
+  }))
+  assert(branching.sent[2].operation == "create_session")
+  assert(branching.sent[2].data.create_worktree == true)
 
   -- The Workspace is the one question the command exists to avoid asking, so
   -- a directory outside every Workspace fails there and sends nothing more.
@@ -358,6 +385,12 @@ do
   })
   assert(not sent)
   assert(err:find("network"), err)
+
+  sent, err = styra:create_session("workspace-1", "claude:claude-opus-5/xhigh", {
+    create_worktree = "yes",
+  })
+  assert(not sent)
+  assert(err:find("create_worktree must be true or false"), err)
 
   assert(#host.sent == 0, "a request the server would refuse was sent anyway")
 end

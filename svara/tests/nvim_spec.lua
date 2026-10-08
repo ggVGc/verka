@@ -93,6 +93,83 @@ do
   assert(err:find("connecting to Styra socket"), err)
 end
 
+-- An exchange inside `run` waits without holding the editor --------------
+
+do
+  local path, server = serve({
+    { status = "ok", response = { type = "health", data = { service = "styra-server" } } },
+    { status = "ok", response = { type = "health", data = { service = "styra-server" } } },
+  })
+  local styra = assert(api.open({ socket = path, timeout = 2000 }))
+  local order = {}
+  host.run(function()
+    order[#order + 1] = "asked"
+    local health, err = styra:health()
+    order[#order + 1] = health and health.service or err
+  end)
+  -- `run` came back at the exchange, before the reply could arrive: the
+  -- editor is free while the server works.
+  order[#order + 1] = "editor free"
+  assert(vim.wait(2000, function()
+    return #order == 3
+  end, 5), vim.inspect(order))
+  assert(vim.deep_equal(order, { "asked", "editor free", "styra-server" }), vim.inspect(order))
+
+  -- Outside `run`, and inside any coroutine `run` did not start, it blocks
+  -- as before: a coroutine some other plugin is running is not yielded out of.
+  local inside = coroutine.wrap(function()
+    return styra:health()
+  end)
+  local health = inside()
+  assert(health and health.service == "styra-server", vim.inspect(health))
+
+  server:close()
+  os.remove(path)
+end
+
+do
+  -- Nothing listening is a message inside `run` too, not a coroutine left
+  -- waiting forever.
+  local styra = assert(api.open({ socket = vim.fn.tempname() .. ".sock", timeout = 500 }))
+  local err
+  host.run(function()
+    local _
+    _, err = styra:health()
+  end)
+  assert(vim.wait(2000, function()
+    return err ~= nil
+  end, 5), "the failed exchange never came back")
+  assert(err:find("connecting to Styra socket"), err)
+end
+
+do
+  -- Nor does a server that never answers leave it waiting: the timeout holds.
+  local path = vim.fn.tempname() .. ".sock"
+  local silent = assert(uv.new_pipe(false))
+  assert(silent:bind(path))
+  local held = {}
+  silent:listen(8, function()
+    local peer = assert(uv.new_pipe(false))
+    silent:accept(peer)
+    held[#held + 1] = peer
+  end)
+  local styra = assert(api.open({ socket = path, timeout = 100 }))
+  local err
+  host.run(function()
+    local _
+    _, err = styra:health()
+  end)
+  assert(vim.wait(2000, function()
+    return err ~= nil
+  end, 5), "the timeout never fired")
+  assert(err:find("timed out"), err)
+  for _, peer in ipairs(held) do
+    peer:close()
+  end
+  silent:close()
+  os.remove(path)
+end
+
 -- A turn, followed on the loop -------------------------------------------
 
 do

@@ -151,8 +151,10 @@ end
 --- avoid making the operator answer. `prompt` is the first turn, sent as the
 --- session comes up. A Styra already showing that Workspace switches to the
 --- new interaction, since starting it from the editor is asking to watch it.
+--- `create_worktree` starts it on a Git branch and checkout of its own rather
+--- than in the Workspace directory — Styra's Ctrl+Enter rather than its Enter.
 ---@param prompt string
----@param options? { directory?: string, selection?: string|table, name?: string, contract?: string, socket?: string, timeout?: integer }
+---@param options? { directory?: string, selection?: string|table, create_worktree?: boolean, name?: string, contract?: string, socket?: string, timeout?: integer }
 ---@return table? session_info
 ---@return string? error
 function M.start(prompt, options)
@@ -180,6 +182,7 @@ function M.start(prompt, options)
     message = prompt,
     name = options.name,
     contract = options.contract,
+    create_worktree = options.create_worktree,
     focus = true,
   })
 end

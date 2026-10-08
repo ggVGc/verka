@@ -1,4 +1,4 @@
--- The list `:SvaraNew` offers before it starts anything.
+-- The model `:SvaraNew` names, and the list Ctrl+L offers to change it.
 --
 -- The command's own question, which is the one part of Svara an operator
 -- answers by hand every time, so what is in the list and in what order is
@@ -39,9 +39,9 @@ core.available_models = function()
   return catalog
 end
 
-local started
+local started, branched
 core.start = function(_, options)
-  started = options.selection
+  started, branched = options.selection, options.create_worktree
   return { id = "styra-1", selection = require("svara.api").selection(options.selection) }
 end
 
@@ -49,10 +49,46 @@ local file = vim.fn.tempname() .. ".lua"
 vim.fn.writefile({ "local a = 1" }, file)
 vim.cmd.edit(file)
 
---- `:SvaraNew`, answering its lists with `picks` in turn — an index, or
---- nothing to escape. Returns what each list showed.
-local function run(picks)
+-- The window the prompt is typed in has a spec of its own,
+-- `tests/compose_spec.lua`. Here it sends what the command line gave it, with
+-- Enter unless a test says Ctrl+Enter — after Ctrl+L, when a test has picks
+-- to answer the model lists with, and, as the window does, whenever there is
+-- no model to name.
+local compose = require("svara.compose")
+local ctrl_l, ctrl_enter, window = false, false, nil
+compose.open = function(options)
+  window = { model = options.model }
+  local function send()
+    options.on_send(options.initial, ctrl_enter, {
+      done = function()
+        window.sent = true
+      end,
+      failed = function(message)
+        window.failed = message
+      end,
+    })
+  end
+  if ctrl_l or not options.model then
+    options.choose_model(vim.ui, function(label)
+      window.answered = true
+      if label then
+        window.model = label
+        send()
+      end
+    end)
+  else
+    send()
+  end
+end
+
+--- `:SvaraNew`. With `picks`, Ctrl+L is pressed and its lists are answered
+--- with them in turn — an index, or nothing to back out. Ctrl+Enter sends
+--- when `branch` is set. Returns what each model list showed, and what the
+--- window was told.
+local function run(picks, branch)
   local shown, turn = {}, 0
+  ctrl_l, ctrl_enter = picks ~= nil, branch == true
+  picks = picks or {}
   vim.ui.select = function(items, options, on_choice)
     turn = turn + 1
     local labels = {}
@@ -62,9 +98,20 @@ local function run(picks)
     shown[turn] = labels
     on_choice(picks[turn] and items[picks[turn]] or nil, picks[turn])
   end
-  started, vim.g.svara_selection = nil, nil
+  started, branched, vim.g.svara_selection = nil, nil, nil
   vim.cmd("SvaraNew what does this module trust?")
-  return shown
+  return shown, window
+end
+
+-- The model in use is named in the border, and Enter starts on it ---------
+
+do
+  local shown, opened = run()
+  assert(#shown == 0, "no list unless Ctrl+L asks for one")
+  assert(opened.model == "claude-opus-5 · high", tostring(opened.model))
+  assert(started.model == "claude-opus-5", vim.inspect(started))
+  assert(vim.g.svara_selection == nil, "sending stores nothing")
+  assert(opened.sent, "the window is told the start is done")
 end
 
 -- One list, the model in use at the top of it -----------------------------
@@ -92,6 +139,9 @@ do
   assert(shown[2][2] == "high (default)", vim.inspect(shown[2]))
   assert(started == "codex:gpt-6-astra/high", vim.inspect(started))
   assert(vim.g.svara_selection == "codex:gpt-6-astra/high", tostring(vim.g.svara_selection))
+  -- And the border names it from then on.
+  local _, opened = run({ 2, 1 })
+  assert(opened.model == "gpt-6-astra · low", tostring(opened.model))
 end
 
 -- A model with no ladder is not asked about ------------------------------
@@ -125,12 +175,24 @@ do
   assert(notified[#notified]:find("reasoning effort"), notified[#notified])
 end
 
--- Escaping the list ------------------------------------------------------
+-- Where to start: Styra's Enter or its Ctrl+Enter -------------------------
 
 do
-  run({})
+  run()
+  assert(branched == false, "Enter is not a new Git workspace")
+
+  run(nil, true)
+  assert(started.model == "claude-opus-5", vim.inspect(started))
+  assert(branched == true, "Ctrl+Enter asks for a new Git workspace")
+end
+
+-- Backing out of the list -----------------------------------------------
+
+do
+  local _, opened = run({})
+  assert(opened.answered, "backing out still hands the window back its prompt")
   assert(started == nil, vim.inspect(started))
-  assert(notified[#notified] == "Svara: nothing started", notified[#notified])
+  assert(opened.model == "claude-opus-5 · high", "the model named is left as it was")
 end
 
 -- Nothing in use: the catalog is the whole list ---------------------------
@@ -139,7 +201,8 @@ do
   core.selection_for_directory = function()
     return nil, nil, "no Session in Workspace \"verka\" to take a model from"
   end
-  local shown = run({ 1, 2 })
+  local shown, opened = run({ 1, 2 })
+  assert(opened.model == "gpt-6-astra · high", "named once one is chosen")
   assert(shown[1][1] == "codex:gpt-6-astra", vim.inspect(shown[1]))
   assert(started == "codex:gpt-6-astra/high", vim.inspect(started))
 

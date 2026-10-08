@@ -22,12 +22,22 @@
 --
 -- `exchange` blocks, which is what one short request/response round trip
 -- wants; `defer` is what keeps a minutes-long turn from blocking with it.
+--
+-- Except inside `M.run`: there an exchange waits by yielding instead, and the
+-- editor carries on until the reply comes. That is for the request that is
+-- not short — a launch that makes a Git worktree and names its branch can take
+-- many seconds — and is asked for rather than assumed, since a coroutine some
+-- other plugin is running would not expect to be yielded out of.
 
 local uv = vim.uv or vim.loop
 
 local M = {}
 
 M.null = vim.NIL
+
+-- The coroutines `M.run` started, which are the only ones an exchange will
+-- yield out of.
+local running = setmetatable({}, { __mode = "k" })
 
 function M.encode(value)
   return vim.json.encode(value)
@@ -46,6 +56,10 @@ end
 --- A connection carries exactly one request and one response, so an exchange
 --- is a whole connection: connect, write one line, read one line, done.
 function M.exchange(path, line, timeout)
+  local co = coroutine.running()
+  local yielding = co ~= nil and running[co] == true
+  local waiting = false
+
   local pipe = uv.new_pipe(false)
   if not pipe then
     return nil, "could not create a Unix socket client"
@@ -62,6 +76,14 @@ function M.exchange(path, line, timeout)
     done = true
     transport_error = err
     pcall(pipe.read_stop, pipe)
+    if waiting then
+      vim.schedule(function()
+        local resumed, failure = coroutine.resume(co)
+        if not resumed then
+          error(failure)
+        end
+      end)
+    end
   end
 
   pipe:connect(path, function(connect_error)
@@ -93,7 +115,18 @@ function M.exchange(path, line, timeout)
     end)
   end)
 
-  if not vim.wait(timeout, function()
+  if yielding then
+    local timer = assert(uv.new_timer())
+    timer:start(timeout, 0, function()
+      finish("timed out waiting for Styra after " .. timeout .. "ms")
+    end)
+    if not done then
+      waiting = true
+      coroutine.yield()
+    end
+    timer:stop()
+    timer:close()
+  elseif not vim.wait(timeout, function()
     return done
   end, 10) then
     finish("timed out waiting for Styra after " .. timeout .. "ms")
@@ -112,6 +145,20 @@ function M.exchange(path, line, timeout)
     return nil, "Styra closed the connection without a newline-terminated response"
   end
   return reply
+end
+
+--- Run `fn` now, letting every exchange it makes wait without blocking the
+--- editor: `fn` returns at its first exchange and carries on when the reply
+--- comes. Whatever runs `fn` gets no result back; `fn` does what it does with
+--- its own.
+---@param fn fun()
+function M.run(fn)
+  local co = coroutine.create(fn)
+  running[co] = true
+  local resumed, failure = coroutine.resume(co)
+  if not resumed then
+    error(failure)
+  end
 end
 
 --- Run `fn` once, `milliseconds` from now, and return a function cancelling it.
