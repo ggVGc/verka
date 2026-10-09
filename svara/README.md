@@ -12,6 +12,7 @@ the command-line program are both written against it.
 | `lua/svara/protocol.lua` | Where the generated `styra.protocol` is found. |
 | `lua/svara/core.lua` | What the commands do: sending to a selected interaction, `start` behind `:SvaraNew`, and `info` behind `:SvaraInfo`. |
 | `lua/svara/compose.lua` | The floating message box `:SvaraNew` takes its prompt and model in. |
+| `lua/svara/pending.lua` | The corner float listing the questions still waiting on an answer. |
 | `../styra/protocol/lua/styra/protocol.lua` | **The vocabulary**, generated, living where it is generated from. |
 
 ## The vocabulary, which is not here
@@ -82,7 +83,9 @@ selection })`, `styra:queue_message(id, text, { contract })`,
 `styra:send_queued_message(id)`, `styra:clear_queued_messages(id)`,
 `styra:interrupt(id)`, `styra:stop(id)`, `styra:close(id)`,
 `styra:set_selection(id, selection)`, `styra:set_working_directory(id, dir)`,
-`styra:set_auto_retry(id, enabled)`.
+`styra:set_auto_retry(id, enabled)`, `styra:set_completed(id, state)`, where
+`state` is `"active"`, `"completed"`, `"abandoned"` or `"sealed"`, and
+`"sealed"` is permanent.
 
 **Answers.** `styra:answer(id, { contract })` parses the last agent message
 under a contract. A reply that missed its contract is an `Answer` too, not an
@@ -162,6 +165,12 @@ styra:ask("styra-7", "which files handle auth?", { contract = "files" },
 
 The sequence it polls from is read *before* the message goes out, so a turn
 that finished before the question cannot be mistaken for its answer.
+
+`styra:await_answer(id, { after, contract }, on_answer)` is the second half
+of `ask` on its own: it waits for the turn under way to complete, then reads
+the answer. It is for a turn that was not sent with `send_message`, such as
+the first turn of a Session that `create_session` launched with a `message` and
+a `contract`. `after` must be a sequence from before that turn began.
 
 ## The host
 
@@ -304,6 +313,48 @@ answers what would be used and where it came from,
 `svara.core.remember_selection`, which validates a profile name and stores it
 in `vim.g.svara_selection`.
 
+`:SvaraAsk` asks a question whose answer is places in the code, and puts
+them in the quickfix list:
+
+```vim
+:SvaraAsk where is the session token checked?
+```
+
+Every question starts a new interaction of its own in the Workspace covering
+the viewed file, with the question as its first turn under the `files`
+contract, followed by the file, line and column being viewed, as `:Svara`
+sends it. So it starts from nothing but itself, never lands in the middle of
+a turn, and leaves the interaction selected with `:Svara` as it was. It runs
+on the model `:SvaraNew` would use; with none to take, the same picker comes
+first. Styra is not switched to it. Once it has answered, it is marked
+completed, which moves it out of the way in Styra's listing while its history
+stays readable. A reply that missed its contract still counts as an answer.
+An interaction that failed or ended without answering stays active, so you can
+look into it.
+
+With no question on the command line, `:SvaraAsk` opens the same box as
+`:SvaraNew`, titled ` question `. The model is named in its border, `Ctrl+L`
+changes it, and `Enter` asks. It has no `Ctrl+Enter`, because a question needs
+no Git workspace of its own. The box spins with `asking…` until the
+interaction is up, then closes and leaves the wait to the float. If the
+interaction cannot start, the question is handed back to be edited, as in
+`:SvaraNew`.
+
+Nothing waits while the agent works. A float at the top right lists every
+question still under way, with a spinner and how long it has taken. It never
+takes the focus, and it closes once the last answer is in. Then the quickfix
+list is replaced with the locations, titled with the question, and opened.
+Paths the agent gave relative to its root are looked for in the directory
+the interaction runs in, which is its own Git workspace when it has one, and
+then in the Workspace's directory. A reply that named no locations leaves the
+quickfix list alone and says why; what the agent wrote instead is in Styra.
+
+From Lua, `require("svara").find(question, { directory, selection }, on_done)`
+does the same without the float or the quickfix list. It returns once the
+interaction is up, with the handle following it and its `SessionInfo`, and calls
+`on_done(items, nil, answer)` with items ready for `setqflist`, or
+`on_done(nil, error, answer)`.
+
 To send to a session that is already live, name it:
 
 ```vim
@@ -340,4 +391,5 @@ nvim --headless -u NONE -l tests/nvim_spec.lua    # the Neovim host, for real
 nvim --headless -u NONE -l tests/info_spec.lua    # what :SvaraInfo answers
 nvim --headless -u NONE -l tests/picker_spec.lua  # the model list :SvaraNew offers
 nvim --headless -u NONE -l tests/compose_spec.lua # the window its prompt and model are chosen in
+nvim --headless -u NONE -l tests/find_spec.lua    # what :SvaraAsk asks, the quickfix items, the float
 ```

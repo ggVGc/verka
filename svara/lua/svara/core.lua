@@ -261,6 +261,127 @@ function M.send_to_selected(message, options)
   return styra:send_message(interaction_id, message)
 end
 
+--- Where a file location an answer named is on this machine.
+---
+--- The agent is asked for paths relative to the Workspace root, and the root
+--- it sees is the directory it runs in — its own Git workspace, when it was
+--- started in one — so that is looked in first. The Workspace's directory is
+--- the fallback for a path not found there, and the answer when neither has
+--- it: a quickfix entry for a missing file still says what was claimed.
+local function located(path, interaction, workspace)
+  if path:sub(1, 1) == "/" then
+    return path
+  end
+  local bases = { interaction.workspace, workspace.host_path }
+  for _, base in ipairs(bases) do
+    local candidate = vim.fs.joinpath(base, path)
+    if (vim.uv or vim.loop).fs_stat(candidate) then
+      return candidate
+    end
+  end
+  return vim.fs.joinpath(bases[1] or workspace.host_path, path)
+end
+
+--- A `files` answer as quickfix items, paths resolved; see `located`.
+---@param locations table[] `FileLocation`s
+---@param interaction table the interaction or `SessionInfo` that answered
+---@param workspace table
+---@return table[] items for `setqflist`
+function M.quickfix_items(locations, interaction, workspace)
+  local api = require("svara.api")
+  local items = {}
+  for _, location in ipairs(locations) do
+    items[#items + 1] = {
+      filename = located(location.path, interaction, workspace),
+      lnum = api.given(location.line),
+      end_lnum = api.given(location.end_line),
+      col = api.given(location.column),
+      text = api.given(location.description) or "",
+    }
+  end
+  return items
+end
+
+--- Ask a question whose answer is file locations, in a new interaction of its
+--- own in the Workspace at `directory`, and hand them over as quickfix items.
+---
+--- A new interaction every time, rather than the one selected for the
+--- Workspace: the question then starts from nothing but itself, cannot land
+--- in the middle of a turn already under way, and leaves the conversation the
+--- operator is having elsewhere as it was. It runs under the selection
+--- `start` would use, or `options.selection`. A Styra showing the Workspace is
+--- not switched to it, because the answer is wanted here.
+---
+--- Once it has answered, the interaction is marked completed: it was asked
+--- one question, and the answer is all there is to do with it. That takes it
+--- out of the way in Styra's listing while its history stays readable. A
+--- reply that missed its contract has answered too, and is marked the same.
+--- An interaction that failed or ended without answering is left active, as
+--- something an operator may want to look at.
+---
+--- A turn takes minutes, so this returns as soon as the interaction is up,
+--- with the handle following it and the session it started, and
+--- `on_done(items, nil, answer)` is called once the turn is over — or
+--- `on_done(nil, error, answer)` if it gave no locations, with
+--- `answer.source` still holding what the agent did say when there was a
+--- reply at all. Marking it completed failing does not cost the caller the
+--- answer: the reason is `on_done`'s fourth argument.
+---@param question string
+---@param options { directory?: string, selection?: string|table, socket?: string, timeout?: integer, host?: table, interval?: integer }
+---@param on_done fun(items: table[]?, error: string?, answer: table?, completion_error: string?)
+---@return table? handle
+---@return string? error
+---@return table? session the `SessionInfo` of the interaction asked
+function M.find(question, options, on_done)
+  options = options or {}
+  if type(question) ~= "string" or question:match("^%s*$") then
+    return nil, "a question is needed to find files with"
+  end
+  local api = require("svara.api")
+  local styra, err = api.open(options)
+  if not styra then
+    return nil, err
+  end
+  local directory = options.directory or (vim.uv or vim.loop).cwd()
+  local workspace, workspace_error = styra:workspace_for_path(directory)
+  if not workspace then
+    return nil, workspace_error
+  end
+  local selection, selection_error = options.selection, nil
+  if not selection then
+    selection, selection_error = selection_for(styra, workspace)
+    if not selection then
+      return nil, selection_error
+    end
+  end
+
+  local contract = api.protocol.Contract.FILES
+  local session, session_error = styra:create_session(workspace.id, selection, {
+    message = question,
+    contract = contract,
+  })
+  if not session then
+    return nil, session_error
+  end
+  local handle = styra:await_answer(session.id, {
+    -- A new interaction's journal is all this question's.
+    after = api.given(session.updates_after) or 0,
+    contract = contract,
+    interval = options.interval,
+  }, function(locations, answer, missed)
+    local completion_error
+    if answer then
+      completion_error =
+        select(2, styra:set_completed(session.id, api.protocol.CompletionState.COMPLETED))
+    end
+    if not locations then
+      return on_done(nil, missed, answer, completion_error)
+    end
+    on_done(M.quickfix_items(locations, session, workspace), nil, answer, completion_error)
+  end)
+  return handle, nil, session
+end
+
 --- What Svara would do if a command ran in `directory`, as one table.
 ---
 --- Every command here answers the same three questions silently — which

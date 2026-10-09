@@ -273,6 +273,112 @@ end, {
   desc = "Start a new Styra interaction in the Workspace over the current file",
 })
 
+vim.api.nvim_create_user_command("SvaraAsk", function(command)
+  local core = require("svara.core")
+  local directory, directory_error = viewed_directory()
+  if not directory then
+    vim.notify("Svara: " .. directory_error, vim.log.levels.ERROR)
+    return
+  end
+  -- Taken now, so the location is where the operator was when they asked,
+  -- not wherever a prompt or a picker left the cursor.
+  local location = core.viewing()
+
+  local function answered(question, items, missed)
+    if not items then
+      vim.notify("Svara: no locations — " .. tostring(missed), vim.log.levels.ERROR)
+      return
+    end
+    vim.fn.setqflist({}, " ", { title = "Svara: " .. question, items = items })
+    vim.notify(
+      string.format("Svara: %d location%s", #items, #items == 1 and "" or "s"),
+      vim.log.levels.INFO
+    )
+    vim.cmd("botright copen")
+  end
+
+  --- `progress` is the message box's, when the question was typed in one: it
+  --- closes once the interaction is up, or hands the question back to be
+  --- edited if it could not start.
+  local function ask(question, selection, progress)
+    local finished = require("svara.pending").add(question)
+    -- Run so the editor is not held while the interaction starts, which is
+    -- the float's first stretch of spinning; a raise is a failure like any
+    -- other, rather than a spinner that never stops.
+    require("svara.nvim").run(function()
+      local called, handle, err, session = pcall(core.find, core.prompt_from_view(question, location), {
+        directory = directory,
+        selection = selection,
+      }, function(items, missed, _, completion_error)
+        finished()
+        if completion_error then
+          vim.notify("Svara: could not mark it completed — " .. completion_error, vim.log.levels.WARN)
+        end
+        answered(question, items, missed)
+      end)
+      if not called then
+        handle, err = nil, tostring(handle)
+      end
+      if not handle then
+        finished()
+        if progress then
+          progress.failed(err)
+        end
+        vim.notify("Svara: " .. err, vim.log.levels.ERROR)
+        return
+      end
+      if progress then
+        progress.done()
+      end
+      vim.notify("Svara: asking in " .. session.id, vim.log.levels.INFO)
+    end)
+  end
+
+  -- Every question starts an interaction, so it needs a model the way
+  -- `:SvaraNew` does, and with nothing to take one from it is asked for the
+  -- same way rather than refused.
+  local selection = core.selection_for_directory(directory)
+
+  if command.args ~= "" then
+    if selection then
+      ask(command.args, nil)
+    else
+      choose_selection(directory, function(chosen)
+        ask(command.args, chosen)
+      end, function() end)
+    end
+    return
+  end
+
+  -- Nothing typed after the command: `:SvaraNew`'s box, for a question. The
+  -- model is named in its border and Ctrl+L changes it, as there; there is
+  -- no Ctrl+Enter, since a question needs no Git workspace of its own.
+  require("svara.compose").open({
+    title = " question ",
+    placeholder = "Enter to ask · the places it names go to the quickfix list",
+    sending = "asking…",
+    worktree = false,
+    model = selection and model_label(selection),
+    choose_model = function(done)
+      choose_selection(directory, function(chosen)
+        selection = chosen
+        done(model_label(chosen))
+      end, function()
+        done(nil)
+      end)
+    end,
+    on_cancel = function()
+      vim.notify("Svara: nothing asked", vim.log.levels.INFO)
+    end,
+    on_send = function(typed, _, progress)
+      ask(typed, selection, progress)
+    end,
+  })
+end, {
+  nargs = "*",
+  desc = "Ask a new Styra interaction where something is, into the quickfix list",
+})
+
 vim.api.nvim_create_user_command("SvaraInfo", function()
   local core = require("svara.core")
   -- The other commands refuse a buffer with no file behind it, because they

@@ -47,6 +47,10 @@ M.selected_interaction = require("svara.core").selected_interaction
 --- Send a message to the selected interaction in the Workspace over a directory.
 M.send_to_selected = require("svara.core").send_to_selected
 
+--- Ask the selected interaction for file locations, as quickfix items; see
+--- `svara.core`.
+M.find = require("svara.core").find
+
 --- What Svara would do in a directory — Workspace, model, selected
 --- interaction — as a table, and as lines to show; see `svara.core`.
 M.info = require("svara.core").info

@@ -56,6 +56,10 @@ local function open(options)
     initial = options.initial,
     model = options.model == nil and "claude-opus-5 · high" or options.model or nil,
     choose_model = options.choose_model,
+    title = options.title,
+    placeholder = options.placeholder,
+    sending = options.sending,
+    worktree = options.worktree,
     on_send = function(prompt, create_worktree, progress)
       result.prompt, result.create_worktree = prompt, create_worktree
       result.progress = progress
@@ -341,6 +345,37 @@ do
   -- Its end still arrives, and finds nothing left to show it in.
   opened.progress.done()
   opened.progress.failed("too late to show")
+end
+
+-- `:SvaraAsk`'s box: its own words, and no Git workspace ------------------
+
+do
+  local opened = open({
+    hold = true,
+    title = " question ",
+    placeholder = "Enter to ask",
+    sending = "asking…",
+    worktree = false,
+  })
+  local title = border_title(opened.window)
+  assert(vim.startswith(title, " question ─"), title)
+  local marks = vim.api.nvim_buf_get_extmarks(opened.buffer, -1, 0, -1, { details = true })
+  assert(marks[1][4].virt_text[1][1] == "Enter to ask", vim.inspect(marks))
+
+  -- Ctrl+Enter is no send here, from either mode. (`keys` leaves Insert
+  -- mode once its keys are typed, so the second is from Normal mode.)
+  keys("iwhere is auth?<C-CR>")
+  assert(opened.sends == nil, "Ctrl+Enter sent a question")
+  keys("<C-CR>")
+  assert(opened.sends == nil, "Ctrl+Enter sent a question")
+  assert(vim.api.nvim_win_is_valid(opened.window))
+
+  keys("<CR>")
+  assert(opened.sends == 1 and opened.create_worktree == false)
+  assert(opened.prompt == "where is auth?", vim.inspect(opened.prompt))
+  assert(bottom_border(opened.window):find("asking…", 1, true), bottom_border(opened.window))
+  opened.progress.done()
+  assert(not vim.api.nvim_win_is_valid(opened.window))
 end
 
 print("svara compose tests passed")

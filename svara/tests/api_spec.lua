@@ -607,4 +607,20 @@ do
   assert(#host.timers == 0)
 end
 
+-- Completion -------------------------------------------------------------
+
+do
+  local styra, host = open({ accepted() })
+  assert(styra:set_completed("styra-9", "completed"))
+  assert(host.sent[1].operation == "set_session_completed")
+  assert(host.sent[1].data.id == "styra-9")
+  assert(host.sent[1].data.completed == "completed")
+
+  -- A state Styra does not know is refused here, before the round trip.
+  local marked, err = styra:set_completed("styra-9", "done")
+  assert(not marked)
+  assert(err:find("not a completion state", 1, true), err)
+  assert(#host.sent == 1)
+end
+
 print("svara api tests passed")

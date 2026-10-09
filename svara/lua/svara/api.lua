@@ -77,6 +77,12 @@ function M.contract(value)
   return one_of("Contract", value, "a contract")
 end
 
+--- A `CompletionState`, from its wire spelling: "active", "completed",
+--- "abandoned" or "sealed".
+function M.completion(value)
+  return one_of("CompletionState", value, "a completion state")
+end
+
 --- A `Provider`, from its wire spelling: "codex", "codex-exec" or "claude".
 function M.provider(value)
   return one_of("Provider", value, "a provider")
@@ -778,6 +784,26 @@ function Client:close(id)
   return operate(self, "close_interaction", { id = named }, protocol.Response.ACCEPTED)
 end
 
+--- Say whether the operator is done with a Session: "active", "completed",
+--- "abandoned", or "sealed" — the last for good, since a sealed Session is
+--- never made active again. Live or only stored, either is marked.
+function Client:set_completed(id, completed)
+  local named, err = text_argument(id, "the session id")
+  if not named then
+    return nil, err
+  end
+  local state, state_error = M.completion(completed)
+  if not state then
+    return nil, state_error
+  end
+  return operate(
+    self,
+    "set_session_completed",
+    { id = named, completed = state },
+    protocol.Response.ACCEPTED
+  )
+end
+
 --- Switch a live interaction onto another model, now and for its next
 --- resume. The provider cannot change; that needs a new session.
 function Client:set_selection(id, selection)
@@ -994,6 +1020,26 @@ function Client:ask(id, text, options, on_answer)
     return nil, send_error
   end
 
+  return self:await_answer(id, {
+    after = baseline.next,
+    contract = contract,
+    interval = options.interval,
+  }, on_answer)
+end
+
+--- Wait for the turn under way to complete, then read its typed answer.
+---
+--- The second half of `ask`, for a turn this client did not send with
+--- `send_message` — the first turn of a Session `create_session` launched
+--- with a `message` and `contract`, in practice. `options.after` is where to
+--- watch from, and must be from before the turn began, or its completion is
+--- never seen. `on_answer` is called as `ask` calls it.
+---@param id string
+---@param options { after: integer, contract: string, interval?: integer }
+---@param on_answer fun(value: any, answer: table?, error: string?)
+---@return table handle
+function Client:await_answer(id, options, on_answer)
+  local contract = options.contract
   local handle, finished
   local function answered(message)
     if finished then
@@ -1021,7 +1067,7 @@ function Client:ask(id, text, options, on_answer)
   end
 
   handle = self:follow(id, {
-    after = baseline.next,
+    after = options.after,
     interval = options.interval,
     raw = false,
     on_error = answered,

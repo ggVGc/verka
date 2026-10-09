@@ -38,14 +38,16 @@ local placeholder_namespace = vim.api.nvim_create_namespace("svara_compose_place
 
 --- The top border as title chunks: ` message ` at the left, the model at the
 --- right, and border between, since a float has one title and Styra's box has
---- two.
+--- two. `title` is the left one, ` message ` unless a caller names another.
 ---@param width integer the window's inner width
 ---@param model? string
-function M.title_chunks(width, model)
+---@param title? string
+function M.title_chunks(width, model, title)
+  title = title or M.title
   local right = " " .. (model or M.no_model) .. " "
-  local fill = width - vim.fn.strdisplaywidth(M.title) - vim.fn.strdisplaywidth(right)
+  local fill = width - vim.fn.strdisplaywidth(title) - vim.fn.strdisplaywidth(right)
   return {
-    { M.title, "Comment" },
+    { title, "Comment" },
     { string.rep("─", math.max(fill, 1)), "FloatBorder" },
     { right, model and "FloatTitle" or "WarningMsg" },
   }
@@ -82,11 +84,20 @@ end
 --- `initial` is put in the buffer to start from, so `:SvaraNew some words`
 --- still means something: the beginning of the prompt rather than all of it.
 --- An empty prompt is not sent; the window stays open and says why.
----@param options { initial?: string, model?: string, choose_model?: fun(done: fun(label?: string)), on_send: fun(prompt: string, create_worktree: boolean, progress: { done: fun(), failed: fun(message: string) }), on_cancel?: fun() }
+---
+--- The box is `:SvaraNew`'s unless told otherwise. `:SvaraAsk` takes its
+--- question in the same box with its own `title` and `placeholder`, `sending`
+--- for what the bottom border says while `on_send` works, and `worktree =
+--- false`, since a question has no use for a Git workspace of its own:
+--- Ctrl+Enter then means nothing, and `create_worktree` is always false.
+---@param options { initial?: string, model?: string, title?: string, placeholder?: string, sending?: string, worktree?: boolean, choose_model?: fun(done: fun(label?: string)), on_send: fun(prompt: string, create_worktree: boolean, progress: { done: fun(), failed: fun(message: string) }), on_cancel?: fun() }
 ---@return integer window
 ---@return integer buffer the prompt's
 function M.open(options)
   local model = options.model
+  local title = options.title or M.title
+  local placeholder_text = options.placeholder or M.placeholder
+  local worktree = options.worktree ~= false
   local prompt_buffer = vim.api.nvim_create_buf(false, true)
   -- Wiped by hand when the window goes.
   vim.bo[prompt_buffer].bufhidden = "hide"
@@ -118,7 +129,7 @@ function M.open(options)
   local config = placement(prompt_rows())
   config.style = "minimal"
   config.border = "rounded"
-  config.title = M.title_chunks(width, model)
+  config.title = M.title_chunks(width, model, title)
   config.title_pos = "left"
   local window = vim.api.nvim_open_win(prompt_buffer, true, config)
   vim.wo[window].wrap = true
@@ -141,7 +152,7 @@ function M.open(options)
     local lines = vim.api.nvim_buf_get_lines(prompt_buffer, 0, -1, false)
     if #lines == 1 and lines[1] == "" then
       vim.api.nvim_buf_set_extmark(prompt_buffer, placeholder_namespace, 0, 0, {
-        virt_text = { { M.placeholder, "Comment" } },
+        virt_text = { { placeholder_text, "Comment" } },
         virt_text_pos = "overlay",
       })
     end
@@ -237,7 +248,7 @@ function M.open(options)
       return
     end
     vim.api.nvim_set_current_win(window)
-    vim.api.nvim_win_set_config(window, { title = M.title_chunks(width, model), title_pos = "left" })
+    vim.api.nvim_win_set_config(window, { title = M.title_chunks(width, model, title), title_pos = "left" })
     if left_at then
       pcall(vim.api.nvim_win_set_cursor, window, left_at)
     end
@@ -309,16 +320,18 @@ function M.open(options)
       return
     end
     vim.cmd.stopinsert()
-    spin(create_worktree and M.branching or M.starting)
+    spin(create_worktree and M.branching or options.sending or M.starting)
     options.on_send(prompt, create_worktree, progress)
   end
 
   map(prompt_buffer, "n", "<CR>", function()
     send(false)
   end, "Send the prompt, starting in this Workspace")
-  map(prompt_buffer, { "n", "i" }, "<C-CR>", function()
-    send(true)
-  end, "Send the prompt, starting in a new Git workspace and branch")
+  if worktree then
+    map(prompt_buffer, { "n", "i" }, "<C-CR>", function()
+      send(true)
+    end, "Send the prompt, starting in a new Git workspace and branch")
+  end
   map(prompt_buffer, { "n", "i" }, "<C-l>", choose_model, "Choose the model")
   -- Escape only closes from Normal mode: from Insert mode it is the step
   -- out of typing, as everywhere else.
