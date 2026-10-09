@@ -303,7 +303,10 @@ fn render_markdown_block(
                         content = bulleted;
                     }
                 }
-                Span::styled(content, span.style)
+                // Plain text comes out of tui-markdown with no colour of its
+                // own, which would leave it in the terminal's default
+                // foreground rather than the entry's text colour.
+                Span::styled(content, base_style.patch(line_style).patch(span.style))
             }));
             Line::from(spans).style(line_style)
         })
@@ -737,6 +740,22 @@ mod tests {
         assert_eq!(rendered_line(&lines[0]), "  Title");
         assert_eq!(lines[0].style.fg, Some(theme::MARKDOWN_HEADING));
         assert!(lines[0].style.add_modifier.contains(Modifier::BOLD));
+        // The heading's colour reaches its text past the base style.
+        assert_eq!(lines[0].spans[1].style.fg, Some(theme::MARKDOWN_HEADING));
+    }
+
+    /// Plain text is drawn in the base style's colour, not left to the
+    /// terminal's default foreground.
+    #[test]
+    fn block_lines_draw_plain_text_in_the_base_color() {
+        let base = Style::default().fg(theme::USER_TEXT);
+        let lines = markdown_block_lines("first\n\nsecond *em*", base, "  ");
+
+        for line in &lines {
+            for span in line.spans.iter().filter(|span| !span.content.trim().is_empty()) {
+                assert_eq!(span.style.fg, Some(theme::USER_TEXT), "{lines:?}");
+            }
+        }
     }
 
     #[test]
