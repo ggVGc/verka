@@ -753,9 +753,6 @@ fn request_operation(request: &Request) -> &'static str {
         Request::Shell { .. } => "shell",
         Request::TurnAnswer { .. } => "turn_answer",
         Request::QuotaLog => "quota_log",
-        Request::ListModels => "list_models",
-        Request::CleanWorktrees { .. } => "clean_worktrees",
-        Request::ListWorktrees { .. } => "list_worktrees",
         Request::Shutdown => "shutdown",
     }
 }
