@@ -1265,20 +1265,28 @@ pub struct FileLocation {
     pub line: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column: Option<u32>,
+    /// The last line, 1-based and inclusive, when the agent named a range of
+    /// lines (`path:66-79`) rather than one; `line` is then the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
     /// The agent's note about this location; empty when it gave none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
 }
 
 impl FileLocation {
-    /// `path`, `path:line`, or `path:line:column` — the spelling the agent was
-    /// asked for, and the one an editor's jump-to-location expects back.
+    /// `path`, `path:line`, `path:line:column`, or `path:line-end_line` — the
+    /// spelling the agent was asked for, and the one an editor's
+    /// jump-to-location expects back.
     pub fn located(&self) -> String {
         let mut text = self.path.display().to_string();
         if let Some(line) = self.line {
             text.push(':');
             text.push_str(&line.to_string());
-            if let Some(column) = self.column {
+            if let Some(end_line) = self.end_line {
+                text.push('-');
+                text.push_str(&end_line.to_string());
+            } else if let Some(column) = self.column {
                 text.push(':');
                 text.push_str(&column.to_string());
             }

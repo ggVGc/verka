@@ -182,32 +182,57 @@ fn locations(body: &str) -> Result<Vec<FileLocation>> {
 /// Splitting on `:` from the left and stopping at the first field that is not a
 /// number keeps Windows-style and colon-bearing paths from being mistaken for
 /// positions, and lets a description contain colons freely.
+///
+/// A range of lines, `path:66-79`, is read too, though the agent is not asked
+/// for one: agents pointing at a function or a block write it unprompted, and
+/// reading it as no position at all would put the range in the description
+/// and send a jump to the top of the file. A range names no column, so none
+/// is looked for after it.
 fn location(line: &str) -> FileLocation {
     let mut fields = line.split(':');
     let path = fields.next().unwrap_or_default().trim();
     let mut rest = fields.collect::<Vec<_>>();
     let mut line_number = None;
+    let mut end_line = None;
     let mut column = None;
-    if let Some(first) = rest
-        .first()
-        .and_then(|field| field.trim().parse::<u32>().ok())
-    {
+    if let Some((first, last)) = rest.first().and_then(|field| line_range(field)) {
         line_number = Some(first);
+        end_line = last;
         rest.remove(0);
-        if let Some(second) = rest
-            .first()
-            .and_then(|field| field.trim().parse::<u32>().ok())
-        {
-            column = Some(second);
-            rest.remove(0);
+        if end_line.is_none() {
+            if let Some(second) = rest
+                .first()
+                .and_then(|field| field.trim().parse::<u32>().ok())
+            {
+                column = Some(second);
+                rest.remove(0);
+            }
         }
     }
     FileLocation {
         path: PathBuf::from(path),
         line: line_number,
         column,
+        end_line,
         description: rest.join(":").trim().to_owned(),
     }
+}
+
+/// A line, `66`, or a range of lines, `66-79`, as the first line and the last
+/// when there is one. Agents write ranges with an en dash as often as with a
+/// hyphen, so both are read. A range running backwards is not a range, and
+/// one ending where it starts is just its line.
+fn line_range(field: &str) -> Option<(u32, Option<u32>)> {
+    let field = field.trim();
+    let Some((first, last)) = field.split_once(['-', '–']) else {
+        return field.parse().ok().map(|line| (line, None));
+    };
+    let first = first.trim().parse::<u32>().ok()?;
+    let last = last.trim().parse::<u32>().ok()?;
+    if last < first {
+        return None;
+    }
+    Some((first, (last > first).then_some(last)))
 }
 
 #[cfg(test)]
@@ -318,6 +343,7 @@ mod tests {
                 path: PathBuf::from("src/auth.rs"),
                 line: None,
                 column: None,
+                end_line: None,
                 description: String::new(),
             }])
         );
@@ -336,6 +362,7 @@ mod tests {
                 path: PathBuf::from("src/auth.rs"),
                 line: Some(12),
                 column: Some(5),
+                end_line: None,
                 description: "checks the token".into(),
             }])
         );
@@ -350,6 +377,38 @@ mod tests {
         };
         assert_eq!(files[0].line, Some(3));
         assert_eq!(files[0].description, "see also: b.rs");
+    }
+
+    /// Agents name a function or a block as a range of lines unasked. The
+    /// range is a position, not the start of the description.
+    #[test]
+    fn a_range_of_lines_is_a_position() {
+        let AnswerValue::Files(files) = parse(
+            &block(
+                "IndexHandler.scala:66-79: Throttled index flushing\n\
+                 IndexHandler.scala:97–119: Kryo setup\n\
+                 a.rs:5-5: one line\n\
+                 b.rs:9-3: backwards",
+            ),
+            Contract::Files,
+        )
+        .unwrap() else {
+            panic!("the files contract must parse to files");
+        };
+        assert_eq!(files[0].path, PathBuf::from("IndexHandler.scala"));
+        assert_eq!(files[0].line, Some(66));
+        assert_eq!(files[0].end_line, Some(79));
+        assert_eq!(files[0].column, None);
+        assert_eq!(files[0].description, "Throttled index flushing");
+        assert_eq!(files[0].located(), "IndexHandler.scala:66-79");
+        // An en dash, as agents write ranges in prose.
+        assert_eq!((files[1].line, files[1].end_line), (Some(97), Some(119)));
+        assert_eq!(files[1].description, "Kryo setup");
+        // A range of one line is that line.
+        assert_eq!((files[2].line, files[2].end_line), (Some(5), None));
+        // A range running backwards is not one, and is left as text.
+        assert_eq!(files[3].line, None);
+        assert_eq!(files[3].description, "9-3: backwards");
     }
 
     /// A description that opens with a non-numeric word must not be read as a
@@ -414,6 +473,7 @@ mod tests {
                 path: PathBuf::from("src/auth.rs"),
                 line: Some(12),
                 column: None,
+                end_line: None,
                 description: String::new(),
             }]))
         );

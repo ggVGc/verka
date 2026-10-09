@@ -1589,6 +1589,7 @@ defmodule Styra.Protocol do
         %{name: "path", required: true, type: %{kind: :string, path: true}},
         %{name: "line", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}},
         %{name: "column", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}},
+        %{name: "end_line", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}},
         %{name: "description", required: false, type: %{kind: :string}}
       ]
     },

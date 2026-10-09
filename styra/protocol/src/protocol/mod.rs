@@ -1222,6 +1222,7 @@ mod tests {
                 path: PathBuf::from("src/auth.rs"),
                 line: Some(12),
                 column: None,
+                end_line: None,
                 description: "checks the token".into(),
             }])),
             error: None,

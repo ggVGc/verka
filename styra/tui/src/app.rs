@@ -3450,6 +3450,7 @@ mod tests {
                 path: PathBuf::from("src/auth.rs"),
                 line: Some(12),
                 column: None,
+                end_line: None,
                 description: String::new(),
             }])),
             error: None,
