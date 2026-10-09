@@ -31,10 +31,10 @@ pub const RUNNING_STATUS: Color = RUNNING;
 pub const QUOTA_WARNING: Color = palette::TERMINAL_YELLOW;
 /// A workspace heading in the live-interactions navigator.
 pub const WORKSPACE_NAME: Color = palette::GOLD;
-/// A worktree heading under a workspace heading in the navigator: in the hue
-/// a row's branch is drawn in, since the heading stands for the branch its
-/// rows no longer name.
-pub const DIRECTORY_NAME: Color = ACCENT;
+/// A worktree heading under a workspace heading in the navigator: a cool hue,
+/// so it stands apart from the warm workspace headings and branch names
+/// around it.
+pub const DIRECTORY_NAME: Color = palette::SOFT_CYAN;
 /// An interaction's `#tags`: apart from the status flags that share their
 /// row.
 pub const INTERACTION_TAG: Color = palette::PEACH;

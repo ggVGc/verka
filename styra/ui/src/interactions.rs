@@ -310,7 +310,7 @@ fn row_item(
     let group_style = Style::default()
         .fg(theme::TEXT)
         .add_modifier(Modifier::BOLD);
-    let workspace_edge = if under_workspaces { "│ " } else { "" };
+    let workspace_edge = if under_workspaces { " " } else { "" };
     match row {
         InteractionRow::Workspace(name) => {
             return vec![Line::from(Span::styled(
@@ -324,7 +324,7 @@ fn row_item(
             return vec![Line::from(vec![
                 Span::styled(workspace_edge, group_style),
                 Span::styled(
-                    format!("{name}/"),
+                    format!("[{name}]"),
                     Style::default().fg(theme::DIRECTORY_NAME),
                 ),
             ])];
@@ -365,9 +365,9 @@ fn row_item(
     let directory_edge = if !*grouped {
         ""
     } else if last_in_directory {
-        " └─ "
+        "└─ "
     } else {
-        " ├─ "
+        "├─ "
     };
     let edge = branch_indent(*depth);
     let mut main = vec![
@@ -493,9 +493,9 @@ fn row_item(
         let directory_continuation = if !*grouped {
             ""
         } else if last_in_directory {
-            "    "
+            "   "
         } else {
-            " │  "
+            "│  "
         };
         lines.push(Line::from(vec![
             Span::styled(
@@ -705,24 +705,24 @@ mod tests {
         let screen = lines(&all);
         assert!(screen[1].starts_with("│Payments"), "{screen:#?}");
         assert!(
-            screen[2].starts_with("││  ●  alone · feature · claude"),
+            screen[2].starts_with("│  ●  alone · feature · claude"),
             "{screen:#?}"
         );
-        assert!(screen[3].starts_with("││ checkout/"), "{screen:#?}");
+        assert!(screen[3].starts_with("│ [checkout]"), "{screen:#?}");
         assert!(
-            screen[4].starts_with("││  ├─  ●  first · claude "),
+            screen[4].starts_with("│ ├─  ●  first · claude "),
             "{screen:#?}"
         );
         assert!(
-            screen[6].starts_with("││  └─  ●  second · claude "),
+            screen[6].starts_with("│ └─  ●  second · claude "),
             "{screen:#?}"
         );
 
-        assert!(screen[5].starts_with("││  │      « preview"), "{screen:#?}");
-        assert!(screen[7].starts_with("││         « preview"), "{screen:#?}");
-        assert!(screen[8].starts_with("││ other/"), "{screen:#?}");
+        assert!(screen[5].starts_with("│ │      « preview"), "{screen:#?}");
+        assert!(screen[7].starts_with("│        « preview"), "{screen:#?}");
+        assert!(screen[8].starts_with("│ [other]"), "{screen:#?}");
         assert!(
-            screen[9].starts_with("││  └─  ●  third · claude"),
+            screen[9].starts_with("│ └─  ●  third · claude"),
             "{screen:#?}"
         );
 
@@ -741,12 +741,12 @@ mod tests {
             screen[1].starts_with("│ ●  alone · feature · claude"),
             "{screen:#?}"
         );
-        assert!(screen[2].starts_with("│checkout/"), "{screen:#?}");
+        assert!(screen[2].starts_with("│[checkout]"), "{screen:#?}");
         assert!(
-            screen[3].starts_with("│ └─  ●  first · claude "),
+            screen[3].starts_with("│└─  ●  first · claude "),
             "{screen:#?}"
         );
-        assert!(screen[4].starts_with("│        « preview"), "{screen:#?}");
+        assert!(screen[4].starts_with("│       « preview"), "{screen:#?}");
         assert!(
             screen[5].starts_with("│ ●  outside · feature · claude"),
             "{screen:#?}"
