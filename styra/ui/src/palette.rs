@@ -90,7 +90,9 @@ pub const MUTED_ROSE_TINT: Color = Color::Rgb(51, 42, 42);
 pub const STONE_TINT: Color = Color::Rgb(53, 51, 47);
 /// A red a fifth of the way up from [`NEAR_BLACK`].
 pub const RED_TINT: Color = Color::Rgb(64, 24, 24);
-pub const RED_FG: Color = Color::Rgb(255, 177, 177);
+/// A clear light red: well short of [`COMFORTABLE_RED`], so it never reads as
+/// an error.
+pub const RED_FG: Color = Color::Rgb(255, 140, 140);
 /// A warm, medium red: plainly red without the glare of the terminal's own.
 pub const COMFORTABLE_RED: Color = Color::Rgb(240, 96, 96);
 /// [`PALE_PINK`] nearly half the way up from [`NEAR_BLACK`].

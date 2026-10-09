@@ -1,6 +1,7 @@
 //! The live-interaction navigator embedded above the event timeline.
 
 use crate::chrome::StopTone;
+use crate::event_list::{blended_style, faded_style};
 use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -98,6 +99,15 @@ pub struct InteractionNavigator<'a> {
 /// How many rows the view keeps between the cursor and its top or bottom edge
 /// before it scrolls, where the list has rows there to show.
 const SCROLL_MARGIN: usize = 2;
+
+/// How far, in tenths, every interaction but the cursor's has the text after
+/// its name faded toward the background, so the cursor's row reads as the
+/// brightest while every name and status marker stays as it is.
+const UNSELECTED_FADE: u16 = 2;
+
+/// How far, in tenths, the cursor's row has the text after its name lifted
+/// toward [`theme::TEXT`].
+const SELECTED_BRIGHTEN: u16 = 4;
 
 pub fn height(view: &InteractionNavigator<'_>, available: u16) -> u16 {
     let message_rows = view
@@ -218,6 +228,20 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
             ..inner
         };
         frame.render_widget(line, line_area);
+    }
+    // A heavy bar over the left border beside the cursor's row, so the eye
+    // finds it from the edge of the pane without anything in the list moving.
+    if let (Some(selected), true) = (selected, inner.x > area.x) {
+        let start = view.rows[..selected].iter().map(row_height).sum::<usize>();
+        let end = start + row_height(&view.rows[selected]);
+        let edge = Style::default()
+            .fg(theme::SELECTED_ROW_EDGE)
+            .add_modifier(Modifier::BOLD);
+        for line in start.max(offset)..end.min(offset + viewport) {
+            frame.buffer_mut()[(area.x, inner.y + (line - offset) as u16)]
+                .set_symbol("┃")
+                .set_style(edge);
+        }
     }
     offset
 }
@@ -385,6 +409,7 @@ fn row_item(
             _ => theme::TEXT,
         })
     };
+    let name_index = main.len();
     main.push(Span::styled(name.to_string(), name_style));
     // Tags belong to the prompt they label, so they follow it directly.
     if !tags.is_empty() {
@@ -447,6 +472,22 @@ fn row_item(
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
+    // Everything after the name is lifted toward white and bolded on the
+    // cursor's row, and faded on every other, so the cursor's row stands out.
+    // The tree edges, status marker and name ahead of it are left as they are
+    // on every row, so state and names read the same down the whole list.
+    let message_style = Style::default().fg(theme::SUBORDINATE_TEXT);
+    let adjust = |style: Style| {
+        if *selected {
+            blended_style(style, theme::TEXT, SELECTED_BRIGHTEN).add_modifier(Modifier::BOLD)
+        } else {
+            faded_style(style, UNSELECTED_FADE)
+        }
+    };
+    for span in main.iter_mut().skip(name_index + 1) {
+        span.style = adjust(span.style);
+    }
+    let message_style = adjust(message_style);
     let mut lines = vec![Line::from(main)];
     if let Some(text) = last_message {
         let directory_continuation = if !*grouped {
@@ -463,7 +504,7 @@ fn row_item(
             ),
             Span::styled(
                 format!("{}    « {text}", " ".repeat(edge.chars().count())),
-                Style::default().fg(theme::SUBORDINATE_TEXT),
+                message_style,
             ),
         ]));
     }
@@ -884,6 +925,70 @@ mod tests {
         assert_eq!(drawn_offset(0, 6), 0);
         assert_eq!(drawn_offset(7, 0), 6);
         assert_eq!(drawn_offset(7, 100), 6);
+    }
+
+    /// Every row but the cursor's has all but its name drawn faded, so the
+    /// cursor's is the brightest in the list and every name stays readable.
+    #[test]
+    fn the_cursor_row_is_lifted_and_the_rest_faded_after_their_names() {
+        let view = many_rows(0);
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(frame, &view, frame.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // The first cell drawing `symbol` on line `y`: `t` starts each name,
+        // `c` the provider, `d` the message.
+        let color = |symbol: &str, y: u16| {
+            let x = (0..80)
+                .find(|&x| buffer[(x, y)].symbol() == symbol)
+                .expect("line draws the symbol");
+            buffer[(x, y)].fg
+        };
+        let faded = |color| {
+            faded_style(Style::default().fg(color), UNSELECTED_FADE)
+                .fg
+                .unwrap()
+        };
+        let brightened = |color| {
+            blended_style(Style::default().fg(color), theme::TEXT, SELECTED_BRIGHTEN)
+                .fg
+                .unwrap()
+        };
+        // The cursor's row on lines 1 and 2, the next row on lines 3 and 4.
+        assert_eq!(color("●", 1), theme::SUCCESS);
+        assert_eq!(color("t", 1), theme::SELECTED_LIVE_INTERACTION_TEXT);
+        assert_eq!(color("c", 1), brightened(theme::INTERACTION_STATUS_INFO));
+        assert_eq!(color("d", 2), brightened(theme::SUBORDINATE_TEXT));
+        assert_eq!(color("●", 3), theme::SUCCESS);
+        assert_eq!(color("t", 3), theme::IDLE_INTERACTION_TEXT);
+        assert_eq!(color("c", 3), faded(theme::INTERACTION_STATUS_INFO));
+        assert_eq!(color("d", 4), faded(theme::SUBORDINATE_TEXT));
+    }
+
+    /// The cursor's row, message line and all, is marked by a bar over the
+    /// left border; every other row keeps the plain border.
+    #[test]
+    fn the_cursor_row_is_marked_on_the_left_border() {
+        let lines = rendered(&many_rows(1))
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(80)
+            .map(|line| line.iter().collect::<String>())
+            .collect::<Vec<_>>();
+        assert!(
+            lines[3].starts_with("┃") && lines[3].contains("task 1"),
+            "{lines:#?}"
+        );
+        assert!(
+            lines[4].starts_with("┃") && lines[4].contains("done"),
+            "{lines:#?}"
+        );
+        for line in [1, 2, 5, 6] {
+            assert!(lines[line].starts_with("│"), "{lines:#?}");
+        }
     }
 
     /// Each way of being finished with a Session has its own badge, so one

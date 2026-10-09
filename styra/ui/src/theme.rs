@@ -108,6 +108,9 @@ pub const IDLE_INTERACTION_TEXT: Color = palette::GREEN_WHITE;
 /// of the event list's selected entry: apart from the colors around them.
 pub const SELECTED_LIVE_INTERACTION_TEXT: Color = palette::RED_FG;
 pub const SELECTED_INTERACTION_TEXT: Color = palette::YELLOW_WHITE;
+/// The bar drawn over the navigator's left border beside the cursor's row:
+/// the cursor name's own color, so the two read as one mark.
+pub const SELECTED_ROW_EDGE: Color = SELECTED_LIVE_INTERACTION_TEXT;
 /// The block behind the status marker at the head of a navigator row, a
 /// subdued tint of the marker's own hue.
 ///

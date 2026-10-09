@@ -1064,22 +1064,27 @@ fn entry_rows_with_max_rows(
 /// failure as a failure — but sits behind the Session's own work.
 /// Backgrounds are left alone; they carry the selection and message tints.
 fn inherited_line(mut line: Line<'static>) -> Line<'static> {
-    line.style = inherited_style(line.style);
+    line.style = faded_style(line.style, INHERITED_FADE);
     for span in &mut line.spans {
-        span.style = inherited_style(span.style);
+        span.style = faded_style(span.style, INHERITED_FADE);
     }
     line
 }
 
-fn inherited_style(style: Style) -> Style {
-    match (
-        style.fg.unwrap_or(theme::TEXT),
-        theme::INHERITED_FADE_TOWARD,
-    ) {
+/// Move a style's foreground `tenths` tenths of the way toward
+/// [`theme::INHERITED_FADE_TOWARD`], leaving its background alone.
+pub(crate) fn faded_style(style: Style, tenths: u16) -> Style {
+    blended_style(style, theme::INHERITED_FADE_TOWARD, tenths)
+}
+
+/// Move a style's foreground `tenths` tenths of the way toward `toward`,
+/// leaving its background alone.
+pub(crate) fn blended_style(style: Style, toward: Color, tenths: u16) -> Style {
+    match (style.fg.unwrap_or(theme::TEXT), toward) {
         (Color::Rgb(r, g, b), Color::Rgb(to_r, to_g, to_b)) => {
             let fade = |from: u8, to: u8| {
                 let (from, to) = (u16::from(from), u16::from(to));
-                ((from * (10 - INHERITED_FADE) + to * INHERITED_FADE) / 10) as u8
+                ((from * (10 - tenths) + to * tenths) / 10) as u8
             };
             style.fg(Color::Rgb(fade(r, to_r), fade(g, to_g), fade(b, to_b)))
         }
