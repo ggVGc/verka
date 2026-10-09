@@ -816,7 +816,7 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
 fn creates_worktree(app: &App, key: KeyEvent) -> bool {
     EDITOR_SEND_IN_BRANCH.matches(key)
         // Nothing is sent, and so nothing is branched, for a blank box.
-        && !app.composer.text.trim().is_empty()
+        && !app.composer.message().is_empty()
 }
 
 /// Ask the server to commit this interaction's turns as they end, or to stop.
@@ -838,11 +838,15 @@ pub fn handle_input_key(
     live: &mut Attachment,
     key: KeyEvent,
 ) {
+    if app.composer.choosing() {
+        return handle_choosing_key(app, key);
+    }
     match key {
-        k if GLOBAL_LEAVE_MESSAGE.matches(k) => {
-            app.branch_needs_prompt_name = false;
-            app.enter_list();
-        }
+        // With several boxes, Esc steps back to choosing between them; a
+        // second Esc, from there, leaves as it does with one.
+        k if EDITOR_CHOOSE_BOX.matches(k) && app.composer.start_choosing() => {}
+        k if GLOBAL_LEAVE_MESSAGE.matches(k) => leave_message(app),
+        k if EDITOR_ADD_BOX.matches(k) => app.composer.add_part(),
         // Choosing a shape is part of writing the message, so it lives in the
         // box rather than being a mode entered from outside it.
         k if EDITOR_CONTRACT.matches(k) => app.outbox.cycle_contract(),
@@ -861,7 +865,7 @@ pub fn handle_input_key(
             }
             if app.branch_needs_prompt_name {
                 if let Some(name) =
-                    styra_server::journal::name_from_message(Some(&app.composer.text))
+                    styra_server::journal::name_from_message(Some(&app.composer.message()))
                 {
                     if let Err(error) = client.rename_session(&app.session_id, Some(&name)) {
                         return app
@@ -902,6 +906,25 @@ pub fn handle_input_key(
                 app.composer.char(ch)
             }
         }
+        _ => {}
+    }
+}
+
+fn leave_message(app: &mut App) {
+    app.branch_needs_prompt_name = false;
+    app.enter_list();
+}
+
+/// Keys while choosing between the message's boxes: nothing is typed, so
+/// plain letters move, edit, and delete instead.
+fn handle_choosing_key(app: &mut App, key: KeyEvent) {
+    match key {
+        k if EDITOR_BOX_LEAVE.matches(k) => leave_message(app),
+        k if EDITOR_BOX_NEXT.matches(k) => app.composer.choose_next(),
+        k if EDITOR_BOX_PREV.matches(k) => app.composer.choose_previous(),
+        k if EDITOR_BOX_EDIT.matches(k) => app.composer.stop_choosing(),
+        k if EDITOR_BOX_DELETE.matches(k) => app.composer.remove_chosen(),
+        k if EDITOR_ADD_BOX.matches(k) => app.composer.add_part(),
         _ => {}
     }
 }
@@ -975,6 +998,42 @@ mod tests {
         assert_eq!(app.focus, crate::app::Focus::List);
         assert!(!app.branch_needs_prompt_name);
         assert!(app.take_request().is_none());
+    }
+
+    /// Ctrl-N opens another box; with two, Esc chooses between them rather
+    /// than leaving, and only a second Esc leaves — with both boxes kept.
+    #[test]
+    fn escape_chooses_between_boxes_before_leaving() {
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
+        app.enter_input();
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut press = |app: &mut App, code: KeyCode, modifiers: KeyModifiers| {
+            handle_input_key(
+                app,
+                &client,
+                "workspace",
+                &mut live,
+                KeyEvent::new(code, modifiers),
+            )
+        };
+        press(&mut app, KeyCode::Char('a'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::NONE);
+        assert_eq!(app.composer.parts(), ["a", "b"]);
+
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.focus, crate::app::Focus::Input);
+        assert!(app.composer.choosing());
+        // While choosing, letters move between boxes instead of typing.
+        press(&mut app, KeyCode::Char('k'), KeyModifiers::NONE);
+        assert_eq!(app.composer.focused(), 0);
+        assert_eq!(app.composer.parts(), ["a", "b"]);
+
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.focus, crate::app::Focus::List);
+        assert!(!app.composer.choosing());
+        assert_eq!(app.composer.parts(), ["a", "b"]);
     }
 
     #[test]
@@ -1344,7 +1403,7 @@ mod tests {
                 message: Some("start here".into())
             })
         );
-        assert!(app.composer.text.is_empty());
+        assert!(app.composer.text().is_empty());
         assert_eq!(live, Attachment::Detached, "nothing launches from the box");
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1376,7 +1435,7 @@ mod tests {
                 message: Some("carry on in a branch".into())
             })
         );
-        assert!(app.composer.text.is_empty());
+        assert!(app.composer.text().is_empty());
         assert_eq!(live, Attachment::Attached { cursor: 0 });
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1403,7 +1462,7 @@ mod tests {
         );
 
         assert_eq!(app.take_request(), None);
-        assert_eq!(app.composer.text, "carry on in a branch");
+        assert_eq!(app.composer.text(), "carry on in a branch");
         assert_eq!(live, Attachment::Attached { cursor: 0 });
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1561,7 +1620,7 @@ mod tests {
         typed(&mut app, "reports/summary.md");
 
         assert!(app.insert.is_none());
-        assert_eq!(app.composer.text, "/workspace/reports/summary.md");
+        assert_eq!(app.composer.text(), "/workspace/reports/summary.md");
         assert!(app.launch.interaction.mounts.is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -1591,7 +1650,7 @@ mod tests {
                 writable: true,
             }]
         );
-        assert_eq!(app.composer.text, host.display().to_string());
+        assert_eq!(app.composer.text(), host.display().to_string());
         assert!(app.notices.iter().any(|message| message
             .text
             .contains("applies when this Session next launches")));

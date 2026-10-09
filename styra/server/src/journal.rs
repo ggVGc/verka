@@ -17,7 +17,8 @@
 use crate::agent::{Profile, Selection, SessionMeta};
 use crate::event::{decode_line, AgentEvent, BranchDirection, Protocol};
 use crate::protocol::{
-    CompletionState, Contract, Direction, QueuedMessage, RawLine, SessionOrigin, SessionSummary,
+    CompletionState, ComposerState, Contract, Direction, QueuedMessage, RawLine, SessionOrigin,
+    SessionSummary, COMPOSER_HISTORY_LIMIT,
 };
 use crate::worktree::Checkout;
 use anyhow::{Context, Result};
@@ -336,6 +337,7 @@ impl Journal {
 const JOURNAL_FILE: &str = "journal.jsonl";
 const SESSION_META_FILE: &str = "session.json";
 const QUEUE_FILE: &str = "queue.json";
+const COMPOSER_FILE: &str = "composer.json";
 
 /// Read the operator messages a Session's interaction had queued but not yet
 /// sent, so the queue survives a client disconnect (closing the Styra UI) or a
@@ -355,6 +357,46 @@ pub fn write_queued_messages(directory: &Path, messages: &[QueuedMessage]) -> Re
     let path = directory.join(QUEUE_FILE);
     let json = serde_json::to_string_pretty(messages).context("serializing the message queue")?;
     std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Read what the operator had in a Session's message box, and the messages
+/// they sent from it. Absent file means an empty box, not an error.
+pub fn read_composer(path: &Path) -> Result<ComposerState> {
+    let path = session_directory(path).join(COMPOSER_FILE);
+    if !path.exists() {
+        return Ok(ComposerState::default());
+    }
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// Replace a Session's stored message box, keeping only the newest
+/// [`COMPOSER_HISTORY_LIMIT`] sent messages. Written aside and renamed into
+/// place: it is rewritten as the operator types, and a crash mid-write must
+/// not cost them what they had.
+pub fn write_composer(path: &Path, composer: &ComposerState) -> Result<()> {
+    let directory = session_directory(path);
+    let mut composer = composer.clone();
+    let excess = composer
+        .history
+        .len()
+        .saturating_sub(COMPOSER_HISTORY_LIMIT);
+    composer.history.drain(..excess);
+    let path = directory.join(COMPOSER_FILE);
+    let temporary = directory.join("composer.json.tmp");
+    let json = serde_json::to_string_pretty(&composer).context("serializing the message box")?;
+    std::fs::write(&temporary, json).with_context(|| format!("writing {}", temporary.display()))?;
+    std::fs::rename(&temporary, &path).with_context(|| format!("replacing {}", path.display()))
+}
+
+/// The Session directory `path` names: itself, or the one holding the file.
+fn session_directory(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    }
 }
 
 fn write_session_meta(
@@ -2117,6 +2159,34 @@ mod tests {
 
         std::fs::remove_dir_all(root).ok();
         std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn the_message_box_is_durable_and_its_history_bounded() {
+        let dir = temp_dir("composer");
+        assert_eq!(read_composer(&dir).unwrap(), ComposerState::default());
+
+        let history: Vec<String> = (0..COMPOSER_HISTORY_LIMIT + 5)
+            .map(|index| format!("sent {index}"))
+            .collect();
+        let composer = ComposerState {
+            parts: vec!["half".into(), "written".into()],
+            focused: 1,
+            history,
+        };
+        write_composer(&dir, &composer).unwrap();
+        let stored = read_composer(&dir).unwrap();
+        assert_eq!(stored.parts, composer.parts);
+        assert_eq!(stored.focused, 1);
+        assert_eq!(stored.history.len(), COMPOSER_HISTORY_LIMIT);
+        // The oldest go; the newest stay, still oldest first.
+        assert_eq!(stored.history[0], "sent 5");
+        assert_eq!(
+            stored.history.last().unwrap(),
+            &format!("sent {}", COMPOSER_HISTORY_LIMIT + 4)
+        );
+
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

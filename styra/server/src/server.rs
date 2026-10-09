@@ -3666,6 +3666,17 @@ impl ServerState {
                 ))
             }
             Request::ListTags => Ok(Response::Tags(self.list_tags()?)),
+            Request::SessionComposer { id } => {
+                let summary = self.stored_summary(&id)?;
+                Ok(Response::SessionComposer(journal::read_composer(
+                    &summary.path,
+                )?))
+            }
+            Request::SetSessionComposer { id, composer } => {
+                let summary = self.stored_summary(&id)?;
+                journal::write_composer(&summary.path, &composer)?;
+                Ok(Response::SessionComposerStored)
+            }
             Request::TranscribeAudio { path } => {
                 self.audio_log(format!("transcribing {}", path.display()));
                 match styra_transcription::transcribe(&path) {

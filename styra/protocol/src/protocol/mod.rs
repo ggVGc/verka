@@ -133,6 +133,30 @@ pub struct SetSessionTags {
     pub tags: Vec<String>,
 }
 
+/// What an operator has half-written to a Session, and what they have already
+/// sent it: the message box, kept by the server so it is there again from any
+/// client, after the client is closed, and after the interaction is resumed.
+///
+/// The server stores it as given and keeps the newest
+/// [`COMPOSER_HISTORY_LIMIT`] history entries; it does not interpret it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComposerState {
+    /// The boxes a message is being built from, in order. A client treats an
+    /// empty list as one empty box.
+    #[serde(default)]
+    pub parts: Vec<String>,
+    /// Which of `parts` the operator was last typing in.
+    #[serde(default)]
+    pub focused: usize,
+    /// Messages already sent to this Session from the message box, oldest
+    /// first, for walking back through.
+    #[serde(default)]
+    pub history: Vec<String>,
+}
+
+/// How many sent messages a Session's [`ComposerState`] keeps.
+pub const COMPOSER_HISTORY_LIMIT: usize = 200;
+
 /// One server-owned edit to a Workspace's standing launch policy.
 ///
 /// Clients send intent instead of replacing a locally cached copy. This lets
@@ -417,6 +441,16 @@ pub enum Request {
     SetSessionTags(SetSessionTags),
     /// All tags known to the server, alphabetically.
     ListTags,
+    /// Read a Session's message box (see [`ComposerState`]). A Session nobody
+    /// has typed in yet answers with an empty one.
+    SessionComposer {
+        id: String,
+    },
+    /// Replace a Session's stored message box.
+    SetSessionComposer {
+        id: String,
+        composer: ComposerState,
+    },
     /// Transcribe one host audio file and return its text.
     ///
     /// The server runs a local Whisper model in its own process. No agent
@@ -614,6 +648,8 @@ pub enum Response {
     SessionRenamed(SessionSummary),
     SessionTagsUpdated(SessionSummary),
     Tags(Vec<String>),
+    SessionComposer(ComposerState),
+    SessionComposerStored,
     WorkspaceLaunchUpdated(LaunchPolicy),
     Accepted,
     Queued(usize),
@@ -1126,6 +1162,34 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Request::ListTags).unwrap()["operation"],
             "list_tags"
+        );
+    }
+
+    #[test]
+    fn session_composer_has_get_and_set_operations() {
+        let request = Request::SetSessionComposer {
+            id: "styra-1".into(),
+            composer: ComposerState {
+                parts: vec!["fix it".into(), "the log".into()],
+                focused: 1,
+                history: vec!["earlier".into()],
+            },
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "set_session_composer");
+        assert_eq!(json["data"]["composer"]["focused"], 1);
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+        assert_eq!(
+            serde_json::to_value(Request::SessionComposer {
+                id: "styra-1".into()
+            })
+            .unwrap()["operation"],
+            "session_composer"
+        );
+        // Every field may be left out, so an older client's empty box parses.
+        assert_eq!(
+            serde_json::from_str::<ComposerState>("{}").unwrap(),
+            ComposerState::default()
         );
     }
 

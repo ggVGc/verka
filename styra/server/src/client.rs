@@ -8,7 +8,9 @@ use crate::protocol::{
     Request, Response, ResumeSession, SendMessage, SessionInfo, SetSessionTags, ShellInfo,
     StoredSession, TemplateSummary, Updates, WireResponse, WorkspaceLaunchChange,
 };
-use crate::protocol::{CompletionState, InteractionSummary, SessionSummary, WorkspaceSummary};
+use crate::protocol::{
+    CompletionState, ComposerState, InteractionSummary, SessionSummary, WorkspaceSummary,
+};
 use anyhow::{bail, Context, Result};
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
@@ -229,6 +231,23 @@ impl Client {
         }))? {
             Response::SessionTagsUpdated(value) => Ok(value),
             other => unexpected("session_tags_updated", other),
+        }
+    }
+
+    pub fn session_composer(&self, id: &str) -> Result<ComposerState> {
+        match self.request(Request::SessionComposer { id: id.to_owned() })? {
+            Response::SessionComposer(value) => Ok(value),
+            other => unexpected("session_composer", other),
+        }
+    }
+
+    pub fn set_session_composer(&self, id: &str, composer: ComposerState) -> Result<()> {
+        match self.request(Request::SetSessionComposer {
+            id: id.to_owned(),
+            composer,
+        })? {
+            Response::SessionComposerStored => Ok(()),
+            other => unexpected("session_composer_stored", other),
         }
     }
 
@@ -727,6 +746,8 @@ fn request_operation(request: &Request) -> &'static str {
         Request::RenameSession(_) => "rename_session",
         Request::SetSessionTags(_) => "set_session_tags",
         Request::ListTags => "list_tags",
+        Request::SessionComposer { .. } => "session_composer",
+        Request::SetSessionComposer { .. } => "set_session_composer",
         Request::TranscribeAudio { .. } => "transcribe_audio",
         Request::AudioRecordingStarted => "audio_recording_started",
         Request::AudioRecordingStopped => "audio_recording_stopped",

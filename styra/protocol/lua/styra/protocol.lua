@@ -134,6 +134,21 @@ M.types.Request = {
     { name = "rename_session", payload = { kind = "newtype", type = { kind = "ref", name = "RenameSession" } } },
     { name = "set_session_tags", payload = { kind = "newtype", type = { kind = "ref", name = "SetSessionTags" } } },
     { name = "list_tags", payload = { kind = "unit" } },
+    { name = "session_composer", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
+    { name = "set_session_composer", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+        { name = "composer", required = true, type = { kind = "ref", name = "ComposerState" } },
+      },
+    } },
     { name = "transcribe_audio", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -336,6 +351,8 @@ M.types.Response = {
     { name = "session_renamed", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "session_tags_updated", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "tags", payload = { kind = "newtype", type = { kind = "list", item = { kind = "string" } } } },
+    { name = "session_composer", payload = { kind = "newtype", type = { kind = "ref", name = "ComposerState" } } },
+    { name = "session_composer_stored", payload = { kind = "unit" } },
     { name = "workspace_launch_updated", payload = { kind = "newtype", type = { kind = "ref", name = "LaunchPolicy" } } },
     { name = "accepted", payload = { kind = "unit" } },
     { name = "queued", payload = { kind = "newtype", type = { kind = "number", integer = true } } },
@@ -475,6 +492,21 @@ M.types.SetSessionTags = {
   fields = {
     { name = "id", required = true, type = { kind = "string" } },
     { name = "tags", required = true, type = { kind = "list", item = { kind = "string" } } },
+  },
+}
+
+--- What an operator has half-written to a Session, and what they have already
+--- sent it: the message box, kept by the server so it is there again from any
+--- client, after the client is closed, and after the interaction is resumed.
+---
+--- The server stores it as given and keeps the newest
+--- `COMPOSER_HISTORY_LIMIT` history entries; it does not interpret it.
+M.types.ComposerState = {
+  kind = "struct",
+  fields = {
+    { name = "parts", required = false, type = { kind = "list", item = { kind = "string" } } },
+    { name = "focused", required = false, type = { kind = "number", integer = true } },
+    { name = "history", required = false, type = { kind = "list", item = { kind = "string" } } },
   },
 }
 
@@ -1630,7 +1662,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1655,6 +1687,8 @@ M.Request = {
   RENAME_SESSION = "rename_session",
   SET_SESSION_TAGS = "set_session_tags",
   LIST_TAGS = "list_tags",
+  SESSION_COMPOSER = "session_composer",
+  SET_SESSION_COMPOSER = "set_session_composer",
   TRANSCRIBE_AUDIO = "transcribe_audio",
   AUDIO_RECORDING_STARTED = "audio_recording_started",
   AUDIO_RECORDING_STOPPED = "audio_recording_stopped",
@@ -1684,7 +1718,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
@@ -1709,6 +1743,8 @@ M.Response = {
   SESSION_RENAMED = "session_renamed",
   SESSION_TAGS_UPDATED = "session_tags_updated",
   TAGS = "tags",
+  SESSION_COMPOSER = "session_composer",
+  SESSION_COMPOSER_STORED = "session_composer_stored",
   WORKSPACE_LAUNCH_UPDATED = "workspace_launch_updated",
   ACCEPTED = "accepted",
   QUEUED = "queued",
@@ -2550,6 +2586,24 @@ end
 --- All tags known to the server, alphabetically.
 function M.request.list_tags()
   return M.build("list_tags")
+end
+
+--- Read a Session's message box (see `ComposerState`). A Session nobody
+--- has typed in yet answers with an empty one.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.session_composer(data)
+  return M.build("session_composer", data)
+end
+
+--- Replace a Session's stored message box.
+---
+--- Fields of `data`:
+---   id        string
+---   composer  ComposerState
+function M.request.set_session_composer(data)
+  return M.build("set_session_composer", data)
 end
 
 --- Transcribe one host audio file and return its text.

@@ -381,6 +381,7 @@ fn make_interaction_current(
         return;
     }
     let id = interaction.id.clone();
+    session::save_composer(app, client, true);
     match session::attach_live_interaction(client, &id) {
         Ok((mut next, next_live)) => {
             next.adopt(app.take_operator_state());
@@ -555,6 +556,20 @@ pub fn run(
     live: &mut Attachment,
     context: RunContext<'_>,
 ) -> Result<RunOutcome> {
+    let outcome = run_rounds(terminal, app, client, live, context);
+    // Every way out of the loop is a screen about to be replaced or a client
+    // about to close, so what was typed on this one is stored first.
+    session::save_composer(app, client, true);
+    outcome
+}
+
+fn run_rounds(
+    terminal: &mut dyn Ui,
+    app: &mut App,
+    client: &Client,
+    live: &mut Attachment,
+    context: RunContext<'_>,
+) -> Result<RunOutcome> {
     tracing::debug!(
         target: "styra_tui::event_loop",
         pid = std::process::id(),
@@ -589,6 +604,7 @@ pub fn run(
     // It starts set: the first round has a blank terminal to fill.
     let mut dirty = true;
     loop {
+        session::save_composer(app, client, false);
         let workspace_id = app.workspace.id.clone().unwrap_or_default();
         dirty |= app.notices.expire();
         dirty |= launch_effects.apply_ready(app, &workspace_id);

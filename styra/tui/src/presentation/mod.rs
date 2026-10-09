@@ -239,7 +239,7 @@ pub(crate) fn help_rows(
 /// Map the TUI-owned composer and queued-message state to the input model.
 /// Rendering, wrapping, dimming, and cursor placement all remain in `ui`.
 fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
-    let title = if app.can_send() {
+    let mut title = if app.can_send() {
         if app.outbox.queued_count() == 0 {
             " message ".to_owned()
         } else {
@@ -248,6 +248,16 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
     } else {
         " message (resumes on send) ".to_owned()
     };
+    let composer = &app.composer;
+    if composer.choosing() {
+        title.push_str("· j/k choose · Enter edit · d delete ");
+    } else if composer.parts().len() > 1 {
+        title.push_str(&format!(
+            "· box {}/{} ",
+            composer.focused() + 1,
+            composer.parts().len()
+        ));
+    }
     let preceding = app
         .outbox
         .queued()
@@ -273,7 +283,9 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
             .map(|contract| format!(" asking for {} ", contract.as_str())),
         preceding,
         notice: None,
-        text: &app.composer.text,
+        parts: composer.parts(),
+        focused: composer.focused(),
+        choosing: composer.choosing(),
         placeholder: if app.session_id.is_empty() {
             "Enter to send · Ctrl+Enter to send in a new Git workspace"
         } else {

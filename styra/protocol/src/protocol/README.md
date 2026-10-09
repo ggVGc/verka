@@ -106,6 +106,16 @@ return `{"text":…,"contract":…}` objects rather than bare strings. A queue f
 written before contracts existed is an array of strings and still loads, as
 untyped messages.
 
+## The message box
+
+`session_composer` and `set_session_composer` read and replace what the
+operator has in a Session's message box: the boxes a message is being built
+from, which one they were typing in, and the messages already sent from it.
+The server stores it beside the Session's journal as `composer.json` and keeps
+the newest 200 history entries; it does not otherwise interpret it. A Session
+nobody has typed in answers with an empty box. Writes replace the whole state,
+so two clients typing into the same Session at once overwrite each other.
+
 ## Audio transcription
 
 `transcribe_audio` takes a host file path and nothing else. The server

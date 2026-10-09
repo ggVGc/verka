@@ -534,6 +534,7 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
     }
     app.select_last_on_interaction_open();
     app.outbox.replace_queued(loaded.queued);
+    restore_composer(client, &mut app);
     let accepting = interaction.activity.accepting();
     let live = if accepting {
         Attachment::Attached { cursor }
@@ -594,6 +595,7 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment
         app.workspace.change_directory(directory);
     }
     replay_into(&mut app, stored.events, stored.raw);
+    restore_composer(client, &mut app);
     // A replayed session has no live agent to end; mark it stopped.
     app.on_ended(styra_protocol::InteractionEnd {
         exit_code: None,
@@ -601,6 +603,51 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment
     });
     Ok((app, Attachment::Detached))
 }
+
+/// Put back what the operator had in this Session's message box. A server that
+/// cannot say is reported rather than refused: the Session is still worth
+/// showing, and the box simply starts empty.
+fn restore_composer(client: &Client, app: &mut App) {
+    match client.session_composer(&app.session_id) {
+        Ok(state) => app.composer = crate::composer::Composer::restore(state),
+        Err(error) => app.push_log(LogEntry::error(format!(
+            "could not restore the message box: {error:#}"
+        ))),
+    }
+}
+
+/// Store the message box with its Session when it has changed, so it is there
+/// again from any client and after this one closes.
+///
+/// While the operator is typing it is stored at most once a
+/// [`COMPOSER_SAVE_INTERVAL`], rather than once a key; at once when they have
+/// left the box, or when `now` — the screen is about to be replaced. A screen with no Session yet has
+/// nowhere to store it; what was typed there is stored with the Session it
+/// starts.
+pub fn save_composer(app: &mut App, client: &Client, now: bool) {
+    if app.session_id.is_empty() {
+        return;
+    }
+    let Some(state) = app.composer.unsaved() else {
+        return;
+    };
+    let typing = app.focus == crate::app::Focus::Input;
+    if !now && typing && app.composer_saved_at.elapsed() < COMPOSER_SAVE_INTERVAL {
+        return;
+    }
+    app.composer_saved_at = Instant::now();
+    if let Err(error) = client.set_session_composer(&app.session_id, state.clone()) {
+        app.push_log(LogEntry::error(format!(
+            "could not store the message box: {error:#}"
+        )));
+    }
+    // Marked either way: a server that refused it would refuse it again every
+    // round, and the next edit tries afresh.
+    app.composer.mark_saved(state);
+}
+
+/// How often a message box still being typed in is stored.
+const COMPOSER_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Push a stored Session's two decodings of its journal — the events it
 /// shows and the wire lines behind them — into `app`.

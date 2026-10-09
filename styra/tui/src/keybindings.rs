@@ -191,6 +191,16 @@ bindings! { MESSAGE_EDITOR = "Message editor";
     EDITOR_HISTORY_OLDER: [Key::code(KeyCode::Up)] => Action::EditorHistoryOlder;
     EDITOR_HISTORY_NEWER: [Key::code(KeyCode::Down)] => Action::EditorHistoryNewer;
     EDITOR_DELETE_WORD: [Key::ctrl('w')] => Action::EditorDeleteWord;
+    EDITOR_ADD_BOX: [Key::ctrl('n')] => Action::EditorAddBox;
+    EDITOR_CHOOSE_BOX: [Key::code(KeyCode::Esc)] ("several boxes") => Action::EditorChooseBox;
+    EDITOR_BOX_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)] ("choosing a box")
+        => Action::EditorBoxNext;
+    EDITOR_BOX_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] ("choosing a box")
+        => Action::EditorBoxPrev;
+    EDITOR_BOX_EDIT: [Key::code(KeyCode::Enter), Key::ch('i')] ("choosing a box")
+        => Action::EditorBoxEdit;
+    EDITOR_BOX_DELETE: [Key::ch('d')] ("choosing a box") => Action::EditorBoxDelete;
+    EDITOR_BOX_LEAVE: [Key::code(KeyCode::Esc)] ("choosing a box") => Action::EditorBoxLeave;
     EDITOR_LAUNCHER: [Key::ctrl('l')]
         => Action::EditorLauncher;
     EDITOR_INSERT_PATH: [Key::ctrl('f')] => Action::EditorInsertPath;

@@ -144,6 +144,21 @@ defmodule Styra.Protocol do
         %{name: "rename_session", payload: %{kind: :newtype, type: %{kind: :ref, name: "RenameSession"}}},
         %{name: "set_session_tags", payload: %{kind: :newtype, type: %{kind: :ref, name: "SetSessionTags"}}},
         %{name: "list_tags", payload: %{kind: :unit}},
+        %{name: "session_composer", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
+        %{name: "set_session_composer", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}},
+            %{name: "composer", required: true, type: %{kind: :ref, name: "ComposerState"}}
+          ]
+        }},
         %{name: "transcribe_audio", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -346,6 +361,8 @@ defmodule Styra.Protocol do
         %{name: "session_renamed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_tags_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "tags", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :string}}}},
+        %{name: "session_composer", payload: %{kind: :newtype, type: %{kind: :ref, name: "ComposerState"}}},
+        %{name: "session_composer_stored", payload: %{kind: :unit}},
         %{name: "workspace_launch_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "LaunchPolicy"}}},
         %{name: "accepted", payload: %{kind: :unit}},
         %{name: "queued", payload: %{kind: :newtype, type: %{kind: :number, integer: true}}},
@@ -485,6 +502,21 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "id", required: true, type: %{kind: :string}},
         %{name: "tags", required: true, type: %{kind: :list, item: %{kind: :string}}}
+      ]
+    },
+
+    # What an operator has half-written to a Session, and what they have already
+    # sent it: the message box, kept by the server so it is there again from any
+    # client, after the client is closed, and after the interaction is resumed.
+    #
+    # The server stores it as given and keeps the newest
+    # `COMPOSER_HISTORY_LIMIT` history entries; it does not interpret it.
+    "ComposerState" => %{
+      kind: :struct,
+      fields: [
+        %{name: "parts", required: false, type: %{kind: :list, item: %{kind: :string}}},
+        %{name: "focused", required: false, type: %{kind: :number, integer: true}},
+        %{name: "history", required: false, type: %{kind: :list, item: %{kind: :string}}}
       ]
     },
 
@@ -1672,6 +1704,8 @@ defmodule Styra.Protocol do
     "rename_session",
     "set_session_tags",
     "list_tags",
+    "session_composer",
+    "set_session_composer",
     "transcribe_audio",
     "audio_recording_started",
     "audio_recording_stopped",
@@ -2473,6 +2507,32 @@ defmodule Styra.Protocol do
     def list_tags!, do: Styra.Protocol.build!("list_tags")
 
     @doc ~S"""
+    Read a Session's message box (see `ComposerState`). A Session nobody
+    has typed in yet answers with an empty one.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def session_composer(data), do: Styra.Protocol.build("session_composer", data)
+
+    @doc "`session_composer/1`, raising on a request the server would refuse."
+    def session_composer!(data), do: Styra.Protocol.build!("session_composer", data)
+
+    @doc ~S"""
+    Replace a Session's stored message box.
+
+    Fields of `data`:
+
+      * `id      `  string
+      * `composer`  ComposerState
+    """
+    def set_session_composer(data), do: Styra.Protocol.build("set_session_composer", data)
+
+    @doc "`set_session_composer/1`, raising on a request the server would refuse."
+    def set_session_composer!(data), do: Styra.Protocol.build!("set_session_composer", data)
+
+    @doc ~S"""
     Transcribe one host audio file and return its text.
 
     The server runs a local Whisper model in its own process. No agent
@@ -2855,6 +2915,8 @@ defmodule Styra.Protocol.Response do
     {:session_renamed, "session_renamed"},
     {:session_tags_updated, "session_tags_updated"},
     {:tags, "tags"},
+    {:session_composer, "session_composer"},
+    {:session_composer_stored, "session_composer_stored"},
     {:workspace_launch_updated, "workspace_launch_updated"},
     {:accepted, "accepted"},
     {:queued, "queued"},
@@ -2940,6 +3002,10 @@ defmodule Styra.Protocol.Response do
   def session_tags_updated, do: "session_tags_updated"
 
   def tags, do: "tags"
+
+  def session_composer, do: "session_composer"
+
+  def session_composer_stored, do: "session_composer_stored"
 
   def workspace_launch_updated, do: "workspace_launch_updated"
 

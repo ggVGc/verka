@@ -257,6 +257,9 @@ pub struct App {
     pub help: Help,
     /// The message being typed and the ones already sent; see [`Composer`].
     pub composer: Composer,
+    /// When the message box was last handed to the server; see
+    /// [`crate::session::save_composer`].
+    pub composer_saved_at: std::time::Instant,
     /// Server-wide interaction navigation shown above the event timeline.
     pub interactions: LiveInteractions,
     /// The overview's cursor over that same snapshot.
@@ -519,9 +522,9 @@ pub struct OperatorState {
     preview: preview::Choices,
     link_display: LinkDisplay,
     recent_models: Vec<String>,
-    /// The message being written and the shape its reply was to come back in.
-    /// A draft is the operator's work, so it survives a screen it outlives.
-    composer: Composer,
+    /// The shape the next reply is to come back in. The message itself is
+    /// not carried: it belongs to the Session it was being written to, and the
+    /// server keeps it there (see [`Composer`]).
     contract: Option<Contract>,
     file_show_all: bool,
     /// The plan-quota readings. Unlike the diagnostic log these are not the
@@ -542,6 +545,7 @@ impl App {
             details_scroll: Scroll::default(),
             help: Help::default(),
             composer: Composer::default(),
+            composer_saved_at: std::time::Instant::now(),
             interactions: LiveInteractions::default(),
             overview: Overview::default(),
             outbox: Outbox::default(),
@@ -613,7 +617,6 @@ impl App {
             preview: self.preview.choices(),
             link_display: self.link_display,
             recent_models: std::mem::take(&mut self.recent_models),
-            composer: std::mem::take(&mut self.composer),
             contract: self.outbox.take_contract(),
             file_show_all: self.files.shows_all(),
             quota: std::mem::take(&mut self.quota),
@@ -633,7 +636,6 @@ impl App {
         self.preview.adopt(state.preview);
         self.link_display = state.link_display;
         self.recent_models = state.recent_models;
-        self.composer = state.composer;
         self.outbox.set_contract(state.contract);
         self.files.set_scope(state.file_show_all);
         self.quota = state.quota;
@@ -1615,8 +1617,11 @@ impl App {
         self.focus = Focus::Input;
     }
 
+    /// Leave the message box. Coming back to it means typing again, into
+    /// whichever box was last highlighted, rather than choosing between them.
     pub fn enter_list(&mut self) {
         self.focus = Focus::List;
+        self.composer.stop_choosing();
     }
 
     // --- Message editing -----------------------------------------------------
@@ -1720,11 +1725,10 @@ mod tests {
 
     /// Switching which Interaction is on screen rebuilds the whole screen from
     /// the server, so anything the operator put there has to be carried over
-    /// deliberately. A half-written message is the case that costs them work.
+    /// deliberately.
     #[test]
-    fn an_unsent_draft_survives_the_screen_it_was_typed_on() {
+    fn display_choices_survive_the_screen_they_were_made_on() {
         let mut app = app();
-        app.set_input("half a thought".into());
         app.outbox.set_contract(Some(Contract::Lines));
         app.preview.show();
         app.toggle_link_display();
@@ -1734,7 +1738,6 @@ mod tests {
         let mut next = App::new(app.selection.clone(), "session-2");
         next.adopt(app.take_operator_state());
 
-        assert_eq!(next.composer.text, "half a thought");
         assert_eq!(next.outbox.contract(), Some(Contract::Lines));
         assert!(next.preview.open);
         assert_eq!(next.link_display, LinkDisplay::Full);
@@ -1744,10 +1747,12 @@ mod tests {
 
     /// The log is partly the server's, replayed with the rest of an
     /// Interaction's history, so a screen that carried it across a re-attach
-    /// would show every entry twice.
+    /// would show every entry twice. The message box is the Session's too: a
+    /// draft written to one interaction is not sent to the next.
     #[test]
     fn the_interactions_own_state_is_left_to_be_rebuilt() {
         let mut app = app();
+        app.set_input("half a thought".into());
         app.push_log(LogEntry::info("something happened"));
         app.raw.push(RawLine {
             direction: styra_protocol::Direction::FromAgent,
@@ -1760,6 +1765,7 @@ mod tests {
 
         assert!(next.log.is_empty());
         assert!(next.raw.is_empty());
+        assert_eq!(next.composer.parts(), [""]);
         assert_eq!(next.timeline.entries.len(), 0);
     }
 
@@ -2432,7 +2438,7 @@ mod tests {
         assert_eq!(app.activity.status, Status::Pending);
         assert_eq!(app.focus, Focus::List);
         assert!(app.session_id.is_empty());
-        assert!(app.composer.text.is_empty());
+        assert!(app.composer.text().is_empty());
         // The message box must not read "session ended" before anything ran.
         assert!(app.can_send());
     }
@@ -2441,7 +2447,7 @@ mod tests {
     fn set_input_prefills_the_message_box_for_the_operator_to_edit_or_send() {
         let mut app = App::pending(Selection::new(Provider::Codex));
         app.set_input("earlier session's transcript".into());
-        assert_eq!(app.composer.text, "earlier session's transcript");
+        assert_eq!(app.composer.text(), "earlier session's transcript");
         assert_eq!(
             app.take_message(),
             Some("earlier session's transcript".into())
@@ -3514,9 +3520,9 @@ mod tests {
 
         app.composer.char('h');
         app.composer.char('i');
-        assert_eq!(app.composer.text, "hi");
+        assert_eq!(app.composer.text(), "hi");
         assert_eq!(app.take_message(), Some("hi".into()));
-        assert!(app.composer.text.is_empty());
+        assert!(app.composer.text().is_empty());
         assert_eq!(app.take_message(), None);
     }
 

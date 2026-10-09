@@ -123,6 +123,8 @@ transcript, details, files, answer, preview) stack over the event list, and
 | `Ctrl+R` (message editor) | start/stop recording and insert its transcript |
 | `W` (existing session) | create and associate a linked workspace and branch, then restart the interaction in it; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
+| `Ctrl+N` (message editor) | add another box to the message after the current one and type in it; the boxes are sent together, each as its own paragraph |
+| `Esc` (several boxes) | choose between the boxes: `j`/`k` move, `Enter`/`i` type in the chosen box, `d` deletes it, `Ctrl+N` adds one after it, `Esc` again leaves the editor with the boxes kept |
 | `s` / `S` | interrupt the active turn / stop its interaction |
 | `n` / `N` / `Ctrl+N` | go to a newly idle interaction, or the next running one / cycle actively running interactions / start a new session in the current Session's checkout when it has one; pressed again on that still-blank screen, it starts at the Workspace root instead |
 | `B` | branch from history through, or only, the selected entry; opens the branch and leaves the source running |
@@ -134,6 +136,13 @@ transcript, details, files, answer, preview) stack over the event list, and
 | `w` (not in details) | worktrees and the sessions in each; `Enter` opens the selected session |
 | `Ctrl+L` | choose provider, model, and effort (one list, typed at) |
 | `Ctrl+G` | turn auto-commit on/off for this interaction (also in the message editor) |
+
+The message box — its boxes, which one you were typing in, and the messages
+sent from it for `Up`/`Down` — is stored by the server with each Session, so
+switching interactions shows each one's own draft, and it is still there after
+closing the client or from another client. The blank start screen has no
+Session to store a draft with, so one left there is not kept; the message sent
+from it becomes the first history entry of the Session it starts.
 
 Sending a message to a stopped or viewed Session automatically attempts native
 provider resume. In the main interaction view, `T` edits the current

@@ -1,5 +1,6 @@
 //! The message box itself: one centered, modal input box over whatever is
-//! already on screen.
+//! already on screen. A message built from several boxes shows them stacked
+//! in it, each under a rule naming it.
 //!
 //! Kept separate from the surrounding screen renderer so input wrapping,
 //! backdrop styling, and cursor placement remain one focused component.
@@ -41,8 +42,12 @@ pub struct ModalInput<'a> {
     /// it could not be. The session view has action messages for this; a box
     /// opened over a picker has nowhere else to put it.
     pub notice: Option<String>,
-    /// The buffer being typed.
-    pub text: &'a str,
+    /// The boxes the message is built from, in order; never empty.
+    pub parts: &'a [String],
+    /// The box being typed into, or highlighted while choosing.
+    pub focused: usize,
+    /// Whether the operator is choosing between boxes rather than typing.
+    pub choosing: bool,
     /// What an empty buffer says instead, so the box explains itself.
     pub placeholder: &'a str,
     /// Whether the terminal cursor belongs in this box. Only the innermost
@@ -66,7 +71,9 @@ fn area(input: &ModalInput<'_>, frame_area: Rect) -> Rect {
 /// Height the box wants for `width` columns of content, borders included.
 pub fn height(input: &ModalInput<'_>, width: u16) -> u16 {
     let lines = display(input, width).lines.len().max(1);
-    (lines as u16 + 2).clamp(3, 8)
+    // Several boxes each spend a row on their rule, so they get more room.
+    let cap = if input.parts.len() > 1 { 16 } else { 8 };
+    (lines as u16 + 2).clamp(3, cap)
 }
 
 /// Draw the box over the whole frame: wash the finished screen beneath it down
@@ -129,7 +136,9 @@ pub fn render(frame: &mut Frame, input: &ModalInput<'_>) {
     }
     let inner = block.inner(area);
     let display = display(input, inner.width);
-    let scroll = (display.lines.len() as u16).saturating_sub(inner.height);
+    // Keep the current box's last row in view: with one box that is the
+    // bottom, with several it may be one above the others.
+    let scroll = (display.cursor_row + 1).saturating_sub(inner.height);
     frame.render_widget(
         Paragraph::new(display.lines)
             .block(block)
@@ -137,7 +146,7 @@ pub fn render(frame: &mut Frame, input: &ModalInput<'_>) {
         area,
     );
 
-    if input.cursor {
+    if input.cursor && !input.choosing {
         frame.set_cursor_position(Position {
             x: inner.x + display.cursor_col,
             y: inner.y + display.cursor_row.saturating_sub(scroll),
@@ -152,7 +161,7 @@ pub struct InputDisplay {
 }
 
 /// Wrap the box's content to `width` and place the cursor at the end of the
-/// buffer, which is where typing continues.
+/// current box, which is where typing continues.
 pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
     let width = usize::from(width.max(1));
     let mut lines = Vec::new();
@@ -163,46 +172,83 @@ pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
             Style::default().fg(theme::ADDITIONAL_INFO),
         ));
     }
-    let preceding_rows = lines.len();
 
-    if input.text.is_empty() {
-        lines.push(Line::from(Span::styled(
-            input.placeholder.to_owned(),
-            Style::default().fg(theme::MUTED_TEXT),
-        )));
-        return InputDisplay {
-            lines,
-            cursor_col: 0,
-            cursor_row: preceding_rows as u16,
+    let several = input.parts.len() > 1;
+    let mut cursor = (0, lines.len());
+    for (index, text) in input.parts.iter().enumerate() {
+        let current = index == input.focused;
+        if several {
+            lines.push(rule(index, current, input.choosing, width));
+        }
+        if text.is_empty() {
+            let (placeholder, color) = if current && !input.choosing {
+                (input.placeholder, theme::MUTED_TEXT)
+            } else {
+                ("empty", theme::INACTIVE)
+            };
+            if current {
+                cursor = (0, lines.len());
+            }
+            lines.push(Line::from(Span::styled(
+                placeholder.to_owned(),
+                Style::default().fg(color),
+            )));
+            continue;
+        }
+
+        let style = match (current, input.choosing) {
+            (true, true) => Style::default()
+                .fg(theme::TEXT)
+                .bg(theme::SELECTED_ROW_BACKGROUND),
+            (true, false) => Style::default().fg(theme::TEXT),
+            (false, _) => Style::default().fg(theme::MUTED_TEXT),
         };
+        let mut part_lines = wrapped_input_lines(text, width, style);
+        if current {
+            let mut cursor_col = part_lines
+                .last()
+                .map(|line| line.width())
+                .unwrap_or_default();
+            // At the right edge, a terminal cursor advances to the next visual
+            // row. Represent that row explicitly so the cursor never lands on
+            // the border.
+            if cursor_col == width {
+                part_lines.push(Line::default());
+                cursor_col = 0;
+            }
+            cursor = (cursor_col, lines.len() + part_lines.len().saturating_sub(1));
+        }
+        lines.extend(part_lines);
     }
-
-    let mut input_lines = wrapped_input_lines(input.text, width, Style::default().fg(theme::TEXT));
-    let mut cursor_col = input_lines
-        .last()
-        .map(|line| line.width())
-        .unwrap_or_default();
-    // At the right edge, a terminal cursor advances to the next visual row.
-    // Represent that row explicitly so the cursor never lands on the border.
-    if cursor_col == width {
-        input_lines.push(Line::default());
-        cursor_col = 0;
-    }
-    let cursor_row = preceding_rows + input_lines.len().saturating_sub(1);
-    lines.extend(input_lines);
 
     InputDisplay {
         lines,
-        cursor_col: cursor_col as u16,
-        cursor_row: cursor_row as u16,
+        cursor_col: cursor.0 as u16,
+        cursor_row: cursor.1 as u16,
     }
+}
+
+/// The rule above a box when there are several: its number, drawn in the
+/// accent for the current box so the operator can see where typing goes.
+fn rule(index: usize, current: bool, choosing: bool, width: usize) -> Line<'static> {
+    let marker = if current && choosing { "▶" } else { "─" };
+    let label = format!("{marker}─ {} ", index + 1);
+    let fill = width.saturating_sub(label.chars().count());
+    let style = if current {
+        Style::default()
+            .fg(theme::ACCENT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::INACTIVE)
+    };
+    Line::from(Span::styled(format!("{label}{}", "─".repeat(fill)), style))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn input<'a>(text: &'a str, preceding: Vec<String>) -> ModalInput<'a> {
+    fn input<'a>(parts: &'a [String], preceding: Vec<String>) -> ModalInput<'a> {
         ModalInput {
             title: " message ".into(),
             note: None,
@@ -212,7 +258,9 @@ mod tests {
             effort_reported: false,
             preceding,
             notice: None,
-            text,
+            parts,
+            focused: parts.len() - 1,
+            choosing: false,
             placeholder: "type a message, Enter to send",
             cursor: true,
         }
@@ -220,24 +268,43 @@ mod tests {
 
     #[test]
     fn wraps_input_and_keeps_the_cursor_on_the_final_visual_row() {
-        let wrapped = display(&input("abcdefghijk", Vec::new()), 5);
+        let wrapped = display(&input(&["abcdefghijk".into()], Vec::new()), 5);
         assert_eq!(wrapped.lines.len(), 3);
         assert_eq!((wrapped.cursor_col, wrapped.cursor_row), (1, 2));
 
-        let display = display(&input("abcde", Vec::new()), 5);
+        let display = display(&input(&["abcde".into()], Vec::new()), 5);
         assert_eq!(display.lines.len(), 2);
         assert_eq!((display.cursor_col, display.cursor_row), (0, 1));
     }
 
     #[test]
     fn queued_lines_are_visually_secondary() {
-        let display = display(&input("draft", vec!["queued: send later".into()]), 40);
+        let display = display(
+            &input(&["draft".into()], vec!["queued: send later".into()]),
+            40,
+        );
         let queued = display.lines[0]
             .spans
             .iter()
             .find(|span| span.content.contains("queued:"))
             .unwrap();
         assert_eq!(queued.style.fg, Some(theme::ADDITIONAL_INFO));
+    }
+
+    /// Several boxes each sit under a rule, and the cursor stays in the
+    /// current one even when a later box follows it.
+    #[test]
+    fn several_boxes_are_ruled_and_the_cursor_stays_in_the_current_one() {
+        let parts = ["first".to_owned(), "second".to_owned(), String::new()];
+        let mut boxes = input(&parts, Vec::new());
+        boxes.focused = 1;
+        let display = display(&boxes, 20);
+        let rows: Vec<String> = display.lines.iter().map(|line| line.to_string()).collect();
+        assert_eq!(rows.len(), 6);
+        assert!(rows[0].starts_with("── 1 "));
+        assert_eq!(rows[3], "second");
+        assert_eq!(rows[5], "empty");
+        assert_eq!((display.cursor_col, display.cursor_row), (6, 3));
     }
 }
 
