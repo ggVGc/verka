@@ -110,6 +110,14 @@ pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> 
         }
     }
     flush(&mut lines, &mut hunk, &language);
+    // Keep additions at full brightness; gently subdue context and metadata.
+    for line in &mut lines {
+        if line.style.bg.is_none() {
+            for span in &mut line.spans {
+                span.style = faded_style(span.style, 1);
+            }
+        }
+    }
     lines
 }
 
@@ -236,8 +244,8 @@ fn flush(
 }
 
 /// An added or removed row with its background hint. Context is left on
-/// whatever it is drawn over. Removed text is darkened and tinted red;
-/// added text is tinted green, retaining both sides' syntax colors.
+/// whatever it is drawn over. Removed text is darkened and tinted red
+/// while retaining its syntax colors.
 ///
 /// The hint is on every span as well as on the row: the event list and the
 /// preview re-wrap rows span by span, which keeps the spans' styles but not
@@ -258,11 +266,7 @@ fn tinted(row: Line<'static>, line: &str) -> Line<'static> {
                     theme::DIFF_REMOVED_FOREGROUND_TINT,
                     4,
                 )
-            } else if matches!(span.style.fg, Some(Color::Rgb(..)) | None) {
-                blended_style(span.style, theme::DIFF_ADDED_FOREGROUND_TINT, 2)
             } else {
-                // Named terminal colors already mark additions in green;
-                // keep their brightness rather than dimming them to blend.
                 span.style
             }
             .bg(background);

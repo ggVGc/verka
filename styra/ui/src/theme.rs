@@ -148,8 +148,6 @@ pub const DIFF_ADDED_BACKGROUND: Color = palette::FAINT_GREEN;
 pub const DIFF_REMOVED_BACKGROUND: Color = palette::FAINT_RED;
 /// Red mixed into removed lines' syntax colors.
 pub const DIFF_REMOVED_FOREGROUND_TINT: Color = palette::RED_FG;
-/// Green mixed into added lines' syntax colors.
-pub const DIFF_ADDED_FOREGROUND_TINT: Color = palette::GREEN;
 /// `CursorLine`.
 pub const SELECTION_BACKGROUND: Color = palette::DARK_GRAY;
 /// What a branched Session's inherited history fades toward: the code
