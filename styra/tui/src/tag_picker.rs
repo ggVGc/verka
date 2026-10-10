@@ -1,4 +1,5 @@
-//! Modal editor for an interaction's durable tags.
+//! Modal editor for an interaction's durable tags, and the same list
+//! choosing which tags the live-interactions navigator is narrowed to.
 //!
 //! The list of known tags narrows as it is typed at, through
 //! [`styra_ui::fuzzy_list`], so every printable key is a letter of the query
@@ -6,8 +7,19 @@
 
 use styra_ui::fuzzy_list::FuzzyList;
 
+/// What the chosen tags are for, which decides what Enter does with them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TagPurpose {
+    /// The tags of the current interaction, saved on Enter.
+    Edit,
+    /// The tags the navigator lists; a filter chooses among the tags that
+    /// exist, so no new one can be added.
+    Filter,
+}
+
 #[derive(Clone, Debug)]
 pub struct TagPicker {
+    pub purpose: TagPurpose,
     pub available: Vec<String>,
     pub selected: Vec<String>,
     pub list: FuzzyList,
@@ -15,7 +27,19 @@ pub struct TagPicker {
 }
 
 impl TagPicker {
-    pub fn new(mut available: Vec<String>, mut selected: Vec<String>) -> Self {
+    pub fn new(available: Vec<String>, selected: Vec<String>) -> Self {
+        Self::for_purpose(TagPurpose::Edit, available, selected)
+    }
+
+    pub fn filter(available: Vec<String>, selected: Vec<String>) -> Self {
+        Self::for_purpose(TagPurpose::Filter, available, selected)
+    }
+
+    fn for_purpose(
+        purpose: TagPurpose,
+        mut available: Vec<String>,
+        mut selected: Vec<String>,
+    ) -> Self {
         available.sort();
         available.dedup();
         selected.sort();
@@ -27,6 +51,7 @@ impl TagPicker {
         }
         available.sort();
         Self {
+            purpose,
             list: FuzzyList::at(&available, 0),
             available,
             selected,
@@ -73,6 +98,9 @@ impl TagPicker {
     /// Start typing a new tag, seeded with the filter: a query that matched
     /// nothing is most often the name of the tag that is missing.
     pub fn start_new(&mut self) {
+        if self.purpose == TagPurpose::Filter {
+            return;
+        }
         self.new_tag = Some(self.list.query.trim().to_owned());
     }
 
@@ -115,6 +143,14 @@ impl TagPicker {
 #[cfg(test)]
 mod tests {
     use super::TagPicker;
+
+    #[test]
+    fn a_filter_cannot_start_a_new_tag() {
+        let mut picker = TagPicker::filter(vec!["bug".into()], vec![]);
+        picker.type_query(Some('x'));
+        picker.start_new();
+        assert!(picker.new_tag.is_none());
+    }
 
     #[test]
     fn adding_a_tag_selects_it_and_makes_it_available() {

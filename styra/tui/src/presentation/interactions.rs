@@ -120,6 +120,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         scope,
         all_workspaces,
         completion_filter: Cow::Borrowed(completion_filter),
+        tag_filter: app.interactions.tag_filter(),
         filter: app
             .interactions
             .filter()

@@ -168,6 +168,7 @@ pub(crate) enum Action {
     InteractionsStop,
     InteractionsDelete,
     InteractionsFilter,
+    InteractionsTagFilter,
     InteractionsClose,
     OverviewLeft,
     OverviewRight,
@@ -449,6 +450,9 @@ impl Action {
             Self::InteractionsFilter => {
                 "filter by name, tag, branch, provider or Workspace (Enter opens the selection, Esc clears it)"
             }
+            Self::InteractionsTagFilter => {
+                "list only interactions carrying the chosen tags (none chosen lists all)"
+            }
             Self::InteractionsClose => "clear the filter, or close the list",
             Self::OverviewLeft => "previous tile",
             Self::OverviewRight => "next tile",
@@ -476,8 +480,10 @@ impl Action {
             Self::TagsPageUp => "move selection a page up",
             Self::TagsDeleteWord => "delete the last word of the filter",
             Self::TagsToggle => "toggle the selected tag",
-            Self::TagsNew => "add a new tag, starting from the filter (Enter adds and saves)",
-            Self::TagsSave => "save",
+            Self::TagsNew => {
+                "add a new tag, starting from the filter (Enter adds and saves; not when filtering)"
+            }
+            Self::TagsSave => "save, or apply the tag filter",
             Self::TagsCancel => "clear the filter, or cancel",
             Self::SessionsHelp => "show/close this reference",
             Self::SessionsNext => "move selection down",

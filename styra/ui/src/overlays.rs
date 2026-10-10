@@ -85,6 +85,9 @@ pub struct TagPickerView<'a> {
     pub selected: &'a [String],
     pub list: &'a FuzzyList,
     pub new_tag: Option<&'a str>,
+    /// Choosing the navigator's tag filter rather than editing tags: the
+    /// same list, but nothing new can be added to it.
+    pub filter: bool,
 }
 
 pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
@@ -103,7 +106,11 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT))
-        .title(" Interaction tags · ? keys ");
+        .title(if picker.filter {
+            " Filter interactions by tags · ? keys "
+        } else {
+            " Interaction tags · ? keys "
+        });
     if picker.list.is_filtering() {
         block = block.title_bottom(Line::from(vec![
             Span::styled(" /", Style::default().fg(theme::MUTED_TEXT)),
@@ -151,7 +158,13 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
     let input = picker
         .new_tag
         .map(|value| format!("new tag: {value} · Enter add & save"))
-        .unwrap_or_else(|| "type to filter · ctrl-n adds a new tag".into());
+        .unwrap_or_else(|| {
+            if picker.filter {
+                "type to filter · Enter lists rows with every ticked tag".into()
+            } else {
+                "type to filter · ctrl-n adds a new tag".into()
+            }
+        });
     let list_area = Rect::new(
         inside.x,
         inside.y,

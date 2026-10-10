@@ -85,6 +85,8 @@ pub struct InteractionNavigator<'a> {
     pub scope: Cow<'a, str>,
     pub all_workspaces: bool,
     pub completion_filter: Cow<'a, str>,
+    /// The tags every listed row carries, chosen with `ctrl-t`.
+    pub tag_filter: &'a [String],
     /// The `/` filter's term, when one is being typed or is in force.
     pub filter: Option<&'a str>,
     /// Whether the filter is still being typed, so it is drawn with a caret.
@@ -133,11 +135,17 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT))
-        // Scope and completion filter are state the list cannot be read
-        // without; the commands that change them are behind `?`.
+        // Scope, completion and tag filters are state the list cannot be
+        // read without; the commands that change them are behind `?`.
         .title(format!(
-            " {} · interactions · {} · ? keys ",
-            view.scope, view.completion_filter
+            " {} · interactions · {}{} · ? keys ",
+            view.scope,
+            view.completion_filter,
+            if view.tag_filter.is_empty() {
+                String::new()
+            } else {
+                format!(" · tags: {}", view.tag_filter.join(", "))
+            }
         ));
     let block = match view.filter {
         Some(filter) if view.typing_filter || !filter.is_empty() => {
@@ -624,6 +632,7 @@ mod tests {
             scope: "All".into(),
             all_workspaces: true,
             completion_filter: "completed hidden".into(),
+            tag_filter: &[],
             filter: None,
             typing_filter: false,
             requested_offset: 0,
@@ -761,6 +770,7 @@ mod tests {
             scope: "Payments".into(),
             all_workspaces: false,
             completion_filter: "completed hidden".into(),
+            tag_filter: &[],
             filter: None,
             typing_filter: false,
             requested_offset: 0,
@@ -794,6 +804,7 @@ mod tests {
             scope: "Payments".into(),
             all_workspaces: false,
             completion_filter: "completed hidden".into(),
+            tag_filter: &[],
             filter: None,
             typing_filter: false,
             requested_offset: 0,
@@ -823,6 +834,7 @@ mod tests {
             scope: "Payments".into(),
             all_workspaces: false,
             completion_filter: "completed hidden".into(),
+            tag_filter: &[],
             filter: None,
             typing_filter: false,
             requested_offset: 0,

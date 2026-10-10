@@ -552,6 +552,7 @@ fn draw_main(
             selected: &picker.selected,
             list: &picker.list,
             new_tag: picker.new_tag.as_deref(),
+            filter: picker.purpose == crate::tag_picker::TagPurpose::Filter,
         });
     let application = styra_ui::application::ApplicationView {
         session_id: &app.session_id,

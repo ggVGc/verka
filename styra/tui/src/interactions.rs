@@ -57,6 +57,10 @@ pub struct LiveInteractions {
     /// are listed. `None` lists every row the scope and completion settings
     /// allow.
     filter: Option<String>,
+    /// The `ctrl-t` tag filter: only rows carrying every one of these tags
+    /// are listed. Chosen from a list rather than typed, it is a setting like
+    /// the scope and stays when the list is reopened.
+    tag_filter: Vec<String>,
     /// Set while the filter is being typed, when every printable key is part
     /// of the term rather than a command on the list.
     typing_filter: bool,
@@ -721,6 +725,16 @@ impl LiveInteractions {
         self.typing_filter = false;
     }
 
+    /// The tags every listed row must carry; empty lists every row.
+    pub fn tag_filter(&self) -> &[String] {
+        &self.tag_filter
+    }
+
+    pub fn set_tag_filter(&mut self, tags: Vec<String>, current: &str, workspace_id: Option<&str>) {
+        self.tag_filter = tags;
+        self.follow_filter(current, workspace_id);
+    }
+
     /// Keep the cursor on a listed row as the filter narrows: once the row
     /// under it is filtered out, it moves to the first that still matches,
     /// and loads there once it rests like any other move.
@@ -740,14 +754,23 @@ impl LiveInteractions {
     fn reveal_past_filter(&mut self, target: &InteractionSummary) {
         if !self.matches_filter(target) {
             self.clear_filter();
+            self.tag_filter.clear();
         }
     }
 
-    /// Whether `interaction` passes the filter: its name (or short id), a tag,
-    /// its branch, its provider, or its Workspace's name contains the term.
-    /// The last message is left out — it changes as the agent talks, and rows
-    /// would come and go under the cursor with it.
+    /// Whether `interaction` passes both filters: it carries every tag of the
+    /// tag filter, and its name (or short id), a tag, its branch, its
+    /// provider, or its Workspace's name contains the typed term. The last
+    /// message is left out — it changes as the agent talks, and rows would
+    /// come and go under the cursor with it.
     fn matches_filter(&self, interaction: &InteractionSummary) -> bool {
+        self.tag_filter
+            .iter()
+            .all(|tag| interaction.tags.contains(tag))
+            && self.matches_typed_filter(interaction)
+    }
+
+    fn matches_typed_filter(&self, interaction: &InteractionSummary) -> bool {
         let Some(filter) = self.filter() else {
             return true;
         };
@@ -860,6 +883,7 @@ impl LiveInteractions {
         }
         if self.visible_indices(workspace_id).is_empty() {
             self.clear_filter();
+            self.tag_filter.clear();
         }
         let visible = self.visible_indices(workspace_id);
         visible
@@ -2339,6 +2363,32 @@ pub(crate) mod tests {
         live.cursor_next("one", Some("workspace"));
         live.type_filter(None, "one", Some("workspace"));
         assert_eq!(live.cursor("one"), "three");
+    }
+
+    #[test]
+    fn the_tag_filter_lists_rows_carrying_every_chosen_tag_and_outlasts_reopening() {
+        let tagged = |id: &str, tags: &[&str]| {
+            let mut interaction = named(id, id);
+            interaction.tags = tags.iter().map(|tag| tag.to_string()).collect();
+            interaction
+        };
+        let items = vec![
+            tagged("one", &["bug"]),
+            tagged("two", &["bug", "urgent"]),
+            tagged("three", &["urgent"]),
+        ];
+        let mut live = LiveInteractions::default();
+        live.open(items.clone(), vec![]);
+
+        live.set_tag_filter(vec!["bug".into(), "urgent".into()], "one", None);
+        assert_eq!(live.visible_indices(None), vec![1]);
+        assert_eq!(live.cursor("one"), "two");
+
+        live.open(items, vec![]);
+        assert_eq!(live.visible_indices(None), vec![1]);
+
+        live.set_tag_filter(Vec::new(), "one", None);
+        assert_eq!(live.visible_indices(None), vec![0, 1, 2]);
     }
 
     #[test]

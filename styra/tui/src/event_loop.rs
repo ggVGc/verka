@@ -1022,7 +1022,15 @@ fn run_rounds(
                 k if keys::TAGS_SAVE.matches(k) => {
                     let tags = picker.selected.clone();
                     let id = app.session_id.clone();
-                    save_tags(app, client, id, tags);
+                    match picker.purpose {
+                        crate::tag_picker::TagPurpose::Edit => save_tags(app, client, id, tags),
+                        crate::tag_picker::TagPurpose::Filter => {
+                            app.tag_picker = None;
+                            let workspace_id = app.workspace.id.clone();
+                            app.interactions
+                                .set_tag_filter(tags, &id, workspace_id.as_deref());
+                        }
+                    }
                 }
                 _ => match key.code {
                     KeyCode::Backspace => picker.type_query(None),
@@ -1092,6 +1100,22 @@ fn run_rounds(
             match key {
                 k if keys::INTERACTIONS_FILTER.matches(k) => {
                     app.interactions.start_filter();
+                    continue;
+                }
+                // Chosen in the tag editor's list, from the tags the server
+                // knows of, with the filter in force already ticked.
+                k if keys::INTERACTIONS_TAG_FILTER.matches(k) => {
+                    match client.list_tags() {
+                        Ok(tags) => {
+                            app.tag_picker = Some(crate::tag_picker::TagPicker::filter(
+                                tags,
+                                app.interactions.tag_filter().to_vec(),
+                            ))
+                        }
+                        Err(error) => {
+                            app.show_action_message(format!("could not list tags: {error:#}"))
+                        }
+                    }
                     continue;
                 }
                 // Esc widens a filtered list back out before it closes it.
