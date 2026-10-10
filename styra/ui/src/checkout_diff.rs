@@ -34,7 +34,15 @@ pub struct CheckoutDiffView<'a> {
     pub per_file: bool,
     pub hide_removed: bool,
     pub selected_file: usize,
+    /// First visible row in the file tree, retained between frames.
+    pub file_list_offset: usize,
     pub search: crate::search::SearchView<'a>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CheckoutDiffFeedback {
+    pub scroll: PreviewFeedback,
+    pub file_list_offset: usize,
 }
 
 /// A complete patch for one changed file, including metadata for renames,
@@ -146,7 +154,7 @@ fn file_tree_rows<'a>(files: &[(usize, FileDiff<'a>)]) -> Vec<(Option<usize>, Li
 const SHORT_COMMIT: usize = 10;
 
 /// Draw the view, and return how far its diff can scroll.
-pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> PreviewFeedback {
+pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> CheckoutDiffFeedback {
     let block = panel_block(&view.chrome);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -170,6 +178,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Pre
         .ok()
         .map(|text| filtered_file_diffs(text, view.search.query))
         .unwrap_or_default();
+    let mut file_list_offset = view.file_list_offset;
     let body = if view.per_file {
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
@@ -180,6 +189,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Pre
             .position(|(index, _)| *index == Some(view.selected_file));
         let items = rows.into_iter().map(|(_, line)| ListItem::new(line));
         let list = List::new(items)
+            .scroll_padding(5)
             .block(
                 Block::default()
                     .borders(Borders::RIGHT)
@@ -191,11 +201,11 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Pre
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("› ");
-        frame.render_stateful_widget(
-            list,
-            left,
-            &mut ListState::default().with_selected(selected),
-        );
+        let mut state = ListState::default()
+            .with_selected(selected)
+            .with_offset(file_list_offset);
+        frame.render_stateful_widget(list, left, &mut state);
+        file_list_offset = state.offset();
         right
     } else {
         body
@@ -234,10 +244,13 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Pre
         Paragraph::new(lines).scroll((view.requested_scroll.min(limit), 0)),
         body,
     );
-    PreviewFeedback {
-        limit,
-        effective_scroll: view.requested_scroll.min(limit),
-        viewport: body.height,
+    CheckoutDiffFeedback {
+        scroll: PreviewFeedback {
+            limit,
+            effective_scroll: view.requested_scroll.min(limit),
+            viewport: body.height,
+        },
+        file_list_offset,
     }
 }
 
@@ -296,9 +309,9 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
         lines.push(stat_line(text));
     }
     let navigation = if view.per_file {
-        "f: combined diff · /: search · j/k: files · J/K: scroll 10 · PgUp/PgDn: half-screen"
+        "f: combined diff · /: search · j/k: files · J/K: 5 files · ↑/↓: scroll 10 · PgUp/PgDn: half-screen"
     } else {
-        "f: per-file diffs · j/k: scroll · J/K: scroll 10 · PgUp/PgDn: half-screen"
+        "f: per-file diffs · j/k: scroll · ↑/↓: scroll 10 · PgUp/PgDn: half-screen"
     };
     lines.push(muted(navigation));
     lines.push(muted(if view.hide_removed {
@@ -452,7 +465,7 @@ index 1111111..2222222 100644
     ) -> ((String, u16), u16) {
         let (width, height) = (80, 16);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut measured = PreviewFeedback::default();
+        let mut measured = CheckoutDiffFeedback::default();
         terminal
             .draw(|frame| {
                 measured = render(
@@ -468,6 +481,7 @@ index 1111111..2222222 100644
                         per_file,
                         hide_removed: false,
                         selected_file,
+                        file_list_offset: 0,
                         search,
                     },
                     frame.area(),
@@ -482,7 +496,7 @@ index 1111111..2222222 100644
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n");
-        ((output, measured.limit), measured.viewport)
+        ((output, measured.scroll.limit), measured.scroll.viewport)
     }
 
     #[test]
@@ -603,6 +617,62 @@ index 1111111..2222222 100644
     }
 
     #[test]
+    fn file_tree_scrolls_with_five_rows_of_margin_in_both_directions() {
+        let text = (0..60)
+            .map(|n| format!("diff --git a/src/file{n:02} b/src/file{n:02}\n"))
+            .collect::<String>();
+        let mut terminal = Terminal::new(TestBackend::new(80, 28)).unwrap();
+        let mut offset = 0;
+        // The directory takes the first row; the file's row is its index + 1.
+        for (selected_file, expected_offset) in [
+            (0, 0),
+            (13, 0),
+            (14, 1),
+            (15, 2),
+            (30, 17),
+            (22, 17),
+            (21, 17),
+            (20, 16),
+            (0, 0),
+            (59, 41),
+        ] {
+            terminal
+                .draw(|frame| {
+                    let measured = render(
+                        frame,
+                        &CheckoutDiffView {
+                            chrome: chrome(),
+                            worktree: "/w",
+                            branch: None,
+                            base_branch: None,
+                            base_commit: "4bf5c35d",
+                            diff: Ok(&text),
+                            requested_scroll: 0,
+                            per_file: true,
+                            hide_removed: false,
+                            selected_file,
+                            file_list_offset: offset,
+                            search: Default::default(),
+                        },
+                        frame.area(),
+                    );
+                    assert_eq!(measured.scroll.viewport, 20);
+                    offset = measured.file_list_offset;
+                })
+                .unwrap();
+            assert_eq!(offset, expected_offset, "selected file {selected_file}");
+            let selection_row = (0..28)
+                .find(|&y| terminal.backend().buffer()[(1, y)].symbol() == "›")
+                .expect("selection remains visible");
+            if (14..=30).contains(&selected_file) {
+                // The body spans rows 7 through 26, inclusive.
+                assert!(selection_row >= 7 + 5);
+                assert!(selection_row <= 26 - 5);
+            }
+        }
+    }
+
+    #[test]
     fn tree_groups_shared_directories_and_keeps_original_patch_indices_when_filtered() {
         let text = [
             "src/a.rs",
@@ -671,6 +741,7 @@ index 1111111..2222222 100644
                         per_file: false,
                         hide_removed: false,
                         selected_file: 0,
+                        file_list_offset: 0,
                         search: Default::default(),
                     },
                     frame.area(),

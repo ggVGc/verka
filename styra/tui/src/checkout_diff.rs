@@ -55,6 +55,7 @@ pub struct CheckoutDiff {
     pub per_file: bool,
     pub hide_removed: bool,
     pub selected_file: usize,
+    pub file_list_offset: usize,
     pub search: crate::search::Search,
 }
 
@@ -70,6 +71,7 @@ impl CheckoutDiff {
             per_file: false,
             hide_removed: false,
             selected_file: 0,
+            file_list_offset: 0,
             search: Default::default(),
         }
     }
@@ -83,6 +85,7 @@ impl CheckoutDiff {
     /// Keep a visible selection as the filter changes, retaining its file
     /// identity when matches before it disappear or return.
     pub fn update_search(&mut self) {
+        self.file_list_offset = 0;
         let files = self.visible_files();
         if files.iter().any(|(index, _)| *index == self.selected_file) {
             return;
@@ -94,7 +97,7 @@ impl CheckoutDiff {
         self.scroll.reset();
     }
 
-    pub fn select_file(&mut self, down: bool) {
+    pub fn select_file(&mut self, down: bool, count: usize) {
         let files = self.visible_files();
         let position = files
             .iter()
@@ -102,10 +105,10 @@ impl CheckoutDiff {
             .unwrap_or(0);
         let next = if down {
             position
-                .saturating_add(1)
+                .saturating_add(count)
                 .min(files.len().saturating_sub(1))
         } else {
-            position.saturating_sub(1)
+            position.saturating_sub(count)
         };
         let next = files.get(next).map(|(index, _)| *index);
         if let Some(next) = next.filter(|next| *next != self.selected_file) {

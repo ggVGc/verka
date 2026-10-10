@@ -147,12 +147,13 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
         }
         MainView::CheckoutDiff(diff_view) => {
             let measured = checkout_diff::render(frame, diff_view, chunks[0]);
+            feedback.diff_file_list_offset = Some(measured.file_list_offset);
             note_preview_scroll(
                 &mut feedback,
                 PanelId::CheckoutDiff {
                     session: view.session_id.into(),
                 },
-                measured,
+                measured.scroll,
             );
         }
         MainView::Driva(driva_view) => {

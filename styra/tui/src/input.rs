@@ -553,8 +553,10 @@ pub fn handle_list_key(
                     diff.hide_removed = !diff.hide_removed;
                     diff.scroll.reset();
                 }
-                k if DIFF_DOWN.matches(k) && diff.per_file => diff.select_file(true),
-                k if DIFF_UP.matches(k) && diff.per_file => diff.select_file(false),
+                k if DIFF_DOWN.matches(k) && diff.per_file => diff.select_file(true, 1),
+                k if DIFF_UP.matches(k) && diff.per_file => diff.select_file(false, 1),
+                k if DIFF_FILES_DOWN.matches(k) && diff.per_file => diff.select_file(true, 5),
+                k if DIFF_FILES_UP.matches(k) && diff.per_file => diff.select_file(false, 5),
                 k if DIFF_DOWN.matches(k) => diff.scroll.line_down(),
                 k if DIFF_UP.matches(k) => diff.scroll.line_up(),
                 k if DIFF_SCROLL_DOWN.matches(k) => diff.scroll.page_down(),
@@ -1854,13 +1856,16 @@ mod tests {
             per_file: false,
             hide_removed: false,
             selected_file: 0,
+                        file_list_offset: 0,
             search: Default::default(),
         });
         let diff = app.checkout_diff.as_mut().unwrap();
         diff.scroll.note_limit(100);
         diff.scroll.note_viewport(30);
         let press = |app: &mut App, code| press_list_key(app, &root, KeyEvent::from(code));
-        press(&mut app, KeyCode::Char('J'));
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);
         press(&mut app, KeyCode::Char('h'));
         assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 0);
@@ -1872,15 +1877,15 @@ mod tests {
         assert!(app.checkout_diff.as_ref().unwrap().per_file);
         press(&mut app, KeyCode::Char('h'));
         assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
-        press(&mut app, KeyCode::Char('J'));
+        press(&mut app, KeyCode::Down);
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
         press(&mut app, KeyCode::PageDown);
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 25);
         press(&mut app, KeyCode::PageUp);
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
-        press(&mut app, KeyCode::Char('K'));
+        press(&mut app, KeyCode::Up);
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 0);
-        press(&mut app, KeyCode::Char('J'));
+        press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Char('j'));
         let diff = app.checkout_diff.as_ref().unwrap();
         assert_eq!(diff.selected_file, 1);
@@ -1927,6 +1932,52 @@ mod tests {
         press(&mut app, KeyCode::Backspace);
         assert!(!app.checkout_diff.as_ref().unwrap().search.typing());
         assert_eq!(app.checkout_diff.as_ref().unwrap().search.query(), None);
+
+        // Large steps clamp at the ends and count visible files when filtered.
+        let diff = app.checkout_diff.as_mut().unwrap();
+        diff.diff = Ok((0..25)
+            .map(|index| {
+                let group = if index % 2 == 0 { "match" } else { "other" };
+                format!(
+                    "diff --git a/{index:02}-{group}.txt b/{index:02}-{group}.txt\n@@ -1 +1 @@\n-a\n+b\n"
+                )
+            })
+            .collect());
+        diff.selected_file = 0;
+        for (key, selected) in [
+            ('J', 5),
+            ('J', 10),
+            ('J', 15),
+            ('J', 20),
+            ('J', 24),
+            ('K', 19),
+            ('K', 14),
+            ('K', 9),
+            ('K', 4),
+            ('K', 0),
+        ] {
+            app.checkout_diff.as_mut().unwrap().scroll.offset = 7;
+            press(&mut app, KeyCode::Char(key));
+            let diff = app.checkout_diff.as_ref().unwrap();
+            assert_eq!(diff.selected_file, selected);
+            assert_eq!(diff.scroll.offset, 0);
+        }
+        press(&mut app, KeyCode::Char('/'));
+        for character in "match".chars() {
+            press(&mut app, KeyCode::Char(character));
+        }
+        press(&mut app, KeyCode::Enter);
+        for (key, selected) in [
+            ('J', 10),
+            ('J', 20),
+            ('J', 24),
+            ('K', 14),
+            ('K', 4),
+            ('K', 0),
+        ] {
+            press(&mut app, KeyCode::Char(key));
+            assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, selected);
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

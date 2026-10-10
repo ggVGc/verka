@@ -420,6 +420,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 per_file: view.as_ref().is_some_and(|(diff, _)| diff.per_file),
                 hide_removed: view.as_ref().is_some_and(|(diff, _)| diff.hide_removed),
                 selected_file: view.as_ref().map_or(0, |(diff, _)| diff.selected_file),
+                file_list_offset: view.as_ref().map_or(0, |(diff, _)| diff.file_list_offset),
             };
             draw_main(ui, app, MainView::CheckoutDiff(&diff))
         }
@@ -609,6 +610,11 @@ fn draw_main(
 }
 
 pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback) {
+    if let Some(offset) = feedback.diff_file_list_offset {
+        if let Some(diff) = &mut app.checkout_diff {
+            diff.file_list_offset = offset;
+        }
+    }
     if let Some(rows) = &feedback.overview_rows {
         app.overview.note_rows(rows);
     }
@@ -1068,6 +1074,7 @@ mod tests {
             per_file: false,
             hide_removed: false,
             selected_file: 0,
+            file_list_offset: 0,
             search: Default::default(),
         });
         app.view = View::CheckoutDiff;

@@ -94,6 +94,8 @@ pub struct RenderFeedback {
     pub list_row_offset: Option<usize>,
     /// The line the interactions navigator was drawn from, when it was drawn.
     pub navigator_offset: Option<usize>,
+    /// First visible row in the checkout diff's file tree.
+    pub diff_file_list_offset: Option<usize>,
     /// How many tiles each row of the overview held, top to bottom, when it
     /// was drawn.
     pub overview_rows: Option<Vec<usize>>,
@@ -336,6 +338,7 @@ where
                 list_offset: None,
                 list_row_offset: None,
                 navigator_offset: None,
+                diff_file_list_offset: None,
                 overview_rows: None,
             }
         })

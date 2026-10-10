@@ -46,6 +46,7 @@ pub fn diff_block_lines(
 /// The diff's rows, without the gutter.
 pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    let mut file_name_rows = Vec::new();
     let mut language = path.and_then(language_of);
     let mut hunk: Vec<(&str, Option<u32>)> = Vec::new();
     let mut in_hunk = false;
@@ -66,6 +67,7 @@ pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> 
                 .map(|(_, path)| path)
                 .unwrap_or(rest);
             language = language_of(named).or(language);
+            file_name_rows.push(lines.len());
             lines.push(header(if compact { named } else { line }, theme::ACCENT));
         } else if line.starts_with("@@") {
             flush(&mut lines, &mut hunk, &language);
@@ -84,6 +86,9 @@ pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> 
                 hunk.push((line, None));
             } else if !compact {
                 flush(&mut lines, &mut hunk, &language);
+                if line.starts_with("--- ") || line.starts_with("+++ ") {
+                    file_name_rows.push(lines.len());
+                }
                 lines.push(header(line, theme::TEXT));
             }
         } else if !is_code(line) {
@@ -110,9 +115,10 @@ pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> 
         }
     }
     flush(&mut lines, &mut hunk, &language);
-    // Keep additions at full brightness; visibly subdue context and metadata.
-    for line in &mut lines {
-        if line.style.bg.is_none() {
+    // Keep additions and file names at full brightness; subdue context and
+    // other metadata.
+    for (index, line) in lines.iter_mut().enumerate() {
+        if line.style.bg.is_none() && file_name_rows.binary_search(&index).is_err() {
             for span in &mut line.spans {
                 span.style = faded_style(span.style, 4);
             }
