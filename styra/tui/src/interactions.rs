@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use styra_protocol::{InteractionSummary, WorkspaceSummary};
+use styra_protocol::{InteractionActivity, InteractionSummary, WorkspaceSummary};
 
 /// How long the cursor must rest on an entry before that Interaction is
 /// loaded, matching the Session and Workspace pickers' settle: short enough to
@@ -288,7 +288,8 @@ impl LiveInteractions {
 
     /// The Interactions the overview tiles, in the order it lays them out:
     /// every one whose agent still takes turns — working or waiting on the
-    /// operator — grouped by Workspace as the navigator's All scope is.
+    /// operator — working ones first, then idle ones, each grouped by
+    /// Workspace as the navigator's All scope is.
     ///
     /// Unlike [`Self::visible_indices`] this follows none of the navigator's
     /// settings. The overview is the whole of the work in flight, and a scope
@@ -306,7 +307,14 @@ impl LiveInteractions {
             })
             .map(|(index, _)| index)
             .collect();
-        grouped_by_workspace(&self.items, &self.workspaces, active)
+        let mut indices = grouped_by_workspace(&self.items, &self.workspaces, active);
+        indices.sort_by_key(|index| {
+            !matches!(
+                self.items[*index].activity,
+                InteractionActivity::Running | InteractionActivity::Background
+            )
+        });
+        indices
     }
 
     /// The visible indices in the order [`crate::presentation::interactions`] draws

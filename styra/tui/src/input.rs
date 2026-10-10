@@ -746,7 +746,11 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
                     let id = id.to_owned();
                     app.ask(Request::ShowInteraction(id))
                 }
-                None => app.show_action_message("no interaction is running or idle"),
+                None => app.show_action_message(if app.overview.running_only {
+                    "no interaction is currently running"
+                } else {
+                    "no interaction is running or idle"
+                }),
             }
         }
         // The message box sends to the interaction on screen, so the tile's
@@ -758,9 +762,14 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
                     let id = id.to_owned();
                     app.ask(Request::MessageInteraction(id))
                 }
-                None => app.show_action_message("no interaction is running or idle"),
+                None => app.show_action_message(if app.overview.running_only {
+                    "no interaction is currently running"
+                } else {
+                    "no interaction is running or idle"
+                }),
             }
         }
+        k if OVERVIEW_RUNNING_ONLY.matches(k) => app.overview.toggle_running_only(),
         k if OVERVIEW_CLOSE.matches(k) => app.view = View::Events,
         _ => return false,
     }
@@ -1327,6 +1336,17 @@ mod tests {
             Some(Request::MessageInteraction("2-left".into())),
             "Tab wraps on to the first"
         );
+
+        press(&mut app, KeyCode::Char('r'));
+        assert!(app.overview.running_only);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ShowInteraction("2-left".into()))
+        );
+        press(&mut app, KeyCode::Char('r'));
+        assert!(!app.overview.running_only);
 
         press(&mut app, KeyCode::Char('v'));
         assert_eq!(app.view, View::Events);

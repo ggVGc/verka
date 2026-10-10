@@ -10,13 +10,14 @@ use styra_ui::overview::{OverviewMessage, OverviewTile, OverviewView};
 pub(crate) fn view(app: &App) -> OverviewView<'_> {
     let now_ms = super::quota::now_ms();
     let tiles = app
-        .interactions
-        .overview_indices()
+        .overview
+        .indices(&app.interactions)
         .into_iter()
         .map(|index| tile(app, &app.interactions.items[index], now_ms))
         .collect();
     OverviewView {
         tiles,
+        running_only: app.overview.running_only,
         selected: app.overview.selected(&app.interactions, &app.session_id),
         links: super::list::ui_link_display(app.link_display),
     }
@@ -103,8 +104,8 @@ fn elapsed(interaction: &InteractionSummary, now_ms: u64) -> Option<String> {
 /// Every figure on the grid the clock moves, for [`super::clock_reading`].
 pub(crate) fn clock_reading(app: &App) -> String {
     let now_ms = super::quota::now_ms();
-    app.interactions
-        .overview_indices()
+    app.overview
+        .indices(&app.interactions)
         .into_iter()
         .filter_map(|index| elapsed(&app.interactions.items[index], now_ms))
         .collect::<Vec<_>>()

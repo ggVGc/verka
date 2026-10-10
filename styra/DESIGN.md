@@ -1083,7 +1083,10 @@ rather than a tail of each conversation, which would mean streaming every
 Interaction's updates at once. The navigator's scope, completion and `/`
 settings are deliberately not applied: a grid of the work in flight that hid
 some of it, with nothing on screen to say so, would be worse than none. Stopped
-and completed Interactions are not in flight and are left out.
+and completed Interactions are not in flight and are left out. Running and
+background work sorts before idle work, preserving Workspace order within
+each group. `r` toggles a separate running-only filter, shown in the title,
+which applies to both drawing and navigation.
 
 The renderer chooses the number of columns from the terminal's width and
 reports it back with the frame, which is how `j`/`k` know how far a column

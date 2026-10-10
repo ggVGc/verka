@@ -56,6 +56,7 @@ pub struct OverviewMessage<'a> {
 
 pub struct OverviewView<'a> {
     pub tiles: Vec<OverviewTile<'a>>,
+    pub running_only: bool,
     /// The tile under the cursor, an index into [`Self::tiles`].
     pub selected: usize,
     /// How links in the messages are drawn, as in the event list.
@@ -145,15 +146,20 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT))
         .title(format!(
-            " overview · {running} running · {} idle · ? keys ",
-            view.tiles.len() - running
+            " overview · {running} running · {} idle · r running only: {} · ? keys ",
+            view.tiles.len() - running,
+            if view.running_only { "on" } else { "off" }
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if view.tiles.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                " no interaction is running or idle",
+                if view.running_only {
+                    " no interaction is currently running"
+                } else {
+                    " no interaction is running or idle"
+                },
                 Style::default()
                     .fg(theme::MUTED_TEXT)
                     .add_modifier(Modifier::DIM),
@@ -434,6 +440,7 @@ mod tests {
         let mut waiting = tile("write the docs", InteractionStatus::Idle);
         waiting.newly_idle = true;
         let view = OverviewView {
+            running_only: false,
             tiles: vec![working, waiting],
             selected: 0,
             links: LinkDisplay::Compact,
@@ -466,6 +473,7 @@ mod tests {
             })
             .collect();
         let view = OverviewView {
+            running_only: false,
             tiles: vec![talking],
             selected: 0,
             links: LinkDisplay::Compact,
@@ -500,6 +508,7 @@ mod tests {
             },
         ];
         let view = OverviewView {
+            running_only: false,
             tiles: vec![talking],
             selected: 0,
             links: LinkDisplay::Compact,
@@ -520,6 +529,7 @@ mod tests {
     #[test]
     fn a_narrow_screen_stacks_the_tiles_in_one_column() {
         let view = OverviewView {
+            running_only: false,
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
@@ -539,6 +549,7 @@ mod tests {
     #[test]
     fn the_tiles_fill_the_whole_frame() {
         let mut view = OverviewView {
+            running_only: false,
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
@@ -602,6 +613,7 @@ mod tests {
     fn a_short_row_stretches_its_tiles_across() {
         let names = ["one", "two", "three", "four", "five", "six", "seven"];
         let view = OverviewView {
+            running_only: false,
             tiles: names
                 .iter()
                 .map(|name| tile(name, InteractionStatus::Idle))
@@ -639,6 +651,7 @@ mod tests {
     fn the_cursor_tile_stays_on_screen() {
         let names = ["one", "two", "three", "four", "five", "six"];
         let view = OverviewView {
+            running_only: false,
             tiles: names
                 .iter()
                 .map(|name| tile(name, InteractionStatus::Idle))
@@ -655,6 +668,7 @@ mod tests {
     #[test]
     fn an_empty_fleet_says_so() {
         let view = OverviewView {
+            running_only: false,
             tiles: Vec::new(),
             selected: 0,
             links: LinkDisplay::Compact,
@@ -664,5 +678,22 @@ mod tests {
             screen.contains("no interaction is running or idle"),
             "{screen}"
         );
+    }
+
+    #[test]
+    fn an_empty_running_filter_shows_its_state() {
+        let view = OverviewView {
+            running_only: true,
+            tiles: Vec::new(),
+            selected: 0,
+            links: LinkDisplay::Compact,
+        };
+        let (screen, feedback) = draw(&view, 100, 5);
+        assert!(screen.contains("r running only: on"), "{screen}");
+        assert!(
+            screen.contains("no interaction is currently running"),
+            "{screen}"
+        );
+        assert!(feedback.rows.is_empty());
     }
 }

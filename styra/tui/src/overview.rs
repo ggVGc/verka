@@ -11,6 +11,7 @@ pub struct Overview {
     /// The interaction under the cursor. `None` — what opening resets it to —
     /// means the one on screen, or the first tile when that is not one.
     cursor: Option<String>,
+    pub running_only: bool,
     /// How many tiles each row of the grid held when it was last drawn, top
     /// to bottom, which is what moving up or down steps between. The renderer
     /// decides it from the terminal's size, so it is learned from the draw.
@@ -23,6 +24,27 @@ impl Overview {
         self.cursor = None;
     }
 
+    pub fn toggle_running_only(&mut self) {
+        self.running_only = !self.running_only;
+        self.rows.clear();
+    }
+
+    /// The visible tiles, shared by drawing and cursor navigation.
+    pub fn indices(&self, interactions: &LiveInteractions) -> Vec<usize> {
+        interactions
+            .overview_indices()
+            .into_iter()
+            .filter(|index| {
+                !self.running_only
+                    || matches!(
+                        interactions.items[*index].activity,
+                        styra_protocol::InteractionActivity::Running
+                            | styra_protocol::InteractionActivity::Background
+                    )
+            })
+            .collect()
+    }
+
     pub fn note_rows(&mut self, rows: &[usize]) {
         self.rows = rows.to_vec();
     }
@@ -31,7 +53,7 @@ impl Overview {
     /// cursor whose interaction has stopped since, and so left the grid,
     /// falls back as an unmoved one does.
     pub fn selected(&self, interactions: &LiveInteractions, current: &str) -> usize {
-        let tiles = interactions.overview_indices();
+        let tiles = self.indices(interactions);
         let position = |id: &str| {
             tiles
                 .iter()
@@ -50,7 +72,7 @@ impl Overview {
         interactions: &'a LiveInteractions,
         current: &str,
     ) -> Option<&'a str> {
-        let tiles = interactions.overview_indices();
+        let tiles = self.indices(interactions);
         tiles
             .get(self.selected(interactions, current))
             .map(|index| interactions.items[*index].id.as_str())
@@ -107,14 +129,14 @@ impl Overview {
     /// The next tile in reading order, wrapping from the last to the first,
     /// as Tab moves between windows.
     pub fn next(&mut self, interactions: &LiveInteractions, current: &str) {
-        let tiles = interactions.overview_indices().len().max(1);
+        let tiles = self.indices(interactions).len().max(1);
         let at = self.selected(interactions, current);
         self.select(interactions, (at + 1) % tiles);
     }
 
     /// The previous tile, wrapping from the first to the last.
     pub fn prev(&mut self, interactions: &LiveInteractions, current: &str) {
-        let tiles = interactions.overview_indices().len().max(1);
+        let tiles = self.indices(interactions).len().max(1);
         let at = self.selected(interactions, current);
         self.select(interactions, (at + tiles - 1) % tiles);
     }
@@ -129,7 +151,7 @@ impl Overview {
 
     /// Put the cursor on tile `position`, or on the last tile past the end.
     fn select(&mut self, interactions: &LiveInteractions, position: usize) {
-        let tiles = interactions.overview_indices();
+        let tiles = self.indices(interactions);
         if let Some(index) = tiles.get(position).or(tiles.last()) {
             self.cursor = Some(interactions.items[*index].id.clone());
         }
@@ -171,7 +193,62 @@ mod tests {
             InteractionActivity::Pending,
             InteractionActivity::Background,
         ]);
-        assert_eq!(ids(&interactions), ["100-tile", "98-tile", "97-tile"]);
+        assert_eq!(ids(&interactions), ["100-tile", "97-tile", "98-tile"]);
+    }
+
+    #[test]
+    fn working_tiles_precede_idle_tiles_in_existing_order() {
+        let interactions = fleet(&[
+            InteractionActivity::Pending,
+            InteractionActivity::Background,
+            InteractionActivity::Running,
+            InteractionActivity::Pending,
+        ]);
+        assert_eq!(
+            ids(&interactions),
+            ["99-tile", "98-tile", "100-tile", "97-tile"]
+        );
+    }
+
+    #[test]
+    fn running_only_filters_navigation_and_tracks_activity_changes() {
+        let mut interactions = fleet(&[
+            InteractionActivity::Pending,
+            InteractionActivity::Running,
+            InteractionActivity::Background,
+        ]);
+        let mut overview = Overview::default();
+        let current = "100-tile";
+        overview.toggle_running_only();
+        assert_eq!(overview.indices(&interactions).len(), 2);
+        assert_eq!(
+            overview.selected_id(&interactions, current),
+            Some("99-tile")
+        );
+        overview.next(&interactions, current);
+        assert_eq!(
+            overview.selected_id(&interactions, current),
+            Some("98-tile")
+        );
+        overview.next(&interactions, current);
+        assert_eq!(
+            overview.selected_id(&interactions, current),
+            Some("99-tile")
+        );
+
+        for item in &mut interactions.items {
+            item.activity = InteractionActivity::Pending;
+        }
+        assert!(overview.indices(&interactions).is_empty());
+        assert_eq!(overview.selected_id(&interactions, current), None);
+        overview.next(&interactions, current);
+        overview.prev(&interactions, current);
+        overview.toggle_running_only();
+        assert_eq!(overview.indices(&interactions).len(), 3);
+        assert_eq!(
+            overview.selected_id(&interactions, current),
+            Some("99-tile")
+        );
     }
 
     #[test]

@@ -265,6 +265,7 @@ bindings! { OVERVIEW = "Overview";
     OVERVIEW_LAST: [Key::ch('G')] => Action::OverviewLast;
     OVERVIEW_OPEN: [Key::code(KeyCode::Enter)] => Action::OverviewOpen;
     OVERVIEW_MESSAGE: [Key::ch('i')] => Action::OverviewMessage;
+    OVERVIEW_RUNNING_ONLY: [Key::ch('r')] => Action::OverviewRunningOnly;
     OVERVIEW_CLOSE: [Key::ch('v'), Key::code(KeyCode::Esc)] => Action::OverviewClose;
 }
 

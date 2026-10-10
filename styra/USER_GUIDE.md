@@ -178,7 +178,10 @@ is showing it is not one of them — you watched it happen.
 
 `v` opens the overview, which lays out every interaction that is running or
 idle — in every Workspace, whatever the `a` list's scope or filter — as a grid
-of tiles, so the whole fleet can be watched at once. Each tile names the
+of tiles, so the whole fleet can be watched at once. Running and background
+work comes before idle interactions. `r` toggles viewing only currently running
+work (including background work); the title shows when this filter is active.
+Each tile names the
 interaction, its Workspace and branch, its agent and model, and what it is
 doing (with how long a turn has been running), carries the same `NEWLY IDLE`,
 `RATE LIMITED` and uncommitted marks as the list, and ends with the last thing
