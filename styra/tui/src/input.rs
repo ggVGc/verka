@@ -1836,6 +1836,7 @@ mod tests {
             per_file: false,
             hide_removed: false,
             selected_file: 0,
+                        file_list_offset: 0,
             search: Default::default(),
         });
         let diff = app.checkout_diff.as_mut().unwrap();

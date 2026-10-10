@@ -55,6 +55,7 @@ pub struct CheckoutDiff {
     pub per_file: bool,
     pub hide_removed: bool,
     pub selected_file: usize,
+    pub file_list_offset: usize,
     pub search: crate::search::Search,
 }
 
@@ -70,6 +71,7 @@ impl CheckoutDiff {
             per_file: false,
             hide_removed: false,
             selected_file: 0,
+            file_list_offset: 0,
             search: Default::default(),
         }
     }
@@ -83,6 +85,7 @@ impl CheckoutDiff {
     /// Keep a visible selection as the filter changes, retaining its file
     /// identity when matches before it disappear or return.
     pub fn update_search(&mut self) {
+        self.file_list_offset = 0;
         let files = self.visible_files();
         if files.iter().any(|(index, _)| *index == self.selected_file) {
             return;
