@@ -564,19 +564,13 @@ index 1111111..2222222 100644
         let ((output, _), viewport) = file_screen(Ok(&text), Some("main"), 0, true, 1);
         let rows = output.lines().collect::<Vec<_>>();
         assert!(
-            rows.iter().any(|row| row
-                .chars()
-                .take(24)
-                .collect::<String>()
-                .contains("▾ src/")),
+            rows.iter()
+                .any(|row| row.chars().take(24).collect::<String>().contains("▾ src/")),
             "{output}"
         );
         assert!(
-            rows.iter().any(|row| row
-                .chars()
-                .take(24)
-                .collect::<String>()
-                .contains("  a.rs")),
+            rows.iter()
+                .any(|row| row.chars().take(24).collect::<String>().contains("  a.rs")),
             "{output}"
         );
         assert!(
@@ -610,27 +604,39 @@ index 1111111..2222222 100644
 
     #[test]
     fn tree_groups_shared_directories_and_keeps_original_patch_indices_when_filtered() {
-        let text = ["src/a.rs", "src/a/z.rs", "README.md", "src/a/b.rs", "src/z.rs"]
-            .iter()
-            .map(|path| format!("diff --git a/{path} b/{path}\n"))
-            .collect::<String>();
+        let text = [
+            "src/a.rs",
+            "src/a/z.rs",
+            "README.md",
+            "src/a/b.rs",
+            "src/z.rs",
+        ]
+        .iter()
+        .map(|path| format!("diff --git a/{path} b/{path}\n"))
+        .collect::<String>();
         let files = filtered_file_diffs(&text, None);
         let rows = file_tree_rows(&files);
         let displayed: Vec<_> = rows
             .iter()
             .map(|(index, line)| (*index, line.to_string()))
             .collect();
-        assert_eq!(displayed, vec![
-            (Some(2), "README.md".into()),
-            (None, "▾ src/".into()),
-            (None, "  ▾ a/".into()),
-            (Some(3), "    b.rs".into()),
-            (Some(1), "    z.rs".into()),
-            (Some(0), "  a.rs".into()),
-            (Some(4), "  z.rs".into()),
-        ]);
+        assert_eq!(
+            displayed,
+            vec![
+                (Some(2), "README.md".into()),
+                (None, "▾ src/".into()),
+                (None, "  ▾ a/".into()),
+                (Some(3), "    b.rs".into()),
+                (Some(1), "    z.rs".into()),
+                (Some(0), "  a.rs".into()),
+                (Some(4), "  z.rs".into()),
+            ]
+        );
         let files = filtered_file_diffs(&text, Some("src/a/"));
-        assert_eq!(files.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [3, 1]);
+        assert_eq!(
+            files.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            [3, 1]
+        );
         assert_eq!(file_tree_rows(&files).len(), 4);
     }
 
