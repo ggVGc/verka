@@ -11,7 +11,7 @@ pub fn render_integration_message(frame: &mut Frame, message: &str) {
     text_prompt::render(
         frame,
         &TextPrompt::new(" integration commit message ", message)
-            .bottom(" Enter integrate · Ctrl-G generate · Alt-Enter newline · Esc cancel "),
+            .bottom(" Enter integrate · Ctrl-G generate · Ctrl-W delete word · Alt-Enter newline · Esc cancel "),
         frame.area(),
     );
 }

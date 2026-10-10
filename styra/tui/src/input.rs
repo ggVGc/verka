@@ -42,6 +42,16 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.ask(Request::GenerateIntegrationMessage)
         }
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(message) = app.integration_prompt.as_mut() {
+                while message.ends_with(char::is_whitespace) {
+                    message.pop();
+                }
+                while !message.is_empty() && !message.ends_with(char::is_whitespace) {
+                    message.pop();
+                }
+            }
+        }
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
             if let Some(message) = app.integration_prompt.as_mut() {
                 message.push('\n');
@@ -1090,6 +1100,20 @@ mod tests {
     use styra_protocol::{
         AttributedMount, DrivaOptions, LaunchMount, Mount, MountAccess, MountOrigin,
     };
+
+    #[test]
+    fn ctrl_w_deletes_the_previous_integration_message_word() {
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
+        app.integration_prompt = Some("fix\n café\u{2003}世界 \t".into());
+        for expected in ["fix\n café\u{2003}", "fix\n ", "", ""] {
+            handle_integration_prompt_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+            );
+            assert_eq!(app.integration_prompt.as_deref(), Some(expected));
+            assert!(app.take_request().is_none());
+        }
+    }
 
     #[test]
     fn integration_message_is_explicitly_submitted_and_generation_stays_editable() {
