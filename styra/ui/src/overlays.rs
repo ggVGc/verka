@@ -142,9 +142,16 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
             .iter()
             .map(|found| {
                 let tag = &picker.available[found.index];
+                let excluded = picker.filter
+                    && picker
+                        .selected
+                        .iter()
+                        .any(|selected| selected.strip_prefix('-') == Some(tag));
                 let mut spans = vec![Span::styled(
                     if picker.selected.contains(tag) {
                         " [x] "
+                    } else if excluded {
+                        " [-] "
                     } else {
                         " [ ] "
                     },
@@ -160,7 +167,7 @@ pub fn render_tags(frame: &mut Frame, picker: TagPickerView<'_>) {
         .map(|value| format!("new tag: {value} · Enter add & save"))
         .unwrap_or_else(|| {
             if picker.filter {
-                "type to filter · Enter lists rows with every ticked tag".into()
+                "Space require · - exclude · Enter keep".into()
             } else {
                 "type to filter · ctrl-n adds a new tag".into()
             }
@@ -362,6 +369,32 @@ mod tests {
             .collect()
     }
 
+    fn rendered_tags(available: &[String], selected: &[String]) -> String {
+        let list = FuzzyList::at(available, 0);
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_tags(
+                    frame,
+                    TagPickerView {
+                        available,
+                        selected,
+                        list: &list,
+                        new_tag: None,
+                        filter: true,
+                    },
+                )
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
     #[test]
     fn path_prompt_shows_the_text_being_typed() {
         assert!(rendered(InsertPromptView::Typing("src/main.rs")).contains("src/main.rs"));
@@ -384,5 +417,16 @@ mod tests {
             restarts: true,
         });
         assert!(screen.contains("mounting restarts the interaction"));
+    }
+
+    #[test]
+    fn tag_filter_distinguishes_required_and_excluded_tags() {
+        let available = vec!["bug".into(), "docs".into()];
+        let selected = vec!["-bug".into(), "docs".into()];
+        let screen = rendered_tags(&available, &selected);
+
+        assert!(screen.contains("[-] bug"));
+        assert!(screen.contains("[x] docs"));
+        assert!(screen.contains("- exclude"));
     }
 }

@@ -57,9 +57,9 @@ pub struct LiveInteractions {
     /// are listed. `None` lists every row the scope and completion settings
     /// allow.
     filter: Option<String>,
-    /// The `ctrl-t` tag filter: only rows carrying every one of these tags
-    /// are listed. Chosen from a list rather than typed, it is a setting like
-    /// the scope and stays when the list is reopened.
+    /// The `ctrl-t` tag filter. Plain entries are required and entries with a
+    /// leading `-` are excluded. Chosen from a list rather than typed, it is a
+    /// setting like the scope and stays when the list is reopened.
     tag_filter: Vec<String>,
     /// Set while the filter is being typed, when every printable key is part
     /// of the term rather than a command on the list.
@@ -270,6 +270,20 @@ impl LiveInteractions {
         self.items
             .iter()
             .find(|interaction| interaction.id == current)
+    }
+
+    /// The distinct tags carried by the server's current live-interaction
+    /// snapshot. The filter picker deliberately uses this instead of the
+    /// server-wide tag catalog, which also contains tags from stored Sessions.
+    pub fn live_tags(&self) -> Vec<String> {
+        let mut tags = self
+            .items
+            .iter()
+            .flat_map(|interaction| interaction.tags.iter().cloned())
+            .collect::<Vec<_>>();
+        tags.sort();
+        tags.dedup();
+        tags
     }
 
     pub fn visible_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
@@ -733,7 +747,8 @@ impl LiveInteractions {
         self.typing_filter = false;
     }
 
-    /// The tags every listed row must carry; empty lists every row.
+    /// The tag conditions in force. Plain tags are required and `-tag`
+    /// excludes rows carrying `tag`; an empty list admits every row.
     pub fn tag_filter(&self) -> &[String] {
         &self.tag_filter
     }
@@ -772,10 +787,13 @@ impl LiveInteractions {
     /// message is left out — it changes as the agent talks, and rows would
     /// come and go under the cursor with it.
     fn matches_filter(&self, interaction: &InteractionSummary) -> bool {
-        self.tag_filter
-            .iter()
-            .all(|tag| interaction.tags.contains(tag))
-            && self.matches_typed_filter(interaction)
+        self.tag_filter.iter().all(|filter| {
+            if let Some(tag) = filter.strip_prefix('-') {
+                !interaction.tags.iter().any(|candidate| candidate == tag)
+            } else {
+                interaction.tags.contains(filter)
+            }
+        }) && self.matches_typed_filter(interaction)
     }
 
     fn matches_typed_filter(&self, interaction: &InteractionSummary) -> bool {
@@ -2335,6 +2353,39 @@ pub(crate) mod tests {
 
         live.set_tag_filter(Vec::new(), "one", None);
         assert_eq!(live.visible_indices(None), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn the_tag_filter_can_exclude_tags() {
+        let tagged = |id: &str, tags: &[&str]| {
+            let mut interaction = named(id, id);
+            interaction.tags = tags.iter().map(|tag| tag.to_string()).collect();
+            interaction
+        };
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                tagged("one", &["bug"]),
+                tagged("two", &["bug", "wip"]),
+                tagged("three", &["docs"]),
+            ],
+            vec![],
+        );
+
+        live.set_tag_filter(vec!["bug".into(), "-wip".into()], "one", None);
+        assert_eq!(live.visible_indices(None), vec![0]);
+    }
+
+    #[test]
+    fn live_tags_are_sorted_unique_and_only_come_from_the_current_snapshot() {
+        let mut one = named("one", "one");
+        one.tags = vec!["urgent".into(), "bug".into()];
+        let mut two = named("two", "two");
+        two.tags = vec!["bug".into(), "docs".into()];
+        let mut live = LiveInteractions::default();
+        live.open(vec![one, two], vec![]);
+
+        assert_eq!(live.live_tags(), ["bug", "docs", "urgent"]);
     }
 
     #[test]

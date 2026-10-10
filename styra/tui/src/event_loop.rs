@@ -330,6 +330,14 @@ fn toggle_tag_picker_selection(app: &mut App) {
     apply_tag_picker_filter(app);
 }
 
+fn toggle_tag_picker_exclusion(app: &mut App) {
+    let Some(picker) = app.tag_picker.as_mut() else {
+        return;
+    };
+    picker.toggle_excluded();
+    apply_tag_picker_filter(app);
+}
+
 fn clear_tag_picker_selection(app: &mut App) {
     let Some(picker) = app.tag_picker.as_mut() else {
         return;
@@ -1068,6 +1076,11 @@ fn run_rounds(
                 k if keys::TAGS_PAGE_UP.matches(k) => picker.page_up(),
                 k if keys::TAGS_DELETE_WORD.matches(k) => picker.delete_query_word(),
                 k if keys::TAGS_TOGGLE.matches(k) => toggle_tag_picker_selection(app),
+                k if keys::TAGS_EXCLUDE.matches(k)
+                    && picker.purpose == crate::tag_picker::TagPurpose::Filter =>
+                {
+                    toggle_tag_picker_exclusion(app)
+                }
                 k if keys::TAGS_CLEAR.matches(k) => clear_tag_picker_selection(app),
                 k if keys::TAGS_NEW.matches(k) => picker.start_new(),
                 k if keys::TAGS_CANCEL.matches(k) => {
@@ -1163,20 +1176,13 @@ fn run_rounds(
                     app.interactions.start_filter();
                     continue;
                 }
-                // Chosen in the tag editor's list, from the tags the server
-                // knows of, with the filter in force already ticked.
+                // Chosen from tags carried by the current live snapshot, with
+                // the filter in force already marked.
                 k if keys::INTERACTIONS_TAG_FILTER.matches(k) => {
-                    match client.list_tags() {
-                        Ok(tags) => {
-                            app.tag_picker = Some(crate::tag_picker::TagPicker::filter(
-                                tags,
-                                app.interactions.tag_filter().to_vec(),
-                            ))
-                        }
-                        Err(error) => {
-                            app.show_action_message(format!("could not list tags: {error:#}"))
-                        }
-                    }
+                    app.tag_picker = Some(crate::tag_picker::TagPicker::filter(
+                        app.interactions.live_tags(),
+                        app.interactions.tag_filter().to_vec(),
+                    ));
                     continue;
                 }
                 // Esc widens a filtered list back out before it closes it.
@@ -1926,6 +1932,36 @@ mod tests {
 
         app.tag_picker = None;
         assert!(cursored_interaction_is_loadable(&app));
+    }
+
+    #[test]
+    fn excluding_a_tag_filter_applies_it_immediately() {
+        let mut app = App::pending(
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+        );
+        app.session_id = "one".into();
+        let current = crate::interactions::tests::interaction(
+            "one",
+            styra_protocol::InteractionActivity::Pending,
+        );
+        let mut excluded = crate::interactions::tests::interaction(
+            "two",
+            styra_protocol::InteractionActivity::Pending,
+        );
+        excluded.tags = vec!["bug".into()];
+        app.interactions.open(vec![current, excluded], Vec::new());
+        app.tag_picker = Some(crate::tag_picker::TagPicker::filter(
+            vec!["bug".into()],
+            Vec::new(),
+        ));
+
+        toggle_tag_picker_exclusion(&mut app);
+        assert_eq!(app.interactions.tag_filter(), ["-bug"]);
+        assert_eq!(app.interactions.visible_indices(None), vec![0]);
+
+        toggle_tag_picker_exclusion(&mut app);
+        assert!(app.interactions.tag_filter().is_empty());
+        assert_eq!(app.interactions.visible_indices(None), vec![0, 1]);
     }
 
     #[test]

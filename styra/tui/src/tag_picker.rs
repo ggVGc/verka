@@ -3,7 +3,8 @@
 //!
 //! The list of known tags narrows as it is typed at, through
 //! [`styra_ui::fuzzy_list`], so every printable key is a letter of the query
-//! and the picker's own commands sit on keys no tag name contains.
+//! and the picker's own commands mostly sit on control or navigation keys.
+//! In filter mode, `-` is reserved for excluding the highlighted tag.
 
 use styra_ui::fuzzy_list::FuzzyList;
 
@@ -45,9 +46,11 @@ impl TagPicker {
         available.dedup();
         selected.sort();
         selected.dedup();
-        for tag in &selected {
-            if !available.contains(tag) {
-                available.push(tag.clone());
+        if purpose == TagPurpose::Edit {
+            for tag in &selected {
+                if !available.contains(tag) {
+                    available.push(tag.clone());
+                }
             }
         }
         available.sort();
@@ -118,10 +121,40 @@ impl TagPicker {
         else {
             return;
         };
+        let excluded = format!("-{tag}");
         if let Some(index) = self.selected.iter().position(|selected| selected == &tag) {
             self.selected.remove(index);
         } else {
+            self.selected.retain(|selected| selected != &excluded);
             self.selected.push(tag);
+            self.selected.sort();
+        }
+        self.clear_query();
+    }
+
+    /// Toggle the highlighted tag as an exclusion. A tag cannot be both
+    /// required and excluded; switching its sense replaces the old choice.
+    pub fn toggle_excluded(&mut self) {
+        if self.purpose != TagPurpose::Filter {
+            return;
+        }
+        let Some(tag) = self
+            .list
+            .selected_row(&self.available)
+            .map(|row| self.available[row].clone())
+        else {
+            return;
+        };
+        let excluded = format!("-{tag}");
+        if let Some(index) = self
+            .selected
+            .iter()
+            .position(|selected| selected == &excluded)
+        {
+            self.selected.remove(index);
+        } else {
+            self.selected.retain(|selected| selected != &tag);
+            self.selected.push(excluded);
             self.selected.sort();
         }
         self.clear_query();
@@ -180,6 +213,30 @@ mod tests {
         picker.toggle();
         assert_eq!(picker.selected, ["urgent"]);
         assert!(!picker.is_filtering());
+    }
+
+    #[test]
+    fn excluding_a_tag_replaces_an_inclusion_and_toggles_off() {
+        let mut picker = TagPicker::filter(vec!["bug".into()], vec!["bug".into()]);
+        picker.toggle_excluded();
+        assert_eq!(picker.selected, ["-bug"]);
+
+        picker.toggle_excluded();
+        assert!(picker.selected.is_empty());
+    }
+
+    #[test]
+    fn including_a_tag_replaces_an_exclusion() {
+        let mut picker = TagPicker::filter(vec!["bug".into()], vec!["-bug".into()]);
+        picker.toggle();
+        assert_eq!(picker.selected, ["bug"]);
+    }
+
+    #[test]
+    fn a_filter_does_not_add_a_stale_selection_to_the_available_tags() {
+        let picker = TagPicker::filter(vec!["live".into()], vec!["-old".into()]);
+        assert_eq!(picker.available, ["live"]);
+        assert_eq!(picker.selected, ["-old"]);
     }
 
     #[test]

@@ -154,10 +154,11 @@ again. `/` filters the list as you type —
 case-insensitively, by name, tag, branch, provider, or Workspace name. The
 arrows still move the cursor while you type. `Enter` opens the interaction under
 the cursor, and `Esc` clears the filter (a second `Esc` closes the list).
-`Ctrl+T` opens the tag list used by `T` to choose a tag filter instead: tick
-tags with `Space` (which also clears the tag search) and the interaction list
-immediately shows only rows carrying every ticked tag; `Ctrl+T` clears all
-ticks. `Esc` restores the selections from when the picker opened and closes
+`Ctrl+T` opens a list of the tags on current live interactions to choose a tag
+filter instead: require a tag with `Space`, or exclude it with `-` (either also
+clears the tag search), and the interaction list updates immediately. Required
+tags are marked `[x]` and excluded tags `[-]`; `Ctrl+T` clears all marks.
+`Esc` restores the selections from when the picker opened and closes
 it. `Enter` saves the filter and closes
 the picker (no new tags can be added there; ticking
 none lists everything again). The tag filter is named in the list's title and
