@@ -99,11 +99,46 @@ pub fn file_diffs(text: &str) -> Vec<FileDiff<'_>> {
 /// File-name filtering starts with the first character and ignores case.
 pub fn filtered_file_diffs<'a>(text: &'a str, query: Option<&str>) -> Vec<(usize, FileDiff<'a>)> {
     let query = query.unwrap_or_default().to_lowercase();
-    file_diffs(text)
+    let mut files: Vec<_> = file_diffs(text)
         .into_iter()
         .enumerate()
         .filter(|(_, file)| file.path.to_lowercase().contains(&query))
-        .collect()
+        .collect();
+    // Compare components so a directory's descendants stay together even
+    // when a sibling filename shares its prefix (src/a.rs and src/a/b.rs).
+    files.sort_by(|(_, a), (_, b)| a.path.split('/').cmp(b.path.split('/')));
+    files
+}
+
+/// Expanded directory rows and file leaves. Only leaves have a file index,
+/// so keyboard navigation continues to select patches rather than folders.
+fn file_tree_rows<'a>(files: &[(usize, FileDiff<'a>)]) -> Vec<(Option<usize>, Line<'a>)> {
+    let mut rows = Vec::new();
+    let mut previous_dirs = Vec::new();
+    for (index, file) in files {
+        let components: Vec<_> = file.path.split('/').collect();
+        let (name, dirs) = components.split_last().unwrap();
+        let shared = dirs
+            .iter()
+            .zip(&previous_dirs)
+            .take_while(|(a, b)| a == b)
+            .count();
+        for (depth, directory) in dirs.iter().enumerate().skip(shared) {
+            rows.push((
+                None,
+                Line::from(Span::styled(
+                    format!("{}▾ {directory}/", "  ".repeat(depth)),
+                    Style::default().fg(theme::MUTED_TEXT),
+                )),
+            ));
+        }
+        rows.push((
+            Some(*index),
+            Line::from(format!("{}{name}", "  ".repeat(dirs.len()))),
+        ));
+        previous_dirs = dirs.to_vec();
+    }
+    rows
 }
 
 /// How much of a commit id the header shows: enough to tell commits apart in
@@ -139,10 +174,11 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Pre
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
                 .areas(body);
-        let selected = files
+        let rows = file_tree_rows(&files);
+        let selected = rows
             .iter()
-            .position(|(index, _)| *index == view.selected_file);
-        let items = files.iter().map(|(_, file)| ListItem::new(file.path));
+            .position(|(index, _)| *index == Some(view.selected_file));
+        let items = rows.into_iter().map(|(_, line)| ListItem::new(line));
         let list = List::new(items)
             .block(
                 Block::default()
@@ -532,7 +568,15 @@ index 1111111..2222222 100644
                 .chars()
                 .take(24)
                 .collect::<String>()
-                .contains("src/a.rs")),
+                .contains("▾ src/")),
+            "{output}"
+        );
+        assert!(
+            rows.iter().any(|row| row
+                .chars()
+                .take(24)
+                .collect::<String>()
+                .contains("  a.rs")),
             "{output}"
         );
         assert!(
@@ -554,14 +598,40 @@ index 1111111..2222222 100644
     }
 
     #[test]
-    fn selection_remains_visible_in_a_long_file_list() {
+    fn selection_remains_visible_in_a_long_file_tree() {
         let text = (0..30)
-            .map(|n| format!("diff --git a/file{n} b/file{n}\n@@ -1 +1 @@\n-old{n}\n+new{n}\n"))
+            .map(|n| format!("diff --git a/src/dir{n}/file{n} b/src/dir{n}/file{n}\n@@ -1 +1 @@\n-old{n}\n+new{n}\n"))
             .collect::<String>();
         let ((output, _), _) = file_screen(Ok(&text), None, 0, true, 29);
-        assert!(output.contains("› file29"), "{output}");
+        assert!(output.contains("›     file29"), "{output}");
         assert!(output.contains("new29"), "{output}");
         assert!(!output.contains("new0"), "{output}");
+    }
+
+    #[test]
+    fn tree_groups_shared_directories_and_keeps_original_patch_indices_when_filtered() {
+        let text = ["src/a.rs", "src/a/z.rs", "README.md", "src/a/b.rs", "src/z.rs"]
+            .iter()
+            .map(|path| format!("diff --git a/{path} b/{path}\n"))
+            .collect::<String>();
+        let files = filtered_file_diffs(&text, None);
+        let rows = file_tree_rows(&files);
+        let displayed: Vec<_> = rows
+            .iter()
+            .map(|(index, line)| (*index, line.to_string()))
+            .collect();
+        assert_eq!(displayed, vec![
+            (Some(2), "README.md".into()),
+            (None, "▾ src/".into()),
+            (None, "  ▾ a/".into()),
+            (Some(3), "    b.rs".into()),
+            (Some(1), "    z.rs".into()),
+            (Some(0), "  a.rs".into()),
+            (Some(4), "  z.rs".into()),
+        ]);
+        let files = filtered_file_diffs(&text, Some("src/a/"));
+        assert_eq!(files.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [3, 1]);
+        assert_eq!(file_tree_rows(&files).len(), 4);
     }
 
     #[test]

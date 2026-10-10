@@ -110,11 +110,11 @@ pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> 
         }
     }
     flush(&mut lines, &mut hunk, &language);
-    // Keep additions at full brightness; gently subdue context and metadata.
+    // Keep additions at full brightness; visibly subdue context and metadata.
     for line in &mut lines {
         if line.style.bg.is_none() {
             for span in &mut line.spans {
-                span.style = faded_style(span.style, 1);
+                span.style = faded_style(span.style, 4);
             }
         }
     }
