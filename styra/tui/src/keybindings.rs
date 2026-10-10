@@ -278,6 +278,7 @@ bindings! { TAGS = "Interaction tags";
     TAGS_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::TagsPageUp;
     TAGS_DELETE_WORD: [Key::ctrl('w')] => Action::TagsDeleteWord;
     TAGS_TOGGLE: [Key::ch(' ')] => Action::TagsToggle;
+    TAGS_CLEAR: [Key::ctrl('t')] => Action::TagsClear;
     TAGS_NEW: [Key::ctrl('n')] => Action::TagsNew;
     TAGS_SAVE: [Key::code(KeyCode::Enter)] => Action::TagsSave;
     TAGS_CANCEL: [Key::code(KeyCode::Esc)] => Action::TagsCancel;

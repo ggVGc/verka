@@ -156,9 +156,13 @@ case-insensitively, by name, tag, branch, provider, or Workspace name. The
 arrows still move the cursor while you type. `Enter` opens the interaction under
 the cursor, and `Esc` clears the filter (a second `Esc` closes the list).
 `Ctrl+T` opens the tag list used by `T` to choose a tag filter instead: tick
-tags with `Space` and `Enter` lists only interactions carrying every ticked
-tag (no new tags can be added there; ticking none lists everything again). The
-tag filter is named in the list's title and stays until changed.
+tags with `Space` (which also clears the tag search) and the interaction list
+immediately shows only rows carrying every ticked tag; `Ctrl+T` clears all
+ticks. `Esc` restores the selections from when the picker opened and closes
+it. `Enter` saves the filter and closes
+the picker (no new tags can be added there; ticking
+none lists everything again). The tag filter is named in the list's title and
+stays until changed.
 The interaction under the cursor is
 loaded once the cursor rests on it, so the list can be crossed without waiting
 for every row on the way; the row being loaded says so, and any other key acts

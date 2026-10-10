@@ -196,6 +196,7 @@ pub(crate) enum Action {
     TagsPageUp,
     TagsDeleteWord,
     TagsToggle,
+    TagsClear,
     TagsNew,
     TagsSave,
     TagsCancel,
@@ -479,12 +480,13 @@ impl Action {
             Self::TagsPageDown => "move selection a page down",
             Self::TagsPageUp => "move selection a page up",
             Self::TagsDeleteWord => "delete the last word of the filter",
-            Self::TagsToggle => "toggle the selected tag",
+            Self::TagsToggle => "toggle the selected tag and clear the search",
+            Self::TagsClear => "clear every selected tag",
             Self::TagsNew => {
                 "add a new tag, starting from the filter (Enter adds and saves; not when filtering)"
             }
-            Self::TagsSave => "save, or apply the tag filter",
-            Self::TagsCancel => "clear the filter, or cancel",
+            Self::TagsSave => "save tags or filters and close",
+            Self::TagsCancel => "restore the original selections and close",
             Self::SessionsHelp => "show/close this reference",
             Self::SessionsNext => "move selection down",
             Self::SessionsPrev => "move selection up",

@@ -302,6 +302,50 @@ fn save_tags(app: &mut App, client: &Client, id: String, tags: Vec<String>) {
     }
 }
 
+fn apply_tag_picker_filter(app: &mut App) {
+    let tags = {
+        let Some(picker) = app.tag_picker.as_ref() else {
+            return;
+        };
+        (picker.purpose == crate::tag_picker::TagPurpose::Filter).then(|| picker.selected.clone())
+    };
+    let Some(tags) = tags else {
+        return;
+    };
+    let id = app.session_id.clone();
+    let workspace_id = app.workspace.id.clone();
+    app.interactions
+        .set_tag_filter(tags, &id, workspace_id.as_deref());
+}
+
+/// Toggle the highlighted tag and, when the picker is choosing a navigator
+/// filter, apply the new selection immediately. The filter picker is drawn on
+/// top of the navigator, so updating its state here lets the rows behind it
+/// react to every Space press instead of waiting for Enter.
+fn toggle_tag_picker_selection(app: &mut App) {
+    let Some(picker) = app.tag_picker.as_mut() else {
+        return;
+    };
+    picker.toggle();
+    apply_tag_picker_filter(app);
+}
+
+fn clear_tag_picker_selection(app: &mut App) {
+    let Some(picker) = app.tag_picker.as_mut() else {
+        return;
+    };
+    picker.selected.clear();
+    apply_tag_picker_filter(app);
+}
+
+fn restore_tag_picker_selection(app: &mut App) {
+    let Some(picker) = app.tag_picker.as_mut() else {
+        return;
+    };
+    picker.restore_selection();
+    apply_tag_picker_filter(app);
+}
+
 pub struct RunContext<'a> {
     pub standing_launch: &'a LaunchPolicy,
     pub preferences_path: &'a Path,
@@ -364,6 +408,10 @@ fn load_cursored_interaction(
         return;
     };
     make_interaction_current(app, live, client, standing_launch, interaction);
+}
+
+fn cursored_interaction_is_loadable(app: &App) -> bool {
+    app.tag_picker.is_none() && app.interactions.due(&app.session_id).is_some()
 }
 
 /// Make `interaction` current. Its complete state is loaded on the event-loop
@@ -680,7 +728,12 @@ fn run_rounds(
         // A cursor that has come to rest loads the interaction under it. Until
         // then the navigator says that row is loading and the screen below is
         // still the interaction it was.
-        if app.interactions.due(&app.session_id).is_some() {
+        // A live tag-filter edit can move the navigator cursor when the row
+        // under it stops matching. Do not load that row while the picker is
+        // still open: loading replaces the whole App and would make Space
+        // appear to close the modal. The settled cursor is loaded on the
+        // first round after the picker closes instead.
+        if cursored_interaction_is_loadable(app) {
             load_cursored_interaction(app, live, client, standing_launch);
             dirty = true;
         }
@@ -1009,15 +1062,12 @@ fn run_rounds(
                 k if keys::TAGS_PAGE_DOWN.matches(k) => picker.page_down(),
                 k if keys::TAGS_PAGE_UP.matches(k) => picker.page_up(),
                 k if keys::TAGS_DELETE_WORD.matches(k) => picker.delete_query_word(),
-                k if keys::TAGS_TOGGLE.matches(k) => picker.toggle(),
+                k if keys::TAGS_TOGGLE.matches(k) => toggle_tag_picker_selection(app),
+                k if keys::TAGS_CLEAR.matches(k) => clear_tag_picker_selection(app),
                 k if keys::TAGS_NEW.matches(k) => picker.start_new(),
-                // Esc widens the list back out before it closes the picker.
                 k if keys::TAGS_CANCEL.matches(k) => {
-                    if picker.is_filtering() {
-                        picker.clear_query();
-                    } else {
-                        app.tag_picker = None;
-                    }
+                    restore_tag_picker_selection(app);
+                    app.tag_picker = None;
                 }
                 k if keys::TAGS_SAVE.matches(k) => {
                     let tags = picker.selected.clone();
@@ -1026,9 +1076,6 @@ fn run_rounds(
                         crate::tag_picker::TagPurpose::Edit => save_tags(app, client, id, tags),
                         crate::tag_picker::TagPurpose::Filter => {
                             app.tag_picker = None;
-                            let workspace_id = app.workspace.id.clone();
-                            app.interactions
-                                .set_tag_filter(tags, &id, workspace_id.as_deref());
                         }
                     }
                 }
@@ -1822,6 +1869,59 @@ mod tests {
             crossterm::event::KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL,)
         ));
         assert!(!interaction_navigator_passthrough(press('l')));
+    }
+
+    #[test]
+    fn toggling_a_tag_filter_applies_it_immediately() {
+        let mut app = App::pending(
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+        );
+        app.session_id = "one".into();
+        let current = crate::interactions::tests::interaction(
+            "one",
+            styra_protocol::InteractionActivity::Pending,
+        );
+        let mut matching = crate::interactions::tests::interaction(
+            "two",
+            styra_protocol::InteractionActivity::Pending,
+        );
+        matching.tags = vec!["bug".into()];
+        app.interactions.open(vec![current, matching], Vec::new());
+        app.tag_picker = Some(crate::tag_picker::TagPicker::filter(
+            vec!["bug".into()],
+            Vec::new(),
+        ));
+
+        toggle_tag_picker_selection(&mut app);
+        assert_eq!(app.interactions.tag_filter(), ["bug"]);
+        assert!(app.tag_picker.is_some());
+        assert!(app.interactions.pending("one").is_some());
+        std::thread::sleep(Duration::from_millis(140));
+        assert!(!cursored_interaction_is_loadable(&app));
+
+        toggle_tag_picker_selection(&mut app);
+        assert!(app.interactions.tag_filter().is_empty());
+        assert!(app.tag_picker.is_some());
+
+        toggle_tag_picker_selection(&mut app);
+        clear_tag_picker_selection(&mut app);
+        assert!(app.interactions.tag_filter().is_empty());
+        assert!(app
+            .tag_picker
+            .as_ref()
+            .is_some_and(|picker| picker.selected.is_empty()));
+
+        app.tag_picker = Some(crate::tag_picker::TagPicker::filter(
+            vec!["bug".into()],
+            vec!["bug".into()],
+        ));
+        clear_tag_picker_selection(&mut app);
+        restore_tag_picker_selection(&mut app);
+        assert_eq!(app.interactions.tag_filter(), ["bug"]);
+        assert_eq!(app.tag_picker.as_ref().unwrap().selected, ["bug"]);
+
+        app.tag_picker = None;
+        assert!(cursored_interaction_is_loadable(&app));
     }
 
     #[test]

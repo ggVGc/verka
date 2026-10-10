@@ -22,6 +22,7 @@ pub struct TagPicker {
     pub purpose: TagPurpose,
     pub available: Vec<String>,
     pub selected: Vec<String>,
+    initial_selected: Vec<String>,
     pub list: FuzzyList,
     pub new_tag: Option<String>,
 }
@@ -54,6 +55,7 @@ impl TagPicker {
             purpose,
             list: FuzzyList::at(&available, 0),
             available,
+            initial_selected: selected.clone(),
             selected,
             new_tag: None,
         }
@@ -95,6 +97,10 @@ impl TagPicker {
         self.list.clear(&self.available);
     }
 
+    pub fn restore_selection(&mut self) {
+        self.selected.clone_from(&self.initial_selected);
+    }
+
     /// Start typing a new tag, seeded with the filter: a query that matched
     /// nothing is most often the name of the tag that is missing.
     pub fn start_new(&mut self) {
@@ -118,6 +124,7 @@ impl TagPicker {
             self.selected.push(tag);
             self.selected.sort();
         }
+        self.clear_query();
     }
 
     pub fn add_new(&mut self) {
@@ -172,6 +179,7 @@ mod tests {
         }
         picker.toggle();
         assert_eq!(picker.selected, ["urgent"]);
+        assert!(!picker.is_filtering());
     }
 
     #[test]
@@ -182,6 +190,7 @@ mod tests {
         }
         picker.toggle();
         assert!(picker.selected.is_empty());
+        assert_eq!(picker.list.query, "zzz");
     }
 
     #[test]
