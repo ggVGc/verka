@@ -3923,6 +3923,9 @@ impl ServerState {
             }
             Request::SetSessionCompleted { id, completed } => {
                 self.ensure_not_integrating(&id)?;
+                if completed == CompletionState::Completed {
+                    self.ensure_checkout_integrated(&id)?;
+                }
                 self.set_session_completion(&id, completed)?;
                 Ok(Response::Accepted)
             }

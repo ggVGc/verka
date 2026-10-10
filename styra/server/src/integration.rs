@@ -27,6 +27,122 @@ mod tests {
     use std::process::Command;
 
     #[test]
+    fn completion_refuses_unmerged_changes_and_leaves_the_session_active() {
+        let fixture = Fixture::new();
+        let complete = || {
+            fixture.state.handle(Request::SetSessionCompleted {
+                id: fixture.id.clone(),
+                completed: CompletionState::Completed,
+            })
+        };
+        // Untracked, staged and unstaged work must all block completion.
+        std::fs::write(fixture.path().join("feature"), "work").unwrap();
+        assert!(complete().unwrap_err().to_string().contains("integrate"));
+        git(fixture.path(), &["add", "feature"]);
+        assert!(complete().is_err());
+        SystemGit.commit_all(fixture.path(), "feature").unwrap();
+        assert!(complete().is_err(), "committed work is still unmerged");
+        std::fs::write(fixture.path().join("feature"), "edited").unwrap();
+        assert!(complete().is_err());
+        assert_eq!(
+            journal::read_session_completed(&fixture.session).unwrap(),
+            CompletionState::Active
+        );
+        // Abandonment remains available for work the operator chooses to drop.
+        fixture
+            .state
+            .handle(Request::SetSessionCompleted {
+                id: fixture.id.clone(),
+                completed: CompletionState::Abandoned,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn completion_allows_a_checkout_without_changes_from_its_base() {
+        let fixture = Fixture::new();
+        // Even a different commit is harmless when it has identical contents.
+        git(fixture.path(), &["commit", "--allow-empty", "-m", "empty"]);
+        fixture
+            .state
+            .handle(Request::SetSessionCompleted {
+                id: fixture.id.clone(),
+                completed: CompletionState::Completed,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn completion_allows_changes_merged_into_the_source() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        git(
+            &fixture.host,
+            &["merge", "--ff-only", &fixture.checkout.branch],
+        );
+        fixture
+            .state
+            .handle(Request::SetSessionCompleted {
+                id: fixture.id.clone(),
+                completed: CompletionState::Completed,
+            })
+            .unwrap();
+        // New work after that merge is no longer integrated.
+        std::fs::write(fixture.path().join("later"), "later").unwrap();
+        SystemGit.commit_all(fixture.path(), "later").unwrap();
+        assert!(fixture
+            .state
+            .ensure_checkout_integrated(&fixture.id)
+            .is_err());
+    }
+
+    #[test]
+    fn completion_checks_branches_whose_checkout_was_removed() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        SystemGit
+            .remove_worktree(&fixture.host, fixture.path())
+            .unwrap();
+        journal::clear_session_worktree(&fixture.session).unwrap();
+        assert!(fixture
+            .state
+            .ensure_checkout_integrated(&fixture.id)
+            .is_err());
+        git(
+            &fixture.host,
+            &["merge", "--ff-only", &fixture.checkout.branch],
+        );
+        fixture
+            .state
+            .ensure_checkout_integrated(&fixture.id)
+            .unwrap();
+    }
+
+    #[test]
+    fn completion_recognizes_a_recorded_squash_but_rejects_later_commits() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        let mut progress = fixture.progress();
+        progress.branch_commit = SystemGit.commit(fixture.path(), "HEAD").unwrap();
+        progress.commit = Some(
+            SystemGit
+                .squash_merge(&fixture.host, &fixture.checkout.branch, "squash")
+                .unwrap(),
+        );
+        store_progress(&fixture.session.join("integration.json"), &progress).unwrap();
+        fixture
+            .state
+            .ensure_checkout_integrated(&fixture.id)
+            .unwrap();
+        std::fs::write(fixture.path().join("later"), "later").unwrap();
+        SystemGit.commit_all(fixture.path(), "later").unwrap();
+        assert!(fixture
+            .state
+            .ensure_checkout_integrated(&fixture.id)
+            .is_err());
+    }
+
+    #[test]
     fn background_integration_publishes_its_result() {
         let fixture = Fixture::new();
         fixture.feature();
@@ -323,6 +439,69 @@ mod tests {
 }
 
 impl ServerState {
+    /// Operator completion must not hide work still waiting to be merged.
+    /// Integration itself completes through `set_session_completion` after
+    /// verifying its squash commit and removing the checkout.
+    pub(super) fn ensure_checkout_integrated(&self, id: &str) -> Result<()> {
+        let session = self.stored_summary(id)?;
+        let Some(checkout) = self.session_checkout(&session.path, &session.workspace_id, id)?
+        else {
+            return Ok(());
+        };
+        let refusal = "this interaction has unmerged checkout changes; integrate it before marking it completed";
+        let path = checkout.path.as_deref().filter(|path| path.exists());
+        if let Some(path) = path {
+            anyhow::ensure!(!self.inner.git.has_uncommitted_changes(path)?, "{refusal}");
+        }
+        let Some(base) = &checkout.branched_from else {
+            // Older checkout records have no base against which to compare.
+            return Ok(());
+        };
+        let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
+        let repository = path.unwrap_or_else(|| {
+            workspace
+                .git_repository
+                .as_deref()
+                .unwrap_or(&workspace.host_path)
+        });
+        let revision = if path.is_some() {
+            "HEAD"
+        } else {
+            &checkout.branch
+        };
+        let head = self
+            .inner
+            .git
+            .commit(repository, revision)?
+            .context("the interaction checkout has no commit")?;
+        if !self
+            .inner
+            .git
+            .has_committed_changes(repository, &base.commit, &head)?
+        {
+            return Ok(());
+        }
+        if let Some(source) = &base.branch {
+            if self.inner.git.is_ancestor(repository, &head, source)? {
+                return Ok(());
+            }
+            // Squash integration does not make the interaction's commits
+            // ancestors of the source. Verify the recorded squash instead.
+            let record = session.path.join("integration.json");
+            if record.exists() {
+                let progress: Progress = serde_json::from_slice(&std::fs::read(record)?)?;
+                if progress.branch_commit.as_ref() == Some(&head) {
+                    if let Some(commit) = &progress.commit {
+                        if self.inner.git.is_ancestor(repository, commit, source)? {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+        anyhow::bail!("{refusal}")
+    }
+
     pub(super) fn integration_result(
         &self,
         id: &str,

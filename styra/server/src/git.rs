@@ -64,6 +64,11 @@ pub struct Directories {
 /// — which is nearly all of them — runs against [`FakeGit`] and never spawns a
 /// process. [`SystemGit`] is the only implementation that does.
 pub trait Git: Send + Sync {
+    /// Whether two revisions have different committed contents. The default
+    /// models the commit-only history used by fake backends.
+    fn has_committed_changes(&self, checkout: &Path, base: &str, head: &str) -> Result<bool> {
+        Ok(self.commit(checkout, base)? != self.commit(checkout, head)?)
+    }
     /// Integration operations. Fakes which do not model history refuse them.
     fn rebase(&self, _checkout: &Path, _source: &str) -> Result<bool> {
         anyhow::bail!("this Git backend does not support rebasing")
@@ -208,6 +213,29 @@ impl SystemGit {
 }
 
 impl Git for SystemGit {
+    fn has_committed_changes(&self, checkout: &Path, base: &str, head: &str) -> Result<bool> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(checkout)
+            .args([
+                "diff",
+                "--quiet",
+                "--no-ext-diff",
+                "--no-textconv",
+                base,
+                head,
+                "--",
+            ])
+            .output()?;
+        match output.status.code() {
+            Some(0) => Ok(false),
+            Some(1) => Ok(true),
+            _ => anyhow::bail!(
+                "could not compare checkout contents: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        }
+    }
     fn is_ancestor(&self, checkout: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
         let output = Command::new("git")
             .arg("-C")

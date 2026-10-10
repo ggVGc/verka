@@ -972,9 +972,9 @@ pub fn finish_interaction(
             true
         }
         Err(error) => {
-            app.push_log(LogEntry::error(format!(
-                "could not mark interaction {label}: {error:#}"
-            )));
+            let message = format!("could not mark interaction {label}: {error:#}");
+            app.push_log(LogEntry::error(message.clone()));
+            app.show_action_message(message);
             false
         }
     }
