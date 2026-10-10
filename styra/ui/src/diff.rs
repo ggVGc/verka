@@ -383,7 +383,12 @@ mod tests {
     /// headers do not. Code with no grammar is banded the same way.
     #[test]
     fn changed_rows_have_a_background_hint_and_context_does_not() {
-        for path in ["src/lib.rs", "notes.unknown"] {
+        for path in [
+            "src/lib.rs",
+            "notes.unknown",
+            "lib/example.ex",
+            "test/example.exs",
+        ] {
             let lines = diff_body_lines("@@ edit @@\n same\n-old\n+new", Some(path), false);
 
             assert_eq!(lines[0].style.bg, None, "{path}: header");
@@ -398,6 +403,64 @@ mod tests {
                 Some(theme::DIFF_ADDED_BACKGROUND),
                 "{path}"
             );
+        }
+    }
+
+    #[test]
+    fn elixir_sources_and_scripts_are_highlighted_with_diff_cues() {
+        for path in ["lib/example.ex", "test/example_test.exs"] {
+            let lines = diff_body_lines(
+                "@@ -1,2 +1,2 @@\n-def old, do: :old\n+def new, do: :new\n # comment",
+                Some(path),
+                false,
+            );
+            assert_eq!(text(&lines[1]), "1 -def old, do: :old");
+            assert_eq!(text(&lines[2]), "1 +def new, do: :new");
+            assert_eq!(text(&lines[3]), "2  # comment");
+            assert_eq!(
+                lines[1].spans[1].style.fg,
+                blended_style(
+                    faded_style(Style::default().fg(theme::ERROR), 3),
+                    theme::DIFF_REMOVED_FOREGROUND_TINT,
+                    4,
+                )
+                .fg
+            );
+            assert_eq!(lines[2].spans[1].style.fg, Some(theme::SUCCESS));
+            for line in &lines[1..=2] {
+                assert!(line.spans.len() > 4, "tokenized {path}: {:?}", line.spans);
+                assert!(line.spans[2..].iter().any(|span| {
+                    span.content.contains("def")
+                        && span.style.fg != Some(theme::SUCCESS)
+                        && span.style.fg != Some(theme::ERROR)
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn elixir_in_file_headers_preserves_blank_lines_and_multiline_strings() {
+        let lines = diff_body_lines(
+            "diff --git a/lib/example.ex b/lib/example.ex\n@@\n+message = \"\"\"\n+hello\n+\n+world\n+\"\"\"",
+            None,
+            true,
+        );
+        let texts: Vec<String> = lines.iter().map(text).collect();
+        assert_eq!(
+            texts,
+            [
+                "lib/example.ex",
+                "@@",
+                "+message = \"\"\"",
+                "+hello",
+                "+",
+                "+world",
+                "+\"\"\""
+            ]
+        );
+        for index in [3, 5] {
+            assert_eq!(lines[index].spans[0].style.fg, Some(theme::SUCCESS));
+            assert_eq!(lines[index].spans[1].style.fg, Some(crate::palette::PEACH));
         }
     }
 

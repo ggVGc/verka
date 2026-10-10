@@ -37,9 +37,22 @@ use ratatui::text::{Line, Span};
 use std::cell::RefCell;
 use std::sync::LazyLock;
 use tui_markdown::{AlertKind, CodeTheme, StyleSheet};
+use two_face::re_exports::syntect::{
+    easy::HighlightLines,
+    highlighting::{FontStyle, Theme, ThemeSet},
+    parsing::SyntaxSet,
+};
 
 static MARKDOWN_CODE_THEME: LazyLock<CodeTheme> = LazyLock::new(|| {
     CodeTheme::from_textmate(theme::MARKDOWN_CODE_THEME)
+        .expect("Styra's embedded Markdown code theme must be valid")
+});
+
+// tui-markdown's built-in syntax set does not include Elixir and cannot be
+// extended. Use the bat grammar bundle for it, with the same TextMate theme.
+static ELIXIR_SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_no_newlines);
+static ELIXIR_CODE_THEME: LazyLock<Theme> = LazyLock::new(|| {
+    ThemeSet::load_from_reader(&mut std::io::Cursor::new(theme::MARKDOWN_CODE_THEME))
         .expect("Styra's embedded Markdown code theme must be valid")
 });
 
@@ -173,9 +186,10 @@ pub fn is_file_reference(code: &str) -> bool {
     })
 }
 
-/// Syntax-highlights a standalone fenced-code block when `language` is known
-/// to tui-markdown.  Code reaches Styra as a separate `DetailBlock`, so it
-/// cannot otherwise take the Markdown renderer's fenced-code path.
+/// Syntax-highlights a standalone code block when `language` is known to
+/// tui-markdown or the supplemental Elixir grammar. Code reaches Styra as a
+/// separate `DetailBlock`, so it cannot otherwise take the Markdown renderer's
+/// fenced-code path.
 ///
 /// `None` means the language was absent or unrecognised; callers can then use
 /// their ordinary code rendering (including its diagnostics and diff cues).
@@ -205,6 +219,12 @@ pub fn syntax_highlighted_code_lines(
 
 /// [`syntax_highlighted_code_lines`] proper, behind its cache.
 fn highlight_code(text: &str, language: &str, indent: &str) -> Option<Vec<Line<'static>>> {
+    if matches!(
+        language.to_ascii_lowercase().as_str(),
+        "elixir" | "ex" | "exs"
+    ) {
+        return highlight_elixir(text, indent);
+    }
     // A four-backtick wrapper also permits source which itself contains a
     // normal three-backtick fence.
     let source = format!("````{language}\n{text}\n````");
@@ -235,6 +255,43 @@ fn highlight_code(text: &str, language: &str, indent: &str) -> Option<Vec<Line<'
             })
             .collect()
     })
+}
+
+fn highlight_elixir(text: &str, indent: &str) -> Option<Vec<Line<'static>>> {
+    let syntax = ELIXIR_SYNTAXES.find_syntax_by_name("Elixir")?;
+    let mut highlighter = HighlightLines::new(syntax, &ELIXIR_CODE_THEME);
+    text.split('\n')
+        .map(|line| {
+            let tokens = highlighter.highlight_line(line, &ELIXIR_SYNTAXES).ok()?;
+            let mut spans = vec![Span::styled(
+                indent.to_owned(),
+                Style::default().fg(theme::TEXT),
+            )];
+            spans.extend(tokens.into_iter().map(|(style, token)| {
+                let mut modifiers = Modifier::empty();
+                if style.font_style.contains(FontStyle::BOLD) {
+                    modifiers |= Modifier::BOLD;
+                }
+                if style.font_style.contains(FontStyle::ITALIC) {
+                    modifiers |= Modifier::ITALIC;
+                }
+                if style.font_style.contains(FontStyle::UNDERLINE) {
+                    modifiers |= Modifier::UNDERLINED;
+                }
+                Span::styled(
+                    token.to_owned(),
+                    Style::default()
+                        .fg(ratatui::style::Color::Rgb(
+                            style.foreground.r,
+                            style.foreground.g,
+                            style.foreground.b,
+                        ))
+                        .add_modifier(modifiers),
+                )
+            }));
+            Some(Line::from(spans))
+        })
+        .collect()
 }
 
 /// As [`markdown_block_lines_with_links`], drawing one entry as selected.
@@ -752,7 +809,11 @@ mod tests {
         let lines = markdown_block_lines("first\n\nsecond *em*", base, "  ");
 
         for line in &lines {
-            for span in line.spans.iter().filter(|span| !span.content.trim().is_empty()) {
+            for span in line
+                .spans
+                .iter()
+                .filter(|span| !span.content.trim().is_empty())
+            {
                 assert_eq!(span.style.fg, Some(theme::USER_TEXT), "{lines:?}");
             }
         }
@@ -1127,6 +1188,26 @@ mod tests {
             text_of(&rust),
             "asking again has to give the same rendering back"
         );
+    }
+
+    #[test]
+    fn elixir_language_aliases_preserve_source_and_indent() {
+        let source = "def hello, do: :world\n\n";
+        for language in ["elixir", "ex", "exs", "Elixir"] {
+            let lines = syntax_highlighted_code_lines(source, Some(language), "  ")
+                .expect("Elixir is a known language");
+            let texts: Vec<String> = lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect();
+            assert_eq!(texts, ["  def hello, do: :world", "  ", "  "]);
+            assert!(lines[0].spans.len() > 3);
+        }
     }
 
     fn text_of(lines: &[Line<'static>]) -> Vec<(String, Vec<Style>)> {
