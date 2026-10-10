@@ -64,6 +64,10 @@ pub struct Directories {
 /// — which is nearly all of them — runs against [`FakeGit`] and never spawns a
 /// process. [`SystemGit`] is the only implementation that does.
 pub trait Git: Send + Sync {
+    /// The common ancestor used when an older checkout has no recorded base.
+    fn merge_base(&self, _checkout: &Path, _left: &str, _right: &str) -> Result<String> {
+        anyhow::bail!("this Git backend cannot determine the checkout's base commit")
+    }
     /// Whether two revisions have different committed contents. The default
     /// models the commit-only history used by fake backends.
     fn has_committed_changes(&self, checkout: &Path, base: &str, head: &str) -> Result<bool> {
@@ -213,6 +217,14 @@ impl SystemGit {
 }
 
 impl Git for SystemGit {
+    fn merge_base(&self, checkout: &Path, left: &str, right: &str) -> Result<String> {
+        let base = Invocation::new(checkout, "determine the checkout's base commit")
+            .args(["merge-base", left, right])
+            .output()?;
+        let base = base.trim();
+        anyhow::ensure!(!base.is_empty(), "the checkout has no common base commit");
+        Ok(base.to_owned())
+    }
     fn has_committed_changes(&self, checkout: &Path, base: &str, head: &str) -> Result<bool> {
         let output = Command::new("git")
             .arg("-C")

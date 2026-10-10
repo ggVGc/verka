@@ -27,6 +27,84 @@ mod tests {
     use std::process::Command;
 
     #[test]
+    fn completion_checks_older_checkout_records_without_a_base() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        let mut checkout = fixture.checkout.clone();
+        checkout.branched_from = None;
+        let meta_path = fixture.session.join("session.json");
+        let mut meta: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+        meta["checkout"]
+            .as_object_mut()
+            .unwrap()
+            .remove("branched_from");
+        std::fs::write(meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+        let error = fixture
+            .state
+            .handle(Request::SetSessionCompleted {
+                id: fixture.id.clone(),
+                completed: CompletionState::Completed,
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("integrate"), "{error:#}");
+        assert_eq!(
+            journal::read_session_completed(&fixture.session).unwrap(),
+            CompletionState::Active
+        );
+        git(&fixture.host, &["merge", "--ff-only", &checkout.branch]);
+        fixture
+            .state
+            .ensure_checkout_integrated(&fixture.id)
+            .unwrap();
+    }
+
+    #[test]
+    fn completion_checks_a_workspace_in_an_unrecorded_worktree() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        let workspace =
+            crate::workspace::create(fixture.state.store_root(), fixture.path(), None).unwrap();
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile =
+            crate::agent::resolve_profile(&selection, &workspace_layout(fixture.path())).unwrap();
+        let (journal, id) = Journal::create_in_workspace(
+            fixture.state.store_root(),
+            &workspace.id,
+            &profile,
+            &selection,
+            None,
+        )
+        .unwrap();
+        let session = journal.path().parent().unwrap().to_path_buf();
+        drop(journal);
+        assert!(journal::read_session_checkout(&session).unwrap().is_none());
+        let error = fixture
+            .state
+            .handle(Request::SetSessionCompleted {
+                id: id.clone(),
+                completed: CompletionState::Completed,
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("integrate"), "{error:#}");
+        assert_eq!(
+            journal::read_session_completed(&session).unwrap(),
+            CompletionState::Active
+        );
+        git(
+            &fixture.host,
+            &["merge", "--ff-only", &fixture.checkout.branch],
+        );
+        fixture
+            .state
+            .handle(Request::SetSessionCompleted {
+                id,
+                completed: CompletionState::Completed,
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn completion_refuses_unmerged_changes_and_leaves_the_session_active() {
         let fixture = Fixture::new();
         let complete = || {
@@ -444,8 +522,54 @@ impl ServerState {
     /// verifying its squash commit and removing the checkout.
     pub(super) fn ensure_checkout_integrated(&self, id: &str) -> Result<()> {
         let session = self.stored_summary(id)?;
-        let Some(checkout) = self.session_checkout(&session.path, &session.workspace_id, id)?
-        else {
+        let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
+        let mut checkout = self.session_checkout(&session.path, &session.workspace_id, id)?;
+        // A Workspace can itself be a linked worktree, or the agent can move
+        // into one. Neither requires a Styra-created checkout record.
+        let directory = if let Ok(interaction) = self.interaction(id) {
+            Some(interaction.working_tree.checkout())
+        } else if checkout
+            .as_ref()
+            .is_some_and(|checkout| checkout.path.is_none())
+        {
+            None
+        } else {
+            let (host, sandbox) = self.stored_workspace_mount(&session)?;
+            let meta = journal::read_session_meta(&session.path)?;
+            let reported = journal::last_reported_cwd(&session.path, meta.protocol)?;
+            Some(
+                replayed_host_working_directory(
+                    reported.as_deref(),
+                    WorkspaceMount {
+                        host: &host,
+                        sandbox: &sandbox,
+                    },
+                )
+                .unwrap_or(host),
+            )
+        };
+        if let Some(directory) = directory.filter(|directory| directory.exists()) {
+            if let Some(repository) = self.inner.git.discover(&directory)? {
+                let main = repository
+                    .common_dir
+                    .parent()
+                    .context("the repository has no main checkout")?;
+                if repository.root != main
+                    && checkout
+                        .as_ref()
+                        .and_then(|checkout| checkout.path.as_ref())
+                        != Some(&repository.root)
+                {
+                    checkout = Some(crate::worktree::Checkout {
+                        path: Some(repository.root.clone()),
+                        branch: self.inner.git.current_branch(&repository.root)?
+                            .context("the interaction worktree has a detached HEAD; cannot verify integration")?,
+                        branched_from: None,
+                    });
+                }
+            }
+        }
+        let Some(checkout) = checkout else {
             return Ok(());
         };
         let refusal = "this interaction has unmerged checkout changes; integrate it before marking it completed";
@@ -453,11 +577,6 @@ impl ServerState {
         if let Some(path) = path {
             anyhow::ensure!(!self.inner.git.has_uncommitted_changes(path)?, "{refusal}");
         }
-        let Some(base) = &checkout.branched_from else {
-            // Older checkout records have no base against which to compare.
-            return Ok(());
-        };
-        let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
         let repository = path.unwrap_or_else(|| {
             workspace
                 .git_repository
@@ -474,6 +593,31 @@ impl ServerState {
             .git
             .commit(repository, revision)?
             .context("the interaction checkout has no commit")?;
+        let base = match &checkout.branched_from {
+            Some(base) => base.clone(),
+            None => {
+                // Missing metadata must not silently authorize completion.
+                // For an existing worktree, compare with the main checkout's
+                // branch at their common ancestor instead.
+                let found =
+                    self.inner.git.discover(repository)?.context(
+                        "cannot locate the interaction's repository to verify integration",
+                    )?;
+                let main = found
+                    .common_dir
+                    .parent()
+                    .context("the repository has no main checkout")?;
+                let source =
+                    self.inner.git.current_branch(main)?.context(
+                        "the main checkout has a detached HEAD; cannot verify integration",
+                    )?;
+                anyhow::ensure!(source != checkout.branch, "cannot verify integration: the checkout has no recorded base or separate source branch");
+                crate::worktree::BranchPoint {
+                    commit: self.inner.git.merge_base(repository, &head, &source)?,
+                    branch: Some(source),
+                }
+            }
+        };
         if !self
             .inner
             .git
