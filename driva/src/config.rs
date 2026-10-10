@@ -289,6 +289,7 @@ fn builtin_templates() -> BTreeMap<String, TemplateConfig> {
             "codex-runtime",
             include_str!("../templates/codex-runtime.toml"),
         ),
+        ("elixir", include_str!("../templates/elixir.toml")),
         ("sbt", include_str!("../templates/sbt.toml")),
         ("rust", include_str!("../templates/rust.toml")),
     ]

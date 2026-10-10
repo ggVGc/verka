@@ -260,6 +260,7 @@ claude-exec	Run Claude Code non-interactively against the current project
 codex	Run the host's Codex binary interactively in Bubblewrap
 codex-exec	Run OpenAI Codex non-interactively against the current project
 codex-runtime	Run OpenAI Codex interactively against the current project
+elixir	Elixir/Mix
 rust	Rust/Cargo
 sbt	Scala sbt
 ```

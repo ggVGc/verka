@@ -1,0 +1,20 @@
+description = "Elixir/Mix"
+
+# Styra agents use a temporary HOME. Keep Mix's archives and Rebar, and Hex's
+# configuration and package cache, at the host paths mounted below.
+[environment]
+MIX_HOME = "~/.mix"
+HEX_HOME = "~/.hex"
+
+[[mount]]
+source = "/etc/resolv.conf"
+destination = "/etc/resolv.conf"
+access = "read"
+
+[[mount]]
+source = "~/.mix"
+access = "write"
+
+[[mount]]
+source = "~/.hex"
+access = "write"

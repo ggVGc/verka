@@ -184,6 +184,14 @@ The agent binary and `tmux` are mounts like everything else, shown as `host
 tooling`; state a session needs beyond that (a git identity, a toolchain) is
 granted as a mount or a template.
 
+The `rust`, `sbt`, and `elixir` templates provide language environments. The
+`elixir` template uses system-installed Elixir and Erlang and grants writable
+access to the host's `~/.mix` and `~/.hex` directories. Create those directories
+before selecting it (`mkdir -p ~/.mix ~/.hex`); their paths are set explicitly
+so Mix and Hex work with the agent's temporary home. Select it with
+`--template elixir` or in the Workspace's template picker. Enable networking
+when fetching dependencies.
+
 ## Socket API
 
 Each connection carries one newline-terminated JSON request and one
