@@ -68,12 +68,12 @@ pub use client::{Client, InProcessServer};
 pub use daemon::{in_process, run, serve_if_requested, ServerConfig};
 pub use protocol::WorkspaceLaunchChange;
 pub use protocol::{
-    Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
-    BranchHistory, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
-    InteractionActivityReason, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
-    LaunchPolicy, LoadedInteraction, LogEntry, LogLevel, MountOrigin, ProviderRaw, QueuedMessage,
-    QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
-    VariableOrigin, WorkspaceSummary,
+    Action, ActionOrigin, ActionRecord, ActionStatus, Answer, AnswerValue, AttributedMount,
+    AttributedVariable, BaseCapability, BaseEntry, BranchHistory, Contract, Direction,
+    DrivaOptions, FileLocation, InteractionActivity, InteractionActivityReason, InteractionEnd,
+    InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LoadedInteraction, LogEntry,
+    LogLevel, MountOrigin, ProviderRaw, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
+    SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary,
 };
 pub use spawn::ensure_server;
 
@@ -84,6 +84,7 @@ pub use spawn::ensure_server;
 pub mod broker;
 // A cheap one-shot question Styra asks an agent for its own purposes, as
 // opposed to an `interaction`, which is the operator's own session.
+mod actions;
 pub mod errand;
 pub mod interaction;
 pub mod journal;

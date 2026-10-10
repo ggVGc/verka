@@ -188,3 +188,11 @@ therefore require coordinated client and server updates.
 server is refused rather than silently misread. New fields are therefore added
 as optional, with an absent value meaning what the protocol meant before it
 existed: no `contract` is an ordinary untyped turn, exactly as every turn was.
+
+
+`interaction_actions` takes a Session `id` and returns its durable action
+lifecycle records, oldest first. It works for live and stored Sessions. A
+record carries the original request (or an automatic commit), timestamp,
+affected Session ids, origin, and status. Match the record `id` to join
+`started` with `succeeded` or `failed`; a missing terminal record means the
+outcome is unknown. Reading action history does not append another action.

@@ -320,6 +320,13 @@ M.types.Request = {
       },
     } },
     { name = "quota_log", payload = { kind = "unit" } },
+    { name = "interaction_actions", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "shutdown", payload = { kind = "unit" } },
   },
 }
@@ -369,6 +376,7 @@ M.types.Response = {
     { name = "shell", payload = { kind = "newtype", type = { kind = "ref", name = "ShellInfo" } } },
     { name = "answer", payload = { kind = "newtype", type = { kind = "ref", name = "Answer" } } },
     { name = "quota_log", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "QuotaEvent" } } } },
+    { name = "interaction_actions", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "ActionRecord" } } } },
   },
 }
 
@@ -921,6 +929,21 @@ M.types.QuotaEvent = {
   },
 }
 
+--- An append-only action lifecycle record. Records sharing `id` describe one
+--- invocation. Sessions created by an action are linked by its terminal record.
+M.types.ActionRecord = {
+  kind = "struct",
+  fields = {
+    { name = "id", required = true, type = { kind = "string" } },
+    { name = "at_ms", required = true, type = { kind = "number", integer = true } },
+    { name = "sessions", required = true, type = { kind = "list", item = { kind = "string" } } },
+    { name = "action", required = true, type = { kind = "ref", name = "Action" } },
+    { name = "origin", required = true, type = { kind = "ref", name = "ActionOrigin" } },
+    { name = "status", required = true, type = { kind = "ref", name = "ActionStatus" } },
+    { name = "detail", required = true, type = { kind = "optional", inner = { kind = "string" } } },
+  },
+}
+
 --- How much reasoning the model is asked to spend per turn.
 ---
 --- One vocabulary across providers, ordered lowest first, since the ladders
@@ -1403,6 +1426,45 @@ M.types.QuotaStatus = {
   },
 }
 
+--- A server action, captured at the common dispatch boundary. The original
+--- request preserves every input, including fields added by future operations.
+M.types.Action = {
+  kind = "enum",
+  tagging = { style = "adjacent", tag = "type", content = "data" },
+  variants = {
+    { name = "request", payload = { kind = "newtype", type = { kind = "ref", name = "Request" } } },
+    { name = "commit_turn", payload = {
+      kind = "struct",
+      fields = {
+        { name = "message", required = true, type = { kind = "string" } },
+      },
+    } },
+  },
+}
+
+M.types.ActionOrigin = {
+  kind = "enum",
+  tagging = { style = "external" },
+  plain = true,
+  variants = {
+    { name = "client", payload = { kind = "unit" } },
+    { name = "automatic", payload = { kind = "unit" } },
+  },
+}
+
+--- Started without a terminal record means the server stopped before it could
+--- report an outcome; it must never be interpreted as success.
+M.types.ActionStatus = {
+  kind = "enum",
+  tagging = { style = "external" },
+  plain = true,
+  variants = {
+    { name = "started", payload = { kind = "unit" } },
+    { name = "succeeded", payload = { kind = "unit" } },
+    { name = "failed", payload = { kind = "unit" } },
+  },
+}
+
 --- Which layer of the launch policy put a mount in the sandbox.
 ---
 --- The effective policy is one flat list by the time Driva runs it, but the
@@ -1663,7 +1725,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1716,10 +1778,11 @@ M.Request = {
   SHELL = "shell",
   TURN_ANSWER = "turn_answer",
   QUOTA_LOG = "quota_log",
+  INTERACTION_ACTIONS = "interaction_actions",
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
@@ -1761,6 +1824,7 @@ M.Response = {
   SHELL = "shell",
   ANSWER = "answer",
   QUOTA_LOG = "quota_log",
+  INTERACTION_ACTIONS = "interaction_actions",
 }
 
 M.enums.WireResponse = { "ok", "error" }
@@ -1909,6 +1973,28 @@ M.QuotaStatus = {
   ALLOWED = "allowed",
   WARNING = "warning",
   EXHAUSTED = "exhausted",
+}
+
+M.enums.Action = { "request", "commit_turn" }
+--- Wire spellings of `Action`.
+M.Action = {
+  REQUEST = "request",
+  COMMIT_TURN = "commit_turn",
+}
+
+M.enums.ActionOrigin = { "client", "automatic" }
+--- Wire spellings of `ActionOrigin`.
+M.ActionOrigin = {
+  CLIENT = "client",
+  AUTOMATIC = "automatic",
+}
+
+M.enums.ActionStatus = { "started", "succeeded", "failed" }
+--- Wire spellings of `ActionStatus`.
+M.ActionStatus = {
+  STARTED = "started",
+  SUCCEEDED = "succeeded",
+  FAILED = "failed",
 }
 
 M.enums.MountOrigin = { "workspace", "git_repository", "scratch", "profile", "template", "tooling", "operator", "broker" }
@@ -2848,6 +2934,14 @@ end
 --- live reading rather than a record: it starts empty with the daemon.
 function M.request.quota_log()
   return M.build("quota_log")
+end
+
+--- Read this interaction's durable action history, including earlier runs.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.interaction_actions(data)
+  return M.build("interaction_actions", data)
 end
 
 --- Ask the server to remove its socket and exit. Any live interactions it owns die
