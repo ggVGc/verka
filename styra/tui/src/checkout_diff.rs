@@ -54,6 +54,7 @@ pub struct CheckoutDiff {
     pub scroll: Scroll,
     pub per_file: bool,
     pub selected_file: usize,
+    pub search: crate::search::Search,
 }
 
 impl CheckoutDiff {
@@ -67,22 +68,45 @@ impl CheckoutDiff {
             scroll: Scroll::default(),
             per_file: false,
             selected_file: 0,
+            search: Default::default(),
         }
     }
-    pub fn select_file(&mut self, down: bool) {
-        let count = self
-            .diff
+    fn visible_files(&self) -> Vec<(usize, styra_ui::checkout_diff::FileDiff<'_>)> {
+        self.diff
             .as_ref()
-            .map(|text| styra_ui::checkout_diff::file_diffs(text).len())
+            .map(|text| styra_ui::checkout_diff::filtered_file_diffs(text, self.search.query()))
+            .unwrap_or_default()
+    }
+
+    /// Keep a visible selection as the filter changes, retaining its file
+    /// identity when matches before it disappear or return.
+    pub fn update_search(&mut self) {
+        let files = self.visible_files();
+        if files.iter().any(|(index, _)| *index == self.selected_file) {
+            return;
+        }
+        let next = files.first().map(|(index, _)| *index);
+        if let Some(next) = next {
+            self.selected_file = next;
+        }
+        self.scroll.reset();
+    }
+
+    pub fn select_file(&mut self, down: bool) {
+        let files = self.visible_files();
+        let position = files
+            .iter()
+            .position(|(index, _)| *index == self.selected_file)
             .unwrap_or(0);
         let next = if down {
-            self.selected_file
+            position
                 .saturating_add(1)
-                .min(count.saturating_sub(1))
+                .min(files.len().saturating_sub(1))
         } else {
-            self.selected_file.saturating_sub(1)
+            position.saturating_sub(1)
         };
-        if next != self.selected_file {
+        let next = files.get(next).map(|(index, _)| *index);
+        if let Some(next) = next.filter(|next| *next != self.selected_file) {
             self.selected_file = next;
             self.scroll.reset();
         }

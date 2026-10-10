@@ -33,6 +33,7 @@ pub struct CheckoutDiffView<'a> {
     pub requested_scroll: u16,
     pub per_file: bool,
     pub selected_file: usize,
+    pub search: crate::search::SearchView<'a>,
 }
 
 /// A complete patch for one changed file, including metadata for renames,
@@ -94,6 +95,16 @@ pub fn file_diffs(text: &str) -> Vec<FileDiff<'_>> {
         .collect()
 }
 
+/// File-name filtering starts with the first character and ignores case.
+pub fn filtered_file_diffs<'a>(text: &'a str, query: Option<&str>) -> Vec<(usize, FileDiff<'a>)> {
+    let query = query.unwrap_or_default().to_lowercase();
+    file_diffs(text)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, file)| file.path.to_lowercase().contains(&query))
+        .collect()
+}
+
 /// How much of a commit id the header shows: enough to tell commits apart in
 /// any repository an operator is likely to have, short enough to read.
 const SHORT_COMMIT: usize = 10;
@@ -118,13 +129,19 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Pre
         ),
         top,
     );
-    let files = view.diff.ok().map(file_diffs).unwrap_or_default();
-    let body = if view.per_file && !files.is_empty() {
+    let files = view
+        .diff
+        .ok()
+        .map(|text| filtered_file_diffs(text, view.search.query))
+        .unwrap_or_default();
+    let body = if view.per_file {
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
                 .areas(body);
-        let selected = view.selected_file.min(files.len() - 1);
-        let items = files.iter().map(|file| ListItem::new(file.path));
+        let selected = files
+            .iter()
+            .position(|(index, _)| *index == view.selected_file);
+        let items = files.iter().map(|(_, file)| ListItem::new(file.path));
         let list = List::new(items)
             .block(
                 Block::default()
@@ -140,7 +157,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Pre
         frame.render_stateful_widget(
             list,
             left,
-            &mut ListState::default().with_selected(Some(selected)),
+            &mut ListState::default().with_selected(selected),
         );
         right
     } else {
@@ -148,9 +165,17 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Pre
     };
     let shown = if view.per_file {
         files
-            .get(view.selected_file.min(files.len().saturating_sub(1)))
-            .map(|file| Ok(file.patch))
-            .unwrap_or(view.diff)
+            .iter()
+            .find(|(index, _)| *index == view.selected_file)
+            .or_else(|| files.first())
+            .map(|(_, file)| Ok(file.patch))
+            .unwrap_or_else(|| {
+                if view.search.query.is_some_and(|query| !query.is_empty()) && view.diff.is_ok() {
+                    Err("no matching files")
+                } else {
+                    view.diff
+                }
+            })
     } else {
         view.diff
     };
@@ -224,10 +249,22 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
         lines.push(stat_line(text));
     }
     lines.push(muted(if view.per_file {
-        "Tab: combined diff · j/k: files · J/K: scroll 10 · PgUp/PgDn: half-screen"
+        "Tab: combined diff · /: search · j/k: files · J/K: scroll 10 · PgUp/PgDn: half-screen"
     } else {
         "Tab: per-file diffs · j/k: scroll · J/K: scroll 10 · PgUp/PgDn: half-screen"
     }));
+    if view.per_file {
+        if let Some(query) = view.search.query {
+            lines.push(muted(&format!(
+                "/{query}  · {}",
+                if view.search.typing {
+                    "Enter: keep filter · Esc: clear"
+                } else {
+                    "Esc: clear filter"
+                }
+            )));
+        }
+    }
     lines
 }
 
@@ -312,6 +349,24 @@ index 1111111..2222222 100644
         per_file: bool,
         selected_file: usize,
     ) -> ((String, u16), u16) {
+        filtered_screen(
+            diff,
+            base_branch,
+            scroll,
+            per_file,
+            selected_file,
+            Default::default(),
+        )
+    }
+
+    fn filtered_screen(
+        diff: Result<&str, &str>,
+        base_branch: Option<&str>,
+        scroll: u16,
+        per_file: bool,
+        selected_file: usize,
+        search: crate::search::SearchView<'_>,
+    ) -> ((String, u16), u16) {
         let (width, height) = (80, 16);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut measured = PreviewFeedback::default();
@@ -329,6 +384,7 @@ index 1111111..2222222 100644
                         requested_scroll: scroll,
                         per_file,
                         selected_file,
+                        search,
                     },
                     frame.area(),
                 );
@@ -343,6 +399,49 @@ index 1111111..2222222 100644
             .collect::<Vec<_>>()
             .join("\n");
         ((output, measured.limit), measured.viewport)
+    }
+
+    #[test]
+    fn file_search_filters_names_and_the_selected_patch_together() {
+        let text =
+            format!("{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old second\n+new second\n");
+        let files = filtered_file_diffs(&text, Some("B.T"));
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0, 1);
+        assert_eq!(files[0].1.path, "b.txt");
+        let ((output, _), _) = filtered_screen(
+            Ok(&text),
+            None,
+            0,
+            true,
+            1,
+            crate::search::SearchView {
+                query: Some("B.T"),
+                typing: true,
+            },
+        );
+        assert!(output.contains("/B.T"), "{output}");
+        assert!(output.contains("Enter: keep filter"), "{output}");
+        assert!(output.contains("› b.txt"), "{output}");
+        assert!(output.contains("new second"), "{output}");
+        assert!(!output.contains("src/a.rs"), "{output}");
+        assert!(!output.contains("fn c()"), "{output}");
+
+        let ((output, limit), _) = filtered_screen(
+            Ok(&text),
+            None,
+            0,
+            true,
+            1,
+            crate::search::SearchView {
+                query: Some("missing"),
+                typing: false,
+            },
+        );
+        assert!(output.contains("no matching files"), "{output}");
+        assert!(!output.contains("new second"), "{output}");
+        assert!(!output.contains("fn c()"), "{output}");
+        assert_eq!(limit, 0);
     }
 
     #[test]
@@ -447,6 +546,7 @@ index 1111111..2222222 100644
                         requested_scroll: 0,
                         per_file: false,
                         selected_file: 0,
+                        search: Default::default(),
                     },
                     frame.area(),
                 );

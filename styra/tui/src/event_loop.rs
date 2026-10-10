@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::activity::Status;
-use crate::app::{App, Focus, LaunchPolicy, Request};
+use crate::app::{App, Focus, LaunchPolicy, Request, View};
 use crate::audio::AudioInput;
 use crate::config::Configuration;
 use crate::input;
@@ -930,6 +930,11 @@ fn run_rounds(
             && app.git_repository_prompt.is_none()
             && app.launch.prompt.is_none()
             && !app.search.typing()
+            && !(app.view == View::CheckoutDiff
+                && app
+                    .checkout_diff
+                    .as_ref()
+                    .is_some_and(|diff| diff.search.typing()))
             && !app
                 .tag_picker
                 .as_ref()
@@ -1097,6 +1102,15 @@ fn run_rounds(
         // The event list's `/` search is modal while it is being typed: every
         // printable key is part of the term, including the ones bound to
         // commands on the list it is marking.
+        if app.view == View::CheckoutDiff
+            && app
+                .checkout_diff
+                .as_ref()
+                .is_some_and(|diff| diff.search.typing())
+        {
+            input::handle_diff_search_key(app, key);
+            continue;
+        }
         if app.search.typing() {
             input::handle_search_key(app, key);
             continue;

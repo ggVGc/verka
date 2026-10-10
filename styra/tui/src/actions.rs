@@ -71,6 +71,7 @@ pub(crate) enum Action {
     EventsLinks,
     EventsLinkMenu,
     EventsCopy,
+    DiffSearch,
     DiffToggleFiles,
     DiffDown,
     DiffUp,
@@ -350,6 +351,7 @@ impl Action {
             }
             Self::EventsLinkMenu => "actions on the highlighted link",
             Self::EventsCopy => "copy selected entry to clipboard",
+            Self::DiffSearch => "filter diff files by name (Enter keeps filter, Esc clears)",
             Self::DiffToggleFiles => "toggle combined / per-file diffs",
             Self::DiffDown => "next file (per-file view), or scroll down",
             Self::DiffUp => "previous file (per-file view), or scroll up",

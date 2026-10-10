@@ -414,6 +414,9 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                     Err(error) => Err(error.as_str()),
                 }),
                 requested_scroll: view.as_ref().map_or(0, |(diff, _)| diff.scroll.clamped()),
+                search: view
+                    .as_ref()
+                    .map_or(Default::default(), |(diff, _)| diff.search.view()),
                 per_file: view.as_ref().is_some_and(|(diff, _)| diff.per_file),
                 selected_file: view.as_ref().map_or(0, |(diff, _)| diff.selected_file),
             };
@@ -1063,6 +1066,7 @@ mod tests {
             scroll: Default::default(),
             per_file: false,
             selected_file: 0,
+            search: Default::default(),
         });
         app.view = View::CheckoutDiff;
 

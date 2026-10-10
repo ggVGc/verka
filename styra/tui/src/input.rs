@@ -36,6 +36,28 @@ pub fn handle_search_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// File-list search consumes command letters while its prompt is open.
+pub fn handle_diff_search_key(app: &mut App, key: KeyEvent) {
+    let Some(diff) = app.checkout_diff.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc => diff.search.cancel(),
+        KeyCode::Enter => diff.search.accept(),
+        KeyCode::Backspace => diff.search.backspace(),
+        KeyCode::Char(character)
+            if !character.is_control()
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            diff.search.push(character)
+        }
+        _ => {}
+    }
+    diff.update_search();
+}
+
 /// Keys for the driva view's "add a mount" prompt. It is modal — every
 /// printable key is part of the path being typed, `?` included — so the event
 /// loop routes keys here ahead of the keybind reference and every view and
@@ -219,6 +241,27 @@ pub fn handle_list_key(
     pending_fold: &mut bool,
     preferences_path: &Path,
 ) {
+    if app.view == View::CheckoutDiff {
+        if app
+            .checkout_diff
+            .as_ref()
+            .is_some_and(|diff| diff.search.typing())
+        {
+            handle_diff_search_key(app, key);
+            return;
+        }
+        if key.code == KeyCode::Esc {
+            if let Some(diff) = app
+                .checkout_diff
+                .as_mut()
+                .filter(|diff| diff.per_file && diff.search.query().is_some())
+            {
+                diff.search.cancel();
+                diff.update_search();
+                return;
+            }
+        }
+    }
     if std::mem::take(pending_fold) {
         match key {
             k if EVENTS_EXPAND_ALL.matches(k) => app.timeline.expand_all(),
@@ -495,6 +538,10 @@ pub fn handle_list_key(
                 return;
             };
             match key {
+                k if DIFF_SEARCH.matches(k) && diff.per_file => {
+                    diff.search.open();
+                    diff.update_search();
+                }
                 k if DIFF_TOGGLE_FILES.matches(k) => {
                     diff.per_file = !diff.per_file;
                     diff.scroll.reset();
@@ -1779,6 +1826,7 @@ mod tests {
             scroll: Default::default(),
             per_file: false,
             selected_file: 0,
+            search: Default::default(),
         });
         let diff = app.checkout_diff.as_mut().unwrap();
         diff.scroll.note_limit(100);
@@ -1808,6 +1856,38 @@ mod tests {
         assert!(!app.checkout_diff.as_ref().unwrap().per_file);
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 1);
+
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('B'));
+        let diff = app.checkout_diff.as_ref().unwrap();
+        assert!(diff.search.typing());
+        assert_eq!(diff.search.query(), Some("B"));
+        assert_eq!(diff.selected_file, 1);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 1);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.view, View::CheckoutDiff);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().search.query(), None);
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);
+
+        press(&mut app, KeyCode::Char('/'));
+        for character in "dq?".chars() {
+            press(&mut app, KeyCode::Char(character));
+        }
+        assert_eq!(app.view, View::CheckoutDiff);
+        assert_eq!(
+            app.checkout_diff.as_ref().unwrap().search.query(),
+            Some("dq?")
+        );
+        assert_eq!(app.take_request(), None);
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Backspace);
+        assert!(!app.checkout_diff.as_ref().unwrap().search.typing());
+        assert_eq!(app.checkout_diff.as_ref().unwrap().search.query(), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 
