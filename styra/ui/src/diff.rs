@@ -18,7 +18,7 @@
 //! where the host could not place them — leaves the column blank.
 
 use crate::code::with_gutter;
-use crate::event_list::faded_style;
+use crate::event_list::{blended_style, faded_style};
 use crate::markdown::syntax_highlighted_code_lines;
 use crate::theme;
 use ratatui::style::{Color, Modifier, Style};
@@ -236,8 +236,8 @@ fn flush(
 }
 
 /// An added or removed row with its background hint. Context is left on
-/// whatever it is drawn over. Removed text is slightly darkened while
-/// retaining its syntax colors.
+/// whatever it is drawn over. Removed text is slightly darkened and tinted
+/// red while retaining its syntax colors.
 ///
 /// The hint is on every span as well as on the row: the event list and the
 /// preview re-wrap rows span by span, which keeps the spans' styles but not
@@ -253,7 +253,11 @@ fn tinted(row: Line<'static>, line: &str) -> Line<'static> {
         .into_iter()
         .map(|span| {
             let style = if line.starts_with('-') {
-                faded_style(span.style, 1)
+                blended_style(
+                    faded_style(span.style, 1),
+                    theme::DIFF_REMOVED_FOREGROUND_TINT,
+                    1,
+                )
             } else {
                 span.style
             }
@@ -333,7 +337,12 @@ mod tests {
         assert_eq!(lines[1].spans[0].content.as_ref(), "-");
         assert_eq!(
             lines[1].spans[0].style.fg,
-            faded_style(Style::default().fg(theme::ERROR), 1).fg
+            blended_style(
+                faded_style(Style::default().fg(theme::ERROR), 1),
+                theme::DIFF_REMOVED_FOREGROUND_TINT,
+                1,
+            )
+            .fg
         );
         assert_eq!(lines[2].spans[0].content.as_ref(), "+");
         assert_eq!(lines[2].spans[0].style.fg, Some(theme::SUCCESS));
