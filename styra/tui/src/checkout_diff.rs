@@ -94,7 +94,7 @@ impl CheckoutDiff {
         self.scroll.reset();
     }
 
-    pub fn select_file(&mut self, down: bool) {
+    pub fn select_file(&mut self, down: bool, count: usize) {
         let files = self.visible_files();
         let position = files
             .iter()
@@ -102,10 +102,10 @@ impl CheckoutDiff {
             .unwrap_or(0);
         let next = if down {
             position
-                .saturating_add(1)
+                .saturating_add(count)
                 .min(files.len().saturating_sub(1))
         } else {
-            position.saturating_sub(1)
+            position.saturating_sub(count)
         };
         let next = files.get(next).map(|(index, _)| *index);
         if let Some(next) = next.filter(|next| *next != self.selected_file) {
