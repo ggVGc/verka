@@ -29,9 +29,7 @@ const RUN: &str = "-e";
 /// The shell opened in an interaction's working directory.
 const SHELL: &str = "fish";
 
-/// What a checkout's changes since its branch point are shown with: Git's own
-/// `diff`, which pages through `less` on a terminal, so the window stays open
-/// until the operator is done reading.
+/// Git runs `delta` to show a checkout's changes since its branch point.
 const GIT: &str = "git";
 
 impl Configuration for Defaults {
@@ -117,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn a_diff_from_the_branch_point_opens_git_diff_in_a_new_terminal_window() {
+    fn a_diff_from_the_branch_point_opens_git_delta_in_a_new_terminal_window() {
         let command = Defaults.open_diff(Path::new("/work/tree"), "4bf5c35d");
 
         assert_eq!(command.get_program(), OsStr::new("urxvt"));
@@ -128,7 +126,7 @@ mod tests {
                 OsStr::new("git"),
                 OsStr::new("-C"),
                 OsStr::new("/work/tree"),
-                OsStr::new("diff"),
+                OsStr::new("delta"),
                 OsStr::new("4bf5c35d"),
             ]
         );
