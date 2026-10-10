@@ -546,6 +546,10 @@ pub fn handle_list_key(
                     diff.per_file = !diff.per_file;
                     diff.scroll.reset();
                 }
+                k if DIFF_TOGGLE_REMOVED.matches(k) => {
+                    diff.hide_removed = !diff.hide_removed;
+                    diff.scroll.reset();
+                }
                 k if DIFF_DOWN.matches(k) && diff.per_file => diff.select_file(true),
                 k if DIFF_UP.matches(k) && diff.per_file => diff.select_file(false),
                 k if DIFF_DOWN.matches(k) => diff.scroll.line_down(),
@@ -1825,6 +1829,7 @@ mod tests {
             diff: Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n".into()),
             scroll: Default::default(),
             per_file: false,
+            hide_removed: false,
             selected_file: 0,
             search: Default::default(),
         });
@@ -1832,8 +1837,16 @@ mod tests {
         diff.scroll.note_limit(100);
         diff.scroll.note_viewport(30);
         let press = |app: &mut App, code| press_list_key(app, &root, KeyEvent::from(code));
+        press(&mut app, KeyCode::Char('J'));
+        press(&mut app, KeyCode::Char('h'));
+        assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 0);
+        press(&mut app, KeyCode::Char('h'));
+        assert!(!app.checkout_diff.as_ref().unwrap().hide_removed);
         press(&mut app, KeyCode::Tab);
         assert!(app.checkout_diff.as_ref().unwrap().per_file);
+        press(&mut app, KeyCode::Char('h'));
+        assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
         press(&mut app, KeyCode::Char('J'));
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
         press(&mut app, KeyCode::PageDown);
@@ -1854,6 +1867,7 @@ mod tests {
         assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);
         press(&mut app, KeyCode::Tab);
         assert!(!app.checkout_diff.as_ref().unwrap().per_file);
+        assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 1);
 

@@ -254,9 +254,9 @@ fn tinted(row: Line<'static>, line: &str) -> Line<'static> {
         .map(|span| {
             let style = if line.starts_with('-') {
                 blended_style(
-                    faded_style(span.style, 1),
+                    faded_style(span.style, 3),
                     theme::DIFF_REMOVED_FOREGROUND_TINT,
-                    1,
+                    2,
                 )
             } else {
                 span.style
@@ -338,9 +338,9 @@ mod tests {
         assert_eq!(
             lines[1].spans[0].style.fg,
             blended_style(
-                faded_style(Style::default().fg(theme::ERROR), 1),
+                faded_style(Style::default().fg(theme::ERROR), 3),
                 theme::DIFF_REMOVED_FOREGROUND_TINT,
-                1,
+                2,
             )
             .fg
         );

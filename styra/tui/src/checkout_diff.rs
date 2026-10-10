@@ -53,6 +53,7 @@ pub struct CheckoutDiff {
     pub diff: Result<String, String>,
     pub scroll: Scroll,
     pub per_file: bool,
+    pub hide_removed: bool,
     pub selected_file: usize,
     pub search: crate::search::Search,
 }
@@ -67,6 +68,7 @@ impl CheckoutDiff {
             diff,
             scroll: Scroll::default(),
             per_file: false,
+            hide_removed: false,
             selected_file: 0,
             search: Default::default(),
         }

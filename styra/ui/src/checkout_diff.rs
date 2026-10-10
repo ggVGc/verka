@@ -32,6 +32,7 @@ pub struct CheckoutDiffView<'a> {
     pub diff: Result<&'a str, &'a str>,
     pub requested_scroll: u16,
     pub per_file: bool,
+    pub hide_removed: bool,
     pub selected_file: usize,
     pub search: crate::search::SearchView<'a>,
 }
@@ -183,7 +184,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Pre
         Ok(text) if text.trim().is_empty() => {
             vec![muted("  no changes since the branch was made")]
         }
-        Ok(text) => diff_block_lines(text, None, false, ""),
+        Ok(text) => patch_lines(text, view.hide_removed),
         Err(error) => vec![Line::from(Span::styled(
             format!("  {error}"),
             Style::default().fg(theme::ERROR),
@@ -202,6 +203,16 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Pre
         effective_scroll: view.requested_scroll.min(limit),
         viewport: body.height,
     }
+}
+
+/// Filter after rendering so line numbers and syntax highlighting still
+/// follow the complete patch, including lines hidden from the view.
+fn patch_lines(text: &str, hide_removed: bool) -> Vec<Line<'static>> {
+    let mut lines = diff_block_lines(text, None, false, "");
+    if hide_removed {
+        lines.retain(|line| line.style.bg != Some(theme::DIFF_REMOVED_BACKGROUND));
+    }
+    lines
 }
 
 /// What is compared with what, where, and how much changed.
@@ -248,10 +259,16 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
     if let Ok(text) = view.diff {
         lines.push(stat_line(text));
     }
-    lines.push(muted(if view.per_file {
+    let navigation = if view.per_file {
         "Tab: combined diff · /: search · j/k: files · J/K: scroll 10 · PgUp/PgDn: half-screen"
     } else {
         "Tab: per-file diffs · j/k: scroll · J/K: scroll 10 · PgUp/PgDn: half-screen"
+    };
+    lines.push(muted(navigation));
+    lines.push(muted(if view.hide_removed {
+        "h: show removed lines · removed lines hidden"
+    } else {
+        "h: hide removed lines"
     }));
     if view.per_file {
         if let Some(query) = view.search.query {
@@ -320,6 +337,36 @@ index 1111111..2222222 100644
 +fn d() {}
 ";
 
+    #[test]
+    fn hiding_removals_keeps_added_indicators_and_original_line_numbers() {
+        let lines = patch_lines(DIFF, true);
+        let text = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("fn b()"), "{text}");
+        assert!(text.contains("1  fn a()"), "{text}");
+        assert!(text.contains("2 +fn c()"), "{text}");
+        assert!(text.contains("3 +fn d()"), "{text}");
+        assert!(text.contains("--- a/src/a.rs"), "{text}");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.style.bg == Some(theme::DIFF_ADDED_BACKGROUND))
+                .count(),
+            2
+        );
+        assert!(patch_lines(DIFF, false)
+            .iter()
+            .any(|line| line.style.bg == Some(theme::DIFF_REMOVED_BACKGROUND)));
+    }
+
     fn chrome() -> PanelChrome {
         PanelChrome {
             focused: true,
@@ -383,6 +430,7 @@ index 1111111..2222222 100644
                         diff,
                         requested_scroll: scroll,
                         per_file,
+                        hide_removed: false,
                         selected_file,
                         search,
                     },
@@ -502,7 +550,7 @@ index 1111111..2222222 100644
         );
         assert!(!output.contains("fn c()"), "{output}");
         assert!(output.contains("2 files changed"), "{output}");
-        assert_eq!(viewport, 9);
+        assert_eq!(viewport, 8);
     }
 
     #[test]
@@ -545,6 +593,7 @@ index 1111111..2222222 100644
                         diff: Ok(DIFF),
                         requested_scroll: 0,
                         per_file: false,
+                        hide_removed: false,
                         selected_file: 0,
                         search: Default::default(),
                     },
