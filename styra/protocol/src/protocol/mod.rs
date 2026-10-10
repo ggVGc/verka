@@ -618,10 +618,53 @@ pub enum Request {
     /// the account rather than to one session, and in-memory because it is a
     /// live reading rather than a record: it starts empty with the daemon.
     QuotaLog,
+    /// Read this interaction's durable action history, including earlier runs.
+    InteractionActions {
+        id: String,
+    },
     /// Ask the server to remove its socket and exit. Any live interactions it owns die
     /// with it, so this is the deliberate counterpart to the daemon outliving
     /// its clients.
     Shutdown,
+}
+
+/// A server action, captured at the common dispatch boundary. The original
+/// request preserves every input, including fields added by future operations.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum Action {
+    Request(Request),
+    CommitTurn { message: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionOrigin {
+    Client,
+    Automatic,
+}
+
+/// Started without a terminal record means the server stopped before it could
+/// report an outcome; it must never be interpreted as success.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionStatus {
+    Started,
+    Succeeded,
+    Failed,
+}
+
+/// An append-only action lifecycle record. Records sharing `id` describe one
+/// invocation. Sessions created by an action are linked by its terminal record.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ActionRecord {
+    pub id: String,
+    pub at_ms: u64,
+    pub sessions: Vec<String>,
+    pub action: Action,
+    pub origin: ActionOrigin,
+    pub status: ActionStatus,
+    pub detail: Option<String>,
 }
 
 /// Versioned request envelope. Flattening keeps `operation` at the top level.
@@ -669,6 +712,7 @@ pub enum Response {
     Shell(ShellInfo),
     Answer(Answer),
     QuotaLog(Vec<QuotaEvent>),
+    InteractionActions(Vec<ActionRecord>),
 }
 
 /// Response envelope returned for every syntactically valid connection.

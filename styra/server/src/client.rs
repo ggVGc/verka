@@ -599,6 +599,14 @@ impl Client {
         }
     }
 
+    /// Durable action history for a live or stored interaction.
+    pub fn interaction_actions(&self, id: &str) -> Result<Vec<crate::protocol::ActionRecord>> {
+        match self.request(Request::InteractionActions { id: id.to_owned() })? {
+            Response::InteractionActions(value) => Ok(value),
+            other => unexpected("interaction_actions", other),
+        }
+    }
+
     /// Read the server's plan-quota readings, oldest first. Empty until a
     /// provider has volunteered one — it is a live in-memory log, so it starts
     /// empty with the daemon rather than being loaded from the store.
@@ -787,6 +795,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::Shell { .. } => "shell",
         Request::TurnAnswer { .. } => "turn_answer",
         Request::QuotaLog => "quota_log",
+        Request::InteractionActions { .. } => "interaction_actions",
         Request::Shutdown => "shutdown",
     }
 }

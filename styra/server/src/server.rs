@@ -1,5 +1,6 @@
 //! Styra's Unix-socket server and server-owned interaction manager.
 
+use crate::actions::{ActionLog, Scope};
 use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::interaction::{
     capture_driva_options, Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker,
@@ -7,6 +8,7 @@ use crate::interaction::{
 use crate::journal::{self, Journal};
 use crate::naming::Topic;
 use crate::protocol::WorkspaceSummary;
+use crate::protocol::{Action, ActionOrigin, ActionStatus};
 use crate::protocol::{
     Answer, CheckoutState, CleanedWorktree, CompletionState, Contract, DrivaOptions,
     InteractionActivity, InteractionActivityReason, InteractionSummary, InteractionUpdate,
@@ -68,6 +70,7 @@ struct ServerInner {
     /// server's equivalent.
     control_root: PathBuf,
     interactions: Mutex<HashMap<String, Arc<ManagedInteraction>>>,
+    actions: Arc<ActionLog>,
     /// Holds the standalone store's advisory lock for this server's lifetime.
     /// Socket servers have no lock here.
     _standalone_lock: Option<std::fs::File>,
@@ -593,6 +596,7 @@ struct ManagedInteraction {
     /// interaction goes idle; mirrored into `session_path` so a resumed
     /// interaction keeps the operator's answer. See [`Self::commit_turn`].
     auto_commit: Arc<AtomicBool>,
+    actions: Arc<ActionLog>,
     /// Whether the operator has finished with this interaction's Session;
     /// mirrored into `session_path` since it is a property of the Session,
     /// not of this interaction — see [`crate::protocol::SessionSummary::completed`].
@@ -832,7 +836,32 @@ impl ManagedInteraction {
         }
         let (prompt, replies) = self.turn_messages();
         let message = turn_commit_message(prompt.as_deref(), &replies);
-        match self.working_tree.commit(&message) {
+        let started = match self.actions.start(
+            Action::CommitTurn {
+                message: message.clone(),
+            },
+            ActionOrigin::Automatic,
+            vec![self.interaction.session_id().to_owned()],
+        ) {
+            Ok(started) => started,
+            Err(error) => {
+                self.push_update(InteractionUpdate::Log(LogEntry::error(format!(
+                    "could not log automatic commit: {error:#}"
+                ))));
+                return;
+            }
+        };
+        let result = self.working_tree.commit(&message);
+        let (status, detail) = match &result {
+            Ok(commit) => (ActionStatus::Succeeded, commit.clone()),
+            Err(error) => (ActionStatus::Failed, Some(format!("{error:#}"))),
+        };
+        if let Err(error) = self.actions.finish(started, status, detail, Vec::new()) {
+            self.push_update(InteractionUpdate::Log(LogEntry::error(format!(
+                "automatic commit outcome could not be logged: {error:#}"
+            ))));
+        }
+        match result {
             Ok(None) => {}
             Ok(Some(commit)) => {
                 let subject = message.lines().next().unwrap_or_default();
@@ -1675,6 +1704,7 @@ impl ServerState {
         .join("sandboxes");
         let state = Self {
             inner: Arc::new(ServerInner {
+                actions: Arc::new(ActionLog::new(&store_root)),
                 quota: Arc::new(crate::quota::QuotaLog::open(&store_root)),
                 roster: crate::roster::Roster::open(&store_root),
                 git,
@@ -1890,6 +1920,7 @@ impl ServerState {
             workspace: checkout.clone(),
             driva: driva.clone(),
             shell,
+            actions: Arc::clone(&self.inner.actions),
             queue: Mutex::new(std::collections::VecDeque::new()),
             auto_retry: Arc::new(AtomicBool::new(false)),
             // A new Session has no answer of its own yet, so where it works
@@ -2533,6 +2564,7 @@ impl ServerState {
             workspace: checkout.clone(),
             driva: driva.clone(),
             shell,
+            actions: Arc::clone(&self.inner.actions),
             queue: Mutex::new(queued.into_iter().collect()),
             // Read back rather than defaulted: the retry that may have caused
             // this resume is the operator's standing answer to a rate limit,
@@ -3233,14 +3265,17 @@ impl ServerState {
         for held in self.held_back_by(reset) {
             let HeldBack { id, launch, alive } = held;
             if !alive {
-                if let Err(error) = self.resume_session(ResumeSession {
-                    id: id.clone(),
-                    launch,
-                    // An unattended retry revives the Session exactly as it
-                    // was held back: there is no operator here to have chosen
-                    // otherwise.
-                    selection: None,
-                }) {
+                if let Err(error) = self.handle_action(
+                    Request::ResumeSession(ResumeSession {
+                        id: id.clone(),
+                        launch,
+                        // An unattended retry revives the Session exactly as it
+                        // was held back: there is no operator here to have chosen
+                        // otherwise.
+                        selection: None,
+                    }),
+                    ActionOrigin::Automatic,
+                ) {
                     // The refused interaction is still the one in the map, so
                     // its own stream is where an operator will look for the
                     // reason their session did not come back after all.
@@ -3265,7 +3300,13 @@ impl ServerState {
                 // Not the refused turn itself, verbatim: the agent was already
                 // told what to do, and a rate limit is not a reason to repeat
                 // it. "continue" is enough to pick the same turn back up.
-                interaction.send_message(SendMessage::new("continue"))?;
+                self.handle_action(
+                    Request::SendMessage {
+                        id: id.clone(),
+                        message: SendMessage::new("continue"),
+                    },
+                    ActionOrigin::Automatic,
+                )?;
                 // Asked again, so the refusal has been acted on: what happens
                 // to this turn is the new turn's business.
                 interaction.note_serving(reset.provider);
@@ -3538,7 +3579,73 @@ impl ServerState {
     /// it can call the same dispatch without a socket (see
     /// [`crate::Client::in_process`]).
     pub(crate) fn handle(&self, request: Request) -> Result<Response> {
+        self.handle_action(request, ActionOrigin::Client)
+    }
+
+    /// Client and automatic requests share this boundary. New request variants
+    /// require an explicit decision in the exhaustive scope match.
+    fn handle_action(&self, request: Request, origin: ActionOrigin) -> Result<Response> {
+        let scope = crate::actions::scope(&request);
+        if matches!(scope, Scope::Read) {
+            return self.dispatch(request);
+        }
+        let sessions = (|| -> Result<Vec<String>> {
+            Ok(match scope {
+                Scope::Session(id) => vec![id.to_owned()],
+                Scope::Workspace(id) => journal::list_workspace_sessions(self.store_root(), id)?
+                    .into_iter()
+                    .map(|session| session.id)
+                    .collect(),
+                Scope::All => crate::workspace::list(self.store_root())?
+                    .into_iter()
+                    .map(|workspace| {
+                        journal::list_workspace_sessions(self.store_root(), &workspace.id)
+                    })
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .flatten()
+                    .map(|session| session.id)
+                    .collect(),
+                Scope::Store => Vec::new(),
+                Scope::Read => unreachable!("reads returned above"),
+            })
+        })();
+        // Even a failed scope lookup is an attempted action. Keep it in the
+        // store ledger, but do not mutate when the affected Sessions are unknown.
+        let started = self.inner.actions.start(
+            Action::Request(request.clone()),
+            origin,
+            sessions.as_ref().cloned().unwrap_or_default(),
+        )?;
+        let result = sessions.and_then(|_| self.dispatch(request));
+        let (status, detail, created) = match &result {
+            Ok(response) => {
+                let created = match response {
+                    Response::SessionCreated(info) | Response::SessionResumed(info) => {
+                        vec![info.id.clone()]
+                    }
+                    Response::SessionBranched(session) | Response::SessionConverted(session) => {
+                        vec![session.id.clone()]
+                    }
+                    _ => Vec::new(),
+                };
+                (ActionStatus::Succeeded, None, created)
+            }
+            Err(error) => (ActionStatus::Failed, Some(format!("{error:#}")), Vec::new()),
+        };
+        self.inner.actions.finish(started, status, detail, created)
+            .context("action dispatched, but its outcome could not be persisted; inspect actions.jsonl before retrying")?;
+        result
+    }
+
+    fn dispatch(&self, request: Request) -> Result<Response> {
         match request {
+            Request::InteractionActions { id } => {
+                self.stored_summary(&id)?;
+                Ok(Response::InteractionActions(
+                    self.inner.actions.for_session(&id)?,
+                ))
+            }
             Request::Health => Ok(Response::Health(Health {
                 service: "styra".into(),
             })),
@@ -5197,6 +5304,98 @@ mod tests {
         let session_path = journal.path().parent().unwrap().to_path_buf();
         drop(journal);
         (store, host, state, workspace, id, session_path)
+    }
+
+    #[test]
+    fn a_request_cannot_mutate_when_its_intent_cannot_be_stored() {
+        let (store, host, state, _, id, _) = stored_session("action-intent-failure");
+        std::fs::create_dir(store.join("actions.jsonl")).unwrap();
+        let request = Request::RenameSession(crate::protocol::RenameSession {
+            id: id.clone(),
+            name: Some("must not be applied".into()),
+        });
+        assert!(state.handle(request).is_err());
+        assert_eq!(state.stored_summary(&id).unwrap().name, None);
+        drop(state);
+        std::fs::remove_dir_all(store).unwrap();
+        std::fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn action_history_routes_workspace_edits_and_records_failed_automatic_actions() {
+        use crate::protocol::{RenameSession, WorkspaceLaunchChange};
+        let (store, host, state, workspace, id, _) = stored_session("action-history");
+        let other_host = host.join("other");
+        std::fs::create_dir_all(&other_host).unwrap();
+        let other_workspace = crate::workspace::create(&store, &other_host, None).unwrap();
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
+        let (_, sibling) =
+            Journal::create_in_workspace(&store, &workspace.id, &profile, &selection, None)
+                .unwrap();
+        let (_, unrelated) =
+            Journal::create_in_workspace(&store, &other_workspace.id, &profile, &selection, None)
+                .unwrap();
+        let requests = vec![
+            Request::ChangeWorkspaceLaunch {
+                workspace_id: workspace.id.clone(),
+                change: WorkspaceLaunchChange::SetTemplates(vec!["git".into()]),
+            },
+            Request::ChangeWorkspaceLaunch {
+                workspace_id: workspace.id.clone(),
+                change: WorkspaceLaunchChange::AddMounts(vec![LaunchMount {
+                    source: host.clone(),
+                    destination: None,
+                    writable: false,
+                }]),
+            },
+            Request::RenameSession(RenameSession {
+                id: id.clone(),
+                name: Some("renamed".into()),
+            }),
+            Request::CreateSessionWorktree { id: id.clone() },
+        ];
+        for request in &requests {
+            state.handle(request.clone()).unwrap();
+        }
+        let failed = Request::SendMessage {
+            id: id.clone(),
+            message: SendMessage::new("continue"),
+        };
+        assert!(state
+            .handle_action(failed.clone(), ActionOrigin::Automatic)
+            .is_err());
+        let history = state.inner.actions.for_session(&id).unwrap();
+        assert_eq!(history.len(), 10);
+        for (records, request) in history[..8].chunks_exact(2).zip(&requests) {
+            assert_eq!(records[0].action, Action::Request(request.clone()));
+            assert_eq!(records[0].id, records[1].id);
+            assert_eq!(records[0].status, ActionStatus::Started);
+            assert_eq!(records[1].status, ActionStatus::Succeeded);
+        }
+        assert_eq!(history[9].action, Action::Request(failed));
+        assert_eq!(history[9].origin, ActionOrigin::Automatic);
+        assert_eq!(history[9].status, ActionStatus::Failed);
+        assert!(history[9].detail.is_some());
+        assert_eq!(state.inner.actions.for_session(&sibling).unwrap().len(), 4);
+        assert!(state
+            .inner
+            .actions
+            .for_session(&unrelated)
+            .unwrap()
+            .is_empty());
+        drop(state);
+        let reopened = ServerState::with_git(Arc::new(crate::git::FakeGit::new()), store.clone());
+        let client = crate::daemon::in_process_client(reopened);
+        assert_eq!(client.interaction_actions(&id).unwrap(), history);
+        assert_eq!(
+            client.interaction_actions(&id).unwrap(),
+            history,
+            "reading history must not audit itself"
+        );
+        drop(client);
+        std::fs::remove_dir_all(store).unwrap();
+        std::fs::remove_dir_all(host).unwrap();
     }
 
     /// `W` may be pressed after a Session has already received several turns.

@@ -88,6 +88,24 @@ workspaces/<WORKSPACE-ID>/
     diagnostics.log
 ```
 
+The store also holds an append-only `actions.jsonl` ledger. Each interaction's
+history is available through `Client::interaction_actions(id)` (the
+`interaction_actions` wire operation), including after it stops or resumes.
+Records preserve the full request, timestamp, affected Session ids, client or
+automatic origin, and started/succeeded/failed status. A shared action id links
+intent to outcome; a start without an outcome has an unknown result.
+Workspace policy edits, including mounts and templates, are linked to the
+Workspace's existing Sessions at the time of the edit. Branch actions are
+linked to both source and destination. Automatic retries and turn commits are
+recorded too. Reads and polling do not create action records.
+
+Request auditing happens before dispatch and uses an exhaustive scope match:
+adding a new operation fails to compile until it declares whether it reads
+state or which Sessions its action affects. The request itself is serialized,
+so new fields need no separate logging code. Intent must be persisted before a
+mutation runs. The ledger repairs an incomplete final line left by a crash;
+a malformed complete record is reported as an error.
+
 Linked worktrees are off by default. Send a message with `Ctrl+Enter` to
 create the Session's branch and worktree as part of that submission. On a
 first prompt the Session launches there; later on, or with `W` when there is

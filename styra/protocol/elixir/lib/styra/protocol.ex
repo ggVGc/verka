@@ -330,6 +330,13 @@ defmodule Styra.Protocol do
           ]
         }},
         %{name: "quota_log", payload: %{kind: :unit}},
+        %{name: "interaction_actions", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "shutdown", payload: %{kind: :unit}}
       ]
     },
@@ -378,7 +385,8 @@ defmodule Styra.Protocol do
         %{name: "audio_transcript", payload: %{kind: :newtype, type: %{kind: :string}}},
         %{name: "shell", payload: %{kind: :newtype, type: %{kind: :ref, name: "ShellInfo"}}},
         %{name: "answer", payload: %{kind: :newtype, type: %{kind: :ref, name: "Answer"}}},
-        %{name: "quota_log", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "QuotaEvent"}}}}
+        %{name: "quota_log", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "QuotaEvent"}}}},
+        %{name: "interaction_actions", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "ActionRecord"}}}}
       ]
     },
 
@@ -931,6 +939,21 @@ defmodule Styra.Protocol do
       ]
     },
 
+    # An append-only action lifecycle record. Records sharing `id` describe one
+    # invocation. Sessions created by an action are linked by its terminal record.
+    "ActionRecord" => %{
+      kind: :struct,
+      fields: [
+        %{name: "id", required: true, type: %{kind: :string}},
+        %{name: "at_ms", required: true, type: %{kind: :number, integer: true}},
+        %{name: "sessions", required: true, type: %{kind: :list, item: %{kind: :string}}},
+        %{name: "action", required: true, type: %{kind: :ref, name: "Action"}},
+        %{name: "origin", required: true, type: %{kind: :ref, name: "ActionOrigin"}},
+        %{name: "status", required: true, type: %{kind: :ref, name: "ActionStatus"}},
+        %{name: "detail", required: true, type: %{kind: :optional, inner: %{kind: :string}}}
+      ]
+    },
+
     # How much reasoning the model is asked to spend per turn.
     #
     # One vocabulary across providers, ordered lowest first, since the ladders
@@ -1413,6 +1436,45 @@ defmodule Styra.Protocol do
       ]
     },
 
+    # A server action, captured at the common dispatch boundary. The original
+    # request preserves every input, including fields added by future operations.
+    "Action" => %{
+      kind: :enum,
+      tagging: %{style: :adjacent, tag: "type", content: "data"},
+      variants: [
+        %{name: "request", payload: %{kind: :newtype, type: %{kind: :ref, name: "Request"}}},
+        %{name: "commit_turn", payload: %{
+          kind: :struct,
+          fields: [
+            %{name: "message", required: true, type: %{kind: :string}}
+          ]
+        }}
+      ]
+    },
+
+    "ActionOrigin" => %{
+      kind: :enum,
+      tagging: %{style: :external},
+      plain: true,
+      variants: [
+        %{name: "client", payload: %{kind: :unit}},
+        %{name: "automatic", payload: %{kind: :unit}}
+      ]
+    },
+
+    # Started without a terminal record means the server stopped before it could
+    # report an outcome; it must never be interpreted as success.
+    "ActionStatus" => %{
+      kind: :enum,
+      tagging: %{style: :external},
+      plain: true,
+      variants: [
+        %{name: "started", payload: %{kind: :unit}},
+        %{name: "succeeded", payload: %{kind: :unit}},
+        %{name: "failed", payload: %{kind: :unit}}
+      ]
+    },
+
     # Which layer of the launch policy put a mount in the sandbox.
     #
     # The effective policy is one flat list by the time Driva runs it, but the
@@ -1733,6 +1795,7 @@ defmodule Styra.Protocol do
     "shell",
     "turn_answer",
     "quota_log",
+    "interaction_actions",
     "shutdown"
   ]
 
@@ -2875,6 +2938,18 @@ defmodule Styra.Protocol do
     def quota_log!, do: Styra.Protocol.build!("quota_log")
 
     @doc ~S"""
+    Read this interaction's durable action history, including earlier runs.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def interaction_actions(data), do: Styra.Protocol.build("interaction_actions", data)
+
+    @doc "`interaction_actions/1`, raising on a request the server would refuse."
+    def interaction_actions!(data), do: Styra.Protocol.build!("interaction_actions", data)
+
+    @doc ~S"""
     Ask the server to remove its socket and exit. Any live interactions it owns die
     with it, so this is the deliberate counterpart to the daemon outliving
     its clients.
@@ -2933,7 +3008,8 @@ defmodule Styra.Protocol.Response do
     {:audio_transcript, "audio_transcript"},
     {:shell, "shell"},
     {:answer, "answer"},
-    {:quota_log, "quota_log"}
+    {:quota_log, "quota_log"},
+    {:interaction_actions, "interaction_actions"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -3038,6 +3114,8 @@ defmodule Styra.Protocol.Response do
   def answer, do: "answer"
 
   def quota_log, do: "quota_log"
+
+  def interaction_actions, do: "interaction_actions"
 end
 
 defmodule Styra.Protocol.WireResponse do
@@ -4003,6 +4081,126 @@ defmodule Styra.Protocol.QuotaStatus do
   The window is full: turns are being refused until it resets.
   """
   def exhausted, do: "exhausted"
+end
+
+defmodule Styra.Protocol.Action do
+  @moduledoc ~S"""
+  Wire spellings of `Action`.
+
+  A server action, captured at the common dispatch boundary. The original
+  request preserves every input, including fields added by future operations.
+  """
+
+  @spellings [
+    {:request, "request"},
+    {:commit_turn, "commit_turn"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  def request, do: "request"
+
+  def commit_turn, do: "commit_turn"
+end
+
+defmodule Styra.Protocol.ActionOrigin do
+  @moduledoc ~S"""
+  Wire spellings of `ActionOrigin`.
+  """
+
+  @spellings [
+    {:client, "client"},
+    {:automatic, "automatic"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  def client, do: "client"
+
+  def automatic, do: "automatic"
+end
+
+defmodule Styra.Protocol.ActionStatus do
+  @moduledoc ~S"""
+  Wire spellings of `ActionStatus`.
+
+  Started without a terminal record means the server stopped before it could
+  report an outcome; it must never be interpreted as success.
+  """
+
+  @spellings [
+    {:started, "started"},
+    {:succeeded, "succeeded"},
+    {:failed, "failed"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  def started, do: "started"
+
+  def succeeded, do: "succeeded"
+
+  def failed, do: "failed"
 end
 
 defmodule Styra.Protocol.MountOrigin do
