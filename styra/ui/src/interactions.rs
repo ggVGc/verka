@@ -48,6 +48,7 @@ pub enum InteractionRow<'a> {
         /// beneath the entry it came from, as the Session picker nests it.
         depth: usize,
         provider: &'a str,
+        model: &'a str,
         /// The Git branch checked out for this interaction. `None` means the
         /// interaction is not associated with a Git checkout; a detached
         /// checkout is passed as the descriptive text `detached head`.
@@ -344,6 +345,7 @@ fn row_item(
         grouped,
         depth,
         provider,
+        model,
         branch,
         status,
         selected,
@@ -434,7 +436,7 @@ fn row_item(
         ));
     }
     main.push(Span::styled(
-        format!(" · {provider}"),
+        format!(" · {provider} · {model}"),
         Style::default().fg(theme::INTERACTION_STATUS_INFO),
     ));
     if let Some(why) = stop_reason {
@@ -597,6 +599,7 @@ mod tests {
             grouped: false,
             depth,
             provider: "codex",
+            model: "gpt-5",
             branch: None,
             status: InteractionStatus::Stopped(StopTone::Paused),
             selected: false,
@@ -643,6 +646,7 @@ mod tests {
                     grouped: false,
                     depth: 0,
                     provider: "codex",
+                    model: "gpt-5",
                     branch: Some("fix"),
                     status: InteractionStatus::Running { events: 2 },
                     selected: true,
@@ -660,7 +664,7 @@ mod tests {
         let screen = rendered(&view);
         assert!(screen.contains("Payments"), "{screen}");
         assert!(
-            screen.contains("repair checkout #bug #urgent · fix · codex"),
+            screen.contains("repair checkout #bug #urgent · fix · codex · gpt-5"),
             "{screen}"
         );
         assert!(screen.contains("· NEWLY IDLE"), "{screen}");
@@ -677,6 +681,7 @@ mod tests {
             grouped,
             depth: 0,
             provider: "claude",
+            model: "sonnet",
             branch: Some("feature"),
             status: InteractionStatus::Idle,
             selected: false,
@@ -779,6 +784,7 @@ mod tests {
                 grouped: false,
                 depth: 0,
                 provider: "claude",
+                model: "sonnet",
                 branch: None,
                 status: InteractionStatus::Stopped(StopTone::Paused),
                 selected: false,
@@ -792,7 +798,7 @@ mod tests {
                 last_message: None,
             }],
         };
-        assert!(rendered(&view).contains("repair checkout · claude · paused"));
+        assert!(rendered(&view).contains("repair checkout · claude · sonnet · paused"));
     }
 
     /// An interaction idling because a plan window refused it looks exactly
@@ -813,6 +819,7 @@ mod tests {
                 grouped: false,
                 depth: 0,
                 provider: "claude",
+                model: "sonnet",
                 branch: None,
                 status: InteractionStatus::Idle,
                 selected: false,
@@ -826,7 +833,8 @@ mod tests {
                 last_message: None,
             }],
         };
-        assert!(rendered(&view).contains("repair checkout · claude · RATE LIMITED (five_hour)"));
+        assert!(rendered(&view)
+            .contains("repair checkout · claude · sonnet · RATE LIMITED (five_hour)"));
     }
 
     fn many_rows(selected: usize) -> InteractionNavigator<'static> {
@@ -844,6 +852,7 @@ mod tests {
                     grouped: false,
                     depth: 0,
                     provider: "claude",
+                    model: "sonnet",
                     branch: None,
                     status: InteractionStatus::Idle,
                     selected: index == selected,

@@ -99,6 +99,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             grouped,
             depth,
             provider: interaction.selection.provider.as_str(),
+            model: &interaction.selection.model,
             branch: interaction
                 .checkout
                 .as_ref()
