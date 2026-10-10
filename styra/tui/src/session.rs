@@ -451,7 +451,7 @@ pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str) -> 
             // did resolve, so say so where the operator is looking rather than
             // only in the log, otherwise a rejected edit reads as an accepted
             // one that simply changed nothing.
-            app.show_action_message(format!("launch policy not applied: {error}"));
+            app.show_error(format!("launch policy not applied: {error}"));
             app.push_log(LogEntry::warn(format!(
                 "could not describe the sandbox a new interaction would launch in: {error:#}"
             )));
@@ -974,7 +974,7 @@ pub fn finish_interaction(
         Err(error) => {
             let message = format!("could not mark interaction {label}: {error:#}");
             app.push_log(LogEntry::error(message.clone()));
-            app.show_action_message(message);
+            app.show_error(message);
             false
         }
     }
@@ -985,7 +985,7 @@ pub fn finish_interaction(
 /// could not make either history choice precise.
 pub fn open_branch_prompt(app: &mut App) {
     if app.session_id.is_empty() {
-        return app.show_action_message("there is no interaction to branch yet");
+        return app.show_warning("there is no interaction to branch yet");
     }
     let at_ms = app
         .timeline
@@ -996,7 +996,7 @@ pub fn open_branch_prompt(app: &mut App) {
         .map(|line| line.at_ms)
         .filter(|at_ms| *at_ms != 0);
     let Some(at_ms) = at_ms else {
-        return app.show_action_message("the selected entry has no branchable history point");
+        return app.show_warning("the selected entry has no branchable history point");
     };
     app.branch_prompt = Some(crate::branch::BranchPrompt::new(at_ms));
 }
@@ -1012,10 +1012,10 @@ pub fn follow_branch(app: &mut App) {
         .and_then(|entry| entry.event().branch_target())
         .map(str::to_owned)
     else {
-        return app.show_action_message("the selected entry is not a branch marker");
+        return app.show_warning("the selected entry is not a branch marker");
     };
     if session_id == app.session_id {
-        return app.show_action_message("that branch marker points at this Session");
+        return app.show_warning("that branch marker points at this Session");
     }
     app.ask(crate::app::Request::OpenSession(session_id));
 }

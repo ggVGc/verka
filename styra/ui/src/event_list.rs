@@ -1737,7 +1737,7 @@ pub fn summary_line(
             if tag == "shell" && failed_shell_result(&entry.event) =>
         {
             (
-                Style::default().fg(tag_color(tag)),
+                Style::default().fg(theme::ERROR),
                 "✗ ",
                 Style::default().fg(theme::ERROR),
             )
@@ -1746,7 +1746,7 @@ pub fn summary_line(
             if tag == "shell" && suspicious_shell_success(&entry.event) =>
         {
             (
-                Style::default().fg(tag_color(tag)),
+                Style::default().fg(theme::WARNING),
                 "⚠ ",
                 Style::default().fg(theme::WARNING),
             )
@@ -1762,7 +1762,7 @@ pub fn summary_line(
         }
         _ if tag == "shell" => (Style::default().fg(tag_color(tag)), "", Style::default()),
         AgentEvent::ToolCompleted { status, .. } | AgentEvent::CommandCompleted { status, .. }
-            if status == "error" =>
+            if matches!(status.as_str(), "error" | "failed") =>
         {
             (
                 Style::default().fg(theme::ERROR),
@@ -1784,7 +1784,11 @@ pub fn summary_line(
     // The cursor's text in the soft cyan the live list draws its cursor's in,
     // so the two lists mark their selection alike. The tag and the result
     // mark keep their own colors, so what the entry is still reads.
-    let summary_style = if entry.selected {
+    let severity_colored = matches!(tag, "error" | "malformed")
+        || failed_shell_result(&entry.event)
+        || suspicious_shell_success(&entry.event)
+        || matches!(&entry.event, AgentEvent::ToolCompleted { status, .. } | AgentEvent::CommandCompleted { status, .. } if matches!(status.as_str(), "error" | "failed"));
+    let summary_style = if entry.selected && !severity_colored {
         summary_style.fg(theme::SELECTED_INTERACTION_TEXT)
     } else {
         summary_style

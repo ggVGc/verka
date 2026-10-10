@@ -558,7 +558,7 @@ fn main() -> Result<()> {
                     Some(session_id) => {
                         open_session_view(&client, &launch, &mut app, &mut live, &session_id);
                     }
-                    None => app.show_action_message("no previous interaction to go back to"),
+                    None => app.show_warning("no previous interaction to go back to"),
                 }
             }
             // Return to the blank start screen. Reset has already stopped the

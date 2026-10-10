@@ -23,7 +23,7 @@ pub const LIGHT_ACCENT: Color = palette::DUSTY_ROSE;
 /// `Function`.
 pub const INFO: Color = palette::PALE_PINK;
 pub const SUCCESS: Color = palette::TERMINAL_GREEN;
-pub const WARNING: Color = palette::ROSE;
+pub const WARNING: Color = palette::TERMINAL_YELLOW;
 /// The running status in a pane's top border, in the hue of the log's own
 /// `working …` line.
 pub const RUNNING_STATUS: Color = RUNNING;
@@ -49,7 +49,7 @@ pub const ERROR: Color = palette::TERMINAL_RED;
 /// `Special`.
 pub const SPECIAL: Color = palette::PINK;
 /// The warning hue a step down.
-pub const MUTED_WARNING: Color = palette::MUTED_ROSE;
+pub const MUTED_WARNING: Color = WARNING;
 /// `SignColumn`.
 pub const CODE_BACKGROUND: Color = palette::NEAR_BLACK;
 /// Inline Markdown code that is neither a link nor a file reference, on the

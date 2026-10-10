@@ -26,7 +26,16 @@ pub fn render(frame: &mut Frame, view: &AnswerView<'_>, area: Rect) {
             .error
             .map(|error| format!("  {error}"))
             .unwrap_or_else(|| "  no answer yet".into());
-        frame.render_widget(Paragraph::new(message).block(panel_block(&chrome)), area);
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(Style::default().fg(if view.error.is_some() {
+                    theme::ERROR
+                } else {
+                    theme::TEXT
+                }))
+                .block(panel_block(&chrome)),
+            area,
+        );
         return;
     };
     let lines = match answer.value.as_ref() {
@@ -128,7 +137,7 @@ fn unsatisfied_lines(answer: &Answer) -> Vec<Line<'static>> {
                 .clone()
                 .unwrap_or_else(|| "the reply did not satisfy the contract".into()),
             Style::default()
-                .fg(theme::WARNING)
+                .fg(theme::ERROR)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(

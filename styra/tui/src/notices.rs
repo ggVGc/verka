@@ -8,6 +8,7 @@
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
+use styra_protocol::LogLevel;
 
 /// How long each notice is displayed for.
 const LIFETIME: Duration = Duration::from_secs(5);
@@ -15,6 +16,7 @@ const LIFETIME: Duration = Duration::from_secs(5);
 /// A short-lived notice about something Styra did on the operator's behalf.
 pub struct Notice {
     pub text: String,
+    pub level: LogLevel,
     shown_at: Instant,
 }
 
@@ -27,19 +29,24 @@ pub struct Notices {
 impl Notices {
     /// Show a notice for the next five seconds.
     pub fn show(&mut self, text: impl Into<String>) {
-        self.show_at(text, Instant::now());
+        self.show_level(text, LogLevel::Info);
+    }
+
+    pub fn show_level(&mut self, text: impl Into<String>, level: LogLevel) {
+        self.show_at(text, level, Instant::now());
     }
 
     /// Show a notice as if at `at`. Only the tests need to say when; the
     /// alternative is reaching in afterwards to rewrite the timestamp.
     #[cfg(test)]
     pub fn show_since(&mut self, text: impl Into<String>, ago: Duration) {
-        self.show_at(text, Instant::now() - ago);
+        self.show_at(text, LogLevel::Info, Instant::now() - ago);
     }
 
-    fn show_at(&mut self, text: impl Into<String>, at: Instant) {
+    fn show_at(&mut self, text: impl Into<String>, level: LogLevel, at: Instant) {
         self.shown.push_back(Notice {
             text: text.into(),
+            level,
             shown_at: at,
         });
     }
@@ -78,6 +85,21 @@ mod tests {
 
     fn texts(notices: &Notices) -> Vec<&str> {
         notices.iter().map(|notice| notice.text.as_str()).collect()
+    }
+
+    #[test]
+    fn notices_keep_their_severity() {
+        let mut notices = Notices::default();
+        notices.show_level("failure", LogLevel::Error);
+        notices.show_level("warning", LogLevel::Warn);
+        notices.show("information");
+        assert_eq!(
+            notices
+                .iter()
+                .map(|notice| notice.level)
+                .collect::<Vec<_>>(),
+            vec![LogLevel::Error, LogLevel::Warn, LogLevel::Info]
+        );
     }
 
     /// Styra can do several things in one keystroke, and each is worth saying.

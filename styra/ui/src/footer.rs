@@ -124,6 +124,7 @@ pub fn message_text_color(tag: &str) -> Color {
     match tag {
         "agent" => theme::AGENT_TEXT,
         "user" => theme::USER_TEXT,
+        "error" | "malformed" => theme::ERROR,
         _ => theme::TEXT,
     }
 }

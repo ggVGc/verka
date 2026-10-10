@@ -71,7 +71,7 @@ pub struct ApplicationOverlays<'a> {
 pub struct ApplicationView<'a> {
     pub session_id: &'a str,
     pub main: MainView<'a>,
-    pub notices: &'a [String],
+    pub notices: &'a [messages::MessageView<'a>],
     pub footer: &'a footer::FooterView<'a>,
     pub overlays: ApplicationOverlays<'a>,
 }

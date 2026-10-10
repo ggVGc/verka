@@ -536,7 +536,14 @@ fn draw_main(
     let notices = app
         .notices
         .iter()
-        .map(|notice| notice.text.clone())
+        .map(|notice| styra_ui::messages::MessageView {
+            text: &notice.text,
+            level: match notice.level {
+                styra_protocol::LogLevel::Info => styra_ui::log::LogLevel::Info,
+                styra_protocol::LogLevel::Warn => styra_ui::log::LogLevel::Warn,
+                styra_protocol::LogLevel::Error => styra_ui::log::LogLevel::Error,
+            },
+        })
         .collect::<Vec<_>>();
     let working_directory = app
         .workspace

@@ -241,7 +241,7 @@ impl LaunchEffects {
                         Err(error) => {
                             let message =
                                 format!("could not change the Workspace launch policy: {error}");
-                            app.show_action_message(message.clone());
+                            app.show_error(message.clone());
                             app.push_log(LogEntry::error(message));
                         }
                     }
@@ -296,9 +296,7 @@ fn save_tags(app: &mut App, client: &Client, id: String, tags: Vec<String>) {
             }
             app.show_action_message("interaction tags saved");
         }
-        Err(error) => {
-            app.show_action_message(format!("could not save interaction tags: {error:#}"))
-        }
+        Err(error) => app.show_error(format!("could not save interaction tags: {error:#}")),
     }
 }
 
@@ -716,14 +714,16 @@ fn run_rounds(
                 match client.session_integration_result(&id) {
                     Ok(Some(result)) => {
                         app.pending_integration = None;
-                        app.show_action_message(result.message);
+                        if result.completed {
+                            app.show_action_message(result.message);
+                        } else {
+                            app.show_error(result.message);
+                        }
                         dirty = true;
                     }
                     Err(error) => {
                         app.pending_integration = None;
-                        app.show_action_message(format!(
-                            "could not read integration result: {error:#}"
-                        ));
+                        app.show_error(format!("could not read integration result: {error:#}"));
                         dirty = true;
                     }
                     Ok(None) => {}
@@ -787,7 +787,7 @@ fn run_rounds(
                             app.push_log(LogEntry::error(format!(
                                 "the new mounts cannot be launched, so the interaction was not restarted: {error:#}"
                             )));
-                            app.show_action_message(format!(
+                            app.show_error(format!(
                                 "mounts not applied, still running on the old ones: {error:#}"
                             ));
                         }
@@ -795,7 +795,7 @@ fn run_rounds(
                             app.push_log(LogEntry::error(format!(
                                 "could not restart with the new mounts: {error:#}"
                             )));
-                            app.show_action_message(format!(
+                            app.show_error(format!(
                                 "could not restart with the new mounts ({error:#}); they apply when this Session next launches"
                             ));
                         }
@@ -1022,7 +1022,7 @@ fn run_rounds(
                             })?;
                         match generated {
                             Ok(message) => app.integration_prompt = Some(message),
-                            Err(error) => app.show_action_message(format!(
+                            Err(error) => app.show_error(format!(
                                 "could not generate commit message: {error:#}"
                             )),
                         }
@@ -1035,9 +1035,7 @@ fn run_rounds(
                                 "integration started — progress appears in the interaction log",
                             );
                         }
-                        Err(error) => {
-                            app.show_action_message(format!("could not integrate: {error:#}"))
-                        }
+                        Err(error) => app.show_error(format!("could not integrate: {error:#}")),
                     },
                     _ => {}
                 }
@@ -1255,7 +1253,7 @@ fn run_rounds(
                         .cursor_to_next_active(&session_id, app.workspace.id.as_deref())
                         .is_none()
                     {
-                        app.show_action_message("no other interaction is actively working");
+                        app.show_warning("no other interaction is actively working");
                     }
                     continue;
                 }
@@ -1265,7 +1263,7 @@ fn run_rounds(
                         .cursor_to_previous_active(&session_id, app.workspace.id.as_deref())
                         .is_none()
                     {
-                        app.show_action_message("no other interaction is actively working");
+                        app.show_warning("no other interaction is actively working");
                     }
                     continue;
                 }
@@ -1358,9 +1356,7 @@ fn run_rounds(
                                 interaction.tags.clone(),
                             ))
                         }
-                        Err(error) => {
-                            app.show_action_message(format!("could not list tags: {error:#}"))
-                        }
+                        Err(error) => app.show_error(format!("could not list tags: {error:#}")),
                     }
                     continue;
                 }
@@ -1598,21 +1594,19 @@ fn run_rounds(
                     continue;
                 }
                 let Some(interaction) = app.interactions.current(&id).cloned() else {
-                    app.show_action_message("that interaction is no longer running");
+                    app.show_warning("that interaction is no longer running");
                     continue;
                 };
                 make_interaction_current(app, live, client, standing_launch, interaction);
                 if app.session_id != id {
-                    app.show_action_message(
-                        "could not open that interaction; the log (ctrl-l) says why",
-                    );
+                    app.show_error("could not open that interaction; the log (ctrl-l) says why");
                 }
             }
             // As above, but the grid stays up behind the message box, so the
             // operator can go on to the next tile once this one is answered.
             Some(Request::MessageInteraction(id)) => {
                 let Some(interaction) = app.interactions.current(&id).cloned() else {
-                    app.show_action_message("that interaction is no longer running");
+                    app.show_warning("that interaction is no longer running");
                     continue;
                 };
                 make_interaction_current(app, live, client, standing_launch, interaction);
@@ -1620,9 +1614,7 @@ fn run_rounds(
                 if app.session_id == id {
                     app.enter_input();
                 } else {
-                    app.show_action_message(
-                        "could not open that interaction; the log (ctrl-l) says why",
-                    );
+                    app.show_error("could not open that interaction; the log (ctrl-l) says why");
                 }
             }
             // The interaction is loaded outright rather than cursored, and the
@@ -1639,7 +1631,7 @@ fn run_rounds(
                     .interactions
                     .next_attention_or_live(&app.session_id, app.workspace.id.as_deref());
                 let Some(next) = next else {
-                    app.show_action_message("no other interaction is running");
+                    app.show_warning("no other interaction is running");
                     continue;
                 };
                 make_interaction_current(app, live, client, standing_launch, next);
@@ -1653,7 +1645,7 @@ fn run_rounds(
                     .interactions
                     .next_active(&app.session_id, app.workspace.id.as_deref())
                 else {
-                    app.show_action_message("no other interaction is actively working");
+                    app.show_warning("no other interaction is actively working");
                     continue;
                 };
                 make_interaction_current(app, live, client, standing_launch, next);
@@ -1683,9 +1675,7 @@ fn run_rounds(
                     client.create_session_worktree(&session_id)
                 })?;
                 if let Err(error) = created {
-                    app.show_action_message(format!(
-                        "could not create a linked workspace: {error}"
-                    ));
+                    app.show_error(format!("could not create a linked workspace: {error}"));
                     // Nothing was sent: the message waits in the box for a
                     // plain Enter, or for another try.
                     if let Some(message) = message {
@@ -1704,7 +1694,7 @@ fn run_rounds(
                     if sent {
                         return Ok(RunOutcome::OpenSession(session_id));
                     }
-                    app.show_action_message(
+                    app.show_error(
                         "created the linked workspace, but could not restart in it; the message is back in the box",
                     );
                     app.enter_input();
@@ -1723,7 +1713,7 @@ fn run_rounds(
                 )?;
                 match restarted {
                     Ok(_) => return Ok(RunOutcome::OpenSession(session_id)),
-                    Err(error) => app.show_action_message(format!(
+                    Err(error) => app.show_error(format!(
                         "created the linked workspace, but could not restart in it ({error}); it will be used when this Session next launches"
                     )),
                 }
@@ -1831,7 +1821,7 @@ fn run_rounds(
                     }
                     Err(error) => {
                         let message = format!("could not change the rate-limit retry: {error:#}");
-                        app.show_action_message(message.clone());
+                        app.show_error(message.clone());
                         app.push_log(LogEntry::error(message));
                     }
                 }
@@ -1848,7 +1838,7 @@ fn run_rounds(
                     }
                     Err(error) => {
                         let message = format!("could not change auto-commit: {error:#}");
-                        app.show_action_message(message.clone());
+                        app.show_error(message.clone());
                         app.push_log(LogEntry::error(message));
                     }
                 }
@@ -1863,7 +1853,7 @@ fn run_rounds(
             Some(Request::OpenUrl(url)) => open_url(app, config, &url),
             Some(Request::OpenDirectory) => {
                 let Some(directory) = app.workspace.working_directory_or_current() else {
-                    app.show_action_message("no directory to open a terminal in");
+                    app.show_warning("no directory to open a terminal in");
                     continue;
                 };
                 match crate::terminal::open_directory(&directory, config) {

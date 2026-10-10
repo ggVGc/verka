@@ -738,7 +738,7 @@ impl App {
             // this is not a choice it can offer — but it stays the answer for
             // any other way of asking.
             if live {
-                return self.show_action_message("changing agent requires a new session");
+                return self.show_warning("changing agent requires a new session");
             }
             // A stopped Session's history is in its old agent's native format,
             // so moving it takes a conversion; a Session that was never
@@ -754,7 +754,7 @@ impl App {
             && selection.effort != self.selection.effort
         {
             selection.effort = self.selection.effort;
-            self.show_action_message(
+            self.show_warning(
                 "Claude Code can change model between turns; effort remains session-wide",
             );
         }
@@ -816,6 +816,16 @@ impl App {
         self.notices.show(message);
     }
 
+    pub fn show_error(&mut self, message: impl Into<String>) {
+        self.notices
+            .show_level(message, styra_protocol::LogLevel::Error);
+    }
+
+    pub fn show_warning(&mut self, message: impl Into<String>) {
+        self.notices
+            .show_level(message, styra_protocol::LogLevel::Warn);
+    }
+
     /// Replace the message box's contents outright, used to restore a message
     /// that failed to launch so it isn't lost.
     pub fn set_input(&mut self, text: String) {
@@ -839,7 +849,10 @@ impl App {
             QuotaStatus::Exhausted => LogEntry::error(reading.describe()),
             _ => LogEntry::warn(reading.describe()),
         });
-        self.show_action_message(reading.describe());
+        match reading.status {
+            QuotaStatus::Exhausted => self.show_error(reading.describe()),
+            _ => self.show_warning(reading.describe()),
+        }
         // A spent window is not just news about the plan: it is why this
         // interaction is about to stop working, and the status that follows
         // has to be able to say so.
@@ -1221,7 +1234,7 @@ impl App {
             .find_link_from(start, 0)
             .or_else(|| self.find_link_before(start));
         if self.link_highlight.is_none() {
-            self.show_action_message("no links or file references in the visible conversation");
+            self.show_warning("no links or file references in the visible conversation");
         }
         self.reveal_highlighted_link();
     }
@@ -1273,7 +1286,7 @@ impl App {
     /// Offer the actions that can be taken on the highlighted link.
     pub fn open_link_menu(&mut self) {
         let Some(destination) = self.highlighted_link_destination() else {
-            return self.show_action_message("selected link no longer exists");
+            return self.show_warning("selected link no longer exists");
         };
         let web = is_web_address(&destination);
         self.link_menu = Some(LinkMenu::new(destination, web));
@@ -1285,14 +1298,14 @@ impl App {
     /// found is reported rather than opened, and stays highlighted.
     pub fn open_highlighted_link(&mut self) {
         let Some(destination) = self.highlighted_link_destination() else {
-            return self.show_action_message("selected link no longer exists");
+            return self.show_warning("selected link no longer exists");
         };
         if is_web_address(&destination) {
             self.ask(Request::OpenUrl(destination));
         } else if let Some((_, path, _)) = self.highlighted_link_target() {
             match path {
                 Ok(path) => self.ask(Request::OpenPath(path)),
-                Err(problem) => return self.show_action_message(problem),
+                Err(problem) => return self.show_error(problem),
             }
         }
         self.clear_link_highlight();
@@ -1496,13 +1509,13 @@ impl App {
     /// with the same words as the rest.
     pub fn allow_launch_edit(&mut self) -> bool {
         if self.workspace_launch_pending > 0 {
-            self.show_action_message("the Workspace launch policy is still saving");
+            self.show_warning("the Workspace launch policy is still saving");
             return false;
         }
         if self.can_edit_launch() {
             return true;
         }
-        self.show_action_message("the launch policy is fixed while an interaction is running");
+        self.show_warning("the launch policy is fixed while an interaction is running");
         false
     }
 
@@ -1515,13 +1528,13 @@ impl App {
     /// restarted to take rather than refused.
     pub fn allow_mount_edit(&mut self) -> bool {
         if self.workspace_launch_pending > 0 {
-            self.show_action_message("the Workspace launch policy is still saving");
+            self.show_warning("the Workspace launch policy is still saving");
             return false;
         }
         if self.can_change_mounts() {
             return true;
         }
-        self.show_action_message(
+        self.show_warning(
             "mounts are fixed while the agent is working — they can change once it is idle",
         );
         false

@@ -554,13 +554,13 @@ pub fn confirm_prompt(app: &mut App) {
     }
     let parsed = match mount::parse(&text) {
         Ok(mount) => mount,
-        Err(problem) => return app.show_action_message(problem),
+        Err(problem) => return app.show_error(problem),
     };
     app.launch.prompt = None;
     let label = mount::label(&parsed);
     if app.launch.scope == LaunchScope::Workspace {
         if app.launch.workspace.mounts.contains(&parsed) {
-            return app.show_action_message("the Workspace policy already grants that mount");
+            return app.show_warning("the Workspace policy already grants that mount");
         }
         workspace_change(app, WorkspaceLaunchChange::AddMounts(vec![parsed]));
         app.note_mount_change();
@@ -575,7 +575,7 @@ pub fn confirm_prompt(app: &mut App) {
             let scope = app.launch.scope;
             show_mount_change(app, format!("added {label} to {}", scope.subject()));
         }
-        Err(reason) => app.show_action_message(reason),
+        Err(reason) => app.show_error(reason),
     }
 }
 
@@ -593,7 +593,7 @@ pub fn remove_selected_mount(app: &mut App) {
             .get(app.launch.cursor(scope))
             .cloned()
         else {
-            return app.show_action_message("the Workspace policy has no mounts to remove");
+            return app.show_warning("the Workspace policy has no mounts to remove");
         };
         workspace_change(app, WorkspaceLaunchChange::RemoveMount(removed.clone()));
         app.note_mount_change();
@@ -617,7 +617,7 @@ pub fn remove_selected_mount(app: &mut App) {
                 ),
             );
         }
-        Err(reason) => app.show_action_message(reason),
+        Err(reason) => app.show_error(reason),
     }
 }
 
@@ -648,7 +648,7 @@ pub fn promote_to_workspace(app: &mut App) {
         return;
     }
     if app.launch.interaction.is_empty() {
-        return app.show_action_message("this interaction adds nothing to the Workspace policy");
+        return app.show_warning("this interaction adds nothing to the Workspace policy");
     }
     let policy = app.launch.effective();
     app.ask(Request::ChangeWorkspaceLaunch {

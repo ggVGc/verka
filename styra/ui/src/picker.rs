@@ -87,6 +87,7 @@ fn message_text_color(tag: &str) -> ratatui::style::Color {
     match tag {
         "agent" => theme::AGENT_TEXT,
         "user" => theme::USER_TEXT,
+        "error" | "malformed" => theme::ERROR,
         _ => theme::TEXT,
     }
 }
@@ -305,12 +306,14 @@ pub fn render_message_popup(frame: &mut Frame, title: &str, message: &str) {
     );
     frame.render_widget(Clear, popup);
     frame.render_widget(
-        Paragraph::new(message.to_owned()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme::ERROR))
-                .title(format!(" {title} · press any key ")),
-        ),
+        Paragraph::new(message.to_owned())
+            .style(Style::default().fg(theme::ERROR))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme::ERROR))
+                    .title(format!(" {title} · press any key ")),
+            ),
         popup,
     );
 }

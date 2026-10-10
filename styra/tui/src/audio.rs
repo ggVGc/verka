@@ -393,7 +393,7 @@ impl AudioInput {
                 let message = format!("could not start audio recording: {error:#}");
                 let _ = client.audio_transcription_error(&message);
                 app.push_log(LogEntry::error(message.clone()));
-                app.show_action_message(message);
+                app.show_error(message);
             }
         }
     }
@@ -587,7 +587,7 @@ impl AudioInput {
                     // while they wait for their words to appear, and a failure
                     // seen only there is indistinguishable from a transcript
                     // that never arrives. Say it where the notice was.
-                    app.show_action_message(format!(
+                    app.show_error(format!(
                         "audio transcription failed: {}",
                         first_line(&error)
                     ));
@@ -661,7 +661,7 @@ impl AudioInput {
         let _ = client.audio_transcription_error(&message);
         let _ = client.audio_recording_stopped();
         app.push_log(LogEntry::error(message.clone()));
-        app.show_action_message(first_line(&message).to_owned());
+        app.show_error(first_line(&message).to_owned());
         true
     }
 }

@@ -157,7 +157,7 @@ pub fn handle_git_repository_prompt_key(app: &mut App, client: &Client, key: Key
                 return;
             };
             let Some(workspace_id) = app.workspace.id.as_deref() else {
-                return app.show_action_message("no Workspace is selected");
+                return app.show_warning("no Workspace is selected");
             };
             let repository = (!path.trim().is_empty()).then(|| Path::new(path.trim()));
             match client.set_workspace_git_repository(workspace_id, repository) {
@@ -169,9 +169,7 @@ pub fn handle_git_repository_prompt_key(app: &mut App, client: &Client, key: Key
                         "Git checkout association cleared"
                     });
                 }
-                Err(error) => {
-                    app.show_action_message(format!("could not set Git checkout: {error:#}"))
-                }
+                Err(error) => app.show_error(format!("could not set Git checkout: {error:#}")),
             }
         }
         KeyCode::Backspace => {
@@ -237,8 +235,8 @@ pub fn handle_link_menu_key(app: &mut App, key: KeyEvent) {
 fn mount_highlighted_link(app: &mut App, writable: bool) {
     let path = match app.highlighted_link_target() {
         Some((_, Ok(path), _)) => path,
-        Some((_, Err(problem), _)) => return app.show_action_message(problem),
-        None => return app.show_action_message("selected link names no file to mount"),
+        Some((_, Err(problem), _)) => return app.show_error(problem),
+        None => return app.show_warning("selected link names no file to mount"),
     };
     if !app.allow_launch_edit() {
         return;
@@ -247,7 +245,7 @@ fn mount_highlighted_link(app: &mut App, writable: bool) {
     // same terms and compared against the sandbox's mounts in them.
     let source = match std::fs::canonicalize(&path) {
         Ok(source) => source,
-        Err(error) => return app.show_action_message(format!("{}: {error}", path.display())),
+        Err(error) => return app.show_error(format!("{}: {error}", path.display())),
     };
     let mounts = app
         .launch
@@ -258,7 +256,7 @@ fn mount_highlighted_link(app: &mut App, writable: bool) {
         .as_deref()
         .and_then(|mounts| crate::mount::visibility(mounts, &source))
     {
-        return app.show_action_message(format!(
+        return app.show_warning(format!(
             "already in the sandbox at {} ({})",
             visible.path.display(),
             visible.access
@@ -272,7 +270,7 @@ fn mount_highlighted_link(app: &mut App, writable: bool) {
     let label = crate::mount::label(&mount);
     let message = match app.launch.add_interaction_mount(mount) {
         Ok(()) => format!("added {label} — applies when this Session next launches"),
-        Err(reason) => reason.to_owned(),
+        Err(reason) => return app.show_error(reason),
     };
     app.show_action_message(message);
 }
@@ -342,7 +340,7 @@ pub fn handle_list_key(
         }
         k if GLOBAL_SHELL.matches(k) => {
             let Attachment::Attached { .. } = live else {
-                return app.show_action_message("no live interaction to open a shell for");
+                return app.show_warning("no live interaction to open a shell for");
             };
             return app.ask(Request::OpenShell);
         }
@@ -834,7 +832,7 @@ fn edit_current_interaction_tags(app: &mut App, client: &Client) {
     let interactions = match client.list_interactions() {
         Ok(interactions) => interactions,
         Err(error) => {
-            app.show_action_message(format!("could not list interactions: {error:#}"));
+            app.show_error(format!("could not list interactions: {error:#}"));
             return;
         }
     };
@@ -843,13 +841,13 @@ fn edit_current_interaction_tags(app: &mut App, client: &Client) {
         .find(|item| item.id == session_id)
         .map(|item| item.tags.clone())
     else {
-        app.show_action_message("current interaction is no longer available");
+        app.show_warning("current interaction is no longer available");
         return;
     };
     let tags = match client.list_tags() {
         Ok(tags) => tags,
         Err(error) => {
-            app.show_action_message(format!("could not list tags: {error:#}"));
+            app.show_error(format!("could not list tags: {error:#}"));
             return;
         }
     };
@@ -870,7 +868,7 @@ fn toggle_provider_raw(app: &mut App, client: &Client) {
             app.provider_raw = Some(crate::raw::ProviderRawView::new(raw.text));
             app.provider_raw_open = true;
         }
-        Err(error) => app.show_action_message(format!("could not read provider raw: {error:#}")),
+        Err(error) => app.show_error(format!("could not read provider raw: {error:#}")),
     }
 }
 
@@ -878,7 +876,7 @@ fn toggle_provider_raw(app: &mut App, client: &Client) {
 /// clipboard (see `App::copy_text`).
 fn copy_selection(app: &mut App) {
     let Some(text) = app.copy_text() else {
-        return app.show_action_message("nothing selected to copy");
+        return app.show_warning("nothing selected to copy");
     };
     copy(app, text, "copied to clipboard");
 }
@@ -887,7 +885,7 @@ fn copy_selection(app: &mut App) {
 /// changes, without the tool calls between them.
 fn copy_conversation(app: &mut App) {
     let Some(text) = app.conversation_text() else {
-        return app.show_action_message("no conversation to copy yet");
+        return app.show_warning("no conversation to copy yet");
     };
     copy(app, text, "copied the conversation to clipboard");
 }
@@ -923,12 +921,12 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
     match prompt.key(key) {
         insert::Outcome::Open => {}
         insert::Outcome::Closed => app.insert = None,
-        insert::Outcome::Notice(notice) => app.show_action_message(notice),
+        insert::Outcome::Notice(notice) => app.show_warning(notice),
         insert::Outcome::Insert { path, notice } => {
             app.insert = None;
             app.composer.insert(&path.display().to_string());
             if let Some(notice) = notice {
-                app.show_action_message(notice);
+                app.show_warning(notice);
             }
         }
         insert::Outcome::Grant { mount, path } => {
@@ -946,7 +944,10 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
                         format!("added {label} — applies when this Session next launches")
                     }
                 }
-                Err(reason) => reason.to_owned(),
+                Err(reason) => {
+                    app.composer.insert(&path.display().to_string());
+                    return app.show_error(reason);
+                }
             };
             app.composer.insert(&path.display().to_string());
             app.show_action_message(message);
@@ -975,7 +976,7 @@ fn creates_worktree(app: &App, key: KeyEvent) -> bool {
 /// starts commits its turns if it is given a linked checkout of its own.
 fn toggle_auto_commit(app: &mut App) {
     if app.session_id.is_empty() {
-        return app.show_action_message(
+        return app.show_warning(
             "no interaction yet — one started in its own worktree commits each turn",
         );
     }
@@ -987,11 +988,11 @@ fn toggle_auto_commit(app: &mut App) {
 /// nothing to diff says why instead (see [`DiffTarget::of`]).
 fn ask_for_diff(app: &mut App, request: fn(DiffTarget) -> Request) {
     let Some(interaction) = app.interactions.current(&app.session_id) else {
-        return app.show_action_message("no interaction to diff");
+        return app.show_warning("no interaction to diff");
     };
     match DiffTarget::of(interaction) {
         Ok(target) => app.ask(request(target)),
-        Err(reason) => app.show_action_message(reason),
+        Err(reason) => app.show_error(reason),
     }
 }
 
@@ -1023,7 +1024,7 @@ pub fn handle_input_key(
                 && matches!(live, Attachment::Attached { .. })
                 && app.activity.status == Status::Running
             {
-                return app.show_action_message(
+                return app.show_warning(
                     "the agent is mid-turn — wait for it to finish before moving it to a new Git workspace",
                 );
             }
@@ -1032,8 +1033,7 @@ pub fn handle_input_key(
                     styra_server::journal::name_from_message(Some(&app.composer.message()))
                 {
                     if let Err(error) = client.rename_session(&app.session_id, Some(&name)) {
-                        return app
-                            .show_action_message(format!("could not name the branch: {error:#}"));
+                        return app.show_error(format!("could not name the branch: {error:#}"));
                     }
                     app.branch_needs_prompt_name = false;
                 }
