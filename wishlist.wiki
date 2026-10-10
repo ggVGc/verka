@@ -1,3 +1,8 @@
+- Log any actions taken for an interaction:
+  - Can be used to generate a detailed report of the work done in that session
+  - mounts
+  - templates
+  - (un)locking files
 - Svara: Ask using structured format and have quickfix filled
 - Svara: Ask question and have answer show up inline until seen and closed:
   - Maybe same for edits? Accept/No/Change?
