@@ -195,10 +195,16 @@ Add this directory to Neovim's runtime path with your plugin manager, then run:
 :SvaraNew
 ```
 
-Run `:Svara` with no argument to choose from the active interactions in the
-Workspace covering the currently viewed file. The choice is remembered per
-Workspace until Neovim exits. Thereafter `:Svara Review this buffer` sends to
-that interaction. `:SvaraNew` starts a new interaction. Both commands use the Workspace covering the viewed
+Run `:Svara` with no argument to open a floating message box. Its border names
+the selected interaction; `Ctrl+L` in Normal or Insert mode chooses from the
+active interactions in the Workspace, using the configured `vim.ui.select`
+picker. The draft stays in the box when the picker closes. Enter in Normal
+mode sends; in Insert mode it adds a newline. If no live interaction is
+selected, sending opens the picker first. Escape or `q` in Normal mode closes
+the box without sending. A failed send leaves the draft available to retry.
+The choice is remembered per Workspace until Neovim exits.
+`:Svara Review this buffer` sends directly to that interaction.
+`:SvaraNew` starts a new interaction. Both commands use the Workspace covering the viewed
 file, rather than Neovim's working directory.
 
 `:SvaraNew` opens Styra's message box as a floating window: ` message ` at the
@@ -429,5 +435,6 @@ nvim --headless -u NONE -l tests/nvim_spec.lua    # the Neovim host, for real
 nvim --headless -u NONE -l tests/info_spec.lua    # what :SvaraInfo answers
 nvim --headless -u NONE -l tests/picker_spec.lua  # the model list :SvaraNew offers, :SvaraEdit, :SvaraJump
 nvim --headless -u NONE -l tests/compose_spec.lua # the window its prompt and model are chosen in
+nvim --headless -u NONE -l tests/send_spec.lua    # :Svara's message box and interaction picker
 nvim --headless -u NONE -l tests/find_spec.lua    # what :SvaraAsk and :SvaraEdit ask, the quickfix items, the float
 ```

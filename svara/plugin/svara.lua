@@ -175,25 +175,69 @@ vim.api.nvim_create_user_command("Svara", function(command)
   end
 
   if command.args == "" then
+    local location = core.viewing()
     local interactions, workspace, err = core.interactions_for_directory(directory)
     if not interactions then
       vim.notify("Svara: " .. err, vim.log.levels.ERROR)
       return
     end
-    if #interactions == 0 then
-      vim.notify("Svara: no live interactions in this Workspace", vim.log.levels.WARN)
-      return
-    end
-    vim.ui.select(interactions, {
-      prompt = "Select Styra interaction",
-      format_item = interaction_name,
-    }, function(interaction)
-      if not interaction then
-        return
+    local selected
+    for _, interaction in ipairs(interactions) do
+      if interaction.id == core.selected_interaction(workspace.id) then
+        selected = interaction
+        break
       end
-      core.select_interaction(workspace.id, interaction.id)
-      vim.notify("Svara: selected " .. interaction.id, vim.log.levels.INFO)
-    end)
+    end
+    local function label(interaction)
+      return require("svara").given(interaction.name) or interaction.id
+    end
+    require("svara.compose").open({
+      worktree = false,
+      interaction = selected and label(selected),
+      placeholder = "Enter to send · Ctrl+L to choose an interaction",
+      sending = "sending…",
+      choose_interaction = function(done)
+        -- Refresh when the picker opens: interactions may have started or
+        -- stopped while the message was being written.
+        local choices, target_workspace, pick_error = core.interactions_for_directory(directory)
+        if not choices or #choices == 0 then
+          vim.notify("Svara: " .. (pick_error or "no live interactions in this Workspace"),
+            choices and vim.log.levels.WARN or vim.log.levels.ERROR)
+          done(nil)
+          return
+        end
+        vim.ui.select(choices, {
+          prompt = "Select Styra interaction",
+          format_item = interaction_name,
+        }, function(interaction)
+          if not interaction then
+            done(nil)
+            return
+          end
+          core.select_interaction(target_workspace.id, interaction.id)
+          done(label(interaction))
+        end)
+      end,
+      on_cancel = function()
+        vim.notify("Svara: nothing sent", vim.log.levels.INFO)
+      end,
+      on_send = function(typed, _, progress)
+        require("svara.nvim").run(function()
+          local called, sent, send_error = pcall(core.send_to_selected,
+            core.prompt_from_view(typed, location), { directory = directory })
+          if not called then
+            sent, send_error = nil, tostring(sent)
+          end
+          if not sent then
+            progress.failed(send_error)
+            vim.notify("Svara: " .. send_error, vim.log.levels.ERROR)
+            return
+          end
+          progress.done()
+          vim.notify("Svara: message sent", vim.log.levels.INFO)
+        end)
+      end,
+    })
     return
   end
 
@@ -207,7 +251,7 @@ vim.api.nvim_create_user_command("Svara", function(command)
   vim.notify("Svara: message sent", vim.log.levels.INFO)
 end, {
   nargs = "*",
-  desc = "Select or message a Styra interaction in the Workspace over the current file",
+  desc = "Message a Styra interaction in the Workspace over the current file",
 })
 
 vim.api.nvim_create_user_command("SvaraNew", function(command)

@@ -25,6 +25,7 @@ local M = {}
 M.title = " message "
 M.placeholder = "Enter to send · Ctrl+Enter to send in a new Git workspace"
 M.no_model = "no model · Ctrl+L"
+M.no_interaction = "no interaction · Ctrl+L"
 M.starting = "starting…"
 M.branching = "creating a Git workspace and branch…"
 
@@ -42,9 +43,10 @@ local placeholder_namespace = vim.api.nvim_create_namespace("svara_compose_place
 ---@param width integer the window's inner width
 ---@param model? string
 ---@param title? string
-function M.title_chunks(width, model, title)
+---@param empty_label? string
+function M.title_chunks(width, model, title, empty_label)
   title = title or M.title
-  local right = " " .. (model or M.no_model) .. " "
+  local right = " " .. (model or empty_label or M.no_model) .. " "
   local fill = width - vim.fn.strdisplaywidth(title) - vim.fn.strdisplaywidth(right)
   return {
     { title, "Comment" },
@@ -80,6 +82,8 @@ end
 --- or `done(nil)` if the operator backed out. The window is left for the
 --- picker meanwhile without that counting as closing it. Sending with no model
 --- runs it first, and sends once it has one.
+--- `interaction` and `choose_interaction(done)` use the same border and
+--- Ctrl+L picker for a message to an existing interaction instead.
 ---
 --- `initial` is put in the buffer to start from, so `:SvaraNew some words`
 --- still means something: the beginning of the prompt rather than all of it.
@@ -90,11 +94,13 @@ end
 --- for what the bottom border says while `on_send` works, and `worktree =
 --- false`, since a question has no use for a Git workspace of its own:
 --- Ctrl+Enter then means nothing, and `create_worktree` is always false.
----@param options { initial?: string, model?: string, title?: string, placeholder?: string, sending?: string, worktree?: boolean, choose_model?: fun(done: fun(label?: string)), on_send: fun(prompt: string, create_worktree: boolean, progress: { done: fun(), failed: fun(message: string) }), on_cancel?: fun() }
+---@param options { initial?: string, model?: string, interaction?: string, title?: string, placeholder?: string, sending?: string, worktree?: boolean, choose_model?: fun(done: fun(label?: string)), choose_interaction?: fun(done: fun(label?: string)), on_send: fun(prompt: string, create_worktree: boolean, progress: { done: fun(), failed: fun(message: string) }), on_cancel?: fun() }
 ---@return integer window
 ---@return integer buffer the prompt's
 function M.open(options)
-  local model = options.model
+  local target_label = options.interaction or options.model
+  local choose = options.choose_interaction or options.choose_model
+  local empty_label = options.choose_interaction and M.no_interaction or M.no_model
   local title = options.title or M.title
   local placeholder_text = options.placeholder or M.placeholder
   local worktree = options.worktree ~= false
@@ -129,7 +135,7 @@ function M.open(options)
   local config = placement(prompt_rows())
   config.style = "minimal"
   config.border = "rounded"
-  config.title = M.title_chunks(width, model, title)
+  config.title = M.title_chunks(width, target_label, title, empty_label)
   config.title_pos = "left"
   local window = vim.api.nvim_open_win(prompt_buffer, true, config)
   vim.wo[window].wrap = true
@@ -140,7 +146,7 @@ function M.open(options)
   -- Whether a picker Ctrl+L opened is up, so leaving the window for it is not
   -- closing it.
   local picking = false
-  -- A send waiting on a model to send with: whether it was Ctrl+Enter's.
+  -- A send waiting on a picker choice: whether it was Ctrl+Enter's.
   local waiting_to_send = nil
   -- Where the cursor was, and in which mode, when the prompt was left.
   local left_at, left_inserting
@@ -242,13 +248,13 @@ function M.open(options)
 
   local send
 
-  --- Back to the prompt, where and as it was left, naming the model.
+  --- Back to the prompt, where and as it was left, naming the choice.
   local function show_prompt()
     if finished or not vim.api.nvim_win_is_valid(window) then
       return
     end
     vim.api.nvim_set_current_win(window)
-    vim.api.nvim_win_set_config(window, { title = M.title_chunks(width, model, title), title_pos = "left" })
+    vim.api.nvim_win_set_config(window, { title = M.title_chunks(width, target_label, title, empty_label), title_pos = "left" })
     if left_at then
       pcall(vim.api.nvim_win_set_cursor, window, left_at)
     end
@@ -258,15 +264,15 @@ function M.open(options)
     end
   end
 
-  local function choose_model()
-    if not options.choose_model or busy or picking then
+  local function choose_target()
+    if not choose or busy or picking then
       return
     end
     left_at = vim.api.nvim_win_get_cursor(window)
     left_inserting = vim.fn.mode() == "i"
     vim.cmd.stopinsert()
     picking = true
-    options.choose_model(function(label)
+    choose(function(label)
       -- Scheduled, so the picker has closed its own windows and handed focus
       -- back before this one takes it.
       vim.schedule(function()
@@ -277,7 +283,7 @@ function M.open(options)
           return
         end
         if label then
-          model = label
+          target_label = label
         end
         show_prompt()
         if label and resend ~= nil then
@@ -310,13 +316,13 @@ function M.open(options)
     local prompt =
       vim.trim(table.concat(vim.api.nvim_buf_get_lines(prompt_buffer, 0, -1, false), "\n"))
     if prompt == "" then
-      vim.notify("Svara: a new interaction needs a prompt", vim.log.levels.WARN)
+      vim.notify("Svara: a message needs a prompt", vim.log.levels.WARN)
       return
     end
-    if not model and options.choose_model then
-      -- Nothing to start on yet: ask, and send once there is.
+    if not target_label and choose then
+      -- No target yet: ask, and send once there is.
       waiting_to_send = create_worktree
-      choose_model()
+      choose_target()
       return
     end
     vim.cmd.stopinsert()
@@ -332,7 +338,8 @@ function M.open(options)
       send(true)
     end, "Send the prompt, starting in a new Git workspace and branch")
   end
-  map(prompt_buffer, { "n", "i" }, "<C-l>", choose_model, "Choose the model")
+  map(prompt_buffer, { "n", "i" }, "<C-l>", choose_target,
+    options.choose_interaction and "Choose the interaction" or "Choose the model")
   -- Escape only closes from Normal mode: from Insert mode it is the step
   -- out of typing, as everywhere else.
   map(prompt_buffer, "n", "q", cancel, "Close without sending")
