@@ -41,21 +41,24 @@ end
 --- `claude:claude-opus-5/xhigh` out in full is last on the list, because a
 --- catalog is not a closed set — an id newer than the server's tables is
 --- still launchable. A model chosen here is remembered, so it is picked at
---- the start of a stretch of work and not at every `:SvaraNew` in it.
+--- the start of a stretch of work and not at every `:SvaraNew` in it — and
+--- remembered for `kind` of command alone, so the model questions are asked
+--- on is not the one edits are made on unless it is chosen for both.
 ---
 --- The questions are asked with `vim.ui`, so in whatever picker the operator
 --- has configured. `on_cancel` is called when one is backed out of instead.
-local function choose_selection(directory, on_chosen, on_cancel)
+local function choose_selection(directory, kind, on_chosen, on_cancel)
   local core = require("svara.core")
   local typed_out = "another model…"
+  local runs = { new = "new interactions", ask = "questions", edit = "edits" }
 
   local function settle(value)
-    local name, err = core.remember_selection(value)
+    local name, err = core.remember_selection(value, kind)
     if not name then
       vim.notify("Svara: " .. err, vim.log.levels.ERROR)
       return
     end
-    vim.notify("Svara: new interactions will run on " .. name, vim.log.levels.INFO)
+    vim.notify(string.format("Svara: %s will run on %s", runs[kind], name), vim.log.levels.INFO)
     on_chosen(name)
   end
 
@@ -95,7 +98,7 @@ local function choose_selection(directory, on_chosen, on_cancel)
     end)
   end
 
-  local selection, source, err = core.selection_for_directory(directory)
+  local selection, source, err = core.selection_for_directory(directory, { kind = kind })
   local said = selection and core.selection_said(selection)
   if not selection then
     -- Nothing in use to put at the top: say why once, and let the catalog
@@ -128,7 +131,7 @@ local function choose_selection(directory, on_chosen, on_cancel)
   choices[#choices + 1] = typed_out
 
   vim.ui.select(choices, {
-    prompt = "Model for this interaction",
+    prompt = "Model for " .. runs[kind],
     format_item = function(choice)
       if choice == typed_out then
         return choice
@@ -222,12 +225,12 @@ vim.api.nvim_create_user_command("SvaraNew", function(command)
   -- while the prompt is written, and Ctrl+L is there to change it. Nothing to
   -- name means no `vim.g.svara_selection` and no Session to take one from;
   -- sending then asks first.
-  local selection = core.selection_for_directory(directory)
+  local selection = core.selection_for_directory(directory, { kind = "new" })
   require("svara.compose").open({
     initial = command.args,
     model = selection and model_label(selection),
     choose_model = function(done)
-      choose_selection(directory, function(chosen)
+      choose_selection(directory, "new", function(chosen)
         selection = chosen
         done(model_label(chosen))
       end, function()
@@ -273,7 +276,16 @@ end, {
   desc = "Start a new Styra interaction in the Workspace over the current file",
 })
 
-vim.api.nvim_create_user_command("SvaraAsk", function(command)
+--- A command whose request is one turn of a new interaction answered with
+--- file locations: `:SvaraAsk` and `:SvaraEdit`, which differ in what the turn
+--- is asked to do and what is done with the answer.
+---
+--- `spec.kind` names the command, for the model it runs on; `spec.run` is
+--- `svara.core.find` or `svara.core.edit`; `spec.answered(request, items)`
+--- takes the locations once there are some; `spec.box` is what the message
+--- box says when nothing was typed after the command; and `spec.under_way`
+--- and `spec.nothing` are the notes for a request started and a box closed.
+local function files_command(spec, command)
   local core = require("svara.core")
   local directory, directory_error = viewed_directory()
   if not directory then
@@ -281,40 +293,33 @@ vim.api.nvim_create_user_command("SvaraAsk", function(command)
     return
   end
   -- Taken now, so the location is where the operator was when they asked,
-  -- not wherever a prompt or a picker left the cursor.
-  local location = core.viewing()
+  -- not wherever a prompt or a picker left the cursor. A range given to the
+  -- command — a visual selection, usually — is the location instead.
+  local location = core.viewing(0, command.range > 0 and { command.line1, command.line2 } or nil)
 
-  local function answered(question, items, missed)
-    if not items then
-      vim.notify("Svara: no locations — " .. tostring(missed), vim.log.levels.ERROR)
-      return
-    end
-    vim.fn.setqflist({}, " ", { title = "Svara: " .. question, items = items })
-    vim.notify(
-      string.format("Svara: %d location%s", #items, #items == 1 and "" or "s"),
-      vim.log.levels.INFO
-    )
-    vim.cmd("botright copen")
-  end
-
-  --- `progress` is the message box's, when the question was typed in one: it
-  --- closes once the interaction is up, or hands the question back to be
+  --- `progress` is the message box's, when the request was typed in one: it
+  --- closes once the interaction is up, or hands the request back to be
   --- edited if it could not start.
-  local function ask(question, selection, progress)
-    local finished = require("svara.pending").add(question)
+  local function run(request, selection, progress)
+    local finished = require("svara.pending").add(request)
     -- Run so the editor is not held while the interaction starts, which is
     -- the float's first stretch of spinning; a raise is a failure like any
     -- other, rather than a spinner that never stops.
     require("svara.nvim").run(function()
-      local called, handle, err, session = pcall(core.find, core.prompt_from_view(question, location), {
+      local called, handle, err, session = pcall(spec.run, core.prompt_from_view(request, location), {
         directory = directory,
         selection = selection,
+        kind = spec.kind,
       }, function(items, missed, _, completion_error)
         finished()
         if completion_error then
           vim.notify("Svara: could not mark it completed — " .. completion_error, vim.log.levels.WARN)
         end
-        answered(question, items, missed)
+        if not items then
+          vim.notify("Svara: no locations — " .. tostring(missed), vim.log.levels.ERROR)
+          return
+        end
+        spec.answered(request, items)
       end)
       if not called then
         handle, err = nil, tostring(handle)
@@ -330,37 +335,35 @@ vim.api.nvim_create_user_command("SvaraAsk", function(command)
       if progress then
         progress.done()
       end
-      vim.notify("Svara: asking in " .. session.id, vim.log.levels.INFO)
+      vim.notify("Svara: " .. spec.under_way .. " in " .. session.id, vim.log.levels.INFO)
     end)
   end
 
-  -- Every question starts an interaction, so it needs a model the way
+  -- Every request starts an interaction, so it needs a model the way
   -- `:SvaraNew` does, and with nothing to take one from it is asked for the
   -- same way rather than refused.
-  local selection = core.selection_for_directory(directory)
+  local selection = core.selection_for_directory(directory, { kind = spec.kind })
 
   if command.args ~= "" then
     if selection then
-      ask(command.args, nil)
+      run(command.args, nil)
     else
-      choose_selection(directory, function(chosen)
-        ask(command.args, chosen)
+      choose_selection(directory, spec.kind, function(chosen)
+        run(command.args, chosen)
       end, function() end)
     end
     return
   end
 
-  -- Nothing typed after the command: `:SvaraNew`'s box, for a question. The
-  -- model is named in its border and Ctrl+L changes it, as there; there is
-  -- no Ctrl+Enter, since a question needs no Git workspace of its own.
-  require("svara.compose").open({
-    title = " question ",
-    placeholder = "Enter to ask · the places it names go to the quickfix list",
-    sending = "asking…",
+  -- Nothing typed after the command: `:SvaraNew`'s box. The model is named in
+  -- its border and Ctrl+L changes it, as there; there is no Ctrl+Enter, since
+  -- the request is answered here rather than worked on in a Git workspace of
+  -- its own.
+  require("svara.compose").open(vim.tbl_extend("force", spec.box, {
     worktree = false,
     model = selection and model_label(selection),
     choose_model = function(done)
-      choose_selection(directory, function(chosen)
+      choose_selection(directory, spec.kind, function(chosen)
         selection = chosen
         done(model_label(chosen))
       end, function()
@@ -368,15 +371,98 @@ vim.api.nvim_create_user_command("SvaraAsk", function(command)
       end)
     end,
     on_cancel = function()
-      vim.notify("Svara: nothing asked", vim.log.levels.INFO)
+      vim.notify("Svara: " .. spec.nothing, vim.log.levels.INFO)
     end,
     on_send = function(typed, _, progress)
-      ask(typed, selection, progress)
+      run(typed, selection, progress)
     end,
-  })
+  }))
+end
+
+vim.api.nvim_create_user_command("SvaraAsk", function(command)
+  files_command({
+    kind = "ask",
+    run = require("svara.core").find,
+    box = {
+      title = " question ",
+      placeholder = "Enter to ask · the places it names go to the quickfix list",
+      sending = "asking…",
+    },
+    under_way = "asking",
+    nothing = "nothing asked",
+    answered = function(question, items)
+      vim.fn.setqflist({}, " ", { title = "Svara: " .. question, items = items })
+      vim.notify(
+        string.format("Svara: %d location%s", #items, #items == 1 and "" or "s"),
+        vim.log.levels.INFO
+      )
+      vim.cmd("botright copen")
+    end,
+  }, command)
 end, {
   nargs = "*",
+  range = true,
   desc = "Ask a new Styra interaction where something is, into the quickfix list",
+})
+
+-- The places the edit that finished last changed, and what it was asked, for
+-- `:SvaraJump`.
+local last_edit
+
+--- An edit's changed places as a quickfix list of their own, entered at the
+--- first. A list rather than only the first place, because an edit that
+--- touched three files is three places to look at.
+local function jump_to_edit(edit)
+  vim.fn.setqflist({}, " ", { title = "Svara edit: " .. edit.instruction, items = edit.items })
+  vim.cmd("cfirst")
+end
+
+vim.api.nvim_create_user_command("SvaraEdit", function(command)
+  files_command({
+    kind = "edit",
+    run = require("svara.core").edit,
+    box = {
+      title = " edit ",
+      placeholder = "Enter to edit · :SvaraJump goes to the change once it is made",
+      sending = "starting…",
+    },
+    under_way = "editing",
+    nothing = "nothing edited",
+    answered = function(instruction, items)
+      -- The agent changed the files on disk; buffers showing them are read
+      -- again, so the edit is in sight rather than a warning at the next write.
+      vim.cmd("silent! checktime")
+      last_edit = { instruction = instruction, items = items }
+      if #items == 0 then
+        vim.notify("Svara: the edit names no places it changed", vim.log.levels.WARN)
+        return
+      end
+      -- The edit finishes minutes after it was asked for, while the operator
+      -- is somewhere else, so the editor is not moved: it is said where the
+      -- change is, and `:SvaraJump` goes there.
+      local first = items[1]
+      local where = vim.fn.fnamemodify(first.filename, ":~:.") .. (first.lnum and (":" .. first.lnum) or "")
+      local more = #items > 1 and string.format(" (+%d more)", #items - 1) or ""
+      vim.notify(
+        string.format("Svara: edited %s%s — :SvaraJump to go there", where, more),
+        vim.log.levels.INFO
+      )
+    end,
+  }, command)
+end, {
+  nargs = "*",
+  range = true,
+  desc = "Have a new Styra interaction make an edit at the cursor or selection",
+})
+
+vim.api.nvim_create_user_command("SvaraJump", function()
+  if not last_edit or #last_edit.items == 0 then
+    vim.notify("Svara: no edit has finished yet", vim.log.levels.WARN)
+    return
+  end
+  jump_to_edit(last_edit)
+end, {
+  desc = "Go to the places the last finished :SvaraEdit changed, as a quickfix list",
 })
 
 vim.api.nvim_create_user_command("SvaraInfo", function()

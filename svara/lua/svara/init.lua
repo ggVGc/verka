@@ -51,6 +51,10 @@ M.send_to_selected = require("svara.core").send_to_selected
 --- `svara.core`.
 M.find = require("svara.core").find
 
+--- Have a new interaction make an edit, and get the places it changed as
+--- quickfix items; see `svara.core`.
+M.edit = require("svara.core").edit
+
 --- What Svara would do in a directory — Workspace, model, selected
 --- interaction — as a table, and as lines to show; see `svara.core`.
 M.info = require("svara.core").info

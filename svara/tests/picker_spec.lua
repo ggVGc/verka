@@ -98,7 +98,7 @@ local function run(picks, branch)
     shown[turn] = labels
     on_choice(picks[turn] and items[picks[turn]] or nil, picks[turn])
   end
-  started, branched, vim.g.svara_selection = nil, nil, nil
+  started, branched, vim.g.svara_new_selection = nil, nil, nil
   vim.cmd("SvaraNew what does this module trust?")
   return shown, window
 end
@@ -110,7 +110,7 @@ do
   assert(#shown == 0, "no list unless Ctrl+L asks for one")
   assert(opened.model == "claude-opus-5 · high", tostring(opened.model))
   assert(started.model == "claude-opus-5", vim.inspect(started))
-  assert(vim.g.svara_selection == nil, "sending stores nothing")
+  assert(vim.g.svara_new_selection == nil, "sending stores nothing")
   assert(opened.sent, "the window is told the start is done")
 end
 
@@ -128,7 +128,7 @@ do
   assert(started.model == "claude-opus-5", vim.inspect(started))
   -- Carrying on with what the rules already give changes nothing, so there
   -- is nothing to store.
-  assert(vim.g.svara_selection == nil, "carrying on stores nothing")
+  assert(vim.g.svara_new_selection == nil, "carrying on stores nothing")
 end
 
 -- A model from the catalog, and the rungs it accepts ----------------------
@@ -138,7 +138,7 @@ do
   assert(shown[2][1] == "low", vim.inspect(shown[2]))
   assert(shown[2][2] == "high (default)", vim.inspect(shown[2]))
   assert(started == "codex:gpt-6-astra/high", vim.inspect(started))
-  assert(vim.g.svara_selection == "codex:gpt-6-astra/high", tostring(vim.g.svara_selection))
+  assert(vim.g.svara_new_selection == "codex:gpt-6-astra/high", tostring(vim.g.svara_new_selection))
   -- And the border names it from then on.
   local _, opened = run({ 2, 1 })
   assert(opened.model == "gpt-6-astra · low", tostring(opened.model))
@@ -151,8 +151,8 @@ do
   assert(#shown == 1, vim.inspect(shown))
   -- It still needs an effort in its Selection: the one a launch would use.
   assert(
-    vim.g.svara_selection == "claude:claude-haiku-4-5-20251001/high",
-    tostring(vim.g.svara_selection)
+    vim.g.svara_new_selection == "claude:claude-haiku-4-5-20251001/high",
+    tostring(vim.g.svara_new_selection)
   )
 end
 
@@ -164,7 +164,7 @@ do
   end
   run({ 4 })
   assert(started == "claude:claude-fable-9/max", vim.inspect(started))
-  assert(vim.g.svara_selection == "claude:claude-fable-9/max")
+  assert(vim.g.svara_new_selection == "claude:claude-fable-9/max")
 
   -- An unusable one is refused, and nothing starts.
   vim.ui.input = function(_, on_input)
@@ -216,6 +216,45 @@ do
   local asked = run({})
   assert(#asked == 0, vim.inspect(asked))
   assert(started == "claude:claude-opus-5/xhigh", vim.inspect(started))
+end
+
+-- :SvaraEdit, its own model, and :SvaraJump to where it changed ----------
+
+do
+  local asked, finish
+  core.selection_for_directory = function(_, options)
+    asked = options and options.kind
+    return in_use, "the newest Session in the Workspace"
+  end
+  core.edit = function(instruction, options, on_done)
+    finish = { instruction = instruction, options = options, on_done = on_done }
+    return {}, nil, { id = "styra-5" }
+  end
+  vim.fn.writefile({ "one", "two", "three" }, file)
+  vim.cmd("edit! " .. vim.fn.fnameescape(file))
+  vim.cmd("2,3SvaraEdit make it four")
+  assert(asked == "edit", tostring(asked))
+  assert(finish.options.kind == "edit", vim.inspect(finish.options))
+  assert(
+    finish.instruction == "make it four\n\nSource: " .. vim.fn.fnamemodify(file, ":p") .. ":2-3",
+    finish.instruction
+  )
+
+  vim.cmd("SvaraJump")
+  assert(notified[#notified]:find("no edit has finished"), notified[#notified])
+
+  -- The agent changes the file on disk, and says where.
+  vim.fn.writefile({ "one", "two", "three and four" }, file)
+  vim.cmd("1")
+  finish.on_done({ { filename = file, lnum = 3, col = 2, text = "four" } })
+  assert(notified[#notified]:find(":3 — :SvaraJump", 1, true), notified[#notified])
+  -- The changed file is read again; the operator is not moved.
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  assert(lines[3] == "three and four", vim.inspect(lines))
+  assert(vim.api.nvim_win_get_cursor(0)[1] == 1, "the edit moved the cursor")
+  vim.cmd("SvaraJump")
+  assert(vim.api.nvim_win_get_cursor(0)[1] == 3, vim.inspect(vim.api.nvim_win_get_cursor(0)))
+  assert(vim.fn.getqflist({ title = 0 }).title == "Svara edit: make it four")
 end
 
 print("svara picker tests passed")

@@ -239,7 +239,7 @@ top, said with where it came from, then every model the server offers, then
 is not a closed set, and an id newer than the server's tables is still
 launchable. Choosing the first entry keeps it and stores nothing, leaving the
 rules in charge. Anything else asks for a reasoning effort next, from the rungs
-that model accepts, and is remembered in `vim.g.svara_selection`, so it is
+that model accepts, and is remembered in `vim.g.svara_new_selection`, so it is
 chosen once for a stretch of work rather than at every `:SvaraNew`. The box
 stays open under the picker, and once it closes — chosen or backed out of —
 goes back to the prompt as it was left, naming the model chosen.
@@ -311,7 +311,8 @@ three parts of that question are `svara.core.selection_for_directory`, which
 answers what would be used and where it came from,
 `svara.core.available_models`, which is the server's catalog, and
 `svara.core.remember_selection`, which validates a profile name and stores it
-in `vim.g.svara_selection`.
+in `vim.g.svara_selection`, or in one command's own variable when given its
+kind (see `:SvaraEdit` below).
 
 `:SvaraAsk` asks a question whose answer is places in the code, and puts
 them in the quickfix list:
@@ -325,8 +326,8 @@ the viewed file, with the question as its first turn under the `files`
 contract, followed by the file, line and column being viewed, as `:Svara`
 sends it. So it starts from nothing but itself, never lands in the middle of
 a turn, and leaves the interaction selected with `:Svara` as it was. It runs
-on the model `:SvaraNew` would use; with none to take, the same picker comes
-first. Styra is not switched to it. Once it has answered, it is marked
+on the model chosen for questions (see `:SvaraEdit` below); with none to
+take, the same picker comes first. Styra is not switched to it. Once it has answered, it is marked
 completed, which moves it out of the way in Styra's listing while its history
 stays readable. A reply that missed its contract still counts as an answer.
 An interaction that failed or ended without answering stays active, so you can
@@ -354,6 +355,43 @@ does the same without the float or the quickfix list. It returns once the
 interaction is up, with the handle following it and its `SessionInfo`, and calls
 `on_done(items, nil, answer)` with items ready for `setqflist`, or
 `on_done(nil, error, answer)`.
+
+Both `:SvaraAsk` and `:SvaraEdit` take a range, so a visual selection is sent
+as `Source: /path/to/file.lua:12-20` instead of the cursor position.
+
+`:SvaraEdit` has a new interaction make an edit, where you are pointing:
+
+```vim
+:'<,'>SvaraEdit return early when the token has expired
+```
+
+It works the same way as `:SvaraAsk`. It starts its own interaction, the float
+shows it while it runs, and it is marked completed once it has answered. With
+no argument it opens the box, titled ` edit `. The difference is the turn: the
+agent is told to make the change in the files, then answer with the places it
+changed. It runs in the Workspace's own directory, not in a Git workspace of
+its own, so the change lands in the files you have open. When it finishes,
+buffers showing changed files are reloaded (`:checktime`), your cursor stays
+put, and a notification names the first changed place: `edited
+src/auth.lua:42 (+1 more) — :SvaraJump to go there`. `:SvaraJump` makes the
+places the last finished edit changed the quickfix list and goes to the first.
+From Lua it is `require("svara").edit(instruction, options, on_done)`, called
+like `find`.
+
+Each of `:SvaraNew`, `:SvaraAsk` and `:SvaraEdit` remembers its own model. A
+model chosen with `Ctrl+L` in one is stored in `vim.g.svara_new_selection`,
+`vim.g.svara_ask_selection` or `vim.g.svara_edit_selection`, and the others
+are left alone. A command's own variable is used first, then the shared
+`vim.g.svara_selection`, then the newest Session. So a fast model for
+questions and a careful one for edits can be set up front:
+
+```lua
+vim.g.svara_ask_selection = "claude:claude-haiku-4-5-20251001/high"
+vim.g.svara_edit_selection = "claude:claude-opus-5/xhigh"
+```
+
+`:SvaraInfo` lists any command that has a model of its own as an extra
+`model (ask)` row.
 
 To send to a session that is already live, name it:
 
@@ -389,7 +427,7 @@ nvim --headless -u NONE -l tests/core_spec.lua    # send_message over a socket
 nvim --headless -u NONE -l tests/api_spec.lua     # the API, on a host of its own
 nvim --headless -u NONE -l tests/nvim_spec.lua    # the Neovim host, for real
 nvim --headless -u NONE -l tests/info_spec.lua    # what :SvaraInfo answers
-nvim --headless -u NONE -l tests/picker_spec.lua  # the model list :SvaraNew offers
+nvim --headless -u NONE -l tests/picker_spec.lua  # the model list :SvaraNew offers, :SvaraEdit, :SvaraJump
 nvim --headless -u NONE -l tests/compose_spec.lua # the window its prompt and model are chosen in
-nvim --headless -u NONE -l tests/find_spec.lua    # what :SvaraAsk asks, the quickfix items, the float
+nvim --headless -u NONE -l tests/find_spec.lua    # what :SvaraAsk and :SvaraEdit ask, the quickfix items, the float
 ```

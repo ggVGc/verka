@@ -263,6 +263,45 @@ do
   vim.g.svara_selection = nil
 end
 
+-- A model for one kind of command alone ------------------------------------
+
+do
+  local where = "/home/me/verka/styra/protocol/src"
+  local function resolve(kind, replies)
+    local host = fake_host(replies)
+    local selection, source, err =
+      core.selection_for_directory(where, { kind = kind, socket = "/tmp/test.sock", host = host })
+    return selection, source, err, host
+  end
+
+  vim.g.svara_selection = "claude:claude-opus-5/xhigh"
+  local name = core.remember_selection("claude:claude-haiku-4-5-20251001/high", "ask")
+  assert(vim.g.svara_ask_selection == name, tostring(vim.g.svara_ask_selection))
+  assert(vim.g.svara_selection == "claude:claude-opus-5/xhigh", "the shared model was displaced")
+
+  -- The command's own model first, the shared one for the others.
+  local selection, source = resolve("ask", { workspace(inner) })
+  assert(selection == name, vim.inspect(selection))
+  assert(source == "vim.g.svara_ask_selection", tostring(source))
+  selection, source = resolve("edit", { workspace(inner) })
+  assert(selection == "claude:claude-opus-5/xhigh", vim.inspect(selection))
+  assert(source == "vim.g.svara_selection", tostring(source))
+
+  -- And :SvaraInfo says which commands have one of their own.
+  local info = ask({
+    health(),
+    workspace(inner),
+    interactions({}),
+  })
+  assert(#info.command_selections == 1, vim.inspect(info.command_selections))
+  local lines = shown(info)
+  assert(lines:find("model (ask)", 1, true), lines)
+  assert(lines:find("from vim.g.svara_ask_selection", 1, true), lines)
+  assert(not lines:find("model (edit)", 1, true), lines)
+
+  vim.g.svara_selection, vim.g.svara_ask_selection = nil, nil
+end
+
 -- A directory no Workspace covers ----------------------------------------
 
 do

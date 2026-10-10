@@ -261,6 +261,70 @@ do
   end
 end
 
+-- An edit: the same turn, asked to change the files ------------------------
+
+do
+  local done
+  local host = fake_host({
+    ok({ type = "workspace_for_path", data = workspace }),
+    created("styra-13"),
+    ok({ type = "updates", data = { updates = {}, next = 0 } }),
+    ok({ type = "updates", data = sequenced(0, {
+      { type = "event", data = { type = "turn_completed", usage = {} } },
+    }) }),
+    ok({ type = "answer", data = {
+      contract = "files",
+      value = { contract = "files", value = {
+        { path = "src/auth.rs", line = 12, end_line = 14, description = "checks the expiry" },
+      } },
+      source = "…",
+    } }),
+    ok({ type = "accepted" }),
+  })
+  vim.g.svara_edit_selection = "codex:gpt-5.6-terra/high"
+  local handle, err = core.edit("check the expiry too\n\nSource: src/auth.rs:12-14", {
+    directory = home,
+    socket = "/tmp/test.sock",
+    host = host,
+    kind = "edit",
+  }, function(items)
+    done = items
+  end)
+  vim.g.svara_edit_selection = nil
+  assert(handle, err)
+  local create = host.sent[2]
+  assert(create.operation == "create_session", create.operation)
+  -- The command's own model.
+  assert(create.data.selection.model == "gpt-5.6-terra", vim.inspect(create.data.selection))
+  assert(create.data.contract == "files")
+  assert(not create.data.create_worktree, "the edit was made away from the open files")
+  assert(vim.startswith(create.data.message, "check the expiry too\n\nSource: src/auth.rs:12-14\n\n"))
+  assert(create.data.message:find(core.edit_instructions, 1, true), create.data.message)
+
+  host.tick()
+  assert(host.sent[#host.sent].operation == "set_session_completed")
+  assert(#done == 1)
+  assert(done[1].filename == checkout .. "/src/auth.rs", done[1].filename)
+  assert(done[1].lnum == 12 and done[1].end_lnum == 14, vim.inspect(done[1]))
+
+  local missing, missing_error = core.edit("  ", { directory = home })
+  assert(not missing)
+  assert(missing_error == "an edit needs an instruction", missing_error)
+end
+
+-- Where the operator is: the cursor, or the lines selected -----------------
+
+do
+  local file = home .. "/docs/auth.md"
+  vim.fn.writefile({ "a", "b", "c", "d" }, file)
+  vim.cmd.edit(file)
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  assert(core.viewing() == file .. ":2:1", core.viewing())
+  assert(core.viewing(0, { 2, 4 }) == file .. ":2-4", core.viewing(0, { 2, 4 }))
+  assert(core.viewing(0, { 3, 3 }) == file .. ":3", core.viewing(0, { 3, 3 }))
+  vim.cmd("bwipeout!")
+end
+
 -- The float --------------------------------------------------------------
 
 do

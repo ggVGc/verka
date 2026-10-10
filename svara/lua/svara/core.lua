@@ -18,26 +18,51 @@ local M = {}
 local selected_interactions = {}
 local accepting_activity = { pending = true, running = true, background = true }
 
+-- The commands that start an interaction, each of which may be set to a model
+-- of its own: a quick question wants a fast model, an edit a careful one, and
+-- neither is the model the conversation in `:SvaraNew` is held on.
+M.kinds = { "new", "ask", "edit" }
+
+--- The global a model chosen for one kind of command is kept in:
+--- `vim.g.svara_ask_selection` for `:SvaraAsk`, and so on. With no kind, the
+--- shared `vim.g.svara_selection`.
+---@param kind? string
+---@return string
+function M.selection_variable(kind)
+  if kind then
+    return "svara_" .. kind .. "_selection"
+  end
+  return "svara_selection"
+end
+
 --- The selection a new interaction here should run under.
 ---
---- `vim.g.svara_selection` is the answer when it is set. Otherwise the
---- Workspace's newest Session supplies one: a Workspace being worked in has
---- already been launched under something, and continuing with it beats
---- inventing a default. A provider's *declared* defaults would be the third
---- answer, and deliberately are not one — they live in the server's Rust,
---- never appear on the wire, and a copy here would drift the first time one
---- changed.
+--- The command's own global, `vim.g.svara_<kind>_selection`, is the answer
+--- when it is set, and `vim.g.svara_selection` — the one for every command —
+--- after it. Otherwise the Workspace's newest Session supplies one: a
+--- Workspace being worked in has already been launched under something, and
+--- continuing with it beats inventing a default. A provider's *declared*
+--- defaults would be the next answer, and deliberately are not one — they
+--- live in the server's Rust, never appear on the wire, and a copy here would
+--- drift the first time one changed.
 ---
 --- Where the answer came from comes back with it, because that is half of what
 --- `:SvaraInfo` is asking: a model an operator did not expect is a question
---- about which of the two rules above produced it.
+--- about which of the rules above produced it.
+---@param kind? string
 ---@return string|table? selection
 ---@return string? error
 ---@return string? source
-local function selection_for(styra, workspace)
-  local configured = vim.g.svara_selection
-  if configured and configured ~= "" then
-    return configured, nil, "vim.g.svara_selection"
+local function selection_for(styra, workspace, kind)
+  local variables = { M.selection_variable(kind) }
+  if kind then
+    variables[2] = M.selection_variable()
+  end
+  for _, variable in ipairs(variables) do
+    local configured = vim.g[variable]
+    if configured and configured ~= "" then
+      return configured, nil, "vim.g." .. variable
+    end
   end
   local sessions, err = styra:sessions(workspace.id)
   if not sessions then
@@ -61,9 +86,10 @@ end
 --- `start` resolves the same thing silently, and for a command that is one
 --- question too few: starting an interaction is the moment the answer stops
 --- being cheap to change. So `:SvaraNew` asks this first, shows the answer
---- and where it came from, and only then starts.
+--- and where it came from, and only then starts. `options.kind` is the
+--- command asking, whose own model comes first; see `selection_for`.
 ---@param directory string
----@param options? { socket?: string, timeout?: integer, host?: table }
+---@param options? { kind?: string, socket?: string, timeout?: integer, host?: table }
 ---@return string|table? selection
 ---@return string? source
 ---@return string? error
@@ -77,7 +103,7 @@ function M.selection_for_directory(directory, options)
   if not workspace then
     return nil, nil, workspace_error
   end
-  local selection, selection_error, source = selection_for(styra, workspace)
+  local selection, selection_error, source = selection_for(styra, workspace, options.kind)
   if not selection then
     return nil, nil, selection_error
   end
@@ -107,22 +133,25 @@ end
 
 --- Remember a selection as the one new interactions run under.
 ---
---- This is `vim.g.svara_selection`, the first of the two rules above, so a
---- model chosen once holds for the rest of this Neovim session instead of
---- being asked for again at every `:SvaraNew`. It is validated before it is
---- stored, because the alternative is a profile name that reads fine and only
---- fails at the next start.
+--- This is the `kind` of command's own global — `vim.g.svara_ask_selection`
+--- for `:SvaraAsk` — or `vim.g.svara_selection` with no kind, the first of
+--- the rules above, so a model chosen once holds for the rest of this Neovim
+--- session instead of being asked for again at every `:SvaraNew`, and a model
+--- chosen for questions does not become the one edits are made on. It is
+--- validated before it is stored, because the alternative is a profile name
+--- that reads fine and only fails at the next start.
 ---@param value string|table
+---@param kind? string
 ---@return string? profile_name
 ---@return string? error
-function M.remember_selection(value)
+function M.remember_selection(value, kind)
   local api = require("svara.api")
   local picked, err = api.selection(value)
   if not picked then
     return nil, err
   end
   local name = api.selection_name(picked)
-  vim.g.svara_selection = name
+  vim.g[M.selection_variable(kind)] = name
   return name
 end
 
@@ -154,7 +183,7 @@ end
 --- `create_worktree` starts it on a Git branch and checkout of its own rather
 --- than in the Workspace directory — Styra's Ctrl+Enter rather than its Enter.
 ---@param prompt string
----@param options? { directory?: string, selection?: string|table, create_worktree?: boolean, name?: string, contract?: string, socket?: string, timeout?: integer }
+---@param options? { directory?: string, selection?: string|table, kind?: string, create_worktree?: boolean, name?: string, contract?: string, socket?: string, timeout?: integer }
 ---@return table? session_info
 ---@return string? error
 function M.start(prompt, options)
@@ -173,7 +202,7 @@ function M.start(prompt, options)
   end
   local selection, selection_error = options.selection, nil
   if not selection then
-    selection, selection_error = selection_for(styra, workspace)
+    selection, selection_error = selection_for(styra, workspace, options.kind)
     if not selection then
       return nil, selection_error
     end
@@ -302,6 +331,55 @@ function M.quickfix_items(locations, interaction, workspace)
   return items
 end
 
+--- Start a new interaction whose first turn is answered with file locations,
+--- and hand them over as quickfix items once it is; `find` and `edit` are
+--- this with a different first turn.
+local function files_turn(prompt, options, on_done)
+  local api = require("svara.api")
+  local styra, err = api.open(options)
+  if not styra then
+    return nil, err
+  end
+  local directory = options.directory or (vim.uv or vim.loop).cwd()
+  local workspace, workspace_error = styra:workspace_for_path(directory)
+  if not workspace then
+    return nil, workspace_error
+  end
+  local selection, selection_error = options.selection, nil
+  if not selection then
+    selection, selection_error = selection_for(styra, workspace, options.kind)
+    if not selection then
+      return nil, selection_error
+    end
+  end
+
+  local contract = api.protocol.Contract.FILES
+  local session, session_error = styra:create_session(workspace.id, selection, {
+    message = prompt,
+    contract = contract,
+  })
+  if not session then
+    return nil, session_error
+  end
+  local handle = styra:await_answer(session.id, {
+    -- A new interaction's journal is all this turn's.
+    after = api.given(session.updates_after) or 0,
+    contract = contract,
+    interval = options.interval,
+  }, function(locations, answer, missed)
+    local completion_error
+    if answer then
+      completion_error =
+        select(2, styra:set_completed(session.id, api.protocol.CompletionState.COMPLETED))
+    end
+    if not locations then
+      return on_done(nil, missed, answer, completion_error)
+    end
+    on_done(M.quickfix_items(locations, session, workspace), nil, answer, completion_error)
+  end)
+  return handle, nil, session
+end
+
 --- Ask a question whose answer is file locations, in a new interaction of its
 --- own in the Workspace at `directory`, and hand them over as quickfix items.
 ---
@@ -309,8 +387,9 @@ end
 --- Workspace: the question then starts from nothing but itself, cannot land
 --- in the middle of a turn already under way, and leaves the conversation the
 --- operator is having elsewhere as it was. It runs under the selection
---- `start` would use, or `options.selection`. A Styra showing the Workspace is
---- not switched to it, because the answer is wanted here.
+--- `start` would use for `options.kind` (`"ask"` from `:SvaraAsk`), or
+--- `options.selection`. A Styra showing the Workspace is not switched to it,
+--- because the answer is wanted here.
 ---
 --- Once it has answered, the interaction is marked completed: it was asked
 --- one question, and the answer is all there is to do with it. That takes it
@@ -327,7 +406,7 @@ end
 --- reply at all. Marking it completed failing does not cost the caller the
 --- answer: the reason is `on_done`'s fourth argument.
 ---@param question string
----@param options { directory?: string, selection?: string|table, socket?: string, timeout?: integer, host?: table, interval?: integer }
+---@param options { directory?: string, selection?: string|table, kind?: string, socket?: string, timeout?: integer, host?: table, interval?: integer }
 ---@param on_done fun(items: table[]?, error: string?, answer: table?, completion_error: string?)
 ---@return table? handle
 ---@return string? error
@@ -337,49 +416,43 @@ function M.find(question, options, on_done)
   if type(question) ~= "string" or question:match("^%s*$") then
     return nil, "a question is needed to find files with"
   end
-  local api = require("svara.api")
-  local styra, err = api.open(options)
-  if not styra then
-    return nil, err
-  end
-  local directory = options.directory or (vim.uv or vim.loop).cwd()
-  local workspace, workspace_error = styra:workspace_for_path(directory)
-  if not workspace then
-    return nil, workspace_error
-  end
-  local selection, selection_error = options.selection, nil
-  if not selection then
-    selection, selection_error = selection_for(styra, workspace)
-    if not selection then
-      return nil, selection_error
-    end
-  end
+  return files_turn(question, options, on_done)
+end
 
-  local contract = api.protocol.Contract.FILES
-  local session, session_error = styra:create_session(workspace.id, selection, {
-    message = question,
-    contract = contract,
-  })
-  if not session then
-    return nil, session_error
+-- What an edit's first turn adds to the instruction: do it, then say where.
+-- The `files` contract's own instructions follow, so this only has to make
+-- the locations the changed ones rather than the ones talked about.
+M.edit_instructions = "Make this change in the files yourself rather than describing it. "
+  .. "Then answer with the places you changed, the most important first."
+
+--- The first turn of an edit: the instruction, then `edit_instructions`.
+---@param instruction string what was typed, with where it was typed from
+---@return string
+function M.edit_prompt(instruction)
+  return instruction .. "\n\n" .. M.edit_instructions
+end
+
+--- Have a new interaction make an edit, in the Workspace at `directory`, and
+--- hand back the places it changed as quickfix items.
+---
+--- `find`, with a turn that changes files rather than reading them: a new
+--- interaction of its own, under `options.kind`'s model (`"edit"` from
+--- `:SvaraEdit`), in the Workspace's own directory — not a Git workspace of
+--- its own, since the edit is wanted in the files the editor has open — and
+--- marked completed once it has answered. `on_done` is called as `find`
+--- calls it, with the changed locations.
+---@param instruction string
+---@param options { directory?: string, selection?: string|table, kind?: string, socket?: string, timeout?: integer, host?: table, interval?: integer }
+---@param on_done fun(items: table[]?, error: string?, answer: table?, completion_error: string?)
+---@return table? handle
+---@return string? error
+---@return table? session the `SessionInfo` of the interaction editing
+function M.edit(instruction, options, on_done)
+  options = options or {}
+  if type(instruction) ~= "string" or instruction:match("^%s*$") then
+    return nil, "an edit needs an instruction"
   end
-  local handle = styra:await_answer(session.id, {
-    -- A new interaction's journal is all this question's.
-    after = api.given(session.updates_after) or 0,
-    contract = contract,
-    interval = options.interval,
-  }, function(locations, answer, missed)
-    local completion_error
-    if answer then
-      completion_error =
-        select(2, styra:set_completed(session.id, api.protocol.CompletionState.COMPLETED))
-    end
-    if not locations then
-      return on_done(nil, missed, answer, completion_error)
-    end
-    on_done(M.quickfix_items(locations, session, workspace), nil, answer, completion_error)
-  end)
-  return handle, nil, session
+  return files_turn(M.edit_prompt(instruction), options, on_done)
 end
 
 --- What Svara would do if a command ran in `directory`, as one table.
@@ -430,6 +503,15 @@ function M.info(options)
 
   info.selection, info.selection_error, info.selection_source =
     selection_for(styra, info.workspace)
+  -- The commands set to a model of their own, which the shared answer above
+  -- does not hold for.
+  info.command_selections = {}
+  for _, kind in ipairs(M.kinds) do
+    local configured = vim.g[M.selection_variable(kind)]
+    if configured and configured ~= "" then
+      info.command_selections[#info.command_selections + 1] = { kind = kind, selection = configured }
+    end
+  end
   return info
 end
 
@@ -506,6 +588,16 @@ function M.info_lines(info)
   else
     rows[#rows + 1] = { "model", "unknown: " .. tostring(info.selection_error) }
   end
+  for _, own in ipairs(info.command_selections or {}) do
+    rows[#rows + 1] = {
+      "model (" .. own.kind .. ")",
+      string.format(
+        "%s, from vim.g.%s",
+        M.selection_said(own.selection),
+        M.selection_variable(own.kind)
+      ),
+    }
+  end
 
   if info.selected_interaction then
     rows[#rows + 1] = { "selected", interaction_said(info.selected_interaction) }
@@ -538,14 +630,25 @@ end
 --- always about the thing on screen and saying so beats making the operator
 --- type the path — but what was typed should lead. A buffer with no file behind it — a scratch buffer, the
 --- start screen — is no location, and then there is nothing to say.
+---
+--- With `lines`, a range the operator selected, it is `path:first-last`
+--- instead — the form the `files` contract reads ranges in — or `path:first`
+--- for a single line.
 ---@param window? integer
+---@param lines? { [1]: integer, [2]: integer }
 ---@return string? location
-function M.viewing(window)
+function M.viewing(window, lines)
   window = window or 0
   local buffer = vim.api.nvim_win_get_buf(window)
   local path = vim.api.nvim_buf_get_name(buffer)
   if path == "" then
     return nil
+  end
+  if lines then
+    if lines[1] == lines[2] then
+      return string.format("%s:%d", path, lines[1])
+    end
+    return string.format("%s:%d-%d", path, lines[1], lines[2])
   end
   local cursor = vim.api.nvim_win_get_cursor(window)
   return string.format("%s:%d:%d", path, cursor[1], cursor[2] + 1)
