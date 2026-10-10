@@ -2786,6 +2786,7 @@ impl ServerState {
             None,
             crate::protocol::BranchHistory::ThroughSelected,
             Some(to_provider),
+            None,
         )
         .with_context(|| {
             format!(
@@ -2821,10 +2822,25 @@ impl ServerState {
         at_ms: Option<u64>,
         history: crate::protocol::BranchHistory,
         provider: Option<crate::agent::Provider>,
+        selection: Option<Selection>,
     ) -> Result<SessionSummary> {
         let summary = self.stored_summary(id)?;
         let from_provider = summary.selection.provider;
-        let to_provider = provider.unwrap_or(from_provider);
+        let to_provider = provider
+            .or_else(|| selection.as_ref().map(|selection| selection.provider))
+            .unwrap_or(from_provider);
+        let selection = match selection {
+            Some(selection) => {
+                anyhow::ensure!(
+                    selection.provider == to_provider,
+                    "branch selection must match the target provider"
+                );
+                crate::agent::validate_selection(&selection)?;
+                selection
+            }
+            None if to_provider == from_provider => summary.selection.clone(),
+            None => Selection::new(to_provider),
+        };
         if !crate::agent::PROVIDERS.contains(&to_provider) {
             anyhow::bail!(
                 "provider {:?} is not an interactive provider Styra can branch into",
@@ -2895,13 +2911,6 @@ impl ServerState {
         std::fs::write(&destination, &branched)
             .with_context(|| format!("writing {}", destination.display()))?;
 
-        // A same-provider branch is a checkpoint: it keeps running under the
-        // exact model and effort the source had, not the provider's defaults.
-        let selection = if to_provider == from_provider {
-            summary.selection.clone()
-        } else {
-            Selection::new(to_provider)
-        };
         let profile = crate::agent::resolve_profile(&selection, &layout)?;
         let branch_name = if to_provider == from_provider {
             Some(format!("Branch: {}", summary.name.as_deref().unwrap_or(id)))
@@ -3650,8 +3659,9 @@ impl ServerState {
                 at_ms,
                 history,
                 provider,
+                selection,
             } => Ok(Response::SessionBranched(
-                self.branch_session(&id, at_ms, history, provider)?,
+                self.branch_session(&id, at_ms, history, provider, selection)?,
             )),
             Request::RenameSession(request) => {
                 let summary = self.stored_summary(&request.id)?;

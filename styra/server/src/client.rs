@@ -203,11 +203,24 @@ impl Client {
         history: crate::protocol::BranchHistory,
         provider: Option<crate::agent::Provider>,
     ) -> Result<SessionSummary> {
+        self.branch_session_with_selection(id, at_ms, history, provider, None)
+    }
+
+    /// Branch with the exact model and effort chosen by the caller.
+    pub fn branch_session_with_selection(
+        &self,
+        id: &str,
+        at_ms: Option<u64>,
+        history: crate::protocol::BranchHistory,
+        provider: Option<crate::agent::Provider>,
+        selection: Option<crate::agent::Selection>,
+    ) -> Result<SessionSummary> {
         match self.request(Request::BranchSession {
             id: id.to_owned(),
             at_ms,
             history,
             provider,
+            selection,
         })? {
             Response::SessionBranched(value) => Ok(value),
             other => unexpected("session_branched", other),

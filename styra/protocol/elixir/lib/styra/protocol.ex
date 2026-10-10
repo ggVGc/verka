@@ -138,7 +138,8 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}},
             %{name: "at_ms", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}},
             %{name: "history", required: false, type: %{kind: :ref, name: "BranchHistory"}},
-            %{name: "provider", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Provider"}}}
+            %{name: "provider", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Provider"}}},
+            %{name: "selection", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Selection"}}}
           ]
         }},
         %{name: "rename_session", payload: %{kind: :newtype, type: %{kind: :ref, name: "RenameSession"}}},
@@ -486,6 +487,32 @@ defmodule Styra.Protocol do
       ]
     },
 
+    # What an operator picked to launch: an agent, a model, and a reasoning effort.
+    #
+    # All three are always present. A selection never leaves the model or effort to
+    # whatever the agent happens to be configured for, because that configuration is
+    # invisible to Genta and to anything reading a journal afterwards — a session
+    # recorded as plain `codex` says nothing about what actually ran. A profile name
+    # that omits either therefore takes this provider's declared default
+    # (`Provider::default_model`, `Provider::default_effort`) rather than
+    # standing for "unset".
+    #
+    # A selection round-trips through one string, `Selection::name`, of the form
+    # `provider:model/effort` — `codex:gpt-5.6-terra/medium`,
+    # `claude:claude-opus-5/xhigh`. That string is the profile name, so it is also
+    # what a journal records and a status line shows: a stored session states which
+    # model and effort ran, and re-parsing it reproduces the launch. Parsing accepts
+    # the shorter `provider[:model][/effort]` forms and fills in the defaults, so
+    # `--profile claude` still works and names itself fully afterwards.
+    "Selection" => %{
+      kind: :struct,
+      fields: [
+        %{name: "provider", required: true, type: %{kind: :ref, name: "Provider"}},
+        %{name: "model", required: true, type: %{kind: :string}},
+        %{name: "effort", required: true, type: %{kind: :ref, name: "Effort"}}
+      ]
+    },
+
     "RenameSession" => %{
       kind: :struct,
       deny_unknown_fields: true,
@@ -544,32 +571,6 @@ defmodule Styra.Protocol do
         %{name: "text", required: true, type: %{kind: :string}},
         %{name: "selection", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Selection"}}},
         %{name: "contract", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Contract"}}}
-      ]
-    },
-
-    # What an operator picked to launch: an agent, a model, and a reasoning effort.
-    #
-    # All three are always present. A selection never leaves the model or effort to
-    # whatever the agent happens to be configured for, because that configuration is
-    # invisible to Genta and to anything reading a journal afterwards — a session
-    # recorded as plain `codex` says nothing about what actually ran. A profile name
-    # that omits either therefore takes this provider's declared default
-    # (`Provider::default_model`, `Provider::default_effort`) rather than
-    # standing for "unset".
-    #
-    # A selection round-trips through one string, `Selection::name`, of the form
-    # `provider:model/effort` — `codex:gpt-5.6-terra/medium`,
-    # `claude:claude-opus-5/xhigh`. That string is the profile name, so it is also
-    # what a journal records and a status line shows: a stored session states which
-    # model and effort ran, and re-parsing it reproduces the launch. Parsing accepts
-    # the shorter `provider[:model][/effort]` forms and fills in the defaults, so
-    # `--profile claude` still works and names itself fully afterwards.
-    "Selection" => %{
-      kind: :struct,
-      fields: [
-        %{name: "provider", required: true, type: %{kind: :ref, name: "Provider"}},
-        %{name: "model", required: true, type: %{kind: :string}},
-        %{name: "effort", required: true, type: %{kind: :ref, name: "Effort"}}
       ]
     },
 
@@ -930,24 +931,6 @@ defmodule Styra.Protocol do
       ]
     },
 
-    # One extra host directory the operator asked to be bound into the sandbox,
-    # on top of what the profile and the selected templates already grant.
-    #
-    # This is a *request*, not a resolved mount: the source is whatever the
-    # operator typed, and the server canonicalizes it (rejecting a path that does
-    # not exist) before it becomes part of a launch. An absent `destination`
-    # means "the same path inside the sandbox", matching Driva's own rule for a
-    # bind mount with no destination.
-    "LaunchMount" => %{
-      kind: :struct,
-      deny_unknown_fields: true,
-      fields: [
-        %{name: "source", required: true, type: %{kind: :string, path: true}},
-        %{name: "destination", required: false, type: %{kind: :optional, inner: %{kind: :string, path: true}}},
-        %{name: "writable", required: false, type: %{kind: :boolean}}
-      ]
-    },
-
     # How much reasoning the model is asked to spend per turn.
     #
     # One vocabulary across providers, ordered lowest first, since the ladders
@@ -965,6 +948,24 @@ defmodule Styra.Protocol do
         %{name: "high", payload: %{kind: :unit}},
         %{name: "xhigh", payload: %{kind: :unit}},
         %{name: "max", payload: %{kind: :unit}}
+      ]
+    },
+
+    # One extra host directory the operator asked to be bound into the sandbox,
+    # on top of what the profile and the selected templates already grant.
+    #
+    # This is a *request*, not a resolved mount: the source is whatever the
+    # operator typed, and the server canonicalizes it (rejecting a path that does
+    # not exist) before it becomes part of a launch. An absent `destination`
+    # means "the same path inside the sandbox", matching Driva's own rule for a
+    # bind mount with no destination.
+    "LaunchMount" => %{
+      kind: :struct,
+      deny_unknown_fields: true,
+      fields: [
+        %{name: "source", required: true, type: %{kind: :string, path: true}},
+        %{name: "destination", required: false, type: %{kind: :optional, inner: %{kind: :string, path: true}}},
+        %{name: "writable", required: false, type: %{kind: :boolean}}
       ]
     },
 
@@ -2463,10 +2464,11 @@ defmodule Styra.Protocol do
 
     Fields of `data`:
 
-      * `id      `  string
-      * `at_ms   `  number|null  (optional)
-      * `history `  BranchHistory  (optional)
-      * `provider`  Provider|null  (optional)
+      * `id       `  string
+      * `at_ms    `  number|null  (optional)
+      * `history  `  BranchHistory  (optional)
+      * `provider `  Provider|null  (optional)
+      * `selection`  Selection|null  (optional)
     """
     def branch_session(data), do: Styra.Protocol.build("branch_session", data)
 

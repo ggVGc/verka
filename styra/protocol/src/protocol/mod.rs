@@ -434,6 +434,10 @@ pub enum Request {
         history: BranchHistory,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider: Option<Provider>,
+        /// Exact model and effort for the branch; its provider must agree with
+        /// `provider` when both are supplied.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selection: Option<Selection>,
     },
     RenameSession(RenameSession),
     /// Replace a Session's tags. Tags live with the durable Session, so they
@@ -1093,6 +1097,7 @@ mod tests {
             at_ms: Some(42),
             history: BranchHistory::SelectedOnly,
             provider: Some(crate::agent::Provider::Claude),
+            selection: Some(Selection::parse("claude:opus/high").unwrap()),
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "branch_session");
@@ -1113,6 +1118,7 @@ mod tests {
                 at_ms: None,
                 history: BranchHistory::ThroughSelected,
                 provider: None,
+                selection: None,
             }
         );
 

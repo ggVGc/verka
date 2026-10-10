@@ -476,7 +476,7 @@ pub enum Request {
     /// format, so choosing a different agent for it is a conversion rather
     /// than a setting: the server copies the history into the new agent's
     /// format as a sibling Session, which is the one the operator continues in.
-    ConvertProvider(Provider),
+    ConvertProvider(Selection),
     /// Fetch the server's plan-quota log, which is server-wide and lives only
     /// in the daemon's memory, so there is nothing to read locally.
     Quota,
@@ -724,12 +724,8 @@ impl App {
             // so moving it takes a conversion; a Session that was never
             // launched has no history and is simply set to the new agent.
             if !self.session_id.is_empty() {
-                // The model is remembered even though the conversion lands on
-                // the new agent's declared default: the converted Session
-                // opens stopped, so its picker is right there — and it lists
-                // the model just asked for first.
                 self.note_recent_model(&selection.model);
-                self.ask(Request::ConvertProvider(selection.provider));
+                self.ask(Request::ConvertProvider(selection));
                 return;
             }
         }
@@ -2585,15 +2581,25 @@ mod tests {
         while launcher.selection().provider != Provider::Claude {
             launcher.next();
         }
+        let chosen = launcher.selection();
         app.confirm_launcher();
 
-        assert_eq!(
-            app.take_request(),
-            Some(Request::ConvertProvider(Provider::Claude))
-        );
+        assert_eq!(app.take_request(), Some(Request::ConvertProvider(chosen)));
         // The conversion is the server's answer to give: this screen keeps
         // showing the Session it is still on until the converted one opens.
         assert_eq!(app.selection.provider, Provider::Codex);
+    }
+
+    #[test]
+    fn switching_a_stopped_claude_session_keeps_the_chosen_codex_model_and_effort() {
+        let mut app = App::new(Selection::new(Provider::Claude), "session-1");
+        app.activity.status = Status::Stopped(StopReason::Paused);
+        let chosen = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+        app.launcher = Some(Launcher::from_selection(&chosen, &[], false));
+        app.confirm_launcher();
+
+        assert_eq!(app.take_request(), Some(Request::ConvertProvider(chosen)));
+        assert_eq!(app.selection.provider, Provider::Claude);
     }
 
     /// Nothing has been launched, so there is no history to convert and no

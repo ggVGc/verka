@@ -17,7 +17,7 @@ use styra_server::agent::{MessageFormat, Profile, Provider, Selection};
 use styra_server::ensure_server;
 use styra_server::event::Protocol;
 use styra_server::journal::{self, Journal};
-use styra_server::protocol::{CompletionState, LaunchPolicy, ResumeSession};
+use styra_server::protocol::{BranchHistory, CompletionState, LaunchPolicy, ResumeSession};
 
 /// One Claude conversation, in Claude Code's own on-disk transcript shape.
 const CLAUDE_TRANSCRIPT: &str = concat!(
@@ -127,6 +127,50 @@ fn converting_a_session_seals_the_one_it_was_converted_from() {
         .set_session_completed(&source_id, CompletionState::Active)
         .expect_err("a sealed Session cannot be un-sealed");
     assert!(error.to_string().contains("sealed"), "{error:#}");
+
+    // A picker-driven conversion carries the full choice, rather than
+    // replacing it with the new provider's defaults.
+    let (source_id, source_path) = stored_claude_session(&store, &workspace.id, &home);
+    let chosen = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+    let error = client
+        .branch_session_with_selection(
+            &source_id,
+            None,
+            BranchHistory::ThroughSelected,
+            Some(Provider::Claude),
+            Some(chosen.clone()),
+        )
+        .expect_err("conflicting providers must fail before changing the source");
+    assert!(error.to_string().contains("target provider"), "{error:#}");
+    assert_eq!(
+        journal::read_session_completed(&source_path).unwrap(),
+        CompletionState::Active
+    );
+
+    let converted = client
+        .branch_session_with_selection(
+            &source_id,
+            None,
+            BranchHistory::ThroughSelected,
+            Some(Provider::Codex),
+            Some(chosen.clone()),
+        )
+        .expect("converting with the chosen model and effort");
+    assert_eq!(converted.selection, chosen);
+    assert_eq!(
+        client
+            .list_sessions(&workspace.id)
+            .unwrap()
+            .into_iter()
+            .find(|session| session.id == converted.id)
+            .unwrap()
+            .selection,
+        chosen
+    );
+    assert_eq!(
+        journal::read_session_completed(&source_path).unwrap(),
+        CompletionState::Sealed
+    );
 
     // The daemon this test spawned is detached, so it would outlive the run
     // and keep its scratch store open unless it is told to stop.
