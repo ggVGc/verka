@@ -3,6 +3,7 @@
   - mounts
   - templates
   - (un)locking files
+- Locking of files within an interaction
 - Svara: Ask using structured format and have quickfix filled
 - Svara: Ask question and have answer show up inline until seen and closed:
   - Maybe same for edits? Accept/No/Change?
