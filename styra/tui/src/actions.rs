@@ -21,6 +21,8 @@ pub(crate) enum Action {
     GlobalLauncher,
     GlobalShell,
     GlobalDirectory,
+    GlobalDiff,
+    GlobalDiffExternal,
     GlobalInteractions,
     GlobalOverview,
     GlobalSessions,
@@ -69,6 +71,15 @@ pub(crate) enum Action {
     EventsLinks,
     EventsLinkMenu,
     EventsCopy,
+    DiffSearch,
+    DiffToggleFiles,
+    DiffToggleRemoved,
+    DiffDown,
+    DiffUp,
+    DiffScrollDown,
+    DiffScrollUp,
+    DiffPageDown,
+    DiffPageUp,
     ReadingDown,
     ReadingUp,
     ReadingFirst,
@@ -166,7 +177,6 @@ pub(crate) enum Action {
     InteractionsAbandon,
     InteractionsTags,
     InteractionsStop,
-    InteractionsDelete,
     InteractionsFilter,
     InteractionsTagFilter,
     InteractionsClose,
@@ -282,6 +292,10 @@ impl Action {
             Self::GlobalLauncher => "choose agent, model and effort for an idle agent turn",
             Self::GlobalShell => "open session shell in a new terminal",
             Self::GlobalDirectory => "open a terminal in the interaction's working directory",
+            Self::GlobalDiff => {
+                "diff the checkout against where its branch started; press again for events"
+            }
+            Self::GlobalDiffExternal => "the same diff in the configured tool, in a new terminal",
             Self::GlobalInteractions => "live interactions",
             Self::GlobalOverview => "overview: every running and idle interaction as a grid",
             Self::GlobalSessions => "stored sessions",
@@ -338,6 +352,15 @@ impl Action {
             }
             Self::EventsLinkMenu => "actions on the highlighted link",
             Self::EventsCopy => "copy selected entry to clipboard",
+            Self::DiffSearch => "filter diff files by name (Enter keeps filter, Esc clears)",
+            Self::DiffToggleFiles => "toggle combined / per-file diffs",
+            Self::DiffToggleRemoved => "toggle visibility of removed diff lines",
+            Self::DiffDown => "next file (per-file view), or scroll down",
+            Self::DiffUp => "previous file (per-file view), or scroll up",
+            Self::DiffScrollDown => "scroll diff down 10 lines",
+            Self::DiffScrollUp => "scroll diff up 10 lines",
+            Self::DiffPageDown => "scroll diff down half a screen",
+            Self::DiffPageUp => "scroll diff up half a screen",
             Self::ReadingDown => "move or scroll down",
             Self::ReadingUp => "move or scroll up",
             Self::ReadingFirst => "first line, or top",
@@ -447,7 +470,6 @@ impl Action {
             Self::InteractionsAbandon => "mark selected abandoned and stop it",
             Self::InteractionsTags => "edit the selected interaction's tags",
             Self::InteractionsStop => "stop the selected interaction",
-            Self::InteractionsDelete => "delete it once stopped",
             Self::InteractionsFilter => {
                 "filter by name, tag, branch, provider or Workspace (Enter opens the selection, Esc clears it)"
             }

@@ -11,6 +11,7 @@ use std::path::Path;
 
 use crate::activity::Status;
 use crate::app::{App, Request, View};
+use crate::checkout_diff::DiffTarget;
 use crate::insert;
 use crate::launch;
 use crate::link_menu::LinkAction;
@@ -33,6 +34,28 @@ pub fn handle_search_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char(character) if !character.is_control() => app.search.push(character),
         _ => {}
     }
+}
+
+/// File-list search consumes command letters while its prompt is open.
+pub fn handle_diff_search_key(app: &mut App, key: KeyEvent) {
+    let Some(diff) = app.checkout_diff.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc => diff.search.cancel(),
+        KeyCode::Enter => diff.search.accept(),
+        KeyCode::Backspace => diff.search.backspace(),
+        KeyCode::Char(character)
+            if !character.is_control()
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            diff.search.push(character)
+        }
+        _ => {}
+    }
+    diff.update_search();
 }
 
 /// Keys for the driva view's "add a mount" prompt. It is modal — every
@@ -218,6 +241,27 @@ pub fn handle_list_key(
     pending_fold: &mut bool,
     preferences_path: &Path,
 ) {
+    if app.view == View::CheckoutDiff {
+        if app
+            .checkout_diff
+            .as_ref()
+            .is_some_and(|diff| diff.search.typing())
+        {
+            handle_diff_search_key(app, key);
+            return;
+        }
+        if key.code == KeyCode::Esc {
+            if let Some(diff) = app
+                .checkout_diff
+                .as_mut()
+                .filter(|diff| diff.per_file && diff.search.query().is_some())
+            {
+                diff.search.cancel();
+                diff.update_search();
+                return;
+            }
+        }
+    }
     if std::mem::take(pending_fold) {
         match key {
             k if EVENTS_EXPAND_ALL.matches(k) => app.timeline.expand_all(),
@@ -259,6 +303,20 @@ pub fn handle_list_key(
         // standing where the interaction is working. That works with no live
         // interaction — a finished one still has a directory to look at.
         k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
+        // `d` reads the diff into a view of its own and, like the other
+        // views, goes back to events when pressed there again. `D` hands the
+        // same diff to the configured tool in a window of its own — except in
+        // the details view, which keeps `D` for saving the launch default.
+        k if GLOBAL_DIFF.matches(k) => {
+            if app.view == View::CheckoutDiff {
+                app.view = View::Events;
+                return;
+            }
+            return ask_for_diff(app, Request::ShowDiff);
+        }
+        k if GLOBAL_DIFF_EXTERNAL.matches(k) && app.view != View::Driva => {
+            return ask_for_diff(app, Request::OpenDiff)
+        }
         // Not from the preview. The overview takes `i` itself, for the tile
         // under its cursor.
         k if GLOBAL_FOCUS_MESSAGE.matches(k)
@@ -290,7 +348,10 @@ pub fn handle_list_key(
         k if GLOBAL_AUTO_COMMIT.matches(k) => return toggle_auto_commit(app),
         k if GLOBAL_FILES.matches(k) && app.view != View::Answer => return app.toggle_files(),
         k if GLOBAL_FILES_ALIAS.matches(k)
-            && !matches!(app.view, View::Events | View::Transcript | View::Preview) =>
+            && !matches!(
+                app.view,
+                View::Events | View::Transcript | View::Preview | View::CheckoutDiff
+            ) =>
         {
             return app.toggle_files()
         }
@@ -475,6 +536,37 @@ pub fn handle_list_key(
             k if READING_UP.matches(k) => app.quota.scroll_up(),
             _ => {}
         },
+        View::CheckoutDiff => {
+            let Some(diff) = app.checkout_diff.as_mut() else {
+                return;
+            };
+            match key {
+                k if DIFF_SEARCH.matches(k) && diff.per_file => {
+                    diff.search.open();
+                    diff.update_search();
+                }
+                k if DIFF_TOGGLE_FILES.matches(k) => {
+                    diff.per_file = !diff.per_file;
+                    diff.scroll.reset();
+                }
+                k if DIFF_TOGGLE_REMOVED.matches(k) => {
+                    diff.hide_removed = !diff.hide_removed;
+                    diff.scroll.reset();
+                }
+                k if DIFF_DOWN.matches(k) && diff.per_file => diff.select_file(true),
+                k if DIFF_UP.matches(k) && diff.per_file => diff.select_file(false),
+                k if DIFF_DOWN.matches(k) => diff.scroll.line_down(),
+                k if DIFF_UP.matches(k) => diff.scroll.line_up(),
+                k if DIFF_SCROLL_DOWN.matches(k) => diff.scroll.page_down(),
+                k if DIFF_SCROLL_UP.matches(k) => diff.scroll.page_up(),
+                k if DIFF_FIRST.matches(k) => diff.scroll.reset(),
+                k if DIFF_LAST.matches(k) => diff.scroll.scroll_to_end(),
+                k if DIFF_PAGE_DOWN.matches(k) => diff.scroll.half_page_down(),
+                k if DIFF_PAGE_UP.matches(k) => diff.scroll.half_page_up(),
+                k if DIFF_COPY.matches(k) => copy_selection(app),
+                _ => {}
+            }
+        }
         View::Transcript => match key {
             k if READING_LINKS.matches(k) => app.highlight_first_link(),
             k if READING_ALL_EVENTS.matches(k) => app.toggle_all_events(),
@@ -829,6 +921,19 @@ fn toggle_auto_commit(app: &mut App) {
         );
     }
     app.ask(Request::SetAutoCommit(!app.auto_commit));
+}
+
+/// Ask for a diff of the interaction's checkout against the commit its branch
+/// was made at, as `request` — in this window or another. An interaction with
+/// nothing to diff says why instead (see [`DiffTarget::of`]).
+fn ask_for_diff(app: &mut App, request: fn(DiffTarget) -> Request) {
+    let Some(interaction) = app.interactions.current(&app.session_id) else {
+        return app.show_action_message("no interaction to diff");
+    };
+    match DiffTarget::of(interaction) {
+        Ok(target) => app.ask(request(target)),
+        Err(reason) => app.show_action_message(reason),
+    }
 }
 
 pub fn handle_input_key(
@@ -1607,6 +1712,241 @@ mod tests {
 
         assert_eq!(app.take_request(), Some(Request::OpenDirectory));
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn press_list_key(app: &mut App, root: &Path, key: KeyEvent) {
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+        handle_list_key(
+            app,
+            &client,
+            &mut live,
+            key,
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+    }
+
+    fn press_d(app: &mut App, root: &Path) {
+        press_list_key(
+            app,
+            root,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        );
+    }
+
+    fn app_with_diffable_interaction(root: &Path) -> App {
+        let mut app = app(root);
+        app.enter_list();
+        app.session_id = "styra-7".into();
+        let mut interaction = crate::interactions::tests::interaction(
+            "styra-7",
+            styra_protocol::InteractionActivity::Pending,
+        );
+        interaction.checkout = Some(styra_protocol::CheckoutState {
+            worktree: PathBuf::from("/state/worktrees/styra-7"),
+            repository: PathBuf::from("/home/me/project"),
+            branch: Some("styra/rename".into()),
+        });
+        interaction.branched_from = Some(styra_protocol::BranchPoint {
+            branch: Some("main".into()),
+            commit: "4bf5c35d".into(),
+        });
+        app.interactions.items = vec![interaction];
+        app
+    }
+
+    fn diffable_target() -> DiffTarget {
+        DiffTarget {
+            worktree: PathBuf::from("/state/worktrees/styra-7"),
+            branch: Some("styra/rename".into()),
+            base_branch: Some("main".into()),
+            base: "4bf5c35d".into(),
+        }
+    }
+
+    /// `d` diffs the checkout the interaction works in against the commit its
+    /// branch was made at — not the origin branch's name, which has moved on —
+    /// and carries both branch names along for the view to say what it shows.
+    #[test]
+    fn d_asks_for_a_diff_of_the_checkout_against_its_start_commit() {
+        let root = tree("diff-checkout");
+        let mut app = app_with_diffable_interaction(&root);
+
+        press_d(&mut app, &root);
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ShowDiff(diffable_target()))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `D` asks for the same diff in the configured tool instead.
+    #[test]
+    fn shift_d_asks_for_the_same_diff_in_the_configured_tool() {
+        let root = tree("diff-external");
+        let mut app = app_with_diffable_interaction(&root);
+
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
+        );
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenDiff(diffable_target()))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The details view keeps `D` for saving the launch default, so no diff
+    /// is asked for there.
+    #[test]
+    fn shift_d_in_the_details_view_is_not_a_diff() {
+        let root = tree("diff-details");
+        let mut app = app_with_diffable_interaction(&root);
+        app.view = View::Driva;
+
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
+        );
+
+        assert!(!matches!(app.take_request(), Some(Request::OpenDiff(_))));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn per_file_diff_navigation_and_scrolling_use_separate_keys() {
+        let root = tree("diff-files");
+        let mut app = app_with_diffable_interaction(&root);
+        app.enter_list();
+        app.view = View::CheckoutDiff;
+        app.checkout_diff = Some(crate::checkout_diff::CheckoutDiff {
+            target: diffable_target(),
+            diff: Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n".into()),
+            scroll: Default::default(),
+            per_file: false,
+            hide_removed: false,
+            selected_file: 0,
+            search: Default::default(),
+        });
+        let diff = app.checkout_diff.as_mut().unwrap();
+        diff.scroll.note_limit(100);
+        diff.scroll.note_viewport(30);
+        let press = |app: &mut App, code| press_list_key(app, &root, KeyEvent::from(code));
+        press(&mut app, KeyCode::Char('J'));
+        press(&mut app, KeyCode::Char('h'));
+        assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 0);
+        press(&mut app, KeyCode::Char('h'));
+        assert!(!app.checkout_diff.as_ref().unwrap().hide_removed);
+        press(&mut app, KeyCode::Tab);
+        assert!(!app.checkout_diff.as_ref().unwrap().per_file);
+        press(&mut app, KeyCode::Char('f'));
+        assert!(app.checkout_diff.as_ref().unwrap().per_file);
+        press(&mut app, KeyCode::Char('h'));
+        assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
+        press(&mut app, KeyCode::Char('J'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
+        press(&mut app, KeyCode::PageDown);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 25);
+        press(&mut app, KeyCode::PageUp);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
+        press(&mut app, KeyCode::Char('K'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 0);
+        press(&mut app, KeyCode::Char('J'));
+        press(&mut app, KeyCode::Char('j'));
+        let diff = app.checkout_diff.as_ref().unwrap();
+        assert_eq!(diff.selected_file, 1);
+        assert_eq!(diff.scroll.offset, 0);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 1);
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);
+        press(&mut app, KeyCode::Char('f'));
+        assert!(!app.checkout_diff.as_ref().unwrap().per_file);
+        assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 1);
+
+        press(&mut app, KeyCode::Char('f'));
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('B'));
+        let diff = app.checkout_diff.as_ref().unwrap();
+        assert!(diff.search.typing());
+        assert_eq!(diff.search.query(), Some("B"));
+        assert_eq!(diff.selected_file, 1);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 1);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.view, View::CheckoutDiff);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().search.query(), None);
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);
+
+        press(&mut app, KeyCode::Char('/'));
+        for character in "dq?".chars() {
+            press(&mut app, KeyCode::Char(character));
+        }
+        assert_eq!(app.view, View::CheckoutDiff);
+        assert_eq!(
+            app.checkout_diff.as_ref().unwrap().search.query(),
+            Some("dq?")
+        );
+        assert_eq!(app.take_request(), None);
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Backspace);
+        assert!(!app.checkout_diff.as_ref().unwrap().search.typing());
+        assert_eq!(app.checkout_diff.as_ref().unwrap().search.query(), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Like the other views, `d` pressed in the diff goes back to events
+    /// rather than reading the diff again.
+    #[test]
+    fn d_in_the_diff_view_returns_to_events() {
+        let root = tree("diff-toggle");
+        let mut app = app_with_diffable_interaction(&root);
+        app.view = View::CheckoutDiff;
+
+        press_d(&mut app, &root);
+
+        assert_eq!(app.view, View::Events);
+        assert_eq!(app.take_request(), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Without a recorded start commit there is nothing to diff against, so
+    /// nothing is opened rather than a guess at a base.
+    #[test]
+    fn d_without_a_start_commit_asks_for_nothing() {
+        let root = tree("diff-no-branch-point");
+        let mut app = app(&root);
+        app.enter_list();
+        app.session_id = "styra-7".into();
+        let mut interaction = crate::interactions::tests::interaction(
+            "styra-7",
+            styra_protocol::InteractionActivity::Pending,
+        );
+        interaction.checkout = Some(styra_protocol::CheckoutState {
+            worktree: PathBuf::from("/home/me/project"),
+            repository: PathBuf::from("/home/me/project"),
+            branch: Some("main".into()),
+        });
+        app.interactions.items = vec![interaction];
+
+        press_d(&mut app, &root);
+
+        assert_eq!(app.take_request(), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

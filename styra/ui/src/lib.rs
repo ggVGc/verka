@@ -16,6 +16,7 @@ use std::time::Duration;
 pub mod answer;
 pub mod application;
 pub mod busy;
+pub mod checkout_diff;
 pub mod chrome;
 pub mod code;
 pub mod diff;
@@ -58,6 +59,9 @@ pub enum PanelId {
         target: PreviewPanel,
     },
     Driva {
+        session: String,
+    },
+    CheckoutDiff {
         session: String,
     },
     EntryLog,

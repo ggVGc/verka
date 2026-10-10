@@ -1219,6 +1219,7 @@ fn build_entry_rows(
     }
     lines.extend(detail);
     let mut wrapped = wrap_log_lines(lines, width, summary_indent);
+    crate::diff::fill_changed_rows(&mut wrapped, width);
     // The cap above bounds logical detail lines, which say nothing about how
     // many rows they occupy once wrapped, so the height has to be bounded
     // again here.

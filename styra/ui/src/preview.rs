@@ -141,11 +141,12 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
             ),
         )
     };
-    let lines = wrap_preview_lines(
+    let mut lines = wrap_preview_lines(
         preview_lines(view),
         usize::from(content_area.width),
         summary_indent(view.entry.as_ref()),
     );
+    crate::diff::fill_changed_rows(&mut lines, usize::from(content_area.width));
     let limit = preview_scroll_limit(&lines, content_area.width, content_area.height);
     let effective = view.requested_scroll.min(limit);
     let mut paragraph = Paragraph::new(lines)

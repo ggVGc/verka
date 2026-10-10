@@ -24,6 +24,8 @@ bindings! { GLOBAL = "Global";
     GLOBAL_LAUNCHER: [Key::ch('l')] => Action::GlobalLauncher;
     GLOBAL_SHELL: [Key::ch('!')] => Action::GlobalShell;
     GLOBAL_DIRECTORY: [Key::ch('~')] => Action::GlobalDirectory;
+    GLOBAL_DIFF: [Key::ch('d')] ("checkout with a branch point") => Action::GlobalDiff;
+    GLOBAL_DIFF_EXTERNAL: [Key::ch('D')] ("not in details") => Action::GlobalDiffExternal;
     GLOBAL_INTERACTIONS: [Key::ch('a')] => Action::GlobalInteractions;
     GLOBAL_OVERVIEW: [Key::ch('v')] ("not in raw") => Action::GlobalOverview;
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
@@ -103,7 +105,22 @@ bindings! { READING = "Raw, log, quota, and transcript";
     READING_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::ReadingPageUp;
     READING_PROVIDER_RAW: [Key::ch('v')] ("raw")
         => Action::ReadingProviderRaw;
-    READING_COPY: [Key::ch('y')] ("raw") => Action::ReadingCopy;
+    READING_COPY: [Key::ch('y')] ("raw, diff") => Action::ReadingCopy;
+}
+
+bindings! { CHECKOUT_DIFF = "Checkout diff";
+    DIFF_SEARCH: [Key::ch('/')] ("per-file view") => Action::DiffSearch;
+    DIFF_TOGGLE_FILES: [Key::ch('f')] => Action::DiffToggleFiles;
+    DIFF_TOGGLE_REMOVED: [Key::ch('h')] => Action::DiffToggleRemoved;
+    DIFF_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::DiffDown;
+    DIFF_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::DiffUp;
+    DIFF_SCROLL_DOWN: [Key::ch('J')] => Action::DiffScrollDown;
+    DIFF_SCROLL_UP: [Key::ch('K')] => Action::DiffScrollUp;
+    DIFF_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::DiffPageDown;
+    DIFF_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::DiffPageUp;
+    DIFF_FIRST: [Key::ch('g')] => Action::ReadingFirst;
+    DIFF_LAST: [Key::ch('G')] => Action::ReadingLast;
+    DIFF_COPY: [Key::ch('y')] => Action::ReadingCopy;
 }
 
 bindings! { PREVIEW = "Full-screen preview";
@@ -229,7 +246,6 @@ bindings! { INTERACTIONS = "Interactions";
     INTERACTIONS_ABANDON: [Key::ch('Z')] => Action::InteractionsAbandon;
     INTERACTIONS_TAGS: [Key::ch('T')] => Action::InteractionsTags;
     INTERACTIONS_STOP: [Key::ch('S')] => Action::InteractionsStop;
-    INTERACTIONS_DELETE: [Key::ch('D')] => Action::InteractionsDelete;
     INTERACTIONS_FILTER: [Key::ch('/')] => Action::InteractionsFilter;
     INTERACTIONS_TAG_FILTER: [Key::ctrl('t')] => Action::InteractionsTagFilter;
     INTERACTIONS_CLOSE: [Key::code(KeyCode::Enter), Key::ch('a'), Key::code(KeyCode::Esc)]
@@ -389,6 +405,7 @@ pub(crate) enum Window {
     Log,
     Quota,
     Transcript,
+    CheckoutDiff,
     Driva,
     Files,
     Answer,
@@ -416,6 +433,7 @@ impl Window {
             Self::Log => "log",
             Self::Quota => "quota",
             Self::Transcript => "transcript",
+            Self::CheckoutDiff => "diff",
             Self::Driva => "details",
             Self::Files => "files",
             Self::Answer => "typed answer",
@@ -438,6 +456,7 @@ impl Window {
     fn sections(self) -> &'static [&'static [ReferenceRow]] {
         match self {
             Self::Events => &[EVENTS, MESSAGE_EDITOR, GLOBAL],
+            Self::CheckoutDiff => &[CHECKOUT_DIFF, MESSAGE_EDITOR, GLOBAL],
             Self::Raw | Self::Log | Self::Quota | Self::Transcript => {
                 &[READING, MESSAGE_EDITOR, GLOBAL]
             }
@@ -477,12 +496,13 @@ mod reference_tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
 
-    const WINDOWS: [Window; 19] = [
+    const WINDOWS: [Window; 20] = [
         Window::Events,
         Window::Raw,
         Window::Log,
         Window::Quota,
         Window::Transcript,
+        Window::CheckoutDiff,
         Window::Driva,
         Window::Files,
         Window::Answer,

@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::activity::Status;
-use crate::app::{App, Focus, LaunchPolicy, Request};
+use crate::app::{App, Focus, LaunchPolicy, Request, View};
 use crate::audio::AudioInput;
 use crate::config::Configuration;
 use crate::input;
@@ -930,6 +930,11 @@ fn run_rounds(
             && app.git_repository_prompt.is_none()
             && app.launch.prompt.is_none()
             && !app.search.typing()
+            && !(app.view == View::CheckoutDiff
+                && app
+                    .checkout_diff
+                    .as_ref()
+                    .is_some_and(|diff| diff.search.typing()))
             && !app
                 .tag_picker
                 .as_ref()
@@ -1097,6 +1102,15 @@ fn run_rounds(
         // The event list's `/` search is modal while it is being typed: every
         // printable key is part of the term, including the ones bound to
         // commands on the list it is marking.
+        if app.view == View::CheckoutDiff
+            && app
+                .checkout_diff
+                .as_ref()
+                .is_some_and(|diff| diff.search.typing())
+        {
+            input::handle_diff_search_key(app, key);
+            continue;
+        }
         if app.search.typing() {
             input::handle_search_key(app, key);
             continue;
@@ -1268,33 +1282,6 @@ fn run_rounds(
                     let Some(next) = app
                         .interactions
                         .select_past_hidden(&interaction.id, workspace_id.as_deref())
-                    else {
-                        app.interactions.close();
-                        return Ok(RunOutcome::Reset);
-                    };
-                    make_interaction_current(app, live, client, standing_launch, next);
-                    continue;
-                }
-                k if keys::INTERACTIONS_DELETE.matches(k) => {
-                    let Some(interaction) = app.interactions.current(&app.session_id).cloned()
-                    else {
-                        continue;
-                    };
-                    if interaction.activity.accepting() {
-                        app.show_action_message("only stopped interactions can be deleted");
-                        continue;
-                    }
-                    if let Err(error) = client.close_interaction(&interaction.id) {
-                        app.push_log(LogEntry::error(format!(
-                            "could not delete interaction {}: {error:#}",
-                            interaction.id
-                        )));
-                        continue;
-                    }
-                    let workspace_id = app.workspace.id.clone();
-                    let Some(next) = app
-                        .interactions
-                        .remove_and_select_next(&interaction.id, workspace_id.as_deref())
                     else {
                         app.interactions.close();
                         return Ok(RunOutcome::Reset);
@@ -1830,6 +1817,22 @@ fn run_rounds(
                         directory.display()
                     ))),
                 }
+            }
+            Some(Request::OpenDiff(target)) => {
+                let worktree = target.worktree.display();
+                match crate::terminal::open_diff(&target.worktree, &target.base, config) {
+                    Ok(program) => app.show_action_message(format!(
+                        "opened {program} on {worktree} against {}",
+                        target.base
+                    )),
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not open a diff of {worktree}: {error:#}"
+                    ))),
+                }
+            }
+            Some(Request::ShowDiff(target)) => {
+                app.checkout_diff = Some(crate::checkout_diff::CheckoutDiff::read(target));
+                app.view = crate::app::View::CheckoutDiff;
             }
             Some(Request::OpenShell) => {
                 match crate::terminal::open_shell(client, &app.session_id, config) {

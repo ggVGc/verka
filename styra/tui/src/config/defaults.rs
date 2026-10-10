@@ -29,6 +29,11 @@ const RUN: &str = "-e";
 /// The shell opened in an interaction's working directory.
 const SHELL: &str = "fish";
 
+/// What a checkout's changes since its branch point are shown with: Git's own
+/// `diff`, which pages through `less` on a terminal, so the window stays open
+/// until the operator is done reading.
+const GIT: &str = "git";
+
 impl Configuration for Defaults {
     fn open_file(&self, path: &Path) -> Command {
         let mut command = in_terminal();
@@ -50,6 +55,19 @@ impl Configuration for Defaults {
 
     fn shell(&self) -> Vec<OsString> {
         vec![OsString::from(SHELL)]
+    }
+
+    fn open_diff(&self, worktree: &Path, base: &str) -> Command {
+        let mut command = in_terminal();
+        // Against the working tree rather than `HEAD`, so what the agent has
+        // not committed yet is shown alongside what it has.
+        command
+            .arg(GIT)
+            .arg("-C")
+            .arg(worktree)
+            .arg("delta")
+            .arg(base);
+        command
     }
 }
 
@@ -96,6 +114,24 @@ mod tests {
     #[test]
     fn the_interaction_directory_opens_in_fish() {
         assert_eq!(Defaults.shell(), [OsString::from("fish")]);
+    }
+
+    #[test]
+    fn a_diff_from_the_branch_point_opens_git_diff_in_a_new_terminal_window() {
+        let command = Defaults.open_diff(Path::new("/work/tree"), "4bf5c35d");
+
+        assert_eq!(command.get_program(), OsStr::new("urxvt"));
+        assert_eq!(
+            argv(&command),
+            [
+                OsStr::new("-e"),
+                OsStr::new("git"),
+                OsStr::new("-C"),
+                OsStr::new("/work/tree"),
+                OsStr::new("diff"),
+                OsStr::new("4bf5c35d"),
+            ]
+        );
     }
 
     #[test]

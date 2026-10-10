@@ -865,7 +865,8 @@ current focus is shown in the status line and by which region draws the cursor.
 | `s`             | Stop the Interaction (keeps the Session and journal)        |
 | `F`             | Seed an explicit new Session from this Session's transcript |
 | `a`             | Open live Interactions above the event list                  |
-| `D`             | In the Interaction navigator, delete the selected stopped Interaction |
+| `d`             | Toggle a diff of the Interaction's checkout against the commit its branch started at, with both branches named above it |
+| `D`             | Open the same diff in the configured tool, in a new terminal (not in the details view, where `D` saves the launch default) |
 | `ctrl-j` / `ctrl-k` | In the Interaction navigator's All-Workspaces mode, jump to the first Interaction of the next / previous Workspace |
 | `A`             | Browse Sessions in the current Workspace with a preview     |
 | `/`             | In the Session picker, filter by Session name or first prompt (`Esc` abandons) |
