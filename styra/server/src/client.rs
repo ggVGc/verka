@@ -151,6 +151,33 @@ impl Client {
         }
     }
 
+    pub fn integrate_session(&self, id: &str, message: &str) -> Result<()> {
+        match self.request(Request::IntegrateSession {
+            id: id.into(),
+            message: message.into(),
+        })? {
+            Response::IntegrationStarted => Ok(()),
+            other => unexpected("integration_started", other),
+        }
+    }
+
+    pub fn generate_integration_message(&self, id: &str) -> Result<String> {
+        match self.request(Request::GenerateIntegrationMessage { id: id.into() })? {
+            Response::IntegrationMessage(message) => Ok(message),
+            other => unexpected("integration_message", other),
+        }
+    }
+
+    pub fn session_integration_result(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::protocol::IntegrationResult>> {
+        match self.request(Request::SessionIntegrationResult { id: id.into() })? {
+            Response::SessionIntegrationResult(result) => Ok(result),
+            other => unexpected("session_integration_result", other),
+        }
+    }
+
     /// Remove the worktrees of completed Sessions with nothing uncommitted in
     /// them, in one Workspace or in every one, keeping each Session's branch.
     /// Answers with what happened to every Session considered.
@@ -751,6 +778,9 @@ fn request_operation(request: &Request) -> &'static str {
         Request::Workspace { .. } => "workspace",
         Request::WorkspaceForPath { .. } => "workspace_for_path",
         Request::RenameWorkspace(_) => "rename_workspace",
+        Request::IntegrateSession { .. } => "integrate_session",
+        Request::GenerateIntegrationMessage { .. } => "generate_integration_message",
+        Request::SessionIntegrationResult { .. } => "session_integration_result",
         Request::SetWorkspaceGitRepository { .. } => "set_workspace_git_repository",
         Request::SetWorkspaceHostPath { .. } => "set_workspace_host_path",
         Request::WorkspaceLaunch { .. } => "workspace_launch",

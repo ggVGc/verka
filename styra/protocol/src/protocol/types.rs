@@ -14,6 +14,12 @@ use crate::{FloorEntry, Mount, WritableMountMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntegrationResult {
+    pub completed: bool,
+    pub message: String,
+}
+
 /// A durable Styra Workspace, which groups provider Sessions that operate on
 /// the same host directory.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

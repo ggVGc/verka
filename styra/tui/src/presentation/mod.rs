@@ -592,6 +592,7 @@ fn draw_main(
         notices: &notices,
         footer: &footer,
         overlays: styra_ui::application::ApplicationOverlays {
+            integration_message: app.integration_prompt.as_deref(),
             launcher: launcher.as_ref(),
             input: input.as_ref(),
             recording: capture.as_ref(),

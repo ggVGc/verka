@@ -64,6 +64,25 @@ pub struct Directories {
 /// — which is nearly all of them — runs against [`FakeGit`] and never spawns a
 /// process. [`SystemGit`] is the only implementation that does.
 pub trait Git: Send + Sync {
+    /// Integration operations. Fakes which do not model history refuse them.
+    fn rebase(&self, _checkout: &Path, _source: &str) -> Result<bool> {
+        anyhow::bail!("this Git backend does not support rebasing")
+    }
+    fn rebase_in_progress(&self, _checkout: &Path) -> Result<bool> {
+        anyhow::bail!("this Git backend does not support rebasing")
+    }
+    fn branch_worktree(&self, _checkout: &Path, _branch: &str) -> Result<Option<PathBuf>> {
+        anyhow::bail!("this Git backend does not support integration")
+    }
+    fn squash_merge(&self, _checkout: &Path, _branch: &str, _message: &str) -> Result<String> {
+        anyhow::bail!("this Git backend does not support integration")
+    }
+    fn integration_diff(&self, _checkout: &Path, _source: &str) -> Result<String> {
+        anyhow::bail!("this Git backend does not support integration")
+    }
+    fn is_ancestor(&self, _checkout: &Path, _ancestor: &str, _descendant: &str) -> Result<bool> {
+        anyhow::bail!("this Git backend does not support integration")
+    }
     /// Discover the Git checkout containing `start`.
     ///
     /// `Ok(None)` means the path is not inside a working tree. Other failures
@@ -189,6 +208,86 @@ impl SystemGit {
 }
 
 impl Git for SystemGit {
+    fn is_ancestor(&self, checkout: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(checkout)
+            .args(["merge-base", "--is-ancestor", ancestor, descendant])
+            .output()?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => anyhow::bail!(
+                "could not compare integration commits: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        }
+    }
+    fn rebase_in_progress(&self, checkout: &Path) -> Result<bool> {
+        let directory = self.directories(checkout)?.git_dir;
+        Ok(directory.join("rebase-merge").exists() || directory.join("rebase-apply").exists())
+    }
+
+    fn rebase(&self, checkout: &Path, source: &str) -> Result<bool> {
+        if self.rebase_in_progress(checkout)? {
+            return Ok(false);
+        }
+        anyhow::ensure!(
+            !self.has_uncommitted_changes(checkout)?,
+            "commit the interaction's changes before integrating"
+        );
+        match Invocation::new(checkout, "rebase onto the source branch")
+            .args(["rebase", "--", source])
+            .succeed()
+        {
+            Ok(()) => Ok(true),
+            Err(_) if self.rebase_in_progress(checkout)? => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn branch_worktree(&self, checkout: &Path, branch: &str) -> Result<Option<PathBuf>> {
+        let listing = Invocation::new(checkout, "find the source checkout")
+            .args(["worktree", "list", "--porcelain", "-z"])
+            .output()?;
+        let mut path = None;
+        for field in listing.split('\0') {
+            if let Some(value) = field.strip_prefix("worktree ") {
+                path = Some(PathBuf::from(value));
+            } else if field.strip_prefix("branch ") == Some(&format!("refs/heads/{branch}")) {
+                return Ok(path);
+            }
+        }
+        Ok(None)
+    }
+
+    fn squash_merge(&self, checkout: &Path, branch: &str, message: &str) -> Result<String> {
+        anyhow::ensure!(
+            !self.has_uncommitted_changes(checkout)?,
+            "the source checkout has uncommitted changes"
+        );
+        anyhow::ensure!(
+            self.is_ancestor(checkout, "HEAD", branch)?,
+            "the source advanced after rebasing; retry integration"
+        );
+        Invocation::new(checkout, "squash merge the interaction")
+            .args(["merge", "--squash", "--", branch])
+            .succeed()?;
+        Invocation::new(checkout, "commit the integration")
+            .args(["commit", "--quiet", "--cleanup=whitespace", "--file=-"])
+            .stdin(message)
+            .succeed()?;
+        self.commit(checkout, "HEAD")?
+            .context("the integration commit is missing")
+    }
+
+    fn integration_diff(&self, checkout: &Path, source: &str) -> Result<String> {
+        Invocation::new(checkout, "read the integration diff")
+            .args(["diff", "--no-ext-diff", "--no-textconv"])
+            .arg(format!("{source}...HEAD"))
+            .arg("--")
+            .output()
+    }
     fn discover(&self, start: &Path) -> Result<Option<Repository>> {
         let start = start
             .canonicalize()

@@ -15,11 +15,11 @@ mod types;
 pub use types::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
     BranchHistory, BranchPoint, CheckoutState, CleanedWorktree, CompletionState, Contract,
-    Direction, DrivaOptions, FileLocation, InteractionActivity, InteractionActivityReason,
-    InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
-    LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
-    RecentMessage, SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin,
-    WorkspaceSummary, WorktreeCleanup, WorktreeSession, WorktreeSummary,
+    Direction, DrivaOptions, FileLocation, IntegrationResult, InteractionActivity,
+    InteractionActivityReason, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
+    LaunchPolicy, LogEntry, LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent,
+    QuotaStatus, RawLine, RecentMessage, SessionOrigin, SessionSummary, TemplateSummary,
+    VariableOrigin, WorkspaceSummary, WorktreeCleanup, WorktreeSession, WorktreeSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -316,6 +316,19 @@ pub struct ProviderRaw {
     deny_unknown_fields
 )]
 pub enum Request {
+    /// Rebase and squash-integrate a Session into its recorded source branch.
+    IntegrateSession {
+        id: String,
+        message: String,
+    },
+    /// Ask an errand for an editable squash commit message.
+    GenerateIntegrationMessage {
+        id: String,
+    },
+    /// None while integration is running; otherwise its final result.
+    SessionIntegrationResult {
+        id: String,
+    },
     Health,
     CreateWorkspace(CreateWorkspace),
     ListWorkspaces,
@@ -672,6 +685,9 @@ pub struct ActionRecord {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum Response {
+    IntegrationStarted,
+    IntegrationMessage(String),
+    SessionIntegrationResult(Option<IntegrationResult>),
     Health(Health),
     WorkspaceCreated(WorkspaceSummary),
     Workspaces(Vec<WorkspaceSummary>),

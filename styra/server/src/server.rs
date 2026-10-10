@@ -53,6 +53,9 @@ pub struct ServerState {
     inner: Arc<ServerInner>,
 }
 
+#[path = "integration.rs"]
+mod integration;
+
 struct ServerInner {
     store_root: PathBuf,
     /// How this server asks Git about the operator's checkouts. A real server
@@ -78,6 +81,8 @@ struct ServerInner {
     /// launch edits so concurrent clients cannot overwrite each other's
     /// templates or mounts with stale intermediate documents.
     workspace_metadata: Mutex<()>,
+    integrating: Mutex<std::collections::HashSet<String>>,
+    integration_git: Mutex<()>,
     /// Set by a [`Request::Shutdown`]; the connection thread checks it after
     /// acknowledging and then exits the process.
     shutdown: AtomicBool,
@@ -834,6 +839,15 @@ impl ManagedInteraction {
         if !self.auto_commit.load(Ordering::Acquire) {
             return;
         }
+        let checkout = self.working_tree.checkout.lock().unwrap().clone();
+        if self
+            .working_tree
+            .git
+            .rebase_in_progress(&checkout)
+            .unwrap_or(false)
+        {
+            return;
+        }
         let (prompt, replies) = self.turn_messages();
         let message = turn_commit_message(prompt.as_deref(), &replies);
         let started = match self.actions.start(
@@ -1389,6 +1403,7 @@ impl ServerState {
         let Some(source_id) = source_id else {
             return Ok(None);
         };
+        self.ensure_not_integrating(source_id)?;
         let source = self.stored_summary(source_id)?;
         anyhow::ensure!(
             source.workspace_id == workspace_id,
@@ -1587,8 +1602,12 @@ impl ServerState {
         workspace_id: &str,
     ) -> Result<Vec<(String, PathBuf)>> {
         let mut in_use = Vec::new();
+        let integrating = self.inner.integrating.lock().unwrap().clone();
         for session in sessions {
-            if session.completed != CompletionState::Active && !self.live_in_checkout(&session.id) {
+            if session.completed != CompletionState::Active
+                && !self.live_in_checkout(&session.id)
+                && !integrating.contains(&session.id)
+            {
                 continue;
             }
             if let Some(path) = self
@@ -1611,7 +1630,9 @@ impl ServerState {
         session: &SessionSummary,
         path: &Path,
     ) -> Result<WorktreeCleanup> {
-        if self.live_in_checkout(&session.id) {
+        if self.live_in_checkout(&session.id)
+            || self.inner.integrating.lock().unwrap().contains(&session.id)
+        {
             return Ok(WorktreeCleanup::Live);
         }
         if !path.exists() {
@@ -1714,6 +1735,8 @@ impl ServerState {
                 interactions: Mutex::new(HashMap::new()),
                 _standalone_lock: standalone_lock,
                 workspace_metadata: Mutex::new(()),
+                integrating: Mutex::new(std::collections::HashSet::new()),
+                integration_git: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
                 user_config,
             }),
@@ -3746,12 +3769,23 @@ impl ServerState {
             }
             Request::ListModels => Ok(Response::Models(self.list_models())),
             Request::ResumeSession(request) => {
+                self.ensure_not_integrating(&request.id)?;
                 Ok(Response::SessionResumed(self.resume_session(request)?))
             }
             Request::CreateSessionWorktree { id } => {
                 self.create_session_worktree(&id)?;
                 Ok(Response::SessionWorktreeCreated)
             }
+            Request::IntegrateSession { id, message } => {
+                self.start_integration(&id, &message)?;
+                Ok(Response::IntegrationStarted)
+            }
+            Request::GenerateIntegrationMessage { id } => Ok(Response::IntegrationMessage(
+                self.generate_integration_message(&id)?,
+            )),
+            Request::SessionIntegrationResult { id } => Ok(Response::SessionIntegrationResult(
+                self.integration_result(&id)?,
+            )),
             Request::CleanWorktrees { workspace_id } => Ok(Response::WorktreesCleaned(
                 self.clean_worktrees(workspace_id.as_deref())?,
             )),
@@ -3833,6 +3867,7 @@ impl ServerState {
                 ))
             }
             Request::SendMessage { id, message } => {
+                self.ensure_not_integrating(&id)?;
                 let interaction = self.interaction(&id)?;
                 interaction.send_message(message)?;
                 Ok(Response::Accepted)
@@ -3843,6 +3878,7 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::SetInteractionWorkingDirectory { id, directory } => {
+                self.ensure_not_integrating(&id)?;
                 self.interaction(&id)?.set_working_directory(directory)?;
                 Ok(Response::Accepted)
             }
@@ -3851,13 +3887,18 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::SetInteractionAutoCommit { id, enabled } => {
+                self.ensure_not_integrating(&id)?;
                 self.interaction(&id)?.set_auto_commit(enabled)?;
                 Ok(Response::Accepted)
             }
-            Request::QueueMessage { id, message } => Ok(Response::QueuedMessages(
-                self.interaction(&id)?.queue_message(&message)?,
-            )),
+            Request::QueueMessage { id, message } => {
+                self.ensure_not_integrating(&id)?;
+                Ok(Response::QueuedMessages(
+                    self.interaction(&id)?.queue_message(&message)?,
+                ))
+            }
             Request::SendQueuedMessage { id } => {
+                self.ensure_not_integrating(&id)?;
                 let (sent, queued) = self.interaction(&id)?.send_queued_message()?;
                 Ok(Response::SentQueuedMessage(sent, queued))
             }
@@ -3881,10 +3922,12 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::SetSessionCompleted { id, completed } => {
+                self.ensure_not_integrating(&id)?;
                 self.set_session_completion(&id, completed)?;
                 Ok(Response::Accepted)
             }
             Request::CloseInteraction { id } => {
+                self.ensure_not_integrating(&id)?;
                 // Closing a row a previous run left is the whole of the work:
                 // there is no agent to stop and no queue to clear, only the
                 // listing to take away — and it must not come back.

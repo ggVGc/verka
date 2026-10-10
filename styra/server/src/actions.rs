@@ -44,6 +44,8 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
         | Request::ProviderRaw { .. }
         | Request::TurnAnswer { .. }
         | Request::QuotaLog
+        | Request::GenerateIntegrationMessage { .. }
+        | Request::SessionIntegrationResult { .. }
         | Request::InteractionActions { .. } => Scope::Read,
         Request::CreateSession(request) => match request.checkout_from.as_deref() {
             Some(id) => Scope::Session(id),
@@ -57,6 +59,7 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
         Request::RenameSession(request) => Scope::Session(&request.id),
         Request::SetSessionTags(request) => Scope::Session(&request.id),
         Request::CreateSessionWorktree { id }
+        | Request::IntegrateSession { id, .. }
         | Request::ConvertSessionProvider { id }
         | Request::BranchSession { id, .. }
         | Request::SetSessionComposer { id, .. }

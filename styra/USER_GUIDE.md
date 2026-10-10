@@ -470,6 +470,23 @@ jumps to the session you pick.
 
 ### Cleaning up the checkouts you are done with
 
+Press `I` while viewing an interaction to integrate its linked checkout into
+the source branch recorded when it was created. Enter a squash commit message,
+or press `Ctrl+G` to ask an errand to generate one and edit the result. `Alt+Enter`
+adds a newline, `Enter` starts integration, and `Esc` cancels the prompt.
+
+Integration rebases onto the source branch first. If it encounters conflicts,
+Styra asks the same interaction to resolve them and finish the rebase. After a
+successful resolution it squash-commits into the source branch, removes the
+interaction's worktree, and marks the interaction Completed. Its branch and
+conversation remain available. Progress and failures appear in the interaction
+log and the final result appears as a notice.
+
+Both checkouts must have their changes committed before integrating, and the
+interaction must be idle with no queued messages. A checkout shared with another
+active Session is retained. After a failure, pressing `I` again retries; a
+recorded successful squash commit is kept while cleanup is retried.
+
 A worktree is a whole copy of the repository per conversation, and they add up.
 `styra clean-worktrees` deletes the ones that have nothing left in them:
 

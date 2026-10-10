@@ -7,6 +7,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+pub fn render_integration_message(frame: &mut Frame, message: &str) {
+    text_prompt::render(
+        frame,
+        &TextPrompt::new(" integration commit message ", message)
+            .bottom(" Enter integrate · Ctrl-G generate · Alt-Enter newline · Esc cancel "),
+        frame.area(),
+    );
+}
+
 #[derive(Clone, Copy)]
 pub struct BranchPromptView {
     pub selected: usize,

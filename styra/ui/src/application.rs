@@ -50,6 +50,7 @@ pub enum MainView<'a> {
 
 #[derive(Default)]
 pub struct ApplicationOverlays<'a> {
+    pub integration_message: Option<&'a str>,
     pub launcher: Option<&'a crate::launcher::LauncherView>,
     pub input: Option<&'a modal_input::ModalInput<'a>>,
     /// A microphone capture in progress, which takes the message box's place:
@@ -381,6 +382,9 @@ fn note_preview_scroll(
 }
 
 fn render_reading_overlays(frame: &mut Frame, view: &ApplicationOverlays<'_>) {
+    if let Some(message) = view.integration_message {
+        overlays::render_integration_message(frame, message);
+    }
     if let Some(references) = view.references {
         overlays::render_references(frame, references, frame.area());
     }

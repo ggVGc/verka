@@ -313,6 +313,8 @@ pub struct App {
     /// The Git checkout path being entered for the current Workspace from the
     /// details view. An empty value deliberately clears the association.
     pub git_repository_prompt: Option<String>,
+    pub integration_prompt: Option<String>,
+    pub pending_integration: Option<String>,
     /// The tag editor opened from the main view or live-interactions navigator.
     pub tag_picker: Option<TagPicker>,
     /// The event list's `/` search. Not carried across screens by
@@ -405,6 +407,8 @@ pub struct App {
 /// because it means leaving this screen or this process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
+    Integrate(String),
+    GenerateIntegrationMessage,
     Quit,
     /// Choose a Workspace, then one of its Sessions.
     Workspace,
@@ -576,6 +580,8 @@ impl App {
             recent_models: Vec::new(),
             workspace: Location::default(),
             git_repository_prompt: None,
+            integration_prompt: None,
+            pending_integration: None,
             tag_picker: None,
             search: Search::default(),
             session_id: session_id.into(),

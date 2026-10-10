@@ -41,6 +41,28 @@ M.types.Request = {
   tagging = { style = "adjacent", tag = "operation", content = "data" },
   deny_unknown_fields = true,
   variants = {
+    { name = "integrate_session", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+        { name = "message", required = true, type = { kind = "string" } },
+      },
+    } },
+    { name = "generate_integration_message", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
+    { name = "session_integration_result", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "health", payload = { kind = "unit" } },
     { name = "create_workspace", payload = { kind = "newtype", type = { kind = "ref", name = "CreateWorkspace" } } },
     { name = "list_workspaces", payload = { kind = "unit" } },
@@ -337,6 +359,9 @@ M.types.Response = {
   kind = "enum",
   tagging = { style = "adjacent", tag = "type", content = "data" },
   variants = {
+    { name = "integration_started", payload = { kind = "unit" } },
+    { name = "integration_message", payload = { kind = "newtype", type = { kind = "string" } } },
+    { name = "session_integration_result", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "ref", name = "IntegrationResult" } } } },
     { name = "health", payload = { kind = "newtype", type = { kind = "ref", name = "Health" } } },
     { name = "workspace_created", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
     { name = "workspaces", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "WorkspaceSummary" } } } },
@@ -614,6 +639,14 @@ M.types.Contract = {
     { name = "lines", payload = { kind = "unit" } },
     { name = "files", payload = { kind = "unit" } },
     { name = "json", payload = { kind = "unit" } },
+  },
+}
+
+M.types.IntegrationResult = {
+  kind = "struct",
+  fields = {
+    { name = "completed", required = true, type = { kind = "boolean" } },
+    { name = "message", required = true, type = { kind = "string" } },
   },
 }
 
@@ -1725,9 +1758,12 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "shutdown" }
+M.enums.Request = { "integrate_session", "generate_integration_message", "session_integration_result", "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
+  INTEGRATE_SESSION = "integrate_session",
+  GENERATE_INTEGRATION_MESSAGE = "generate_integration_message",
+  SESSION_INTEGRATION_RESULT = "session_integration_result",
   HEALTH = "health",
   CREATE_WORKSPACE = "create_workspace",
   LIST_WORKSPACES = "list_workspaces",
@@ -1782,9 +1818,12 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions" }
+M.enums.Response = { "integration_started", "integration_message", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions" }
 --- Wire spellings of `Response`.
 M.Response = {
+  INTEGRATION_STARTED = "integration_started",
+  INTEGRATION_MESSAGE = "integration_message",
+  SESSION_INTEGRATION_RESULT = "session_integration_result",
   HEALTH = "health",
   WORKSPACE_CREATED = "workspace_created",
   WORKSPACES = "workspaces",
@@ -2443,6 +2482,31 @@ end
 --- One constructor per operation. Each checks what it is given and returns
 --- the request table to encode and send.
 M.request = {}
+
+--- Rebase and squash-integrate a Session into its recorded source branch.
+---
+--- Fields of `data`:
+---   id       string
+---   message  string
+function M.request.integrate_session(data)
+  return M.build("integrate_session", data)
+end
+
+--- Ask an errand for an editable squash commit message.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.generate_integration_message(data)
+  return M.build("generate_integration_message", data)
+end
+
+--- None while integration is running; otherwise its final result.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.session_integration_result(data)
+  return M.build("session_integration_result", data)
+end
 
 function M.request.health()
   return M.build("health")

@@ -712,6 +712,23 @@ fn run_rounds(
         // the operator is reading or working in this one.
         if interactions_refreshed.elapsed() >= INTERACTIONS_REFRESH {
             interactions_refreshed = Instant::now();
+            if let Some(id) = app.pending_integration.clone() {
+                match client.session_integration_result(&id) {
+                    Ok(Some(result)) => {
+                        app.pending_integration = None;
+                        app.show_action_message(result.message);
+                        dirty = true;
+                    }
+                    Err(error) => {
+                        app.pending_integration = None;
+                        app.show_action_message(format!(
+                            "could not read integration result: {error:#}"
+                        ));
+                        dirty = true;
+                    }
+                    Ok(None) => {}
+                }
+            }
             if let Ok(interactions) = client.list_interactions() {
                 dirty |= app.interactions.refresh(interactions);
             }
@@ -936,6 +953,7 @@ fn run_rounds(
         if keys::HELP.matches(key)
             && app.insert.is_none()
             && app.git_repository_prompt.is_none()
+            && app.integration_prompt.is_none()
             && app.launch.prompt.is_none()
             && !app.search.typing()
             && !(app.view == View::CheckoutDiff
@@ -992,6 +1010,40 @@ fn run_rounds(
 
         // The branching choice is modal and can replace the current Session
         // on confirmation, so it owns the key before every underlying view.
+        if app.integration_prompt.is_some() {
+            input::handle_integration_prompt_key(app, key);
+            if let Some(request) = app.take_request() {
+                let id = app.session_id.clone();
+                match request {
+                    Request::GenerateIntegrationMessage => {
+                        let generated =
+                            blocked_on(terminal, app, "generating commit message…", |_| {
+                                client.generate_integration_message(&id)
+                            })?;
+                        match generated {
+                            Ok(message) => app.integration_prompt = Some(message),
+                            Err(error) => app.show_action_message(format!(
+                                "could not generate commit message: {error:#}"
+                            )),
+                        }
+                    }
+                    Request::Integrate(message) => match client.integrate_session(&id, &message) {
+                        Ok(()) => {
+                            app.integration_prompt = None;
+                            app.pending_integration = Some(id.clone());
+                            app.show_action_message(
+                                "integration started — progress appears in the interaction log",
+                            );
+                        }
+                        Err(error) => {
+                            app.show_action_message(format!("could not integrate: {error:#}"))
+                        }
+                    },
+                    _ => {}
+                }
+            }
+            continue;
+        }
         if app.branch_prompt.is_some() {
             input::handle_branch_prompt_key(app, client, key);
             // Confirming has already branched; open the result on this key
@@ -1367,6 +1419,7 @@ fn run_rounds(
         match app.take_request() {
             None => {}
             Some(Request::Quit) => return Ok(RunOutcome::Quit),
+            Some(Request::Integrate(_) | Request::GenerateIntegrationMessage) => {}
             Some(Request::Workspace) => {
                 let mut workspaces = client.list_workspaces()?;
                 let Some(choice) =

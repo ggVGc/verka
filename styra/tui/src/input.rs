@@ -36,6 +36,40 @@ pub fn handle_search_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => app.integration_prompt = None,
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.ask(Request::GenerateIntegrationMessage)
+        }
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+            if let Some(message) = app.integration_prompt.as_mut() {
+                message.push('\n');
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(message) = app
+                .integration_prompt
+                .as_ref()
+                .filter(|text| !text.trim().is_empty())
+            {
+                app.ask(Request::Integrate(message.clone()));
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(message) = app.integration_prompt.as_mut() {
+                message.pop();
+            }
+        }
+        KeyCode::Char(ch) if !ch.is_control() => {
+            if let Some(message) = app.integration_prompt.as_mut() {
+                message.push(ch);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// File-list search consumes command letters while its prompt is open.
 pub fn handle_diff_search_key(app: &mut App, key: KeyEvent) {
     let Some(diff) = app.checkout_diff.as_mut() else {
@@ -292,6 +326,10 @@ pub fn handle_list_key(
         }
         k if GLOBAL_STOP.matches(k) => return session::pause_interaction(app, client, live),
         k if GLOBAL_BRANCH.matches(k) => return session::open_branch_prompt(app),
+        k if GLOBAL_INTEGRATE.matches(k) && !app.session_id.is_empty() => {
+            app.integration_prompt = Some(String::new());
+            return;
+        }
         k if GLOBAL_SHELL.matches(k) => {
             let Attachment::Attached { .. } = live else {
                 return app.show_action_message("no live interaction to open a shell for");
@@ -1052,6 +1090,36 @@ mod tests {
     use styra_protocol::{
         AttributedMount, DrivaOptions, LaunchMount, Mount, MountAccess, MountOrigin,
     };
+
+    #[test]
+    fn integration_message_is_explicitly_submitted_and_generation_stays_editable() {
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
+        app.integration_prompt = Some(String::new());
+        handle_integration_prompt_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.take_request().is_none());
+        handle_integration_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        );
+        assert!(matches!(
+            app.take_request(),
+            Some(Request::GenerateIntegrationMessage)
+        ));
+        app.integration_prompt = Some("Generated subject".into());
+        handle_integration_prompt_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        handle_integration_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE),
+        );
+        assert!(app.take_request().is_none());
+        handle_integration_prompt_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(app.take_request(), Some(Request::Integrate(message)) if message == "Generated subject\n!")
+        );
+        handle_integration_prompt_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.integration_prompt.is_none());
+        assert!(app.take_request().is_none());
+    }
 
     /// A session whose sandbox binds `root` at `/workspace` and nothing else,
     /// with nothing launched — so the launch policy is still open to editing.

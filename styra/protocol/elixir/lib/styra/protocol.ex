@@ -51,6 +51,28 @@ defmodule Styra.Protocol do
       tagging: %{style: :adjacent, tag: "operation", content: "data"},
       deny_unknown_fields: true,
       variants: [
+        %{name: "integrate_session", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}},
+            %{name: "message", required: true, type: %{kind: :string}}
+          ]
+        }},
+        %{name: "generate_integration_message", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
+        %{name: "session_integration_result", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "health", payload: %{kind: :unit}},
         %{name: "create_workspace", payload: %{kind: :newtype, type: %{kind: :ref, name: "CreateWorkspace"}}},
         %{name: "list_workspaces", payload: %{kind: :unit}},
@@ -347,6 +369,9 @@ defmodule Styra.Protocol do
       kind: :enum,
       tagging: %{style: :adjacent, tag: "type", content: "data"},
       variants: [
+        %{name: "integration_started", payload: %{kind: :unit}},
+        %{name: "integration_message", payload: %{kind: :newtype, type: %{kind: :string}}},
+        %{name: "session_integration_result", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "IntegrationResult"}}}},
         %{name: "health", payload: %{kind: :newtype, type: %{kind: :ref, name: "Health"}}},
         %{name: "workspace_created", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
         %{name: "workspaces", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "WorkspaceSummary"}}}},
@@ -624,6 +649,14 @@ defmodule Styra.Protocol do
         %{name: "lines", payload: %{kind: :unit}},
         %{name: "files", payload: %{kind: :unit}},
         %{name: "json", payload: %{kind: :unit}}
+      ]
+    },
+
+    "IntegrationResult" => %{
+      kind: :struct,
+      fields: [
+        %{name: "completed", required: true, type: %{kind: :boolean}},
+        %{name: "message", required: true, type: %{kind: :string}}
       ]
     },
 
@@ -1745,6 +1778,9 @@ defmodule Styra.Protocol do
   # ----------
 
   @operations [
+    "integrate_session",
+    "generate_integration_message",
+    "session_integration_result",
     "health",
     "create_workspace",
     "list_workspaces",
@@ -2258,6 +2294,43 @@ defmodule Styra.Protocol do
     `{:error, message}` after checking what it was given. The `!` form
     beside each returns the request and raises instead.
     """
+
+    @doc ~S"""
+    Rebase and squash-integrate a Session into its recorded source branch.
+
+    Fields of `data`:
+
+      * `id     `  string
+      * `message`  string
+    """
+    def integrate_session(data), do: Styra.Protocol.build("integrate_session", data)
+
+    @doc "`integrate_session/1`, raising on a request the server would refuse."
+    def integrate_session!(data), do: Styra.Protocol.build!("integrate_session", data)
+
+    @doc ~S"""
+    Ask an errand for an editable squash commit message.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def generate_integration_message(data), do: Styra.Protocol.build("generate_integration_message", data)
+
+    @doc "`generate_integration_message/1`, raising on a request the server would refuse."
+    def generate_integration_message!(data), do: Styra.Protocol.build!("generate_integration_message", data)
+
+    @doc ~S"""
+    None while integration is running; otherwise its final result.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def session_integration_result(data), do: Styra.Protocol.build("session_integration_result", data)
+
+    @doc "`session_integration_result/1`, raising on a request the server would refuse."
+    def session_integration_result!(data), do: Styra.Protocol.build!("session_integration_result", data)
 
     def health, do: Styra.Protocol.build("health")
 
@@ -2970,6 +3043,9 @@ defmodule Styra.Protocol.Response do
   """
 
   @spellings [
+    {:integration_started, "integration_started"},
+    {:integration_message, "integration_message"},
+    {:session_integration_result, "session_integration_result"},
     {:health, "health"},
     {:workspace_created, "workspace_created"},
     {:workspaces, "workspaces"},
@@ -3033,6 +3109,12 @@ defmodule Styra.Protocol.Response do
       nil -> :error
     end
   end
+
+  def integration_started, do: "integration_started"
+
+  def integration_message, do: "integration_message"
+
+  def session_integration_result, do: "session_integration_result"
 
   def health, do: "health"
 
