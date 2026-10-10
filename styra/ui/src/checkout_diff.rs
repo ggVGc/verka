@@ -260,9 +260,9 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
         lines.push(stat_line(text));
     }
     let navigation = if view.per_file {
-        "Tab: combined diff · /: search · j/k: files · J/K: scroll 10 · PgUp/PgDn: half-screen"
+        "f: combined diff · /: search · j/k: files · J/K: scroll 10 · PgUp/PgDn: half-screen"
     } else {
-        "Tab: per-file diffs · j/k: scroll · J/K: scroll 10 · PgUp/PgDn: half-screen"
+        "f: per-file diffs · j/k: scroll · J/K: scroll 10 · PgUp/PgDn: half-screen"
     };
     lines.push(muted(navigation));
     lines.push(muted(if view.hide_removed {

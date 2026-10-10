@@ -348,7 +348,10 @@ pub fn handle_list_key(
         k if GLOBAL_AUTO_COMMIT.matches(k) => return toggle_auto_commit(app),
         k if GLOBAL_FILES.matches(k) && app.view != View::Answer => return app.toggle_files(),
         k if GLOBAL_FILES_ALIAS.matches(k)
-            && !matches!(app.view, View::Events | View::Transcript | View::Preview) =>
+            && !matches!(
+                app.view,
+                View::Events | View::Transcript | View::Preview | View::CheckoutDiff
+            ) =>
         {
             return app.toggle_files()
         }
@@ -1844,6 +1847,8 @@ mod tests {
         press(&mut app, KeyCode::Char('h'));
         assert!(!app.checkout_diff.as_ref().unwrap().hide_removed);
         press(&mut app, KeyCode::Tab);
+        assert!(!app.checkout_diff.as_ref().unwrap().per_file);
+        press(&mut app, KeyCode::Char('f'));
         assert!(app.checkout_diff.as_ref().unwrap().per_file);
         press(&mut app, KeyCode::Char('h'));
         assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
@@ -1865,13 +1870,13 @@ mod tests {
         press(&mut app, KeyCode::Char('k'));
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);
-        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('f'));
         assert!(!app.checkout_diff.as_ref().unwrap().per_file);
         assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 1);
 
-        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('f'));
         press(&mut app, KeyCode::Char('/'));
         press(&mut app, KeyCode::Char('B'));
         let diff = app.checkout_diff.as_ref().unwrap();

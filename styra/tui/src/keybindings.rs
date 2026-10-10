@@ -110,7 +110,7 @@ bindings! { READING = "Raw, log, quota, and transcript";
 
 bindings! { CHECKOUT_DIFF = "Checkout diff";
     DIFF_SEARCH: [Key::ch('/')] ("per-file view") => Action::DiffSearch;
-    DIFF_TOGGLE_FILES: [Key::code(KeyCode::Tab)] => Action::DiffToggleFiles;
+    DIFF_TOGGLE_FILES: [Key::ch('f')] => Action::DiffToggleFiles;
     DIFF_TOGGLE_REMOVED: [Key::ch('h')] => Action::DiffToggleRemoved;
     DIFF_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::DiffDown;
     DIFF_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::DiffUp;
