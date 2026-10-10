@@ -555,8 +555,8 @@ pub fn handle_list_key(
                 }
                 k if DIFF_DOWN.matches(k) && diff.per_file => diff.select_file(true, 1),
                 k if DIFF_UP.matches(k) && diff.per_file => diff.select_file(false, 1),
-                k if DIFF_FILES_DOWN.matches(k) && diff.per_file => diff.select_file(true, 10),
-                k if DIFF_FILES_UP.matches(k) && diff.per_file => diff.select_file(false, 10),
+                k if DIFF_FILES_DOWN.matches(k) && diff.per_file => diff.select_file(true, 5),
+                k if DIFF_FILES_UP.matches(k) && diff.per_file => diff.select_file(false, 5),
                 k if DIFF_DOWN.matches(k) => diff.scroll.line_down(),
                 k if DIFF_UP.matches(k) => diff.scroll.line_up(),
                 k if DIFF_SCROLL_DOWN.matches(k) => diff.scroll.page_down(),
@@ -1925,10 +1925,14 @@ mod tests {
             .collect());
         diff.selected_file = 0;
         for (key, selected) in [
+            ('J', 5),
             ('J', 10),
+            ('J', 15),
             ('J', 20),
             ('J', 24),
+            ('K', 19),
             ('K', 14),
+            ('K', 9),
             ('K', 4),
             ('K', 0),
         ] {
@@ -1943,7 +1947,14 @@ mod tests {
             press(&mut app, KeyCode::Char(character));
         }
         press(&mut app, KeyCode::Enter);
-        for (key, selected) in [('J', 20), ('J', 24), ('K', 4), ('K', 0)] {
+        for (key, selected) in [
+            ('J', 10),
+            ('J', 20),
+            ('J', 24),
+            ('K', 14),
+            ('K', 4),
+            ('K', 0),
+        ] {
             press(&mut app, KeyCode::Char(key));
             assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, selected);
         }
