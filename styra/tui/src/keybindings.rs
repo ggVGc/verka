@@ -108,6 +108,19 @@ bindings! { READING = "Raw, log, quota, and transcript";
     READING_COPY: [Key::ch('y')] ("raw, diff") => Action::ReadingCopy;
 }
 
+bindings! { CHECKOUT_DIFF = "Checkout diff";
+    DIFF_TOGGLE_FILES: [Key::code(KeyCode::Tab)] => Action::DiffToggleFiles;
+    DIFF_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::DiffDown;
+    DIFF_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::DiffUp;
+    DIFF_SCROLL_DOWN: [Key::ch('J')] => Action::DiffScrollDown;
+    DIFF_SCROLL_UP: [Key::ch('K')] => Action::DiffScrollUp;
+    DIFF_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::DiffPageDown;
+    DIFF_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::DiffPageUp;
+    DIFF_FIRST: [Key::ch('g')] => Action::ReadingFirst;
+    DIFF_LAST: [Key::ch('G')] => Action::ReadingLast;
+    DIFF_COPY: [Key::ch('y')] => Action::ReadingCopy;
+}
+
 bindings! { PREVIEW = "Full-screen preview";
     PREVIEW_SCROLL_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::PreviewScrollDown;
     PREVIEW_SCROLL_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::PreviewScrollUp;
@@ -441,7 +454,8 @@ impl Window {
     fn sections(self) -> &'static [&'static [ReferenceRow]] {
         match self {
             Self::Events => &[EVENTS, MESSAGE_EDITOR, GLOBAL],
-            Self::Raw | Self::Log | Self::Quota | Self::Transcript | Self::CheckoutDiff => {
+            Self::CheckoutDiff => &[CHECKOUT_DIFF, MESSAGE_EDITOR, GLOBAL],
+            Self::Raw | Self::Log | Self::Quota | Self::Transcript => {
                 &[READING, MESSAGE_EDITOR, GLOBAL]
             }
             Self::Preview => &[PREVIEW, MESSAGE_EDITOR, GLOBAL],

@@ -414,6 +414,8 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                     Err(error) => Err(error.as_str()),
                 }),
                 requested_scroll: view.as_ref().map_or(0, |(diff, _)| diff.scroll.clamped()),
+                per_file: view.as_ref().is_some_and(|(diff, _)| diff.per_file),
+                selected_file: view.as_ref().map_or(0, |(diff, _)| diff.selected_file),
             };
             draw_main(ui, app, MainView::CheckoutDiff(&diff))
         }
@@ -656,6 +658,7 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
                 if let Some(diff) = &mut app.checkout_diff {
                     diff.scroll.offset = scroll.effective_offset;
                     diff.scroll.note_limit(scroll.limit);
+                    diff.scroll.note_viewport(scroll.viewport);
                 }
             }
             styra_ui::PanelId::EntryLog => {
@@ -1058,6 +1061,8 @@ mod tests {
                     .into(),
             ),
             scroll: Default::default(),
+            per_file: false,
+            selected_file: 0,
         });
         app.view = View::CheckoutDiff;
 

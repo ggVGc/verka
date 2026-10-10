@@ -146,14 +146,13 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             );
         }
         MainView::CheckoutDiff(diff_view) => {
-            let limit = checkout_diff::render(frame, diff_view, chunks[0]);
-            note_scroll(
+            let measured = checkout_diff::render(frame, diff_view, chunks[0]);
+            note_preview_scroll(
                 &mut feedback,
                 PanelId::CheckoutDiff {
                     session: view.session_id.into(),
                 },
-                limit,
-                diff_view.requested_scroll.min(limit),
+                measured,
             );
         }
         MainView::Driva(driva_view) => {

@@ -52,6 +52,8 @@ pub struct CheckoutDiff {
     /// `git diff`'s output, or why it could not be read.
     pub diff: Result<String, String>,
     pub scroll: Scroll,
+    pub per_file: bool,
+    pub selected_file: usize,
 }
 
 impl CheckoutDiff {
@@ -63,6 +65,26 @@ impl CheckoutDiff {
             target,
             diff,
             scroll: Scroll::default(),
+            per_file: false,
+            selected_file: 0,
+        }
+    }
+    pub fn select_file(&mut self, down: bool) {
+        let count = self
+            .diff
+            .as_ref()
+            .map(|text| styra_ui::checkout_diff::file_diffs(text).len())
+            .unwrap_or(0);
+        let next = if down {
+            self.selected_file
+                .saturating_add(1)
+                .min(count.saturating_sub(1))
+        } else {
+            self.selected_file.saturating_sub(1)
+        };
+        if next != self.selected_file {
+            self.selected_file = next;
+            self.scroll.reset();
         }
     }
 }

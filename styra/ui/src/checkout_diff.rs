@@ -8,11 +8,12 @@
 
 use crate::chrome::{panel_block, PanelChrome};
 use crate::diff::{diff_block_lines, fill_changed_rows};
+use crate::preview::PreviewFeedback;
 use crate::theme;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 pub struct CheckoutDiffView<'a> {
@@ -30,6 +31,67 @@ pub struct CheckoutDiffView<'a> {
     /// `git diff`'s output, or why there is none.
     pub diff: Result<&'a str, &'a str>,
     pub requested_scroll: u16,
+    pub per_file: bool,
+    pub selected_file: usize,
+}
+
+/// A complete patch for one changed file, including metadata for renames,
+/// binary changes, deletions, and changes of mode that have no hunks.
+pub struct FileDiff<'a> {
+    pub path: &'a str,
+    pub patch: &'a str,
+}
+
+/// Split only on Git's file headers, retaining each patch verbatim.
+pub fn file_diffs(text: &str) -> Vec<FileDiff<'_>> {
+    let mut starts = Vec::new();
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        if line.starts_with("diff --git ") {
+            starts.push(offset);
+        }
+        offset += line.len();
+    }
+    starts
+        .iter()
+        .enumerate()
+        .map(|(index, &start)| {
+            let end = starts.get(index + 1).copied().unwrap_or(text.len());
+            let patch = &text[start..end];
+            let header = patch.lines().next().unwrap_or_default();
+            // The destination marker handles spaces in paths. A deleted file
+            // uses its source; renames without hunks use their destination.
+            let marker_path = |marker: &str| {
+                patch
+                    .lines()
+                    .take_while(|line| !line.starts_with("@@"))
+                    .find_map(|line| {
+                        line.strip_prefix(marker)
+                            .filter(|path| *path != "/dev/null")
+                    })
+                    .map(|path| {
+                        let path = path.trim_matches('"');
+                        path.strip_prefix("b/")
+                            .or_else(|| path.strip_prefix("a/"))
+                            .unwrap_or(path)
+                    })
+            };
+            let path = marker_path("+++ ")
+                .or_else(|| {
+                    patch
+                        .lines()
+                        .find_map(|line| line.strip_prefix("rename to "))
+                })
+                .or_else(|| marker_path("--- "))
+                .unwrap_or_else(|| {
+                    header
+                        .rsplit_once(" b/")
+                        .or_else(|| header.rsplit_once(" \"b/"))
+                        .map_or(header, |(_, path)| path.trim_end_matches('"'))
+                });
+            FileDiff { path, patch }
+        })
+        .collect()
 }
 
 /// How much of a commit id the header shows: enough to tell commits apart in
@@ -37,7 +99,7 @@ pub struct CheckoutDiffView<'a> {
 const SHORT_COMMIT: usize = 10;
 
 /// Draw the view, and return how far its diff can scroll.
-pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> u16 {
+pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> PreviewFeedback {
     let block = panel_block(&view.chrome);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -56,7 +118,43 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> u16
         ),
         top,
     );
-    let mut lines = match view.diff {
+    let files = view.diff.ok().map(file_diffs).unwrap_or_default();
+    let body = if view.per_file && !files.is_empty() {
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
+                .areas(body);
+        let selected = view.selected_file.min(files.len() - 1);
+        let items = files.iter().map(|file| ListItem::new(file.path));
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::RIGHT)
+                    .border_style(Style::default().fg(theme::INACTIVE)),
+            )
+            .highlight_style(
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("› ");
+        frame.render_stateful_widget(
+            list,
+            left,
+            &mut ListState::default().with_selected(Some(selected)),
+        );
+        right
+    } else {
+        body
+    };
+    let shown = if view.per_file {
+        files
+            .get(view.selected_file.min(files.len().saturating_sub(1)))
+            .map(|file| Ok(file.patch))
+            .unwrap_or(view.diff)
+    } else {
+        view.diff
+    };
+    let mut lines = match shown {
         Ok(text) if text.trim().is_empty() => {
             vec![muted("  no changes since the branch was made")]
         }
@@ -67,12 +165,18 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> u16
         ))],
     };
     fill_changed_rows(&mut lines, usize::from(body.width));
-    let limit = (lines.len() as u16).saturating_sub(body.height);
+    let limit = u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(body.height);
     frame.render_widget(
         Paragraph::new(lines).scroll((view.requested_scroll.min(limit), 0)),
         body,
     );
-    limit
+    PreviewFeedback {
+        limit,
+        effective_scroll: view.requested_scroll.min(limit),
+        viewport: body.height,
+    }
 }
 
 /// What is compared with what, where, and how much changed.
@@ -119,6 +223,11 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
     if let Ok(text) = view.diff {
         lines.push(stat_line(text));
     }
+    lines.push(muted(if view.per_file {
+        "Tab: combined diff · j/k: files · J/K: scroll 10 · PgUp/PgDn: half-screen"
+    } else {
+        "Tab: per-file diffs · j/k: scroll · J/K: scroll 10 · PgUp/PgDn: half-screen"
+    }));
     lines
 }
 
@@ -193,12 +302,22 @@ index 1111111..2222222 100644
     }
 
     fn screen(diff: Result<&str, &str>, base_branch: Option<&str>, scroll: u16) -> (String, u16) {
+        file_screen(diff, base_branch, scroll, false, 0).0
+    }
+
+    fn file_screen(
+        diff: Result<&str, &str>,
+        base_branch: Option<&str>,
+        scroll: u16,
+        per_file: bool,
+        selected_file: usize,
+    ) -> ((String, u16), u16) {
         let (width, height) = (80, 16);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut limit = 0;
+        let mut measured = PreviewFeedback::default();
         terminal
             .draw(|frame| {
-                limit = render(
+                measured = render(
                     frame,
                     &CheckoutDiffView {
                         chrome: chrome(),
@@ -208,6 +327,8 @@ index 1111111..2222222 100644
                         base_commit: "4bf5c35d0123456789abcdef",
                         diff,
                         requested_scroll: scroll,
+                        per_file,
+                        selected_file,
                     },
                     frame.area(),
                 );
@@ -221,7 +342,79 @@ index 1111111..2222222 100644
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n");
-        (output, limit)
+        ((output, measured.limit), measured.viewport)
+    }
+
+    #[test]
+    fn file_sections_include_deleted_renamed_binary_and_mode_only_changes() {
+        let patches = [
+            DIFF.to_owned(),
+            "diff --git a/gone.txt b/gone.txt\n--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n".into(),
+            "diff --git a/old name b/a/new name\nsimilarity index 100%\nrename from old name\nrename to a/new name\n".into(),
+            "diff --git a/a/image.png b/a/image.png\nBinary files a/a/image.png and b/a/image.png differ\n".into(),
+            "diff --git a/script b/script\nold mode 100644\nnew mode 100755\n".into(),
+            "diff --git \"a/tab\\tname\" \"b/tab\\tname\"\n--- \"a/tab\\tname\"\n+++ \"b/tab\\tname\"\n@@ -1 +1 @@\n-old\n+new\n".into(),
+        ];
+        let text = patches.concat();
+        let files = file_diffs(&text);
+        assert_eq!(
+            files.iter().map(|file| file.path).collect::<Vec<_>>(),
+            [
+                "src/a.rs",
+                "gone.txt",
+                "a/new name",
+                "a/image.png",
+                "script",
+                "tab\\tname"
+            ]
+        );
+        for (file, patch) in files.iter().zip(&patches) {
+            assert_eq!(file.patch, patch);
+        }
+        assert!(file_diffs("").is_empty());
+    }
+
+    #[test]
+    fn per_file_view_keeps_files_on_the_left_and_only_the_selected_patch_on_the_right() {
+        let text =
+            format!("{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old second\n+new second\n");
+        let ((output, _), viewport) = file_screen(Ok(&text), Some("main"), 0, true, 1);
+        let rows = output.lines().collect::<Vec<_>>();
+        assert!(
+            rows.iter().any(|row| row
+                .chars()
+                .take(24)
+                .collect::<String>()
+                .contains("src/a.rs")),
+            "{output}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.chars().take(24).collect::<String>().contains("› b.txt")),
+            "{output}"
+        );
+        assert!(
+            rows.iter().any(|row| row
+                .chars()
+                .skip(24)
+                .collect::<String>()
+                .contains("new second")),
+            "{output}"
+        );
+        assert!(!output.contains("fn c()"), "{output}");
+        assert!(output.contains("2 files changed"), "{output}");
+        assert_eq!(viewport, 9);
+    }
+
+    #[test]
+    fn selection_remains_visible_in_a_long_file_list() {
+        let text = (0..30)
+            .map(|n| format!("diff --git a/file{n} b/file{n}\n@@ -1 +1 @@\n-old{n}\n+new{n}\n"))
+            .collect::<String>();
+        let ((output, _), _) = file_screen(Ok(&text), None, 0, true, 29);
+        assert!(output.contains("› file29"), "{output}");
+        assert!(output.contains("new29"), "{output}");
+        assert!(!output.contains("new0"), "{output}");
     }
 
     #[test]
@@ -252,6 +445,8 @@ index 1111111..2222222 100644
                         base_commit: "4bf5c35d",
                         diff: Ok(DIFF),
                         requested_scroll: 0,
+                        per_file: false,
+                        selected_file: 0,
                     },
                     frame.area(),
                 );

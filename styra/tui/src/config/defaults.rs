@@ -65,7 +65,7 @@ impl Configuration for Defaults {
             .arg(GIT)
             .arg("-C")
             .arg(worktree)
-            .arg("diff")
+            .arg("delta")
             .arg(base);
         command
     }

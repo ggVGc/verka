@@ -495,15 +495,21 @@ pub fn handle_list_key(
                 return;
             };
             match key {
-                k if READING_DOWN.matches(k) => diff.scroll.offset = diff.scroll.clamped() + 1,
-                k if READING_UP.matches(k) => {
-                    diff.scroll.offset = diff.scroll.clamped().saturating_sub(1)
+                k if DIFF_TOGGLE_FILES.matches(k) => {
+                    diff.per_file = !diff.per_file;
+                    diff.scroll.reset();
                 }
-                k if READING_FIRST.matches(k) => diff.scroll.reset(),
-                k if READING_LAST.matches(k) => diff.scroll.scroll_to_end(),
-                k if READING_PAGE_DOWN.matches(k) => diff.scroll.page_down(),
-                k if READING_PAGE_UP.matches(k) => diff.scroll.page_up(),
-                k if READING_COPY.matches(k) => copy_selection(app),
+                k if DIFF_DOWN.matches(k) && diff.per_file => diff.select_file(true),
+                k if DIFF_UP.matches(k) && diff.per_file => diff.select_file(false),
+                k if DIFF_DOWN.matches(k) => diff.scroll.line_down(),
+                k if DIFF_UP.matches(k) => diff.scroll.line_up(),
+                k if DIFF_SCROLL_DOWN.matches(k) => diff.scroll.page_down(),
+                k if DIFF_SCROLL_UP.matches(k) => diff.scroll.page_up(),
+                k if DIFF_FIRST.matches(k) => diff.scroll.reset(),
+                k if DIFF_LAST.matches(k) => diff.scroll.scroll_to_end(),
+                k if DIFF_PAGE_DOWN.matches(k) => diff.scroll.half_page_down(),
+                k if DIFF_PAGE_UP.matches(k) => diff.scroll.half_page_up(),
+                k if DIFF_COPY.matches(k) => copy_selection(app),
                 _ => {}
             }
         }
@@ -1758,6 +1764,50 @@ mod tests {
         );
 
         assert!(!matches!(app.take_request(), Some(Request::OpenDiff(_))));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn per_file_diff_navigation_and_scrolling_use_separate_keys() {
+        let root = tree("diff-files");
+        let mut app = app_with_diffable_interaction(&root);
+        app.enter_list();
+        app.view = View::CheckoutDiff;
+        app.checkout_diff = Some(crate::checkout_diff::CheckoutDiff {
+            target: diffable_target(),
+            diff: Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n".into()),
+            scroll: Default::default(),
+            per_file: false,
+            selected_file: 0,
+        });
+        let diff = app.checkout_diff.as_mut().unwrap();
+        diff.scroll.note_limit(100);
+        diff.scroll.note_viewport(30);
+        let press = |app: &mut App, code| press_list_key(app, &root, KeyEvent::from(code));
+        press(&mut app, KeyCode::Tab);
+        assert!(app.checkout_diff.as_ref().unwrap().per_file);
+        press(&mut app, KeyCode::Char('J'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
+        press(&mut app, KeyCode::PageDown);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 25);
+        press(&mut app, KeyCode::PageUp);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
+        press(&mut app, KeyCode::Char('K'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 0);
+        press(&mut app, KeyCode::Char('J'));
+        press(&mut app, KeyCode::Char('j'));
+        let diff = app.checkout_diff.as_ref().unwrap();
+        assert_eq!(diff.selected_file, 1);
+        assert_eq!(diff.scroll.offset, 0);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 1);
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);
+        press(&mut app, KeyCode::Tab);
+        assert!(!app.checkout_diff.as_ref().unwrap().per_file);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 
