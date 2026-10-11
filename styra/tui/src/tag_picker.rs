@@ -92,10 +92,6 @@ impl TagPicker {
         self.list.delete_word();
     }
 
-    pub fn is_filtering(&self) -> bool {
-        self.list.is_filtering()
-    }
-
     pub fn clear_query(&mut self) {
         self.list.clear(&self.available);
     }
