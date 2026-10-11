@@ -3615,10 +3615,19 @@ impl ServerState {
         let sessions = (|| -> Result<Vec<String>> {
             Ok(match scope {
                 Scope::Session(id) => vec![id.to_owned()],
-                Scope::Workspace(id) => journal::list_workspace_sessions(self.store_root(), id)?
-                    .into_iter()
-                    .map(|session| session.id)
-                    .collect(),
+                Scope::Workspace(id) => {
+                    // Restoration must audit the preserved Sessions while
+                    // ordinary session access is still refused.
+                    let sessions = if matches!(&request, Request::RestoreWorkspace { .. }) {
+                        journal::list_sessions_at(
+                            &crate::workspace::sessions_dir(self.store_root(), id),
+                            id,
+                        )?
+                    } else {
+                        journal::list_workspace_sessions(self.store_root(), id)?
+                    };
+                    sessions.into_iter().map(|session| session.id).collect()
+                }
                 Scope::All => crate::workspace::list(self.store_root())?
                     .into_iter()
                     .map(|workspace| {
@@ -3662,6 +3671,56 @@ impl ServerState {
     }
 
     fn dispatch(&self, request: Request) -> Result<Response> {
+        // A launch or integration cannot slip past deletion's active check
+        // and create new work after the Workspace has been hidden.
+        let _launch = if matches!(
+            &request,
+            Request::CreateSession(_)
+                | Request::ResumeSession(_)
+                | Request::BranchSession { .. }
+                | Request::ConvertSessionProvider { .. }
+                | Request::CreateSessionWorktree { .. }
+                | Request::IntegrateSession { .. }
+        ) {
+            Some(
+                self.inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned"),
+            )
+        } else {
+            None
+        };
+        // Live rows can outlast their Workspace's visibility. Guard both live
+        // and stored access at the request boundary, including read requests.
+        let session_id = match &request {
+            Request::Updates { id, .. }
+            | Request::StoredSession { id, .. }
+            | Request::ProviderRaw { id }
+            | Request::TurnAnswer { id, .. }
+            | Request::SessionComposer { id }
+            | Request::GenerateIntegrationMessage { id }
+            | Request::SessionIntegrationResult { id }
+            | Request::InteractionActions { id } => Some(id.as_str()),
+            _ => match crate::actions::scope(&request) {
+                Scope::Session(id) => Some(id),
+                _ => None,
+            },
+        };
+        if let Some(id) = session_id {
+            let live = self
+                .inner
+                .interactions
+                .lock()
+                .expect("server interaction lock poisoned")
+                .get(id)
+                .cloned();
+            if let Some(live) = live {
+                crate::workspace::get(self.store_root(), &live.workspace_id)?;
+            } else {
+                self.stored_summary(id)?;
+            }
+        }
         match request {
             Request::InteractionActions { id } => {
                 self.stored_summary(&id)?;
@@ -3688,6 +3747,49 @@ impl ServerState {
             Request::ListWorkspaces => Ok(Response::Workspaces(crate::workspace::list(
                 &self.inner.store_root,
             )?)),
+            Request::ListDeletedWorkspaces => Ok(Response::Workspaces(
+                crate::workspace::list_deleted(self.store_root())?,
+            )),
+            Request::DeleteWorkspace { id } => {
+                let _metadata = self
+                    .inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned");
+                crate::workspace::get(self.store_root(), &id)?;
+                let live: Vec<_> = self
+                    .inner
+                    .interactions
+                    .lock()
+                    .expect("server interaction lock poisoned")
+                    .values()
+                    .filter(|interaction| interaction.workspace_id == id)
+                    .cloned()
+                    .collect();
+                // Refuse deletion while integration is running, and only hide
+                // the Workspace once every sandbox has actually exited.
+                for session in journal::list_workspace_sessions(self.store_root(), &id)? {
+                    self.ensure_not_integrating(&session.id)?;
+                }
+                for interaction in live {
+                    interaction.kill()?;
+                }
+                Ok(Response::Workspace(crate::workspace::delete(
+                    self.store_root(),
+                    &id,
+                )?))
+            }
+            Request::RestoreWorkspace { id } => {
+                let _metadata = self
+                    .inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned");
+                Ok(Response::Workspace(crate::workspace::restore(
+                    self.store_root(),
+                    &id,
+                )?))
+            }
             Request::Workspace { id } => {
                 let _metadata = self
                     .inner
@@ -4033,14 +4135,24 @@ impl ServerState {
                 // conversation is still theirs to go back to, and only the
                 // agent is gone. See [`crate::roster`].
                 summaries.extend(self.inner.roster.restored());
+                let active: std::collections::HashSet<_> =
+                    crate::workspace::list(self.store_root())?
+                        .into_iter()
+                        .map(|workspace| workspace.id)
+                        .collect();
+                summaries.retain(|summary| active.contains(&summary.workspace_id));
                 // Newest first: the id embeds a millisecond timestamp, so a
                 // descending id sort orders interactions by creation time.
                 summaries.sort_by(|a, b| b.id.cmp(&a.id));
                 Ok(Response::Interactions(summaries))
             }
-            Request::ListSessions { workspace_id } => Ok(Response::StoredSessions(
-                journal::list_workspace_sessions(self.store_root(), &workspace_id)?,
-            )),
+            Request::ListSessions { workspace_id } => {
+                crate::workspace::get(self.store_root(), &workspace_id)?;
+                Ok(Response::StoredSessions(journal::list_workspace_sessions(
+                    self.store_root(),
+                    &workspace_id,
+                )?))
+            }
             Request::StoredSession { id, raw: want_raw } => {
                 let summary = self.stored_summary(&id)?;
                 let meta = journal::read_session_meta(&summary.path)?;
@@ -7329,6 +7441,115 @@ mod tests {
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn deleted_workspace_api_blocks_sessions_and_restores_after_reopening() {
+        let (store, host, state, workspace, id, session_path) =
+            stored_session("deleted-workspace-api");
+        drop(state);
+        crate::roster::Roster::open(&store).publish(vec![(
+            session_path.clone(),
+            InteractionSummary {
+                id: id.clone(),
+                name: None,
+                tags: Vec::new(),
+                workspace_id: workspace.id.clone(),
+                selection: Selection::new(crate::agent::Provider::Codex),
+                workspace: host.clone(),
+                driva: DrivaOptions::default(),
+                activity: InteractionActivity::Stopped,
+                activity_reason: None,
+                activity_since_ms: 1,
+                idle_unseen: false,
+                uncommitted_changes: false,
+                checkout: None,
+                branched_from: None,
+                last_message: None,
+                recent_messages: Vec::new(),
+                auto_retry: false,
+                auto_commit: false,
+                events: 0,
+                completed: CompletionState::Active,
+                focus_requested: false,
+                origin: None,
+                restored: false,
+            },
+        )]);
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        assert!(matches!(state.handle(Request::ListInteractions).unwrap(),
+            Response::Interactions(items) if items.len() == 1));
+        state
+            .handle(Request::DeleteWorkspace {
+                id: workspace.id.clone(),
+            })
+            .unwrap();
+        assert!(matches!(state.handle(Request::ListWorkspaces).unwrap(),
+            Response::Workspaces(items) if items.is_empty()));
+        assert!(
+            matches!(state.handle(Request::ListDeletedWorkspaces).unwrap(),
+            Response::Workspaces(items) if items.len() == 1 && items[0].id == workspace.id)
+        );
+        for request in [
+            Request::Workspace {
+                id: workspace.id.clone(),
+            },
+            Request::ListSessions {
+                workspace_id: workspace.id.clone(),
+            },
+            Request::StoredSession {
+                id: id.clone(),
+                raw: false,
+            },
+            Request::LoadInteraction { id: id.clone() },
+            Request::RenameSession(crate::protocol::RenameSession {
+                id: id.clone(),
+                name: Some("blocked".into()),
+            }),
+            Request::PlanSession(crate::protocol::PlanSession {
+                workspace_id: workspace.id.clone(),
+                selection: Selection::new(crate::agent::Provider::Codex),
+                launch: LaunchPolicy::default(),
+                create_worktree: false,
+                checkout_from: None,
+            }),
+        ] {
+            assert!(
+                state.handle(request.clone()).is_err(),
+                "accepted {request:?}"
+            );
+        }
+        assert!(session_path.is_dir());
+        assert!(matches!(state.handle(Request::ListInteractions).unwrap(),
+            Response::Interactions(items) if items.is_empty()));
+        assert!(state
+            .handle(Request::Updates {
+                id: id.clone(),
+                after: 0,
+                raw: false
+            })
+            .is_err());
+        drop(state);
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        assert!(matches!(state.handle(Request::ListWorkspaces).unwrap(),
+            Response::Workspaces(items) if items.is_empty()));
+        state
+            .handle(Request::RestoreWorkspace {
+                id: workspace.id.clone(),
+            })
+            .unwrap();
+        assert!(matches!(state.handle(Request::ListInteractions).unwrap(),
+            Response::Interactions(items) if items.len() == 1 && items[0].activity == InteractionActivity::Stopped));
+        assert!(
+            matches!(state.handle(Request::ListSessions { workspace_id: workspace.id }).unwrap(),
+            Response::StoredSessions(items) if items.len() == 1 && items[0].id == id)
+        );
+        assert!(state
+            .handle(Request::StoredSession { id, raw: false })
+            .is_ok());
+        drop(state);
+        std::fs::remove_dir_all(store).unwrap();
+        std::fs::remove_dir_all(host).unwrap();
     }
 
     #[test]

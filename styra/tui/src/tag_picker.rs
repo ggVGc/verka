@@ -208,7 +208,7 @@ mod tests {
         }
         picker.toggle();
         assert_eq!(picker.selected, ["urgent"]);
-        assert!(!picker.is_filtering());
+        assert!(!picker.list.is_filtering());
     }
 
     #[test]

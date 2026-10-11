@@ -204,6 +204,7 @@ pub trait Ui {
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
         offer: Option<&std::path::Path>,
+        show_deleted: bool,
     ) -> UiResult<RenderFeedback>;
 
     fn render_worktree_picker(
@@ -473,6 +474,7 @@ where
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
         offer: Option<&std::path::Path>,
+        show_deleted: bool,
     ) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
             picker::render_workspace_picker(
@@ -482,6 +484,7 @@ where
                 interactions,
                 preview,
                 filter,
+                show_deleted,
             );
             if let Some(directory) = offer {
                 picker::render_workspace_offer(frame, directory);
@@ -508,6 +511,7 @@ where
                 interactions,
                 preview,
                 filter,
+                false,
             );
             picker::render_workspace_prompt(frame, title, value);
             RenderFeedback::default()
@@ -676,6 +680,7 @@ where
         preview: picker::SessionsPreview<'_>,
         filter: Option<&str>,
         offer: Option<&std::path::Path>,
+        show_deleted: bool,
     ) -> UiResult<RenderFeedback> {
         TerminalUi::render_workspace_picker(
             self,
@@ -685,6 +690,7 @@ where
             preview,
             filter,
             offer,
+            show_deleted,
         )
     }
 

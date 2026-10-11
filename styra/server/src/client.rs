@@ -328,6 +328,27 @@ impl Client {
         }
     }
 
+    pub fn list_deleted_workspaces(&self) -> Result<Vec<WorkspaceSummary>> {
+        match self.request(Request::ListDeletedWorkspaces)? {
+            Response::Workspaces(value) => Ok(value),
+            other => unexpected("workspaces", other),
+        }
+    }
+
+    pub fn delete_workspace(&self, id: &str) -> Result<WorkspaceSummary> {
+        match self.request(Request::DeleteWorkspace { id: id.to_owned() })? {
+            Response::Workspace(value) => Ok(value),
+            other => unexpected("workspace", other),
+        }
+    }
+
+    pub fn restore_workspace(&self, id: &str) -> Result<WorkspaceSummary> {
+        match self.request(Request::RestoreWorkspace { id: id.to_owned() })? {
+            Response::Workspace(value) => Ok(value),
+            other => unexpected("workspace", other),
+        }
+    }
+
     pub fn workspace(&self, id: &str) -> Result<WorkspaceSummary> {
         match self.request(Request::Workspace { id: id.to_owned() })? {
             Response::Workspace(value) => Ok(value),
@@ -775,6 +796,9 @@ fn request_operation(request: &Request) -> &'static str {
         Request::Health => "health",
         Request::CreateWorkspace(_) => "create_workspace",
         Request::ListWorkspaces => "list_workspaces",
+        Request::ListDeletedWorkspaces => "list_deleted_workspaces",
+        Request::DeleteWorkspace { .. } => "delete_workspace",
+        Request::RestoreWorkspace { .. } => "restore_workspace",
         Request::Workspace { .. } => "workspace",
         Request::WorkspaceForPath { .. } => "workspace_for_path",
         Request::RenameWorkspace(_) => "rename_workspace",

@@ -66,6 +66,21 @@ M.types.Request = {
     { name = "health", payload = { kind = "unit" } },
     { name = "create_workspace", payload = { kind = "newtype", type = { kind = "ref", name = "CreateWorkspace" } } },
     { name = "list_workspaces", payload = { kind = "unit" } },
+    { name = "list_deleted_workspaces", payload = { kind = "unit" } },
+    { name = "delete_workspace", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
+    { name = "restore_workspace", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "workspace", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -1758,7 +1773,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "integrate_session", "generate_integration_message", "session_integration_result", "health", "create_workspace", "list_workspaces", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "shutdown" }
+M.enums.Request = { "integrate_session", "generate_integration_message", "session_integration_result", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   INTEGRATE_SESSION = "integrate_session",
@@ -1767,6 +1782,9 @@ M.Request = {
   HEALTH = "health",
   CREATE_WORKSPACE = "create_workspace",
   LIST_WORKSPACES = "list_workspaces",
+  LIST_DELETED_WORKSPACES = "list_deleted_workspaces",
+  DELETE_WORKSPACE = "delete_workspace",
+  RESTORE_WORKSPACE = "restore_workspace",
   WORKSPACE = "workspace",
   WORKSPACE_FOR_PATH = "workspace_for_path",
   RENAME_WORKSPACE = "rename_workspace",
@@ -2522,6 +2540,25 @@ end
 
 function M.request.list_workspaces()
   return M.build("list_workspaces")
+end
+
+--- Deleted Workspaces are available only for listing and restoration.
+function M.request.list_deleted_workspaces()
+  return M.build("list_deleted_workspaces")
+end
+
+--- Soft delete: preserve metadata, Sessions, and checkouts on disk.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.delete_workspace(data)
+  return M.build("delete_workspace", data)
+end
+
+--- Fields of `data`:
+---   id  string
+function M.request.restore_workspace(data)
+  return M.build("restore_workspace", data)
 end
 
 --- Fields of `data`:

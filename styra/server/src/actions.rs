@@ -28,6 +28,7 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
     match request {
         Request::Health
         | Request::ListWorkspaces
+        | Request::ListDeletedWorkspaces
         | Request::Workspace { .. }
         | Request::WorkspaceForPath { .. }
         | Request::WorkspaceLaunch { .. }
@@ -52,6 +53,7 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
             None => Scope::Store,
         },
         Request::ResumeSession(request) => Scope::Session(&request.id),
+        Request::DeleteWorkspace { id } | Request::RestoreWorkspace { id } => Scope::Workspace(id),
         Request::RenameWorkspace(request) => Scope::Workspace(&request.id),
         Request::SetWorkspaceGitRepository { workspace_id, .. }
         | Request::SetWorkspaceHostPath { workspace_id, .. }

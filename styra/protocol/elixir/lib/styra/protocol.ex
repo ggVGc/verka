@@ -76,6 +76,21 @@ defmodule Styra.Protocol do
         %{name: "health", payload: %{kind: :unit}},
         %{name: "create_workspace", payload: %{kind: :newtype, type: %{kind: :ref, name: "CreateWorkspace"}}},
         %{name: "list_workspaces", payload: %{kind: :unit}},
+        %{name: "list_deleted_workspaces", payload: %{kind: :unit}},
+        %{name: "delete_workspace", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
+        %{name: "restore_workspace", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "workspace", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -1784,6 +1799,9 @@ defmodule Styra.Protocol do
     "health",
     "create_workspace",
     "list_workspaces",
+    "list_deleted_workspaces",
+    "delete_workspace",
+    "restore_workspace",
     "workspace",
     "workspace_for_path",
     "rename_workspace",
@@ -2353,6 +2371,36 @@ defmodule Styra.Protocol do
 
     @doc "`list_workspaces/0`, raising on a request the server would refuse."
     def list_workspaces!, do: Styra.Protocol.build!("list_workspaces")
+
+    @doc ~S"""
+    Deleted Workspaces are available only for listing and restoration.
+    """
+    def list_deleted_workspaces, do: Styra.Protocol.build("list_deleted_workspaces")
+
+    @doc "`list_deleted_workspaces/0`, raising on a request the server would refuse."
+    def list_deleted_workspaces!, do: Styra.Protocol.build!("list_deleted_workspaces")
+
+    @doc ~S"""
+    Soft delete: preserve metadata, Sessions, and checkouts on disk.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def delete_workspace(data), do: Styra.Protocol.build("delete_workspace", data)
+
+    @doc "`delete_workspace/1`, raising on a request the server would refuse."
+    def delete_workspace!(data), do: Styra.Protocol.build!("delete_workspace", data)
+
+    @doc ~S"""
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def restore_workspace(data), do: Styra.Protocol.build("restore_workspace", data)
+
+    @doc "`restore_workspace/1`, raising on a request the server would refuse."
+    def restore_workspace!(data), do: Styra.Protocol.build!("restore_workspace", data)
 
     @doc ~S"""
     Fields of `data`:

@@ -15,6 +15,8 @@ const WORKSPACE_META_FILE: &str = "workspace.json";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct WorkspaceMeta {
     id: String,
+    #[serde(default)]
+    deleted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     host_path: PathBuf,
@@ -81,6 +83,7 @@ pub fn create_with_repository(
         .with_context(|| format!("creating Workspace directory {}", path.display()))?;
     let meta = WorkspaceMeta {
         id: id.clone(),
+        deleted: false,
         name,
         host_path: host_path.clone(),
         git_repository: git_repository.clone(),
@@ -105,6 +108,15 @@ pub fn create_with_repository(
 
 /// List durable Workspaces by most recent access, newest first.
 pub fn list(store_root: &Path) -> Result<Vec<WorkspaceSummary>> {
+    list_by_deleted(store_root, false)
+}
+
+/// List only deleted Workspaces, without making them available for use.
+pub fn list_deleted(store_root: &Path) -> Result<Vec<WorkspaceSummary>> {
+    list_by_deleted(store_root, true)
+}
+
+fn list_by_deleted(store_root: &Path, deleted: bool) -> Result<Vec<WorkspaceSummary>> {
     let root = workspaces_dir(store_root);
     let now = now_ms();
     let mut workspaces = Vec::new();
@@ -116,7 +128,10 @@ pub fn list(store_root: &Path) -> Result<Vec<WorkspaceSummary>> {
             if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
                 continue;
             }
-            workspaces.push(summary_from_dir(&entry.path(), now)?);
+            let meta = read_meta(&entry.path())?;
+            if meta.deleted == deleted {
+                workspaces.push(summary_from_meta(&entry.path(), meta, now)?);
+            }
         }
     }
     workspaces.sort_by(|a, b| {
@@ -182,7 +197,7 @@ pub fn get(store_root: &Path, id: &str) -> Result<WorkspaceSummary> {
     if !path.is_dir() {
         anyhow::bail!("Workspace {id:?} was not found");
     }
-    summary_from_dir(&path, now_ms())
+    summary_from_meta(&path, read_active_meta(&path)?, now_ms())
 }
 
 /// Record an explicit operator access and return the updated Workspace.
@@ -201,7 +216,7 @@ pub fn access(store_root: &Path, id: &str) -> Result<WorkspaceSummary> {
         .map(|workspace| workspace.last_accessed_at_ms)
         .max()
         .unwrap_or(0);
-    let mut meta = read_meta(&path)?;
+    let mut meta = read_active_meta(&path)?;
     let previous = meta
         .last_accessed_at_ms
         .unwrap_or(meta.created_at_ms)
@@ -211,9 +226,33 @@ pub fn access(store_root: &Path, id: &str) -> Result<WorkspaceSummary> {
     summary_from_meta(&path, meta, now_ms())
 }
 
-fn summary_from_dir(path: &Path, now: u64) -> Result<WorkspaceSummary> {
+/// Mark a Workspace unavailable, preserving all of its files.
+pub fn delete(store_root: &Path, id: &str) -> Result<WorkspaceSummary> {
+    let path = workspace_dir(store_root, id);
+    let mut meta = read_active_meta(&path)?;
+    meta.deleted = true;
+    write_meta(&path, &meta)?;
+    summary_from_meta(&path, meta, now_ms())
+}
+
+/// Restore the same identity, Sessions, and policy.
+pub fn restore(store_root: &Path, id: &str) -> Result<WorkspaceSummary> {
+    let path = workspace_dir(store_root, id);
+    let mut meta = read_meta(&path)?;
+    anyhow::ensure!(meta.deleted, "Workspace {id:?} is not deleted");
+    meta.deleted = false;
+    write_meta(&path, &meta)?;
+    access(store_root, id)
+}
+
+fn read_active_meta(path: &Path) -> Result<WorkspaceMeta> {
     let meta = read_meta(path)?;
-    summary_from_meta(path, meta, now)
+    anyhow::ensure!(
+        !meta.deleted,
+        "Workspace {:?} is deleted; restore it before use",
+        meta.id
+    );
+    Ok(meta)
 }
 
 fn summary_from_meta(path: &Path, meta: WorkspaceMeta, now: u64) -> Result<WorkspaceSummary> {
@@ -253,7 +292,7 @@ pub fn set_git_repository(
     if !path.is_dir() {
         anyhow::bail!("Workspace {id:?} was not found");
     }
-    let mut meta = read_meta(&path)?;
+    let mut meta = read_active_meta(&path)?;
     meta.git_repository = git_repository
         .map(|path| validate_git_repository(git, path))
         .transpose()?;
@@ -287,7 +326,7 @@ pub fn set_host_path(store_root: &Path, id: &str, host_path: &Path) -> Result<Wo
             host_path.display()
         );
     }
-    let mut meta = read_meta(&path)?;
+    let mut meta = read_active_meta(&path)?;
     meta.host_path = host_path;
     write_meta(&path, &meta)?;
     summary_from_meta(&path, meta, now_ms())
@@ -299,7 +338,7 @@ pub fn rename(store_root: &Path, id: &str, name: Option<&str>) -> Result<Workspa
     if !path.is_dir() {
         anyhow::bail!("Workspace {id:?} was not found");
     }
-    let mut meta = read_meta(&path)?;
+    let mut meta = read_active_meta(&path)?;
     meta.name = name
         .map(str::trim)
         .filter(|name| !name.is_empty())
@@ -323,7 +362,7 @@ pub fn launch(store_root: &Path, id: &str) -> Result<LaunchPolicy> {
     if !path.is_dir() {
         anyhow::bail!("Workspace {id:?} was not found");
     }
-    Ok(read_meta(&path)?.launch)
+    Ok(read_active_meta(&path)?.launch)
 }
 
 /// Apply an edit to a Workspace's standing sandbox policy.
@@ -341,7 +380,7 @@ pub fn change_launch(
     if !path.is_dir() {
         anyhow::bail!("Workspace {id:?} was not found");
     }
-    let mut meta = read_meta(&path)?;
+    let mut meta = read_active_meta(&path)?;
     match change {
         WorkspaceLaunchChange::SetNetwork(network) => meta.launch.network = network,
         WorkspaceLaunchChange::SetWritableWorkspace(writable) => {
@@ -428,6 +467,62 @@ mod tests {
         let root = std::env::temp_dir().join(format!("styra-workspace-{tag}-{}", new_id(now_ms())));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn deletion_hides_and_blocks_a_workspace_until_restored_without_removing_files() {
+        let store = temp_dir("delete-store");
+        let host = temp_dir("delete-host");
+        let workspace = create(&store, &host, Some("preserved".into())).unwrap();
+        let session = workspace.path.join("sessions/session-1");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::write(session.join("journal.jsonl"), "preserved history").unwrap();
+        let worktrees = workspace.path.join("worktrees/checkout-1");
+        std::fs::create_dir_all(&worktrees).unwrap();
+        std::fs::write(worktrees.join("uncommitted"), "preserved changes").unwrap();
+        change_launch(
+            &store,
+            &workspace.id,
+            WorkspaceLaunchChange::SetNetwork(Some(true)),
+        )
+        .unwrap();
+
+        delete(&store, &workspace.id).unwrap();
+        assert!(list(&store).unwrap().is_empty());
+        assert!(for_path(&store, &host).unwrap().is_none());
+        assert_eq!(list_deleted(&store).unwrap()[0].id, workspace.id);
+        assert!(get(&store, &workspace.id).is_err());
+        assert!(access(&store, &workspace.id).is_err());
+        assert!(rename(&store, &workspace.id, Some("hidden")).is_err());
+        assert!(set_host_path(&store, &workspace.id, &host).is_err());
+        assert!(set_git_repository(&FakeGit::new(), &store, &workspace.id, None).is_err());
+        assert!(launch(&store, &workspace.id).is_err());
+        assert!(change_launch(
+            &store,
+            &workspace.id,
+            WorkspaceLaunchChange::SetNetwork(None)
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read_to_string(session.join("journal.jsonl")).unwrap(),
+            "preserved history"
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktrees.join("uncommitted")).unwrap(),
+            "preserved changes"
+        );
+
+        let restored = restore(&store, &workspace.id).unwrap();
+        assert_eq!(restored.id, workspace.id);
+        assert_eq!(restored.name, workspace.name);
+        assert_eq!(restored.host_path, workspace.host_path);
+        assert_eq!(restored.session_count, 1);
+        assert_eq!(restored.launch.network, Some(true));
+        assert!(list_deleted(&store).unwrap().is_empty());
+        assert_eq!(for_path(&store, &host).unwrap().unwrap().id, workspace.id);
+        assert!(restore(&store, &workspace.id).is_err());
+        std::fs::remove_dir_all(store).unwrap();
+        std::fs::remove_dir_all(host).unwrap();
     }
 
     #[test]
@@ -575,6 +670,7 @@ mod tests {
         let mut json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
         json.as_object_mut().unwrap().remove("launch");
+        json.as_object_mut().unwrap().remove("deleted");
         std::fs::write(&meta_path, serde_json::to_string(&json).unwrap()).unwrap();
 
         let reread = get(&store, &workspace.id).unwrap();

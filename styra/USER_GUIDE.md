@@ -236,7 +236,13 @@ word, and `Esc` clears the filter before a second `Esc` backs out. The arrows
 Workspace on a new interaction, skipping its live work and Session list;
 `Ctrl+C` creates a Workspace for the current directory; `Ctrl+R` changes the
 selected Workspace's display name, and submitting a blank name restores its
-directory-name fallback. `?` still opens the key reference.
+directory-name fallback. `Ctrl+D` changes its directory. `Ctrl+X` deletes the
+selected Workspace: its files, Sessions, and checkouts stay on disk, but its
+running interactions stop and it disappears from normal lists and operations.
+`Ctrl+T` switches between active and deleted Workspaces; in the deleted list,
+`Ctrl+U` restores the selected Workspace so it can be used again. Restoration
+preserves its identity and history; stopped agents stay stopped.
+`?` still opens the key reference.
 
 `w` opens the worktree list: one row per session working in a linked
 checkout, named by the checkout, with the path, branch and Workspace of the

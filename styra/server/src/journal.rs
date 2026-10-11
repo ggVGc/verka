@@ -497,7 +497,7 @@ pub fn find_workspace_session(
     session_summary_at(&path, workspace_id).map(Some)
 }
 
-fn list_sessions_at(dir: &Path, workspace_id: &str) -> Result<Vec<SessionSummary>> {
+pub(crate) fn list_sessions_at(dir: &Path, workspace_id: &str) -> Result<Vec<SessionSummary>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }

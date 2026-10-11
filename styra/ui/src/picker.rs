@@ -341,6 +341,7 @@ pub enum SessionsPreview<'a> {
 /// Render the top-level Workspace picker. Entering a Workspace leads to its
 /// separate Session picker, so the right-hand pane previews that next screen
 /// for the row under the cursor: the Workspace's Sessions.
+#[allow(clippy::too_many_arguments)]
 pub fn render_workspace_picker(
     frame: &mut Frame,
     workspaces: &[WorkspaceSummary],
@@ -348,15 +349,18 @@ pub fn render_workspace_picker(
     interactions: &[InteractionSummary],
     preview: SessionsPreview<'_>,
     filter: Option<&str>,
+    show_deleted: bool,
 ) {
     let panes = workspace_picker_panes(frame.area());
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT))
-        .title(workspace_picker_title(filter));
+        .title(workspace_picker_title(filter, show_deleted));
     if workspaces.is_empty() {
         let empty = if filter.is_some_and(|filter| !filter.is_empty()) {
             "  no Workspaces match the filter \u{b7} Esc clears it"
+        } else if show_deleted {
+            "  no deleted Workspaces · Ctrl+T returns to active Workspaces"
         } else {
             "  no Workspaces found \u{b7} press Ctrl+C to create one in the current directory"
         };
@@ -379,7 +383,18 @@ pub fn render_workspace_picker(
     state.select(Some(selected));
     frame.render_stateful_widget(list, panes[0], &mut state);
     let workspace = workspaces.get(selected);
-    render_sessions_preview(frame, workspace, preview, interactions, panes[1]);
+    if show_deleted {
+        render_placeholder(
+            frame,
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Preserved Sessions "),
+            panes[1],
+            "  Restore this Workspace with Ctrl+U to access its Sessions.",
+        );
+    } else {
+        render_sessions_preview(frame, workspace, preview, interactions, panes[1]);
+    }
 }
 
 /// The Workspace picker's two panes: the list on the left, the selected
@@ -445,12 +460,22 @@ pub fn render_workspace_offer(frame: &mut Frame, directory: &Path) {
 /// The Workspace picker's title says what the list cannot be read without:
 /// the filter narrowing it. Every letter typed is part of that filter, so the
 /// rest of the keys live behind `?`, as they do for the session picker.
-fn workspace_picker_title(filter: Option<&str>) -> String {
+fn workspace_picker_title(filter: Option<&str>, show_deleted: bool) -> String {
     let filter = filter
         .filter(|filter| !filter.is_empty())
         .map(|filter| format!(" \u{b7} filter: {filter}"))
         .unwrap_or_default();
-    format!(" styra \u{b7} Workspaces{filter} \u{b7} type to filter \u{b7} ? keys ")
+    let scope = if show_deleted {
+        "Deleted Workspaces"
+    } else {
+        "Workspaces"
+    };
+    let action = if show_deleted {
+        "Ctrl+U restore"
+    } else {
+        "Ctrl+X delete"
+    };
+    format!(" styra \u{b7} {scope}{filter} \u{b7} type to filter \u{b7} Ctrl+T deleted \u{b7} {action} \u{b7} ? keys ")
 }
 
 /// One Workspace row. A Workspace holding an Interaction the server still
@@ -986,10 +1011,50 @@ mod tests {
             Terminal::new(TestBackend::new(WORKSPACE_PICKER_WIDTH as u16, 14)).unwrap();
         terminal
             .draw(|frame| {
-                render_workspace_picker(frame, workspaces, selected, interactions, preview, filter)
+                render_workspace_picker(
+                    frame,
+                    workspaces,
+                    selected,
+                    interactions,
+                    preview,
+                    filter,
+                    false,
+                )
             })
             .unwrap();
         screen_text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn deleted_workspace_picker_explains_restoration_and_handles_an_empty_list() {
+        let workspaces = vec![workspace_summary("deleted", "archived work", 2)];
+        let mut terminal = Terminal::new(TestBackend::new(180, 14)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_workspace_picker(
+                    frame,
+                    &workspaces,
+                    0,
+                    &[],
+                    SessionsPreview::Ready(&[]),
+                    None,
+                    true,
+                )
+            })
+            .unwrap();
+        let screen = screen_text(terminal.backend().buffer());
+        assert!(screen.contains("Deleted Workspaces"), "{screen}");
+        assert!(screen.contains("Ctrl+U restore"), "{screen}");
+        assert!(screen.contains("archived work"), "{screen}");
+        assert!(screen.contains("Restore this Workspace"), "{screen}");
+        terminal
+            .draw(|frame| {
+                render_workspace_picker(frame, &[], 0, &[], SessionsPreview::Ready(&[]), None, true)
+            })
+            .unwrap();
+        let screen = screen_text(terminal.backend().buffer());
+        assert!(screen.contains("no deleted Workspaces"), "{screen}");
+        assert!(screen.contains("Ctrl+T returns to active"), "{screen}");
     }
 
     #[test]
@@ -1129,6 +1194,7 @@ mod tests {
                     &[],
                     SessionsPreview::Ready(&[]),
                     None,
+                    false,
                 );
                 render_workspace_offer(frame, Path::new("/home/op/fresh"));
             })

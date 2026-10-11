@@ -332,6 +332,15 @@ pub enum Request {
     Health,
     CreateWorkspace(CreateWorkspace),
     ListWorkspaces,
+    /// Deleted Workspaces are available only for listing and restoration.
+    ListDeletedWorkspaces,
+    /// Soft delete: preserve metadata, Sessions, and checkouts on disk.
+    DeleteWorkspace {
+        id: String,
+    },
+    RestoreWorkspace {
+        id: String,
+    },
     Workspace {
         id: String,
     },

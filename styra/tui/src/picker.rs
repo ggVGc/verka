@@ -594,7 +594,8 @@ fn read_session_name(
 /// narrows it by name or host path, so the commands are on the arrows (or
 /// Ctrl+J/K), Enter to open a Workspace, and control chords — Ctrl+N to start a
 /// new interaction, Ctrl+C to create a Workspace for the current directory,
-/// Ctrl+R to rename, Ctrl+D to change its directory — with `?` for that list
+/// Ctrl+R to rename, Ctrl+D to change its directory, Ctrl+X to delete,
+/// Ctrl+T to list deleted Workspaces, Ctrl+U to restore — with `?` for that list
 /// on screen. Esc clears the filter, then backs out.
 ///
 /// The list is ordered once on entry, by [`sort_workspaces`]. A Workspace the
@@ -621,6 +622,7 @@ pub fn run_workspace_picker(
     sort_workspaces(workspaces, &interactions);
     label_recency(workspaces, &interactions, unix_now_ms());
     let mut all_workspaces = workspaces.to_vec();
+    let mut show_deleted = false;
     let mut filter = String::new();
     let mut workspaces = picker_workspaces(&all_workspaces, None);
     let mut selected = 0usize;
@@ -642,7 +644,9 @@ pub fn run_workspace_picker(
             }
             if settle_from.is_some_and(|since| since.elapsed() >= PREVIEW_SETTLE) {
                 settle_from = None;
-                preview_sessions = client.list_sessions(&preview_id).unwrap_or_default();
+                if !show_deleted {
+                    preview_sessions = client.list_sessions(&preview_id).unwrap_or_default();
+                }
             }
         }
         if refreshed.elapsed() >= LIVENESS_REFRESH {
@@ -675,6 +679,7 @@ pub fn run_workspace_picker(
                 preview,
                 Some(&filter),
                 asking,
+                show_deleted,
             )?;
         }
         let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
@@ -740,22 +745,75 @@ pub fn run_workspace_picker(
             continue;
         }
         match key {
+            k if keys::WORKSPACES_DELETED.matches(k) => {
+                show_deleted = !show_deleted;
+                all_workspaces = if show_deleted {
+                    client.list_deleted_workspaces()?
+                } else {
+                    client.list_workspaces()?
+                };
+                sort_workspaces(&mut all_workspaces, &interactions);
+                label_recency(&mut all_workspaces, &interactions, unix_now_ms());
+                filter.clear();
+                workspaces = picker_workspaces(&all_workspaces, None);
+                selected = 0;
+                preview_id.clear();
+                preview_sessions.clear();
+                settle_from = None;
+            }
+            k if (keys::WORKSPACES_DELETE.matches(k) && !show_deleted
+                || keys::WORKSPACES_RESTORE.matches(k) && show_deleted)
+                && !workspaces.is_empty() =>
+            {
+                let id = workspaces[selected].id.clone();
+                let result = if show_deleted {
+                    client.restore_workspace(&id)
+                } else {
+                    client.delete_workspace(&id)
+                };
+                match result {
+                    Ok(_) => {
+                        interactions = client.list_interactions().unwrap_or_default();
+                        all_workspaces.retain(|workspace| workspace.id != id);
+                        workspaces = picker_workspaces(&all_workspaces, Some(&filter));
+                        selected = selected.min(workspaces.len().saturating_sub(1));
+                        preview_id.clear();
+                        preview_sessions.clear();
+                        settle_from = None;
+                    }
+                    Err(error) => {
+                        // Keep failed operations visible without closing the picker.
+                        let title = format!("Workspace · {error:#}");
+                        read_workspace_text(
+                            terminal,
+                            &workspaces,
+                            selected,
+                            &interactions,
+                            presentation::SessionsPreview::Ready(&[]),
+                            Some(&filter),
+                            &title,
+                            "",
+                            0,
+                        )?;
+                    }
+                }
+            }
             k if keys::WORKSPACES_NEXT.matches(k) => {
                 selected = (selected + 1).min(workspaces.len().saturating_sub(1));
             }
             k if keys::WORKSPACES_PREV.matches(k) => selected = selected.saturating_sub(1),
-            k if keys::WORKSPACES_OPEN.matches(k) && !workspaces.is_empty() => {
+            k if keys::WORKSPACES_OPEN.matches(k) && !show_deleted && !workspaces.is_empty() => {
                 return Ok(Some(WorkspaceChoice::Existing(
                     workspaces[selected].clone(),
                 )));
             }
-            k if keys::WORKSPACES_NEW.matches(k) && !workspaces.is_empty() => {
+            k if keys::WORKSPACES_NEW.matches(k) && !show_deleted && !workspaces.is_empty() => {
                 return Ok(Some(WorkspaceChoice::New(workspaces[selected].clone())));
             }
             k if keys::WORKSPACES_CREATE.matches(k) => {
                 return Ok(Some(WorkspaceChoice::CreateCurrentDirectory))
             }
-            k if keys::WORKSPACES_RENAME.matches(k) && !workspaces.is_empty() => {
+            k if keys::WORKSPACES_RENAME.matches(k) && !show_deleted && !workspaces.is_empty() => {
                 if let Some(name) = read_workspace_text(
                     terminal,
                     &workspaces,
@@ -781,7 +839,10 @@ pub fn run_workspace_picker(
                     }
                 }
             }
-            k if keys::WORKSPACES_DIRECTORY.matches(k) && !workspaces.is_empty() => {
+            k if keys::WORKSPACES_DIRECTORY.matches(k)
+                && !show_deleted
+                && !workspaces.is_empty() =>
+            {
                 // A directory that does not resolve keeps the prompt open with
                 // what was typed and why it failed, so a typo is fixed in place
                 // rather than retyped.

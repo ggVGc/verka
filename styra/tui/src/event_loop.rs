@@ -1421,6 +1421,13 @@ fn run_rounds(
                 let Some(choice) =
                     picker::run_workspace_picker(terminal, client, &mut workspaces, None)?
                 else {
+                    if !client
+                        .list_workspaces()?
+                        .iter()
+                        .any(|workspace| workspace.id == workspace_id)
+                    {
+                        return Ok(RunOutcome::Quit);
+                    }
                     continue;
                 };
                 let workspace = match choice {
@@ -1488,6 +1495,13 @@ fn run_rounds(
                         },
                         open_interactions: false,
                     });
+                }
+                if !client
+                    .list_workspaces()?
+                    .iter()
+                    .any(|workspace| workspace.id == workspace_id)
+                {
+                    return Ok(RunOutcome::Quit);
                 }
             }
             Some(Request::OpenSession(id)) => return Ok(RunOutcome::OpenSession(id)),
