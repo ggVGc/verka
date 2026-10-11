@@ -242,6 +242,10 @@ mod tests {
             "Approved asynchronous integration"
         );
         assert!(!fixture.path().exists());
+        assert_eq!(
+            journal::read_session_completed(&fixture.session).unwrap(),
+            CompletionState::Sealed
+        );
     }
 
     #[test]
@@ -371,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn integration_rebases_squashes_cleans_up_and_completes() {
+    fn integration_rebases_squashes_cleans_up_and_seals() {
         let fixture = Fixture::new();
         fixture.feature();
         std::fs::write(fixture.host.join("upstream"), "upstream\n").unwrap();
@@ -398,8 +402,20 @@ mod tests {
             .is_none());
         assert_eq!(
             journal::read_session_completed(&fixture.session).unwrap(),
-            CompletionState::Completed
+            CompletionState::Sealed
         );
+        assert!(
+            fixture
+                .state
+                .integration_result(&fixture.id)
+                .unwrap()
+                .unwrap()
+                .completed
+        );
+        assert!(fixture
+            .state
+            .set_session_completion(&fixture.id, CompletionState::Active)
+            .is_err());
         assert!(SystemGit
             .commit(&fixture.host, &fixture.checkout.branch)
             .unwrap()
@@ -479,6 +495,31 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_retry_after_worktree_removal_seals() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        let mut progress = fixture.progress();
+        progress.commit = Some(
+            SystemGit
+                .squash_merge(&fixture.host, &fixture.checkout.branch, "approved message")
+                .unwrap(),
+        );
+        SystemGit
+            .remove_worktree(&fixture.host, fixture.path())
+            .unwrap();
+        journal::clear_session_worktree(&fixture.session).unwrap();
+        fixture
+            .state
+            .run_integration(&fixture.id, progress)
+            .unwrap();
+        assert_eq!(
+            journal::read_session_completed(&fixture.session).unwrap(),
+            CompletionState::Sealed
+        );
+        assert_eq!(git(&fixture.host, &["rev-list", "--count", "main"]), "2");
+    }
+
+    #[test]
     fn cleanup_retry_does_not_create_another_squash_commit() {
         let fixture = Fixture::new();
         fixture.feature();
@@ -511,7 +552,7 @@ mod tests {
         );
         assert_eq!(
             journal::read_session_completed(&fixture.session).unwrap(),
-            CompletionState::Completed
+            CompletionState::Sealed
         );
     }
 }
@@ -660,8 +701,10 @@ impl ServerState {
         }
         let progress: Progress = serde_json::from_slice(&std::fs::read(record)?)?;
         Ok(Some(progress.result.unwrap_or_else(|| {
-            let completed =
-                session.completed == CompletionState::Completed && progress.commit.is_some();
+            let completed = matches!(
+                session.completed,
+                CompletionState::Completed | CompletionState::Sealed
+            ) && progress.commit.is_some();
             crate::protocol::IntegrationResult {
                 completed,
                 message: if completed {
@@ -924,7 +967,7 @@ impl ServerState {
         let (session, checkout, source) = self.integration_checkout(id)?;
         let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
         if progress.commit.is_some() && checkout.path.is_none() {
-            return self.set_session_completion(id, CompletionState::Completed);
+            return self.set_session_completion(id, CompletionState::Sealed);
         }
         let path = checkout
             .path
@@ -1030,7 +1073,7 @@ impl ServerState {
             worktrees.remove(path)?;
         }
         journal::clear_session_worktree(&session.path)?;
-        self.set_session_completion(id, CompletionState::Completed)
+        self.set_session_completion(id, CompletionState::Sealed)
     }
 
     fn resolve_integration_conflicts(&self, id: &str, source: &str, path: &Path) -> Result<()> {

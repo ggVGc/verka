@@ -478,7 +478,7 @@ adds a newline, `Enter` starts integration, and `Esc` cancels the prompt.
 Integration rebases onto the source branch first. If it encounters conflicts,
 Styra asks the same interaction to resolve them and finish the rebase. After a
 successful resolution it squash-commits into the source branch, removes the
-interaction's worktree, and marks the interaction Completed. Its branch and
+interaction's worktree, and marks the interaction Sealed. Its branch and
 conversation remain available. Progress and failures appear in the interaction
 log and the final result appears as a notice.
 
