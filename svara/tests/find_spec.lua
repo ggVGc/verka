@@ -153,7 +153,7 @@ do
   assert(create.data.workspace_id == workspace.id)
   assert(create.data.message == "where is auth?")
   assert(create.data.contract == "files", vim.inspect(create.data))
-  assert(not create.data.focus, "Styra was switched away to the question")
+  assert(create.data.focus == true, "Styra was not asked to show the question")
   for _, request in ipairs(host.sent) do
     assert(request.operation ~= "send_message", "an existing interaction was asked")
   end
@@ -297,6 +297,7 @@ do
   -- The command's own model.
   assert(create.data.selection.model == "gpt-5.6-terra", vim.inspect(create.data.selection))
   assert(create.data.contract == "files")
+  assert(create.data.focus == true, "Styra was not asked to show the edit")
   assert(not create.data.create_worktree, "the edit was made away from the open files")
   assert(vim.startswith(create.data.message, "check the expiry too\n\nSource: src/auth.rs:12-14\n\n"))
   assert(create.data.message:find(core.edit_instructions, 1, true), create.data.message)

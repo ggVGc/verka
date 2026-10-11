@@ -333,7 +333,8 @@ contract, followed by the file, line and column being viewed, as `:Svara`
 sends it. So it starts from nothing but itself, never lands in the middle of
 a turn, and leaves the interaction selected with `:Svara` as it was. It runs
 on the model chosen for questions (see `:SvaraEdit` below); with none to
-take, the same picker comes first. Styra is not switched to it. Once it has answered, it is marked
+take, the same picker comes first. Styra switches to the new interaction when
+the interaction it is showing belongs to the same Workspace. Once it has answered, it is marked
 completed, which moves it out of the way in Styra's listing while its history
 stays readable. A reply that missed its contract still counts as an answer.
 An interaction that failed or ended without answering stays active, so you can

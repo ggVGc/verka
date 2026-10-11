@@ -394,6 +394,7 @@ local function files_turn(prompt, options, on_done)
   local session, session_error = styra:create_session(workspace.id, selection, {
     message = prompt,
     contract = contract,
+    focus = true,
   })
   if not session then
     return nil, session_error
@@ -415,8 +416,8 @@ end
 --- in the middle of a turn already under way, and leaves the conversation the
 --- operator is having elsewhere as it was. It runs under the selection
 --- `start` would use for `options.kind` (`"ask"` from `:SvaraAsk`), or
---- `options.selection`. A Styra showing the Workspace is not switched to it,
---- because the answer is wanted here.
+--- `options.selection`. A Styra showing an interaction in the same Workspace
+--- switches to the new interaction.
 ---
 --- Once it has answered, the interaction is marked completed: it was asked
 --- one question, and the answer is all there is to do with it. That takes it
