@@ -16,6 +16,24 @@ local M = {}
 -- in the same Workspace.  Keeping this table here consequently makes a choice
 -- last for this Neovim session and no longer.
 local selected_interactions = {}
+local recent_interactions = {}
+
+local function remember_interaction(session, prompt, kind)
+  local recent = recent_interactions[session.workspace_id] or {}
+  recent_interactions[session.workspace_id] = recent
+  for index, interaction in ipairs(recent) do
+    if interaction.id == session.id then
+      table.remove(recent, index)
+      break
+    end
+  end
+  table.insert(recent, 1, {
+    id = session.id, session = session, prompt = prompt, kind = kind,
+  })
+  if #recent > 20 then
+    table.remove(recent)
+  end
+end
 local accepting_activity = { pending = true, running = true, background = true }
 
 -- The commands that start an interaction, each of which may be set to a model
@@ -207,13 +225,17 @@ function M.start(prompt, options)
       return nil, selection_error
     end
   end
-  return styra:create_session(workspace.id, selection, {
+  local session, session_error = styra:create_session(workspace.id, selection, {
     message = prompt,
     name = options.name,
     contract = options.contract,
     create_worktree = options.create_worktree,
     focus = true,
   })
+  if session then
+    remember_interaction(session, prompt, "new")
+  end
+  return session, session_error
 end
 
 --- The live interactions in the Workspace covering `directory`.
@@ -331,6 +353,21 @@ function M.quickfix_items(locations, interaction, workspace)
   return items
 end
 
+local function files_answer(styra, session, workspace, on_done)
+  local api = require("svara.api")
+  return function(locations, answer, missed)
+    local completion_error
+    if answer then
+      completion_error =
+        select(2, styra:set_completed(session.id, api.protocol.CompletionState.COMPLETED))
+    end
+    if not locations then
+      return on_done(nil, missed, answer, completion_error)
+    end
+    on_done(M.quickfix_items(locations, session, workspace), nil, answer, completion_error)
+  end
+end
+
 --- Start a new interaction whose first turn is answered with file locations,
 --- and hand them over as quickfix items once it is; `find` and `edit` are
 --- this with a different first turn.
@@ -361,22 +398,12 @@ local function files_turn(prompt, options, on_done)
   if not session then
     return nil, session_error
   end
+  remember_interaction(session, prompt, options.kind or "ask")
   local handle = styra:await_answer(session.id, {
-    -- A new interaction's journal is all this turn's.
     after = api.given(session.updates_after) or 0,
     contract = contract,
     interval = options.interval,
-  }, function(locations, answer, missed)
-    local completion_error
-    if answer then
-      completion_error =
-        select(2, styra:set_completed(session.id, api.protocol.CompletionState.COMPLETED))
-    end
-    if not locations then
-      return on_done(nil, missed, answer, completion_error)
-    end
-    on_done(M.quickfix_items(locations, session, workspace), nil, answer, completion_error)
-  end)
+  }, files_answer(styra, session, workspace, on_done))
   return handle, nil, session
 end
 
@@ -452,7 +479,77 @@ function M.edit(instruction, options, on_done)
   if type(instruction) ~= "string" or instruction:match("^%s*$") then
     return nil, "an edit needs an instruction"
   end
-  return files_turn(M.edit_prompt(instruction), options, on_done)
+  return files_turn(M.edit_prompt(instruction), vim.tbl_extend("force", options, { kind = options.kind or "edit" }), on_done)
+end
+
+--- The last twenty interactions Svara started here, most recently used first.
+--- Kept for this Neovim session, including interactions already completed.
+function M.recent_interactions_for_directory(directory, options)
+  local styra, err = require("svara.api").open(options or {})
+  if not styra then
+    return nil, nil, err
+  end
+  local workspace, workspace_error = styra:workspace_for_path(directory)
+  if not workspace then
+    return nil, nil, workspace_error
+  end
+  return vim.deepcopy(recent_interactions[workspace.id] or {}), workspace
+end
+
+--- Continue a recent interaction, resuming its stopped agent when needed.
+--- Ask and Edit follow-ups return file locations and complete again afterward.
+function M.continue_interaction(interaction, message, options, on_done)
+  options = options or {}
+  if type(message) ~= "string" or message:match("^%s*$") then
+    return nil, "a continuation needs a message"
+  end
+  local api = require("svara.api")
+  local styra, err = api.open(options)
+  if not styra then
+    return nil, err
+  end
+  local workspace, workspace_error = styra:workspace_for_path(options.directory or (vim.uv or vim.loop).cwd())
+  if not workspace then
+    return nil, workspace_error
+  end
+  local session = interaction.session
+  if workspace.id ~= session.workspace_id then
+    return nil, "the interaction belongs to another Workspace"
+  end
+  local live, live_error = styra:interactions()
+  if not live then
+    return nil, live_error
+  end
+  local accepting = false
+  for _, current in ipairs(live) do
+    if current.id == interaction.id and accepting_activity[current.activity] then
+      accepting = true
+      break
+    end
+  end
+  if not accepting then
+    local resumed, resume_error = styra:resume_session(interaction.id)
+    if not resumed then
+      return nil, resume_error
+    end
+    session = resumed
+  end
+  if interaction.kind == "new" then
+    local sent, send_error = styra:send_message(session.id, message)
+    if sent then
+      remember_interaction(session, message, interaction.kind)
+    end
+    return sent, send_error, session
+  end
+  local prompt = interaction.kind == "edit" and M.edit_prompt(message) or message
+  local handle, ask_error = styra:ask(session.id, prompt, {
+    contract = api.protocol.Contract.FILES,
+    interval = options.interval,
+  }, files_answer(styra, session, workspace, on_done))
+  if handle then
+    remember_interaction(session, prompt, interaction.kind)
+  end
+  return handle, ask_error, session
 end
 
 --- What Svara would do if a command ran in `directory`, as one table.

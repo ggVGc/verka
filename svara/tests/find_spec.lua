@@ -312,6 +312,95 @@ do
   assert(missing_error == "an edit needs an instruction", missing_error)
 end
 
+-- Continue a completed edit: resume it, watch only the new turn, complete again.
+
+do
+  local recent_host = fake_host({ ok({ type = "workspace_for_path", data = workspace }) })
+  local recent = assert(core.recent_interactions_for_directory(home, { socket = "/tmp/test.sock", host = recent_host }))
+  assert(recent[1].id == "styra-13" and recent[1].kind == "edit")
+  assert(recent[2].id == "styra-12", "recent starts should be newest first")
+  local interaction = recent[1]
+  local resumed = created(interaction.id)
+  resumed.response.type = "session_resumed"
+  local host = fake_host({
+    ok({ type = "workspace_for_path", data = workspace }),
+    ok({ type = "interactions", data = {} }),
+    resumed,
+    -- This is the completion from the previous turn; it must not answer this one.
+    ok({ type = "updates", data = sequenced(8, {
+      { type = "event", data = { type = "turn_completed", usage = {} } },
+    }) }),
+    ok({ type = "accepted" }),
+    ok({ type = "updates", data = { updates = {}, next = 9 } }),
+    ok({ type = "updates", data = sequenced(9, {
+      { type = "event", data = { type = "turn_completed", usage = {} } },
+    }) }),
+    ok({ type = "answer", data = {
+      contract = "files", source = "updated",
+      value = { contract = "files", value = { { path = "src/auth.rs", line = 14 } } },
+    } }),
+    ok({ type = "accepted" }),
+  })
+  local done
+  local handle, err, session = core.continue_interaction(interaction, "also check revocation", {
+    directory = home, socket = "/tmp/test.sock", host = host,
+  }, function(items) done = items end)
+  assert(handle, err)
+  assert(session.id == interaction.id)
+  assert(host.sent[3].operation == "resume_session")
+  assert(host.sent[3].data.id == interaction.id)
+  assert(host.sent[5].operation == "send_message")
+  assert(host.sent[5].data.message.contract == "files")
+  assert(host.sent[5].data.message.text == core.edit_prompt("also check revocation"), vim.inspect(host.sent[5]))
+  assert(host.sent[6].data.after == 9)
+  assert(done == nil, "the old completion was mistaken for the follow-up")
+  host.tick()
+  assert(#done == 1 and done[1].lnum == 14)
+  assert(host.sent[#host.sent].operation == "set_session_completed")
+  for _, request in ipairs(host.sent) do
+    assert(request.operation ~= "create_session", "the follow-up started a new conversation")
+  end
+
+  local refreshed_host = fake_host({ ok({ type = "workspace_for_path", data = workspace }) })
+  local refreshed = assert(core.recent_interactions_for_directory(home, {
+    socket = "/tmp/test.sock", host = refreshed_host,
+  }))
+  assert(refreshed[1].id == interaction.id)
+  assert(refreshed[1].prompt == core.edit_prompt("also check revocation"))
+
+  local live = fake_host({
+    ok({ type = "workspace_for_path", data = workspace }),
+    ok({ type = "interactions", data = { { id = "new-1", activity = "pending" } } }),
+    ok({ type = "accepted" }),
+  })
+  local sent, send_error = core.continue_interaction({
+    id = "new-1", kind = "new", session = { id = "new-1", workspace_id = workspace.id },
+  }, "keep going", { directory = home, socket = "/tmp/test.sock", host = live })
+  assert(sent, send_error)
+  assert(#live.sent == 3 and live.sent[3].operation == "send_message")
+
+  -- Resume failures send nothing.
+  local failed = fake_host({
+    ok({ type = "workspace_for_path", data = workspace }),
+    ok({ type = "interactions", data = {} }),
+    { status = "error", error = "agent has not exited yet" },
+  })
+  local missing, missed = core.continue_interaction(interaction, "retry", {
+    directory = home, socket = "/tmp/test.sock", host = failed,
+  }, function() error("unexpected answer") end)
+  assert(not missing and missed == "agent has not exited yet")
+  assert(#failed.sent == 3)
+
+  local other_workspace = vim.tbl_extend("force", workspace, { id = "other" })
+  local other = fake_host({ ok({ type = "workspace_for_path", data = other_workspace }) })
+  assert(#assert(core.recent_interactions_for_directory(home, { socket = "/tmp/test.sock", host = other })) == 0)
+  other = fake_host({ ok({ type = "workspace_for_path", data = other_workspace }) })
+  local wrong, wrong_error = core.continue_interaction(interaction, "wrong workspace", {
+    directory = home, socket = "/tmp/test.sock", host = other,
+  }, function() end)
+  assert(not wrong and wrong_error == "the interaction belongs to another Workspace")
+end
+
 -- Where the operator is: the cursor, or the lines selected -----------------
 
 do

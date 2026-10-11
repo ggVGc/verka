@@ -331,7 +331,10 @@ end, {
 --- and `spec.nothing` are the notes for a request started and a box closed.
 local function files_command(spec, command)
   local core = require("svara.core")
-  local directory, directory_error = viewed_directory()
+  local directory, directory_error = spec.directory, nil
+  if not directory then
+    directory, directory_error = viewed_directory()
+  end
   if not directory then
     vim.notify("Svara: " .. directory_error, vim.log.levels.ERROR)
     return
@@ -339,7 +342,7 @@ local function files_command(spec, command)
   -- Taken now, so the location is where the operator was when they asked,
   -- not wherever a prompt or a picker left the cursor. A range given to the
   -- command — a visual selection, usually — is the location instead.
-  local location = core.viewing(0, command.range > 0 and { command.line1, command.line2 } or nil)
+  local location = spec.location or core.viewing(0, command.range > 0 and { command.line1, command.line2 } or nil)
 
   --- `progress` is the message box's, when the request was typed in one: it
   --- closes once the interaction is up, or hands the request back to be
@@ -383,6 +386,21 @@ local function files_command(spec, command)
     end)
   end
 
+  if spec.interaction then
+    require("svara.compose").open(vim.tbl_extend("force", spec.box, {
+      initial = command.args,
+      worktree = false,
+      interaction = spec.interaction.id,
+      on_cancel = function()
+        vim.notify("Svara: nothing sent", vim.log.levels.INFO)
+      end,
+      on_send = function(typed, _, progress)
+        run(typed, nil, progress)
+      end,
+    }))
+    return
+  end
+
   -- Every request starts an interaction, so it needs a model the way
   -- `:SvaraNew` does, and with nothing to take one from it is asked for the
   -- same way rather than refused.
@@ -423,8 +441,8 @@ local function files_command(spec, command)
   }))
 end
 
-vim.api.nvim_create_user_command("SvaraAsk", function(command)
-  files_command({
+local function ask_spec()
+  return {
     kind = "ask",
     run = require("svara.core").find,
     box = {
@@ -442,7 +460,11 @@ vim.api.nvim_create_user_command("SvaraAsk", function(command)
       )
       vim.cmd("botright copen")
     end,
-  }, command)
+  }
+end
+
+vim.api.nvim_create_user_command("SvaraAsk", function(command)
+  files_command(ask_spec(), command)
 end, {
   nargs = "*",
   range = true,
@@ -461,8 +483,8 @@ local function jump_to_edit(edit)
   vim.cmd("cfirst")
 end
 
-vim.api.nvim_create_user_command("SvaraEdit", function(command)
-  files_command({
+local function edit_spec()
+  return {
     kind = "edit",
     run = require("svara.core").edit,
     box = {
@@ -492,11 +514,79 @@ vim.api.nvim_create_user_command("SvaraEdit", function(command)
         vim.log.levels.INFO
       )
     end,
-  }, command)
+  }
+end
+
+vim.api.nvim_create_user_command("SvaraEdit", function(command)
+  files_command(edit_spec(), command)
 end, {
   nargs = "*",
   range = true,
   desc = "Have a new Styra interaction make an edit at the cursor or selection",
+})
+
+vim.api.nvim_create_user_command("SvaraContinue", function(command)
+  local core = require("svara.core")
+  local directory, directory_error = viewed_directory()
+  if not directory then
+    vim.notify("Svara: " .. directory_error, vim.log.levels.ERROR)
+    return
+  end
+  local location = core.viewing(0, command.range > 0 and { command.line1, command.line2 } or nil)
+  local interactions, _, err = core.recent_interactions_for_directory(directory)
+  if not interactions or #interactions == 0 then
+    vim.notify("Svara: " .. (err or "no recent interactions in this Workspace"),
+      interactions and vim.log.levels.WARN or vim.log.levels.ERROR)
+    return
+  end
+  vim.ui.select(interactions, {
+    prompt = "Continue recent Svara interaction",
+    format_item = function(interaction)
+      local prompt = interaction.prompt:match("[^\r\n]+") or ""
+      return string.format("%s · %s: %s", interaction.id, interaction.kind, prompt)
+    end,
+  }, function(interaction)
+    if not interaction then
+      return
+    end
+    if interaction.kind ~= "new" then
+      local spec = interaction.kind == "edit" and edit_spec() or ask_spec()
+      spec.interaction, spec.directory, spec.location = interaction, directory, location
+      spec.run = function(message, options, on_done)
+        return core.continue_interaction(interaction, message, options, on_done)
+      end
+      files_command(spec, command)
+      return
+    end
+    require("svara.compose").open({
+      initial = command.args,
+      worktree = false,
+      interaction = interaction.id,
+      on_cancel = function()
+        vim.notify("Svara: nothing sent", vim.log.levels.INFO)
+      end,
+      on_send = function(typed, _, progress)
+        require("svara.nvim").run(function()
+          local called, sent, send_error = pcall(core.continue_interaction, interaction,
+            core.prompt_from_view(typed, location), { directory = directory })
+          if not called then
+            sent, send_error = nil, tostring(sent)
+          end
+          if not sent then
+            progress.failed(send_error)
+            vim.notify("Svara: " .. send_error, vim.log.levels.ERROR)
+            return
+          end
+          progress.done()
+          vim.notify("Svara: message sent", vim.log.levels.INFO)
+        end)
+      end,
+    })
+  end)
+end, {
+  nargs = "*",
+  range = true,
+  desc = "Continue a recent interaction started by Svara in this Workspace",
 })
 
 vim.api.nvim_create_user_command("SvaraJump", function()

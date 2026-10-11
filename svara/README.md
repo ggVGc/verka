@@ -384,6 +384,20 @@ places the last finished edit changed the quickfix list and goes to the first.
 From Lua it is `require("svara").edit(instruction, options, on_done)`, called
 like `find`.
 
+`:SvaraContinue` opens a picker of the twenty most recently used interactions
+started by `:SvaraNew`, `:SvaraAsk` or `:SvaraEdit` in the Workspace covering
+the viewed file. The list is kept until Neovim exits, with the newest first.
+Choose an interaction, then write a follow-up in the message box; text after
+`:SvaraContinue` prefills the draft. The current cursor or command range is
+included as `Source`, just as with Ask and Edit.
+
+Completed or stopped interactions are resumed with their existing history
+and model. Follow-ups to Ask put the new locations in quickfix; follow-ups to
+Edit reload changed buffers and update `:SvaraJump`. Both are marked completed
+again once they answer. Follow-ups to New send a message to the conversation.
+A failed resume or send leaves the draft available to retry. Cancelling the
+picker or message box sends nothing.
+
 Each of `:SvaraNew`, `:SvaraAsk` and `:SvaraEdit` remembers its own model. A
 model chosen with `Ctrl+L` in one is stored in `vim.g.svara_new_selection`,
 `vim.g.svara_ask_selection` or `vim.g.svara_edit_selection`, and the others
@@ -436,5 +450,6 @@ nvim --headless -u NONE -l tests/info_spec.lua    # what :SvaraInfo answers
 nvim --headless -u NONE -l tests/picker_spec.lua  # the model list :SvaraNew offers, :SvaraEdit, :SvaraJump
 nvim --headless -u NONE -l tests/compose_spec.lua # the window its prompt and model are chosen in
 nvim --headless -u NONE -l tests/send_spec.lua    # :Svara's message box and interaction picker
+nvim --headless -u NONE -l tests/continue_spec.lua # recent interactions and follow-ups
 nvim --headless -u NONE -l tests/find_spec.lua    # what :SvaraAsk and :SvaraEdit ask, the quickfix items, the float
 ```

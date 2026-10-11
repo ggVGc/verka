@@ -55,6 +55,9 @@ M.find = require("svara.core").find
 --- quickfix items; see `svara.core`.
 M.edit = require("svara.core").edit
 
+M.recent_interactions_for_directory = require("svara.core").recent_interactions_for_directory
+M.continue_interaction = require("svara.core").continue_interaction
+
 --- What Svara would do in a directory — Workspace, model, selected
 --- interaction — as a table, and as lines to show; see `svara.core`.
 M.info = require("svara.core").info
