@@ -4682,11 +4682,18 @@ fn worktree_mounts(worktrees: Option<&crate::worktree::Worktrees>) -> Vec<MountS
 /// Workspace's own `driva.toml` when it has one, otherwise Driva's built-ins.
 fn workspace_driva_config(workspace: &Path) -> Result<driva::Config> {
     let candidate = workspace.join("driva.toml");
-    if candidate.exists() {
-        driva::Config::load(&candidate)
+    let mut config = if candidate.exists() {
+        driva::Config::load(&candidate)?
     } else {
-        Ok(driva::Config::default())
+        driva::Config::default()
+    };
+    if let Some(mut rust) = config.template("rust") {
+        rust.environment
+            .entry("CARGO_TARGET_DIR".into())
+            .or_insert_with(|| "/tmp/cargo_target".into());
+        config.templates.insert("rust".into(), rust);
     }
+    Ok(config)
 }
 
 /// Turn the operator's mount requests into concrete bind mounts.
