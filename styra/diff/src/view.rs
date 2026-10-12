@@ -6,7 +6,7 @@
 //! started from — and the worktree they are read in. The header stays put
 //! while the diff below it scrolls.
 
-use crate::files::{filtered_file_diffs, FileDiff};
+use crate::files::{filtered_file_diffs, FileChange, FileDiff};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -133,8 +133,8 @@ struct Directory<'a> {
 
 enum Node<'a> {
     Directory(&'a str, Directory<'a>),
-    /// A changed file: its patch's index in the whole diff, and its name.
-    File(usize, &'a str),
+    /// A changed file: its patch's index, name, and change kind.
+    File(usize, &'a str, FileChange),
 }
 
 impl<'a> Directory<'a> {
@@ -162,7 +162,9 @@ impl<'a> Directory<'a> {
                 };
                 directory = child;
             }
-            directory.children.push(Node::File(*index, name));
+            directory
+                .children
+                .push(Node::File(*index, name, file.change()));
         }
         root
     }
@@ -171,8 +173,23 @@ impl<'a> Directory<'a> {
         let indent = "  ".repeat(depth);
         for child in &self.children {
             match child {
-                Node::File(index, name) => {
-                    rows.push((Some(*index), Line::from(format!("{indent}{name}"))));
+                Node::File(index, name, change) => {
+                    let color = match change {
+                        FileChange::Added | FileChange::Copied => theme::SUCCESS,
+                        FileChange::Deleted => theme::ERROR,
+                        FileChange::Moved => theme::DIRECTORY_NAME,
+                        _ => theme::WARNING,
+                    };
+                    rows.push((
+                        Some(*index),
+                        Line::from(vec![
+                            Span::raw(format!("{indent}{name}")),
+                            Span::styled(
+                                format!(" [{}]", change.marker()),
+                                Style::default().fg(color),
+                            ),
+                        ]),
+                    ));
                 }
                 Node::Directory(name, directory) => {
                     let mut path = (*name).to_owned();
@@ -294,19 +311,32 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
     } else {
         body
     };
+    let selected_file = view
+        .per_file
+        .then(|| {
+            files
+                .iter()
+                .find(|(index, _)| *index == view.selected_file)
+                .or_else(|| files.first())
+                .map(|(_, file)| file)
+        })
+        .flatten();
+    let body = if let Some(file) = selected_file {
+        let [info, patch] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
+        frame.render_widget(Paragraph::new(file_info(file)), info);
+        patch
+    } else {
+        body
+    };
     let shown = if view.per_file {
-        files
-            .iter()
-            .find(|(index, _)| *index == view.selected_file)
-            .or_else(|| files.first())
-            .map(|(_, file)| Ok(file.patch))
-            .unwrap_or_else(|| {
-                if view.search.query.is_some_and(|query| !query.is_empty()) && view.diff.is_ok() {
-                    Err("no matching files")
-                } else {
-                    view.diff
-                }
-            })
+        selected_file.map(|file| Ok(file.patch)).unwrap_or_else(|| {
+            if view.search.query.is_some_and(|query| !query.is_empty()) && view.diff.is_ok() {
+                Err("no matching files")
+            } else {
+                view.diff
+            }
+        })
     } else {
         view.diff
     };
@@ -339,6 +369,34 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         },
         file_list_offset,
     }
+}
+
+/// Keep the selected file's explanation visible while its patch scrolls.
+fn file_info(file: &FileDiff<'_>) -> Line<'static> {
+    let source = file
+        .patch
+        .lines()
+        .take_while(|line| !line.starts_with("@@"))
+        .find_map(|line| {
+            line.strip_prefix("rename from ")
+                .or_else(|| line.strip_prefix("copy from "))
+        });
+    let mut description = file.change().label().to_owned();
+    if let Some(source) = source {
+        description.push_str(&format!(" from {source}"));
+    }
+    Line::from(vec![
+        Span::styled(
+            format!(" {}", file.path),
+            Style::default()
+                .fg(theme::TEXT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" · {description}"),
+            Style::default().fg(theme::ADDITIONAL_INFO),
+        ),
+    ])
 }
 
 /// What one row of the view shows.
@@ -761,11 +819,11 @@ index 1111111..2222222 100644
             format!("{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old second\n+new second\n");
         let ((output, _), viewport) = file_screen(Ok(&text), Some("main"), 0, true, 1);
         let rows = output.lines().collect::<Vec<_>>();
-        // The panel's border, then "› " + the widest row ("▾ src/", 6) + two
-        // columns of padding + the tree's own border: the patch starts at 12.
-        let tree = |row: &&str| row.chars().take(12).collect::<String>();
-        let patch = |row: &&str| row.chars().skip(12).collect::<String>();
-        for name in ["▾ src/", "  a.rs", "› b.txt"] {
+        // The panel border, marker, widest row ("  a.rs [M]", 10),
+        // padding and tree border put the patch at column 16.
+        let tree = |row: &&str| row.chars().take(16).collect::<String>();
+        let patch = |row: &&str| row.chars().skip(16).collect::<String>();
+        for name in ["▾ src/", "  a.rs [M]", "› b.txt"] {
             assert!(rows.iter().any(|row| tree(row).contains(name)), "{output}");
         }
         assert!(
@@ -779,7 +837,43 @@ index 1111111..2222222 100644
         );
         assert!(!output.contains("fn c()"), "{output}");
         assert!(output.contains("2 files changed"), "{output}");
-        assert_eq!(viewport, 10);
+        assert_eq!(viewport, 9);
+    }
+
+    #[test]
+    fn file_list_shows_markers_and_explains_the_selected_change() {
+        let text = "diff --git a/a b/a\nnew file mode 100644\n\
+            diff --git a/b b/b\ndeleted file mode 100644\n\
+            diff --git a/old b/c\nsimilarity index 100%\nrename from old\nrename to c\n\
+            diff --git a/old2 b/d\nsimilarity index 90%\nrename from old2\nrename to d\n@@ -1 +1 @@\n-old\n+new\n";
+        let ((output, _), _) = file_screen(Ok(text), Some("main"), 0, true, 0);
+        for label in ["a [A]", "b [D]", "c [R]", "d [R+]"] {
+            assert!(output.contains(label), "{output}");
+        }
+        assert!(output.contains("a · added"), "{output}");
+        let ((output, _), _) = file_screen(Ok(text), Some("main"), u16::MAX, true, 3);
+        assert!(
+            output.contains("d · moved with edits from old2"),
+            "{output}"
+        );
+        assert!(!output.contains("a · added"), "{output}");
+        let ((output, _), _) = filtered_screen(
+            Ok(text),
+            Some("main"),
+            0,
+            true,
+            0,
+            SearchView {
+                query: Some("c"),
+                ..Default::default()
+            },
+        );
+        assert!(output.contains("c · moved from old"), "{output}");
+        let files = filtered_file_diffs(text, Some("c"));
+        let rows = file_tree_rows(&files, true);
+        assert_eq!(rows[0].0, Some(2));
+        assert_eq!(rows[0].1.to_string(), "c [R]");
+        assert_eq!(rows[0].1.spans[1].style.fg, Some(theme::DIRECTORY_NAME));
     }
 
     /// The tree fits its longest row, with a little room after it, but a
@@ -797,8 +891,8 @@ index 1111111..2222222 100644
                 .map(|(index, line)| (index, Line::from(line.to_string())))
                 .collect::<Vec<_>>()
         };
-        // "  main.rs" is the longest row: 9, + marker 2 + padding 2 + border 1.
-        assert_eq!(file_tree_width(&rows(&["src/main.rs", "a.rs"]), 120), 14);
+        // "  main.rs [M]": 13, + marker 2 + padding 2 + border 1.
+        assert_eq!(file_tree_width(&rows(&["src/main.rs", "a.rs"]), 120), 18);
         let deep = ["a/very/deep/directory/structure/with/a_long_file_name.rs"];
         assert_eq!(file_tree_width(&rows(&deep), 60), 30);
         assert_eq!(file_tree_width(&[], 60), 5);
@@ -859,7 +953,7 @@ index 1111111..2222222 100644
                         },
                         frame.area(),
                     );
-                    assert_eq!(measured.scroll.viewport, 20);
+                    assert_eq!(measured.scroll.viewport, 19);
                     offset = measured.file_list_offset;
                 })
                 .unwrap();
@@ -901,13 +995,13 @@ index 1111111..2222222 100644
         assert_eq!(
             displayed,
             vec![
-                (Some(2), "README.md".into()),
+                (Some(2), "README.md [M]".into()),
                 (None, "▾ src/".into()),
                 (None, "  ▾ a/".into()),
-                (Some(3), "    b.rs".into()),
-                (Some(1), "    z.rs".into()),
-                (Some(0), "  a.rs".into()),
-                (Some(4), "  z.rs".into()),
+                (Some(3), "    b.rs [M]".into()),
+                (Some(1), "    z.rs [M]".into()),
+                (Some(0), "  a.rs [M]".into()),
+                (Some(4), "  z.rs [M]".into()),
             ]
         );
         let files = filtered_file_diffs(&text, Some("src/a/"));
@@ -944,29 +1038,29 @@ index 1111111..2222222 100644
         assert_eq!(
             shown(true),
             [
-                "Cargo.toml",
+                "Cargo.toml [M]",
                 "▾ styra/",
                 "  ▾ diff/src/",
-                "    lib.rs",
-                "    view.rs",
+                "    lib.rs [M]",
+                "    view.rs [M]",
                 "  ▾ ui/src/",
-                "    scroll.rs",
-                "    search.rs",
+                "    scroll.rs [M]",
+                "    search.rs [M]",
             ]
         );
         assert_eq!(
             shown(false),
             [
-                "Cargo.toml",
+                "Cargo.toml [M]",
                 "▾ styra/",
                 "  ▾ diff/",
                 "    ▾ src/",
-                "      lib.rs",
-                "      view.rs",
+                "      lib.rs [M]",
+                "      view.rs [M]",
                 "  ▾ ui/",
                 "    ▾ src/",
-                "      scroll.rs",
-                "      search.rs",
+                "      scroll.rs [M]",
+                "      search.rs [M]",
             ]
         );
         for (index, line) in file_tree_rows(&files, true) {

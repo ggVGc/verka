@@ -8,6 +8,84 @@ pub struct FileDiff<'a> {
     pub patch: &'a str,
 }
 
+/// The change described by a file patch's metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileChange {
+    Added,
+    Deleted,
+    Edited,
+    Moved,
+    MovedEdited,
+    Copied,
+    CopiedEdited,
+    Mode,
+}
+
+impl FileChange {
+    pub fn marker(self) -> &'static str {
+        match self {
+            Self::Added => "A",
+            Self::Deleted => "D",
+            Self::Edited => "M",
+            Self::Moved => "R",
+            Self::MovedEdited => "R+",
+            Self::Copied => "C",
+            Self::CopiedEdited => "C+",
+            Self::Mode => "T",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::Deleted => "deleted",
+            Self::Edited => "edited",
+            Self::Moved => "moved",
+            Self::MovedEdited => "moved with edits",
+            Self::Copied => "copied",
+            Self::CopiedEdited => "copied with edits",
+            Self::Mode => "file mode changed",
+        }
+    }
+}
+
+impl FileDiff<'_> {
+    pub fn change(&self) -> FileChange {
+        // Inspect headers only: code in a hunk can resemble Git metadata.
+        let headers: Vec<_> = self
+            .patch
+            .lines()
+            .take_while(|line| !line.starts_with("@@"))
+            .collect();
+        let has = |prefix: &str| headers.iter().any(|line| line.starts_with(prefix));
+        if has("new file mode ") || has("--- /dev/null") {
+            return FileChange::Added;
+        }
+        if has("deleted file mode ") || has("+++ /dev/null") {
+            return FileChange::Deleted;
+        }
+        let content_changed = self.patch.lines().any(|line| line.starts_with("@@"))
+            || has("Binary files ")
+            || has("GIT binary patch")
+            || headers.iter().any(|line| {
+                line.starts_with("similarity index ") && *line != "similarity index 100%"
+            });
+        let mode_changed = has("old mode ") || has("new mode ");
+        match (
+            has("rename from "),
+            has("copy from "),
+            content_changed || mode_changed,
+        ) {
+            (true, _, true) => FileChange::MovedEdited,
+            (true, _, false) => FileChange::Moved,
+            (_, true, true) => FileChange::CopiedEdited,
+            (_, true, false) => FileChange::Copied,
+            _ if mode_changed && !content_changed => FileChange::Mode,
+            _ => FileChange::Edited,
+        }
+    }
+}
+
 /// Split only on Git's file headers, retaining each patch verbatim.
 pub fn file_diffs(text: &str) -> Vec<FileDiff<'_>> {
     let mut starts = Vec::new();
@@ -132,6 +210,31 @@ pub fn filtered_file_diffs<'a>(text: &'a str, query: Option<&str>) -> Vec<(usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn change_kinds_cover_metadata_only_and_content_changes() {
+        let cases = [
+            ("new file mode 100644\n", FileChange::Added),
+            ("deleted file mode 100644\n", FileChange::Deleted),
+            ("--- /dev/null\n+++ b/file\n", FileChange::Added),
+            ("--- a/file\n+++ /dev/null\n", FileChange::Deleted),
+            ("@@ -1 +1 @@\n-old\n+new\n", FileChange::Edited),
+            ("similarity index 100%\nrename from old\nrename to file\n", FileChange::Moved),
+            ("similarity index 80%\nrename from old\nrename to file\n@@ -1 +1 @@\n-old\n+new\n", FileChange::MovedEdited),
+            ("similarity index 80%\nrename from old\nrename to file\nBinary files a/old and b/file differ\n", FileChange::MovedEdited),
+            ("old mode 100644\nnew mode 100755\nrename from old\nrename to file\n", FileChange::MovedEdited),
+            ("similarity index 100%\ncopy from old\ncopy to file\n", FileChange::Copied),
+            ("similarity index 80%\ncopy from old\ncopy to file\n", FileChange::CopiedEdited),
+            ("old mode 100644\nnew mode 100755\n", FileChange::Mode),
+            ("old mode 100644\nnew mode 100755\n@@ -1 +1 @@\n-old\n+new\n", FileChange::Edited),
+            ("Binary files a/file and b/file differ\n", FileChange::Edited),
+            ("@@ -1 +1 @@\n rename from code\n+new file mode 100644\n", FileChange::Edited),
+        ];
+        for (metadata, expected) in cases {
+            let patch = format!("diff --git a/file b/file\n{metadata}");
+            assert_eq!(file_diffs(&patch)[0].change(), expected, "{patch}");
+        }
+    }
 
     #[test]
     fn file_sections_include_deleted_renamed_binary_and_mode_only_changes() {

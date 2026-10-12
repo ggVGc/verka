@@ -259,6 +259,11 @@ repository: `styra-diff [-C DIR] [BASE]` shows the working tree against where
 the current branch left `BASE`, or against `HEAD` when no base is given.
 The view's keys live in that crate too, so both answer them the same way;
 while the view is open in Styra no other shortcut acts, and Esc closes it.
+The per-file list uses compact change markers: `A` added, `D` deleted, `M`
+edited, `R` moved, `R+` moved with edits, `C` copied, `C+` copied with edits,
+and `T` file mode changed. A fixed row above the selected patch explains its
+change and shows the source path for moves and copies. Moves are detected
+using Git's rename similarity threshold.
 The Rust wire types are in `styra_server::api`, and the blocking client used by
 the TUI is `styra_server::Client`.
 

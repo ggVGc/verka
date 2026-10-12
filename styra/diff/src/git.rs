@@ -11,7 +11,14 @@ use crate::DiffTarget;
 pub fn diff(worktree: &Path, base: &str) -> Result<String, String> {
     git(
         worktree,
-        &["diff", "--no-color", "--no-ext-diff", base, "--"],
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--find-renames",
+            base,
+            "--",
+        ],
     )
 }
 
@@ -133,6 +140,28 @@ mod tests {
 
         assert!(diff.contains("+committed"), "{diff}");
         assert!(diff.contains("+loose"), "{diff}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn moves_are_detected_even_when_disabled_in_repository_config() {
+        let root = repository("styra-diff-renames");
+        std::fs::write(root.join("old.txt"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "start"]);
+        git(&root, &["config", "diff.renames", "false"]);
+        git(&root, &["mv", "old.txt", "new.txt"]);
+        let patch = diff(&root, "HEAD").unwrap();
+        let files = crate::files::file_diffs(&patch);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "new.txt");
+        assert_eq!(files[0].change(), crate::files::FileChange::Moved);
+
+        std::fs::write(root.join("new.txt"), "one\ntwo\nthree\nfour\nedited\n").unwrap();
+        let patch = diff(&root, "HEAD").unwrap();
+        let files = crate::files::file_diffs(&patch);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].change(), crate::files::FileChange::MovedEdited);
         let _ = std::fs::remove_dir_all(&root);
     }
 
