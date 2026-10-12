@@ -444,7 +444,8 @@ impl LiveInteractions {
         from: &str,
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        self.next_attention_or_live_in_order(&self.step_order(workspace_id), from)
+        self.next_idle_unseen(from, workspace_id)
+            .or_else(|| self.next_live(from, workspace_id))
     }
 
     pub(crate) fn next_attention_or_live_in_order(

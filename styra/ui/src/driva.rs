@@ -1084,7 +1084,7 @@ fn interaction_lines(app: &DrivaView) -> Vec<Line<'static>> {
             "identity",
             &format!(
                 "{} · {}",
-                app.session_name.as_deref().unwrap_or("unnamed"),
+                app.session_name.unwrap_or("unnamed"),
                 app.session_id
             ),
         ),
@@ -1093,7 +1093,7 @@ fn interaction_lines(app: &DrivaView) -> Vec<Line<'static>> {
             app.workspace.id.as_deref().unwrap_or("unknown"),
         ),
         detail_field_line("profile", &app.selection_name),
-        detail_field_line("status", &app.activity.status.label()),
+        detail_field_line("status", app.activity.status.label()),
         detail_field_line(
             "accepting",
             if matches!(
@@ -1120,7 +1120,7 @@ fn interaction_lines(app: &DrivaView) -> Vec<Line<'static>> {
     rest.extend(checkout_lines(app.checkout.as_ref()));
     rest.extend(app.branched_from.as_ref().map(branched_from_line));
     if let Some(message) = &app.last_message {
-        rest.push(detail_field_line("last message", &message));
+        rest.push(detail_field_line("last message", message));
     }
     lines.extend(app.workspace.abbreviate(rest));
     lines

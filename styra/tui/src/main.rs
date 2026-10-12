@@ -907,25 +907,22 @@ mod cli_tests {
     fn quitting_and_switching_detach_but_reset_stops_the_running_interaction() {
         let live = Attachment::Attached { cursor: 7 };
 
-        assert_eq!(
-            event_loop::stops_current_interaction(&RunOutcome::Quit, &live),
-            false
-        );
-        assert_eq!(
-            event_loop::stops_current_interaction(
-                &RunOutcome::OpenSession("styra-other".into()),
-                &live,
-            ),
-            false
-        );
-        assert_eq!(
-            event_loop::stops_current_interaction(&RunOutcome::Reset, &live),
-            true
-        );
-        assert_eq!(
-            event_loop::stops_current_interaction(&RunOutcome::NewSession, &live),
-            false
-        );
+        assert!(!event_loop::stops_current_interaction(
+            &RunOutcome::Quit,
+            &live
+        ));
+        assert!(!event_loop::stops_current_interaction(
+            &RunOutcome::OpenSession("styra-other".into()),
+            &live,
+        ));
+        assert!(event_loop::stops_current_interaction(
+            &RunOutcome::Reset,
+            &live
+        ));
+        assert!(!event_loop::stops_current_interaction(
+            &RunOutcome::NewSession,
+            &live
+        ));
     }
 
     #[test]
@@ -1007,7 +1004,7 @@ mod cli_tests {
         app.workspace
             .enter(PathBuf::from("/state/worktrees/since-removed/styra-3"));
 
-        let landed_in = workspace_for_new_session(&app, &active, &[active.clone()]);
+        let landed_in = workspace_for_new_session(&app, &active, std::slice::from_ref(&active));
         let pending = pending_app_from_session(&app, &landed_in);
 
         assert_eq!(landed_in, active);

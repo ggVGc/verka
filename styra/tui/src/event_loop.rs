@@ -603,10 +603,10 @@ fn blocked_on<T>(
 
 /// Return the running interaction an in-client transition explicitly stops.
 pub fn stops_current_interaction(outcome: &RunOutcome, live: &Attachment) -> bool {
-    match (outcome, live) {
-        (RunOutcome::Reset, Attachment::Attached { .. }) => true,
-        _ => false,
-    }
+    matches!(
+        (outcome, live),
+        (RunOutcome::Reset, Attachment::Attached { .. })
+    )
 }
 
 /// The event loop: apply pending session updates, render, and handle input
@@ -980,10 +980,10 @@ fn run_rounds(
             && !app.search.typing()
             // The diff owns the keyboard; `?` is not one of its keys.
             && app.view != View::CheckoutDiff
-            && !app
+            && app
                 .tag_picker
                 .as_ref()
-                .is_some_and(|picker| picker.new_tag.is_some())
+                .is_none_or(|picker| picker.new_tag.is_none())
             && (app.focus == Focus::List || app.launcher.is_some() || app.template_picker.is_some())
         {
             app.help.open();

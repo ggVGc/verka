@@ -159,6 +159,8 @@ pub trait Ui {
 
     fn render_launcher(&mut self, view: &launcher::LauncherView) -> UiResult<RenderFeedback>;
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_session_picker(
         &mut self,
         scope: &str,
@@ -171,6 +173,8 @@ pub trait Ui {
         show_completed: bool,
     ) -> UiResult<RenderFeedback>;
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_session_picker_message(
         &mut self,
         scope: &str,
@@ -185,6 +189,8 @@ pub trait Ui {
         message: &str,
     ) -> UiResult<RenderFeedback>;
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_session_picker_name_prompt(
         &mut self,
         scope: &str,
@@ -198,6 +204,8 @@ pub trait Ui {
         value: &str,
     ) -> UiResult<RenderFeedback>;
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_workspace_picker(
         &mut self,
         workspaces: &[styra_protocol::WorkspaceSummary],
@@ -214,6 +222,8 @@ pub trait Ui {
         view: &worktrees::WorktreePickerView<'_>,
     ) -> UiResult<RenderFeedback>;
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_workspace_picker_prompt(
         &mut self,
         workspaces: &[styra_protocol::WorkspaceSummary],
@@ -364,6 +374,8 @@ where
         })
     }
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_session_picker(
         &mut self,
         scope: &str,
@@ -388,6 +400,8 @@ where
         )
     }
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_session_picker_message(
         &mut self,
         scope: &str,
@@ -414,6 +428,8 @@ where
         )
     }
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_session_picker_name_prompt(
         &mut self,
         scope: &str,
@@ -439,6 +455,8 @@ where
         )
     }
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_session_picker_with(
         &mut self,
         scope: &str,
@@ -468,6 +486,8 @@ where
         })
     }
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_workspace_picker(
         &mut self,
         workspaces: &[styra_protocol::WorkspaceSummary],
@@ -495,6 +515,8 @@ where
         })
     }
 
+    // Picker display state is passed explicitly across the UI boundary.
+    #[allow(clippy::too_many_arguments)]
     fn render_workspace_picker_prompt(
         &mut self,
         workspaces: &[styra_protocol::WorkspaceSummary],

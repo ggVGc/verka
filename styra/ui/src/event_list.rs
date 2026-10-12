@@ -420,7 +420,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     );
     let visible_selection = view
         .anchor_selection
-        .then(|| position)
+        .then_some(position)
         .flatten()
         .filter(|position| *position >= offset && *position < offset + items.len())
         .map(|position| position - offset);
@@ -1711,7 +1711,7 @@ pub fn summary_line(
         AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
     );
     let row_lead = if is_conversation { "" } else { "  " };
-    let display_tag = match &entry.event {
+    let display_tag = match entry.event {
         AgentEvent::UserMessage { .. } => "»",
         AgentEvent::AgentMessage { .. } => "«",
         AgentEvent::CommandStarted { .. } | AgentEvent::CommandCompleted { .. } => "Shell",
@@ -1732,9 +1732,9 @@ pub fn summary_line(
     // unguarded pipeline can therefore return zero while an earlier command
     // printed a clear failure; keep that distinct from both success and a
     // provider-reported failure with an amber warning.
-    let (summary_style, prefix, prefix_style) = match &entry.event {
+    let (summary_style, prefix, prefix_style) = match entry.event {
         AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. }
-            if tag == "shell" && failed_shell_result(&entry.event) =>
+            if tag == "shell" && failed_shell_result(entry.event) =>
         {
             (
                 Style::default().fg(theme::ERROR),
@@ -1743,7 +1743,7 @@ pub fn summary_line(
             )
         }
         AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. }
-            if tag == "shell" && suspicious_shell_success(&entry.event) =>
+            if tag == "shell" && suspicious_shell_success(entry.event) =>
         {
             (
                 Style::default().fg(theme::WARNING),
@@ -1785,9 +1785,9 @@ pub fn summary_line(
     // so the two lists mark their selection alike. The tag and the result
     // mark keep their own colors, so what the entry is still reads.
     let severity_colored = matches!(tag, "error" | "malformed")
-        || failed_shell_result(&entry.event)
-        || suspicious_shell_success(&entry.event)
-        || matches!(&entry.event, AgentEvent::ToolCompleted { status, .. } | AgentEvent::CommandCompleted { status, .. } if matches!(status.as_str(), "error" | "failed"));
+        || failed_shell_result(entry.event)
+        || suspicious_shell_success(entry.event)
+        || matches!(entry.event, AgentEvent::ToolCompleted { status, .. } | AgentEvent::CommandCompleted { status, .. } if matches!(status.as_str(), "error" | "failed"));
     let summary_style = if entry.selected && !severity_colored {
         summary_style.fg(theme::SELECTED_INTERACTION_TEXT)
     } else {
@@ -1810,11 +1810,11 @@ pub fn summary_line(
         if !prefix.is_empty() {
             spans.push(Span::styled(prefix, prefix_style));
         }
-        let mut summary = file_action_summary(&entry.event)
-            .unwrap_or_else(|| protocol.presented_summary(&entry.event, PresentationMode::Pretty));
+        let mut summary = file_action_summary(entry.event)
+            .unwrap_or_else(|| protocol.presented_summary(entry.event, PresentationMode::Pretty));
         if expanded && summary.ends_with('…') {
             if let Some(first_line) = protocol
-                .presented_detail(&entry.event, PresentationMode::Pretty)
+                .presented_detail(entry.event, PresentationMode::Pretty)
                 .first()
                 .and_then(|block| match block {
                     DetailBlock::Text(text) | DetailBlock::Code { text, .. } => text.lines().next(),
@@ -1850,7 +1850,7 @@ pub fn summary_line(
                 to.as_str()
             ));
         }
-        let display_summary = match &entry.event {
+        let display_summary = match entry.event {
             AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
                 summary
                     .strip_prefix(name)

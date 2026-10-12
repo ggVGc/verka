@@ -234,18 +234,18 @@ fn render_events(
     feedback: &mut RenderFeedback,
 ) {
     let mut tint_area = area;
-    let interaction_area = if view.preview.is_some() && view.entry_log.is_some() {
+    let interaction_area = if let (Some(preview), Some(_)) = (view.preview, view.entry_log) {
         let panes = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
         tint_area.width = panes[0].width;
-        let measured = preview::render(frame, view.preview.unwrap(), panes[1]);
+        let measured = preview::render(frame, preview, panes[1]);
         note_preview_scroll(
             feedback,
             PanelId::Preview {
                 session: session_id.into(),
-                target: preview_panel(view.preview.unwrap()),
+                target: preview_panel(preview),
             },
             measured,
         );

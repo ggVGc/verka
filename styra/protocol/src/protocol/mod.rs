@@ -695,6 +695,9 @@ pub struct ActionRecord {
 /// Successful response payload. The variant must match the request operation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
+// Like WireResponse, this is built once per request and immediately serialised;
+// boxing its payloads would add allocations to that path.
+#[allow(clippy::large_enum_variant)]
 pub enum Response {
     IntegrationStarted,
     IntegrationMessage(String),

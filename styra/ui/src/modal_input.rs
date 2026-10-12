@@ -244,6 +244,26 @@ fn rule(index: usize, current: bool, choosing: bool, width: usize) -> Line<'stat
     Line::from(Span::styled(format!("{label}{}", "─".repeat(fill)), style))
 }
 
+pub(crate) fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for logical_line in text.split('\n') {
+        let mut current = String::new();
+        let mut current_width = 0;
+        for ch in logical_line.chars() {
+            let ch_width = ch.width().unwrap_or(0);
+            if current_width > 0 && current_width + ch_width > width {
+                lines.push(Line::from(Span::styled(current, style)));
+                current = String::new();
+                current_width = 0;
+            }
+            current.push(ch);
+            current_width += ch_width;
+        }
+        lines.push(Line::from(Span::styled(current, style)));
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,24 +326,4 @@ mod tests {
         assert_eq!(rows[5], "empty");
         assert_eq!((display.cursor_col, display.cursor_row), (6, 3));
     }
-}
-
-pub(crate) fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for logical_line in text.split('\n') {
-        let mut current = String::new();
-        let mut current_width = 0;
-        for ch in logical_line.chars() {
-            let ch_width = ch.width().unwrap_or(0);
-            if current_width > 0 && current_width + ch_width > width {
-                lines.push(Line::from(Span::styled(current, style)));
-                current = String::new();
-                current_width = 0;
-            }
-            current.push(ch);
-            current_width += ch_width;
-        }
-        lines.push(Line::from(Span::styled(current, style)));
-    }
-    lines
 }

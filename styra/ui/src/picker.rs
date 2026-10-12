@@ -118,6 +118,8 @@ pub enum Preview<'a> {
 /// on, so the list never looks unsorted. Standalone from [`crate::app::App`] — the
 /// picker runs before any session is loaded, so it has no state of its own
 /// to render.
+// Picker rendering keeps its borrowed display state explicit, like render_workspace_picker.
+#[allow(clippy::too_many_arguments)]
 pub fn render_picker(
     frame: &mut Frame,
     scope: &str,
@@ -182,7 +184,7 @@ fn session_picker_title(
         .filter(|filter| !filter.is_empty())
         .map(|filter| format!(" · filter: {filter}"))
         .unwrap_or_default();
-    let searching = searching.then_some(" · searching").unwrap_or("");
+    let searching = if searching { " · searching" } else { "" };
     let completed = if show_completed {
         "completed shown"
     } else {

@@ -96,7 +96,7 @@ fn converting_a_session_seals_the_one_it_was_converted_from() {
         CompletionState::Active
     );
 
-    let client = ensure_server(&root.join("styra.sock")).expect("the daemon should start");
+    let client = ensure_server(root.join("styra.sock")).expect("the daemon should start");
     let converted = client
         .convert_session_provider(&source_id)
         .expect("converting a stored Claude Session to Codex");

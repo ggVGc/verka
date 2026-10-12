@@ -305,7 +305,7 @@ fn model() -> Result<Model> {
 }
 
 fn configured_model(name: Option<&str>) -> Result<Model> {
-    let name = name.or(Some("quantized_medium")).unwrap();
+    let name = name.unwrap_or("quantized_medium");
     // Preserve the spellings accepted by the rwhisper implementation so an
     // existing service environment keeps selecting the same class of model.
     let canonical = match name {
