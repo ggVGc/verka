@@ -848,8 +848,10 @@ impl LiveInteractions {
     /// Select the entry to move to after completing or abandoning an interaction.
     /// The finished row stays listed; the completion filter controls its visibility.
     ///
-    /// Prefer live work in the same worktree, then in the same Workspace,
-    /// nearest after it and then nearest before within each group.
+    /// Prefer live work in the same worktree, then in the same Workspace, then
+    /// a stopped one left in the same Workspace — leaving the Workspace only
+    /// when nothing unfinished remains in it. Within each group the nearest
+    /// row as the navigator draws them wins: after it first, then before it.
     pub fn select_past_hidden(
         &mut self,
         id: &str,
@@ -860,30 +862,49 @@ impl LiveInteractions {
             .iter()
             .position(|interaction| interaction.id == id)?;
         let own_workspace = &self.items[hidden].workspace_id;
-        let live_alongside = self
-            .visible_indices(workspace_id)
+        // The finished row is placed among the visible ones, even when it is
+        // itself hidden, so "nearest" is measured from where it was drawn.
+        let mut shown = self.visible_indices(workspace_id);
+        if !shown.contains(&hidden) {
+            shown.push(hidden);
+            shown.sort_unstable();
+        }
+        let order = display_tree(&self.items, &self.workspaces, shown)
             .into_iter()
-            .filter(|index| {
+            .map(|row| row.index)
+            .collect::<Vec<_>>();
+        let at = order.iter().position(|index| *index == hidden)?;
+        let alongside = order
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, index)| {
                 let interaction = &self.items[*index];
                 *index != hidden
                     && interaction.workspace_id == *own_workspace
-                    && interaction.activity.accepting()
                     && !interaction.completed.is_done()
             })
+            .collect::<Vec<_>>();
+        let live_alongside = alongside
+            .iter()
+            .copied()
+            .filter(|(_, index)| self.items[*index].activity.accepting())
             .collect::<Vec<_>>();
         let same_worktree = live_alongside
             .iter()
             .copied()
-            .filter(|index| self.items[*index].workspace == self.items[hidden].workspace)
+            .filter(|(_, index)| self.items[*index].workspace == self.items[hidden].workspace)
             .collect::<Vec<_>>();
-        let nearest = |indices: &[usize]| {
-            indices
-                .iter()
-                .copied()
-                .find(|index| *index > hidden)
-                .or_else(|| indices.last().copied())
+        let nearest = |rows: &[(usize, usize)]| {
+            rows.iter()
+                .find(|(position, _)| *position > at)
+                .or_else(|| rows.last())
+                .map(|(_, index)| *index)
         };
-        if let Some(index) = nearest(&same_worktree).or_else(|| nearest(&live_alongside)) {
+        if let Some(index) = nearest(&same_worktree)
+            .or_else(|| nearest(&live_alongside))
+            .or_else(|| nearest(&alongside))
+        {
             // The cursor is not left on an entry the navigator no longer offers.
             self.rest();
             return self.items.get(index).cloned();
@@ -1518,8 +1539,8 @@ pub(crate) mod tests {
     }
 
     /// The rest of the completed interaction's own Workspace comes before any
-    /// other Workspace, even one listed next to it — and a stopped row of its
-    /// own Workspace does not count as the rest of its work.
+    /// other Workspace, even one listed next to it — and its live work comes
+    /// before a stopped row of its own Workspace.
     #[test]
     fn completing_an_interaction_moves_on_to_live_work_in_its_own_workspace() {
         let mut live = LiveInteractions::default();
@@ -1540,7 +1561,61 @@ pub(crate) mod tests {
         assert_eq!(next.id, "earlier");
     }
 
-    /// With no live work left in its own Workspace, the move falls back to the
+    /// A stopped row of its own Workspace is still work left in it, and is
+    /// moved to before any other Workspace's live work.
+    #[test]
+    fn completing_an_interaction_stays_in_its_workspace_while_any_work_is_left() {
+        let mut live = LiveInteractions::default();
+        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
+        elsewhere.workspace_id = "other".into();
+        live.open(
+            vec![
+                completed("finished"),
+                elsewhere,
+                interaction("stopped", InteractionActivity::Stopped),
+            ],
+            vec![],
+        );
+
+        let next = live.select_past_hidden("finished", None).unwrap();
+
+        assert_eq!(next.id, "stopped");
+    }
+
+    /// Nearest is where the navigator draws the rows — grouped by worktree —
+    /// not the order they were created in.
+    #[test]
+    fn completing_an_interaction_moves_to_the_nearest_row_as_drawn() {
+        let in_worktree = |id: &str, activity, name: &str| {
+            let mut interaction = interaction(id, activity);
+            let path = PathBuf::from(format!("/worktrees/{name}"));
+            interaction.workspace = path.clone();
+            interaction.checkout = Some(styra_protocol::CheckoutState {
+                worktree: path,
+                repository: PathBuf::from("/workspace"),
+                branch: Some(name.into()),
+            });
+            interaction
+        };
+        let mut finished = in_worktree("finished", InteractionActivity::Stopped, "second");
+        finished.completed = CompletionState::Completed;
+        let mut live = LiveInteractions::default();
+        // Drawn as: main, first, second (finished).
+        live.open(
+            vec![
+                in_worktree("first", InteractionActivity::Pending, "first"),
+                finished,
+                interaction("main", InteractionActivity::Pending),
+            ],
+            vec![],
+        );
+
+        let next = live.select_past_hidden("finished", None).unwrap();
+
+        assert_eq!(next.id, "first");
+    }
+
+    /// With no work left in its own Workspace, the move falls back to the
     /// next visible row wherever it is.
     #[test]
     fn completing_the_last_live_interaction_of_a_workspace_moves_past_it() {

@@ -151,7 +151,9 @@ current/all-Workspace scope, `j`/`k` selects, `T` edits the selected
 interaction's tags, `C` / `Z` marks it completed / abandoned and stops it (also
 available directly in the event view), and `c` shows or hides those rows
 again. Completing or abandoning an interaction in the list moves to another
-live interaction in the same worktree first, then in the same Workspace.
+live interaction in the same worktree first, then in the same Workspace, then
+to a stopped one in the same Workspace — the nearest row in the list each time.
+It leaves the Workspace only when nothing unfinished is left in it.
 `/` filters the list as you type —
 case-insensitively, by name, tag, branch, provider, or Workspace name. The
 arrows still move the cursor while you type. `Enter` opens the interaction under
