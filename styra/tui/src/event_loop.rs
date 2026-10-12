@@ -1660,14 +1660,35 @@ fn run_rounds(
                     app.interactions.refresh(interactions);
                     interactions_refreshed = Instant::now();
                 }
-                let next = app
-                    .interactions
-                    .next_attention_or_live(&app.session_id, app.workspace.id.as_deref());
+                let overview =
+                    (app.view == crate::app::View::Overview).then(|| app.overview.clone());
+                let next = if let Some(overview) = &overview {
+                    overview.next_attention_or_live(&app.interactions, &app.session_id)
+                } else {
+                    app.interactions
+                        .next_attention_or_live(&app.session_id, app.workspace.id.as_deref())
+                };
                 let Some(next) = next else {
                     app.show_warning("no other interaction is running");
                     continue;
                 };
+                let target_id = next.id.clone();
                 make_interaction_current(app, live, client, standing_launch, next);
+                if let Some(mut overview) = overview {
+                    if app.session_id == target_id {
+                        if overview.running_only
+                            && overview
+                                .indices(&app.interactions)
+                                .iter()
+                                .all(|index| app.interactions.items[*index].id != app.session_id)
+                        {
+                            overview.toggle_running_only();
+                        }
+                        overview.open();
+                    }
+                    app.overview = overview;
+                    app.view = crate::app::View::Overview;
+                }
             }
             Some(Request::NextWorkingInteraction) => {
                 if let Ok(interactions) = client.list_interactions() {

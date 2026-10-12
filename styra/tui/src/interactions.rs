@@ -444,8 +444,22 @@ impl LiveInteractions {
         from: &str,
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        self.next_idle_unseen(from, workspace_id)
-            .or_else(|| self.next_live(from, workspace_id))
+        self.next_attention_or_live_in_order(&self.step_order(workspace_id), from)
+    }
+
+    pub(crate) fn next_attention_or_live_in_order(
+        &self,
+        order: &[usize],
+        from: &str,
+    ) -> Option<InteractionSummary> {
+        self.step_from(order, from, |interaction| {
+            is_idle(interaction) && interaction.idle_unseen
+        })
+        .or_else(|| {
+            self.step_from(order, from, |interaction| {
+                interaction.activity.accepting() && !interaction.completed.is_done()
+            })
+        })
     }
 
     /// The next Interaction that is actually working — Running or Background —

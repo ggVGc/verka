@@ -78,6 +78,17 @@ impl Overview {
             .map(|index| interactions.items[*index].id.as_str())
     }
 
+    /// Follow newly idle work first, then live work, from the selected tile.
+    /// Like the navigator's `n`, this reveals destinations hidden by a filter.
+    pub fn next_attention_or_live(
+        &self,
+        interactions: &LiveInteractions,
+        current: &str,
+    ) -> Option<styra_protocol::InteractionSummary> {
+        let from = self.selected_id(interactions, current).unwrap_or(current);
+        interactions.next_attention_or_live_in_order(&interactions.overview_indices(), from)
+    }
+
     pub fn left(&mut self, interactions: &LiveInteractions, current: &str) {
         let at = self.selected(interactions, current);
         self.select(interactions, at.saturating_sub(1));
@@ -207,6 +218,63 @@ mod tests {
         assert_eq!(
             ids(&interactions),
             ["99-tile", "98-tile", "100-tile", "97-tile"]
+        );
+    }
+
+    #[test]
+    fn next_live_prioritizes_newly_idle_from_the_selected_tile() {
+        let mut interactions = fleet(&[
+            InteractionActivity::Running,
+            InteractionActivity::Background,
+            InteractionActivity::Pending,
+            InteractionActivity::Pending,
+        ]);
+        interactions.items[2].idle_unseen = true;
+        interactions.items[3].idle_unseen = true;
+        // The grid covers all Workspaces even when the navigator is scoped.
+        interactions.only_current_workspace = true;
+        let mut overview = Overview::default();
+        let current = "100-tile";
+        assert_eq!(
+            overview
+                .next_attention_or_live(&interactions, current)
+                .unwrap()
+                .id,
+            "98-tile"
+        );
+        overview.last(&interactions);
+        assert_eq!(
+            overview
+                .next_attention_or_live(&interactions, current)
+                .unwrap()
+                .id,
+            "98-tile"
+        );
+        overview.prev(&interactions, current);
+        assert_eq!(
+            overview
+                .next_attention_or_live(&interactions, current)
+                .unwrap()
+                .id,
+            "97-tile"
+        );
+
+        overview.toggle_running_only();
+        assert_eq!(
+            overview
+                .next_attention_or_live(&interactions, current)
+                .unwrap()
+                .id,
+            "98-tile"
+        );
+        interactions.items[2].idle_unseen = false;
+        interactions.items[3].idle_unseen = false;
+        assert_eq!(
+            overview
+                .next_attention_or_live(&interactions, current)
+                .unwrap()
+                .id,
+            "99-tile"
         );
     }
 

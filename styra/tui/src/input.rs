@@ -1357,6 +1357,9 @@ mod tests {
         assert_eq!(app.take_request(), Some(Request::Overview));
 
         app.view = View::Overview;
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.take_request(), Some(Request::NextLiveInteraction));
+        assert_eq!(app.view, View::Overview);
         press(&mut app, KeyCode::Char('l'));
         assert!(app.launcher.is_none(), "`l` moves in the grid");
         press(&mut app, KeyCode::Enter);
