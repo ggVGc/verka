@@ -60,8 +60,9 @@ pub struct CheckoutDiff {
 }
 
 impl CheckoutDiff {
-    /// Read the diff now. It is read once, when the view opens, rather than
-    /// on every frame: opening the view again is what refreshes it.
+    /// Read the diff now. It is read when the view opens rather than on every
+    /// frame: opening the view again refreshes it, and so does the event loop
+    /// every few seconds while the agent is working (see [`Self::refresh`]).
     pub fn read(target: DiffTarget) -> Self {
         let diff = git_diff(&target.worktree, &target.base);
         Self {
@@ -75,6 +76,45 @@ impl CheckoutDiff {
             search: Default::default(),
         }
     }
+    /// Read the diff again, keeping the view where it is: the same file stays
+    /// selected while it is still in the diff, and the scroll is left for the
+    /// renderer to hold to what now fits. Reports whether the diff changed.
+    pub fn refresh(&mut self) -> bool {
+        let diff = git_diff(&self.target.worktree, &self.target.base);
+        if diff == self.diff {
+            return false;
+        }
+        let selected = self.selected_path();
+        self.diff = diff;
+        let files = self.visible_files();
+        let kept = selected.and_then(|path| {
+            files
+                .iter()
+                .find(|(_, file)| file.path == path)
+                .map(|(index, _)| *index)
+        });
+        let next = kept.or_else(|| files.first().map(|(index, _)| *index));
+        drop(files);
+        match next {
+            Some(next) if next == self.selected_file => {}
+            Some(next) => {
+                self.selected_file = next;
+                if kept.is_none() {
+                    self.scroll.reset();
+                }
+            }
+            None => self.selected_file = 0,
+        }
+        true
+    }
+
+    fn selected_path(&self) -> Option<String> {
+        self.visible_files()
+            .into_iter()
+            .find(|(index, _)| *index == self.selected_file)
+            .map(|(_, file)| file.path.to_owned())
+    }
+
     fn visible_files(&self) -> Vec<(usize, styra_ui::checkout_diff::FileDiff<'_>)> {
         self.diff
             .as_ref()
@@ -179,6 +219,38 @@ mod tests {
         let diff = read.diff.unwrap();
         assert!(diff.contains("+committed"), "{diff}");
         assert!(diff.contains("+loose"), "{diff}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file appearing ahead of the selected one moves its index, not the
+    /// selection: the refreshed view stays on the file being read.
+    #[test]
+    fn a_refresh_picks_up_new_work_and_keeps_the_selected_file() {
+        let root = std::env::temp_dir().join("styra-checkout-diff-refresh");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q"]);
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        std::fs::write(root.join("b.txt"), "one\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "start"]);
+        let start = git(&root, &["rev-parse", "HEAD"]);
+        std::fs::write(root.join("b.txt"), "two\n").unwrap();
+        let mut diff = CheckoutDiff::read(DiffTarget {
+            worktree: root.clone(),
+            branch: None,
+            base_branch: None,
+            base: start,
+        });
+        diff.scroll.offset = 3;
+
+        assert!(!diff.refresh());
+        std::fs::write(root.join("a.txt"), "two\n").unwrap();
+        assert!(diff.refresh());
+
+        assert!(diff.diff.as_ref().unwrap().contains("a/a.txt"));
+        assert_eq!(diff.selected_path().as_deref(), Some("b.txt"));
+        assert_eq!(diff.scroll.offset, 3);
         let _ = std::fs::remove_dir_all(&root);
     }
 

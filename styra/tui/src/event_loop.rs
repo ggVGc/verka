@@ -72,6 +72,10 @@ const REDRAW_TICK: Duration = Duration::from_secs(1);
 /// footer's warning is never meaningfully behind the account.
 const QUOTA_REFRESH: Duration = Duration::from_secs(5);
 
+/// How often the in-window diff is read again while the agent is working on
+/// the checkout it shows.
+const DIFF_REFRESH: Duration = Duration::from_secs(5);
+
 /// Launch-policy work is serialized off the terminal thread. Serialization
 /// preserves the operator's edit order; the channel back to the root loop lets
 /// it keep rendering and consuming input while the daemon or filesystem is
@@ -643,6 +647,7 @@ fn run_rounds(
     let mut pending_fold = false;
     let mut interactions_refreshed = Instant::now();
     let mut quota_refreshed = Instant::now();
+    let mut diff_refreshed = Instant::now();
     let mut ticked = Instant::now();
     // What the clock read on the frame currently on screen, so that a reading
     // which has not changed since cannot ask for another one.
@@ -748,6 +753,19 @@ fn run_rounds(
         if quota_refreshed.elapsed() >= QUOTA_REFRESH {
             quota_refreshed = Instant::now();
             dirty |= poll_quota(app, client);
+        }
+
+        // The diff on screen is a reading of a checkout the agent may still be
+        // writing to, so it is read again while the agent works. An idle or
+        // stopped agent leaves the checkout alone: reopening refreshes it then.
+        if app.view == View::CheckoutDiff
+            && matches!(app.activity.status, Status::Running | Status::Background)
+            && diff_refreshed.elapsed() >= DIFF_REFRESH
+        {
+            diff_refreshed = Instant::now();
+            if let Some(diff) = app.checkout_diff.as_mut() {
+                dirty |= diff.refresh();
+            }
         }
 
         // A cursor that has come to rest loads the interaction under it. Until
@@ -1895,6 +1913,7 @@ fn run_rounds(
             }
             Some(Request::ShowDiff(target)) => {
                 app.checkout_diff = Some(crate::checkout_diff::CheckoutDiff::read(target));
+                diff_refreshed = Instant::now();
                 app.view = crate::app::View::CheckoutDiff;
             }
             Some(Request::OpenShell) => {
