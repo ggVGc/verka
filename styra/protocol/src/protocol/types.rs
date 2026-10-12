@@ -20,6 +20,15 @@ pub struct IntegrationResult {
     pub message: String,
 }
 
+/// Progress and final outcome of a standalone interaction rebase.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RebaseStatus {
+    pub finished: bool,
+    pub succeeded: bool,
+    pub message: String,
+    pub source_commit: String,
+}
+
 /// A durable Styra Workspace, which groups provider Sessions that operate on
 /// the same host directory.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

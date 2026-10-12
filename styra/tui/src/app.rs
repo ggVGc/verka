@@ -228,6 +228,8 @@ pub struct App {
     /// details view. An empty value deliberately clears the association.
     pub git_repository_prompt: Option<String>,
     pub integration_prompt: Option<String>,
+    pub rebase_status: Option<styra_protocol::RebaseStatus>,
+    pub pending_rebase: Option<String>,
     pub pending_integration: Option<String>,
     /// The tag editor opened from the main view or live-interactions navigator.
     pub tag_picker: Option<TagPicker>,
@@ -323,6 +325,7 @@ pub struct App {
 /// because it means leaving this screen or this process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
+    Rebase,
     Integrate(String),
     GenerateIntegrationMessage,
     Quit,
@@ -502,6 +505,8 @@ impl App {
             workspace: Location::default(),
             git_repository_prompt: None,
             integration_prompt: None,
+            rebase_status: None,
+            pending_rebase: None,
             pending_integration: None,
             tag_picker: None,
             search: Search::default(),

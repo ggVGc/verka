@@ -403,6 +403,7 @@ fn open_url(app: &mut App, config: &dyn Configuration, url: &str) {
 /// interaction it lands on, while Ctrl-N starts a new interaction.
 fn interaction_navigator_passthrough(key: crossterm::event::KeyEvent) -> bool {
     keys::GLOBAL_FOCUS_MESSAGE.matches(key)
+        || keys::GLOBAL_REBASE.matches(key)
         || keys::GLOBAL_STOP.matches(key)
         || keys::GLOBAL_NEXT_LIVE.matches(key)
         || keys::GLOBAL_NEW_SESSION.matches(key)
@@ -719,6 +720,25 @@ fn run_rounds(
         // the operator is reading or working in this one.
         if interactions_refreshed.elapsed() >= INTERACTIONS_REFRESH {
             interactions_refreshed = Instant::now();
+            if let Some(id) = app.pending_rebase.clone() {
+                match client.session_rebase_status(&id) {
+                    Ok(status) => {
+                        if status.finished {
+                            app.pending_rebase = None;
+                        }
+                        app.rebase_status = Some(status);
+                    }
+                    Err(error) => {
+                        app.pending_rebase = None;
+                        if let Some(status) = app.rebase_status.as_mut() {
+                            status.finished = true;
+                            status.succeeded = false;
+                            status.message = format!("Could not read rebase progress: {error:#}");
+                        }
+                    }
+                }
+                dirty = true;
+            }
             if let Some(id) = app.pending_integration.clone() {
                 match client.session_integration_result(&id) {
                     Ok(Some(result)) => {
@@ -964,6 +984,13 @@ fn run_rounds(
                 k if keys::REFERENCE_PAGE_UP.matches(k) => app.help.page_up(),
                 k if keys::REFERENCE_TOP.matches(k) => app.help.scroll_to_top(),
                 _ => {}
+            }
+            continue;
+        }
+
+        if let Some(status) = &app.rebase_status {
+            if status.finished && matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
+                app.rebase_status = None;
             }
             continue;
         }
@@ -1430,6 +1457,22 @@ fn run_rounds(
         // so those arms fall through to the next frame rather than returning.
         match app.take_request() {
             None => {}
+            Some(Request::Rebase) => {
+                let id = app.session_id.clone();
+                let started = client.rebase_session(&id);
+                app.rebase_status = Some(styra_protocol::RebaseStatus {
+                    finished: started.is_err(),
+                    succeeded: false,
+                    source_commit: String::new(),
+                    message: match &started {
+                        Ok(()) => "Starting rebase…".into(),
+                        Err(error) => format!("Could not rebase: {error:#}"),
+                    },
+                });
+                if started.is_ok() {
+                    app.pending_rebase = Some(id);
+                }
+            }
             Some(Request::Quit) => return Ok(RunOutcome::Quit),
             Some(Request::Integrate(_) | Request::GenerateIntegrationMessage) => {}
             Some(Request::Workspace) => {

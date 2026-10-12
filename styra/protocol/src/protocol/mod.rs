@@ -18,9 +18,9 @@ pub use types::{
     Direction, DrivaOptions, FileLocation, IntegrationResult, InteractionActivity,
     InteractionActivityReason, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
     LaunchPolicy, LogEntry, LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent,
-    QuotaStatus, RawLine, RecentMessage, SessionOrigin, SessionSummary, TemplateSummary,
-    VariableOrigin, WorkspaceSummary, WorktreeCleanup, WorktreeSession, WorktreeSummary,
-    WORKTREES_DIR,
+    QuotaStatus, RawLine, RebaseStatus, RecentMessage, SessionOrigin, SessionSummary,
+    TemplateSummary, VariableOrigin, WorkspaceSummary, WorktreeCleanup, WorktreeSession,
+    WorktreeSummary, WORKTREES_DIR,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -329,6 +329,13 @@ pub enum Request {
     },
     /// None while integration is running; otherwise its final result.
     SessionIntegrationResult {
+        id: String,
+    },
+    /// Rebase onto the recorded source branch, retaining the checkout.
+    RebaseSession {
+        id: String,
+    },
+    SessionRebaseStatus {
         id: String,
     },
     Health,
@@ -698,6 +705,8 @@ pub struct ActionRecord {
 // boxing its payloads would add allocations to that path.
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
+    RebaseStarted,
+    SessionRebaseStatus(RebaseStatus),
     IntegrationStarted,
     IntegrationMessage(String),
     SessionIntegrationResult(Option<IntegrationResult>),

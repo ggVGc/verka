@@ -73,6 +73,20 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "rebase_session", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
+        %{name: "session_rebase_status", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "health", payload: %{kind: :unit}},
         %{name: "create_workspace", payload: %{kind: :newtype, type: %{kind: :ref, name: "CreateWorkspace"}}},
         %{name: "list_workspaces", payload: %{kind: :unit}},
@@ -391,6 +405,8 @@ defmodule Styra.Protocol do
       kind: :enum,
       tagging: %{style: :adjacent, tag: "type", content: "data"},
       variants: [
+        %{name: "rebase_started", payload: %{kind: :unit}},
+        %{name: "session_rebase_status", payload: %{kind: :newtype, type: %{kind: :ref, name: "RebaseStatus"}}},
         %{name: "integration_started", payload: %{kind: :unit}},
         %{name: "integration_message", payload: %{kind: :newtype, type: %{kind: :string}}},
         %{name: "session_integration_result", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "IntegrationResult"}}}},
@@ -672,6 +688,17 @@ defmodule Styra.Protocol do
         %{name: "lines", payload: %{kind: :unit}},
         %{name: "files", payload: %{kind: :unit}},
         %{name: "json", payload: %{kind: :unit}}
+      ]
+    },
+
+    # Progress and final outcome of a standalone interaction rebase.
+    "RebaseStatus" => %{
+      kind: :struct,
+      fields: [
+        %{name: "finished", required: true, type: %{kind: :boolean}},
+        %{name: "succeeded", required: true, type: %{kind: :boolean}},
+        %{name: "message", required: true, type: %{kind: :string}},
+        %{name: "source_commit", required: true, type: %{kind: :string}}
       ]
     },
 
@@ -1804,6 +1831,8 @@ defmodule Styra.Protocol do
     "integrate_session",
     "generate_integration_message",
     "session_integration_result",
+    "rebase_session",
+    "session_rebase_status",
     "health",
     "create_workspace",
     "list_workspaces",
@@ -2358,6 +2387,28 @@ defmodule Styra.Protocol do
 
     @doc "`session_integration_result/1`, raising on a request the server would refuse."
     def session_integration_result!(data), do: Styra.Protocol.build!("session_integration_result", data)
+
+    @doc ~S"""
+    Rebase onto the recorded source branch, retaining the checkout.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def rebase_session(data), do: Styra.Protocol.build("rebase_session", data)
+
+    @doc "`rebase_session/1`, raising on a request the server would refuse."
+    def rebase_session!(data), do: Styra.Protocol.build!("rebase_session", data)
+
+    @doc ~S"""
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def session_rebase_status(data), do: Styra.Protocol.build("session_rebase_status", data)
+
+    @doc "`session_rebase_status/1`, raising on a request the server would refuse."
+    def session_rebase_status!(data), do: Styra.Protocol.build!("session_rebase_status", data)
 
     def health, do: Styra.Protocol.build("health")
 
@@ -3107,6 +3158,8 @@ defmodule Styra.Protocol.Response do
   """
 
   @spellings [
+    {:rebase_started, "rebase_started"},
+    {:session_rebase_status, "session_rebase_status"},
     {:integration_started, "integration_started"},
     {:integration_message, "integration_message"},
     {:session_integration_result, "session_integration_result"},
@@ -3174,6 +3227,10 @@ defmodule Styra.Protocol.Response do
       nil -> :error
     end
   end
+
+  def rebase_started, do: "rebase_started"
+
+  def session_rebase_status, do: "session_rebase_status"
 
   def integration_started, do: "integration_started"
 

@@ -159,6 +159,20 @@ impl Client {
         }
     }
 
+    pub fn rebase_session(&self, id: &str) -> Result<()> {
+        match self.request(Request::RebaseSession { id: id.into() })? {
+            Response::RebaseStarted => Ok(()),
+            other => unexpected("rebase_started", other),
+        }
+    }
+
+    pub fn session_rebase_status(&self, id: &str) -> Result<crate::protocol::RebaseStatus> {
+        match self.request(Request::SessionRebaseStatus { id: id.into() })? {
+            Response::SessionRebaseStatus(status) => Ok(status),
+            other => unexpected("session_rebase_status", other),
+        }
+    }
+
     pub fn integrate_session(&self, id: &str, message: &str) -> Result<()> {
         match self.request(Request::IntegrateSession {
             id: id.into(),
@@ -810,6 +824,8 @@ fn request_operation(request: &Request) -> &'static str {
         Request::Workspace { .. } => "workspace",
         Request::WorkspaceForPath { .. } => "workspace_for_path",
         Request::RenameWorkspace(_) => "rename_workspace",
+        Request::RebaseSession { .. } => "rebase_session",
+        Request::SessionRebaseStatus { .. } => "session_rebase_status",
         Request::IntegrateSession { .. } => "integrate_session",
         Request::GenerateIntegrationMessage { .. } => "generate_integration_message",
         Request::SessionIntegrationResult { .. } => "session_integration_result",

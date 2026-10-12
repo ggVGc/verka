@@ -55,6 +55,8 @@ pub struct ServerState {
 
 #[path = "integration.rs"]
 mod integration;
+#[path = "rebase.rs"]
+mod rebase;
 
 struct ServerInner {
     store_root: PathBuf,
@@ -3688,6 +3690,7 @@ impl ServerState {
                 | Request::BranchSession { .. }
                 | Request::ConvertSessionProvider { .. }
                 | Request::CreateSessionWorktree { .. }
+                | Request::RebaseSession { .. }
                 | Request::IntegrateSession { .. }
         ) {
             Some(
@@ -3708,6 +3711,7 @@ impl ServerState {
             | Request::TurnAnswer { id, .. }
             | Request::SessionComposer { id }
             | Request::GenerateIntegrationMessage { id }
+            | Request::SessionRebaseStatus { id }
             | Request::SessionIntegrationResult { id }
             | Request::InteractionActions { id } => Some(id.as_str()),
             _ => match crate::actions::scope(&request) {
@@ -3893,6 +3897,13 @@ impl ServerState {
             Request::CreateSessionWorktree { id } => {
                 self.create_session_worktree(&id)?;
                 Ok(Response::SessionWorktreeCreated)
+            }
+            Request::RebaseSession { id } => {
+                self.start_rebase(&id)?;
+                Ok(Response::RebaseStarted)
+            }
+            Request::SessionRebaseStatus { id } => {
+                Ok(Response::SessionRebaseStatus(self.rebase_status(&id)?))
             }
             Request::IntegrateSession { id, message } => {
                 self.start_integration(&id, &message)?;

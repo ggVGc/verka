@@ -664,6 +664,21 @@ pub fn store_session_checkout(path: &Path, checkout: &Checkout) -> Result<()> {
     write_stored_session_meta(&directory, &stored)
 }
 
+/// Update the base only after verifying a rebase of this same checkout.
+pub fn store_rebased_checkout(path: &Path, checkout: &Checkout) -> Result<()> {
+    let mut stored = read_stored_session_meta(path)?;
+    let existing = stored
+        .checkout
+        .as_ref()
+        .context("session has no checkout")?;
+    anyhow::ensure!(
+        existing.path == checkout.path && existing.branch == checkout.branch,
+        "the session checkout changed during rebase"
+    );
+    stored.checkout = Some(checkout.clone());
+    write_stored_session_meta(path, &stored)
+}
+
 /// Record that a Session's checkout has been removed, keeping the branch it
 /// worked on.
 ///

@@ -215,7 +215,7 @@ impl ServerState {
             .collect();
         anyhow::ensure!(
             !active.iter().any(|held| held == id),
-            "this interaction is being integrated"
+            "this interaction is being rebased or integrated"
         );
         if active.is_empty() {
             return Ok(());
@@ -253,13 +253,13 @@ impl ServerState {
                                 },
                             )
                         })),
-                "this checkout is participating in integration"
+                "this checkout is participating in a rebase or integration"
             );
         }
         Ok(())
     }
 
-    fn integration_checkout(
+    pub(super) fn integration_checkout(
         &self,
         id: &str,
     ) -> Result<(SessionSummary, crate::worktree::Checkout, String)> {
@@ -483,7 +483,7 @@ impl ServerState {
                 if rebased {
                     break;
                 }
-                self.resolve_integration_conflicts(id, &source, path)?;
+                self.resolve_rebase_conflicts(id, &source, path, true)?;
             }
             let _git = self.inner.integration_git.lock().unwrap();
             anyhow::ensure!(
@@ -563,7 +563,13 @@ impl ServerState {
         self.set_session_completion(id, CompletionState::Sealed)
     }
 
-    fn resolve_integration_conflicts(&self, id: &str, source: &str, path: &Path) -> Result<()> {
+    pub(super) fn resolve_rebase_conflicts(
+        &self,
+        id: &str,
+        source: &str,
+        path: &Path,
+        integrate: bool,
+    ) -> Result<()> {
         if let Ok(interaction) = self.interaction(id) {
             if interaction.activity.activity().accepting() && interaction.workspace != path {
                 interaction.kill()?;
@@ -582,12 +588,17 @@ impl ServerState {
         }
         let interaction = self.interaction(id)?;
         let auto_commit = interaction.auto_commit.swap(false, Ordering::AcqRel);
+        let next = if integrate {
+            "Styra will integrate when the rebase succeeds."
+        } else {
+            "Styra will record the new base when the rebase succeeds. Keep the interaction branch and checkout."
+        };
         let resolution = (|| -> Result<()> {
             interaction.send_message(SendMessage {
                 text: format!("Resolve conflicts from rebase onto {source}. Resolve each conflict, stage the resolved files, \
                     and run GIT_EDITOR=true git rebase --continue until the rebase finishes. \
                     Preserve both branches' intended changes. Do not abort the rebase, merge, or squash commit; \
-                    Styra will integrate when the rebase succeeds."),
+                    {next}"),
                 selection: None, contract: None,
             })?;
             loop {
@@ -1124,6 +1135,234 @@ mod tests {
             std::fs::write(self.path().join("feature"), "two\n").unwrap();
             SystemGit.commit_all(self.path(), "feature two").unwrap();
         }
+    }
+
+    fn wait_for_rebase(fixture: &Fixture) -> crate::protocol::RebaseStatus {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = fixture.state.rebase_status(&fixture.id).unwrap();
+            if status.finished {
+                return status;
+            }
+            assert!(std::time::Instant::now() < deadline, "rebase timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn standalone_rebase_updates_the_base_and_keeps_the_interaction() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        std::fs::write(fixture.host.join("upstream"), "upstream\n").unwrap();
+        SystemGit.commit_all(&fixture.host, "upstream").unwrap();
+        let source = git(&fixture.host, &["rev-parse", "main"]);
+        fixture.state.start_rebase(&fixture.id).unwrap();
+        let status = wait_for_rebase(&fixture);
+        assert!(status.succeeded, "{}", status.message);
+        assert_eq!(status.source_commit, source);
+        let stored = journal::read_session_checkout(&fixture.session)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.path, fixture.checkout.path);
+        assert_eq!(stored.branch, fixture.checkout.branch);
+        assert_eq!(stored.branched_from.unwrap().commit, source);
+        assert_eq!(git(&fixture.host, &["rev-parse", "main"]), source);
+        assert_eq!(
+            git(fixture.path(), &["rev-list", "--count", "main..HEAD"]),
+            "2"
+        );
+        assert!(fixture.path().join("upstream").exists());
+        assert_eq!(
+            journal::read_session_completed(&fixture.session).unwrap(),
+            CompletionState::Active
+        );
+        assert!(!fixture.session.join("integration.json").exists());
+    }
+
+    #[test]
+    fn standalone_rebase_rejects_dirty_or_sealed_interactions() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.path().join("file"), "dirty\n").unwrap();
+        assert!(fixture.state.start_rebase(&fixture.id).is_err());
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session).unwrap(),
+            Some(fixture.checkout.clone())
+        );
+        assert!(!fixture.session.join("rebase.json").exists());
+        git(fixture.path(), &["checkout", "--", "file"]);
+        fixture
+            .state
+            .set_session_completion(&fixture.id, CompletionState::Sealed)
+            .unwrap();
+        assert!(fixture.state.start_rebase(&fixture.id).is_err());
+    }
+
+    #[test]
+    fn standalone_rebase_restores_a_removed_checkout() {
+        let fixture = Fixture::new();
+        SystemGit
+            .remove_worktree(&fixture.host, fixture.path())
+            .unwrap();
+        journal::clear_session_worktree(&fixture.session).unwrap();
+        fixture.state.start_rebase(&fixture.id).unwrap();
+        let status = wait_for_rebase(&fixture);
+        assert!(status.succeeded, "{}", status.message);
+        assert!(fixture.path().exists());
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session)
+                .unwrap()
+                .unwrap()
+                .path,
+            fixture.checkout.path
+        );
+    }
+
+    #[test]
+    fn standalone_rebase_records_the_pinned_source_even_if_the_branch_advances() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        let source = git(&fixture.host, &["rev-parse", "main"]);
+        std::fs::write(fixture.host.join("later"), "later\n").unwrap();
+        SystemGit.commit_all(&fixture.host, "later").unwrap();
+        let mut status = crate::protocol::RebaseStatus {
+            finished: false,
+            succeeded: false,
+            message: String::new(),
+            source_commit: source.clone(),
+        };
+        fixture
+            .state
+            .run_rebase(
+                &fixture.id,
+                fixture.checkout.clone(),
+                &mut status,
+                &fixture.session.join("rebase.json"),
+            )
+            .unwrap();
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session)
+                .unwrap()
+                .unwrap()
+                .branched_from
+                .unwrap()
+                .commit,
+            source
+        );
+        assert!(!fixture.path().join("later").exists());
+    }
+
+    #[test]
+    fn standalone_rebase_resolves_conflicts_before_recording_the_base() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.path().join("file"), "feature\n").unwrap();
+        SystemGit.commit_all(fixture.path(), "feature").unwrap();
+        std::fs::write(fixture.host.join("file"), "source\n").unwrap();
+        SystemGit.commit_all(&fixture.host, "source").unwrap();
+        let source = git(&fixture.host, &["rev-parse", "main"]);
+        let mut status = crate::protocol::RebaseStatus {
+            finished: false,
+            succeeded: false,
+            message: String::new(),
+            source_commit: source.clone(),
+        };
+        let record = fixture.session.join("rebase.json");
+        let mut called = false;
+        fixture
+            .state
+            .run_rebase_with_resolver(
+                &fixture.id,
+                fixture.checkout.clone(),
+                &mut status,
+                &record,
+                |id, target, path| {
+                    called = true;
+                    assert_eq!(id, fixture.id);
+                    assert_eq!(target, source);
+                    assert!(SystemGit.rebase_in_progress(path)?);
+                    assert_eq!(
+                        journal::read_session_checkout(&fixture.session)?,
+                        Some(fixture.checkout.clone())
+                    );
+                    let progress: crate::protocol::RebaseStatus =
+                        serde_json::from_slice(&std::fs::read(&record)?)?;
+                    assert!(progress.message.contains("Conflicts found"));
+                    std::fs::write(path.join("file"), "source and feature\n")?;
+                    git(path, &["add", "file"]);
+                    let output = Command::new("git")
+                        .arg("-C")
+                        .arg(path)
+                        .env("GIT_EDITOR", "true")
+                        .args(["rebase", "--continue"])
+                        .output()?;
+                    anyhow::ensure!(output.status.success(), "rebase continue failed");
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(called);
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session)
+                .unwrap()
+                .unwrap()
+                .branched_from
+                .unwrap()
+                .commit,
+            source
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.path().join("file")).unwrap(),
+            "source and feature\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.host.join("file")).unwrap(),
+            "source\n"
+        );
+    }
+
+    #[test]
+    fn standalone_rebase_keeps_the_old_base_when_conflict_resolution_fails() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.path().join("file"), "feature\n").unwrap();
+        SystemGit.commit_all(fixture.path(), "feature").unwrap();
+        std::fs::write(fixture.host.join("file"), "source\n").unwrap();
+        SystemGit.commit_all(&fixture.host, "source").unwrap();
+        let mut status = crate::protocol::RebaseStatus {
+            finished: false,
+            succeeded: false,
+            message: String::new(),
+            source_commit: git(&fixture.host, &["rev-parse", "main"]),
+        };
+        assert!(fixture
+            .state
+            .run_rebase_with_resolver(
+                &fixture.id,
+                fixture.checkout.clone(),
+                &mut status,
+                &fixture.session.join("rebase.json"),
+                |_, _, _| { anyhow::bail!("resolver stopped") }
+            )
+            .is_err());
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session).unwrap(),
+            Some(fixture.checkout.clone())
+        );
+        assert!(SystemGit.rebase_in_progress(fixture.path()).unwrap());
+    }
+
+    #[test]
+    fn standalone_rebase_refuses_an_unrelated_conflicted_rebase() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.path().join("file"), "feature\n").unwrap();
+        SystemGit.commit_all(fixture.path(), "feature").unwrap();
+        std::fs::write(fixture.host.join("file"), "source\n").unwrap();
+        SystemGit.commit_all(&fixture.host, "source").unwrap();
+        assert!(!SystemGit.rebase(fixture.path(), "main").unwrap());
+        assert!(fixture.state.start_rebase(&fixture.id).is_err());
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session).unwrap(),
+            Some(fixture.checkout.clone())
+        );
+        assert!(SystemGit.rebase_in_progress(fixture.path()).unwrap());
     }
 
     #[test]

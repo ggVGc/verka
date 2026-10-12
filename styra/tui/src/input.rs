@@ -328,6 +328,9 @@ pub fn handle_list_key(
         }
         k if GLOBAL_STOP.matches(k) => return session::pause_interaction(app, client, live),
         k if GLOBAL_BRANCH.matches(k) => return session::open_branch_prompt(app),
+        k if GLOBAL_REBASE.matches(k) && !app.session_id.is_empty() => {
+            return app.ask(Request::Rebase);
+        }
         k if GLOBAL_INTEGRATE.matches(k) && !app.session_id.is_empty() => {
             app.integration_prompt = Some(String::new());
             return;

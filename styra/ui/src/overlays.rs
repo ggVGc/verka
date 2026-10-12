@@ -7,6 +7,43 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+pub fn render_rebase_status(frame: &mut Frame, status: &styra_protocol::RebaseStatus) {
+    let outer = frame.area();
+    let width = outer.width.saturating_sub(4).min(82);
+    let height = outer.height.min(10);
+    let area = Rect {
+        x: outer.x + outer.width.saturating_sub(width) / 2,
+        y: outer.y + outer.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    let title = if !status.finished {
+        " rebasing interaction "
+    } else if status.succeeded {
+        " rebase completed "
+    } else {
+        " rebase stopped "
+    };
+    let footer = if status.finished {
+        " Enter / Esc close "
+    } else {
+        " Working · conflicts are resolved by the current model "
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(status.message.as_str())
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme::ACCENT))
+                    .title(title)
+                    .title_bottom(footer),
+            ),
+        area,
+    );
+}
+
 pub fn render_integration_message(frame: &mut Frame, message: &str) {
     text_prompt::render(
         frame,
@@ -402,6 +439,36 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn rebase_modal_shows_progress_and_final_outcomes() {
+        for (finished, succeeded, title) in [
+            (false, false, "rebasing interaction"),
+            (true, true, "rebase completed"),
+            (true, false, "rebase stopped"),
+        ] {
+            let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+            let status = styra_protocol::RebaseStatus {
+                finished,
+                succeeded,
+                message: "Resolving conflicts in file.rs".into(),
+                source_commit: "abc123".into(),
+            };
+            terminal
+                .draw(|frame| render_rebase_status(frame, &status))
+                .unwrap();
+            let screen: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(screen.contains(title));
+            assert!(screen.contains(&status.message));
+            assert_eq!(screen.contains("Enter / Esc close"), finished);
+        }
     }
 
     #[test]

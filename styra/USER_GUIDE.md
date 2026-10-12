@@ -481,6 +481,19 @@ the worktree parent that no Session records is listed with no Sessions under
 it. Listing changes nothing. Inside the interface, `w` shows the same list and
 jumps to the session you pick.
 
+### Rebasing an interaction
+
+Press `Ctrl+B` while viewing an interaction to rebase its branch onto the current
+commit of its recorded source branch. A modal shows progress, conflict resolution,
+and the final result; press `Enter` or `Esc` to close it when the action finishes.
+The interaction must be idle, with its changes committed and no queued messages.
+
+If conflicts occur, Styra resumes the interaction using its current model and
+asks it to resolve the conflicts and finish the rebase. On success, Styra records
+the new source commit as the interaction's base for future diffs. The branch,
+checkout, and conversation remain available. On failure, the previous base stays
+recorded; press `Ctrl+B` again to retry.
+
 ### Cleaning up the checkouts you are done with
 
 Press `I` while viewing an interaction to integrate its linked checkout into

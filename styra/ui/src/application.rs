@@ -101,6 +101,7 @@ pub struct PanelFeedback {
 
 #[derive(Default)]
 pub struct ApplicationOverlays<'a> {
+    pub rebase_status: Option<&'a styra_protocol::RebaseStatus>,
     pub integration_message: Option<&'a str>,
     pub launcher: Option<&'a crate::launcher::LauncherView>,
     pub input: Option<&'a modal_input::ModalInput<'a>>,
@@ -409,6 +410,9 @@ fn note_preview_scroll(
 }
 
 fn render_reading_overlays(frame: &mut Frame, view: &ApplicationOverlays<'_>) {
+    if let Some(status) = view.rebase_status {
+        overlays::render_rebase_status(frame, status);
+    }
     if let Some(message) = view.integration_message {
         overlays::render_integration_message(frame, message);
     }

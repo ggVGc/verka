@@ -34,6 +34,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_SESSION_WORKTREE: [Key::ch('W')] ("existing session")
         => Action::GlobalSessionWorktree;
     GLOBAL_TAGS: [Key::ch('T')] => Action::GlobalTags;
+    GLOBAL_REBASE: [Key::ctrl('b')] => Action::GlobalRebase;
     GLOBAL_INTEGRATE: [Key::ch('I')] => Action::GlobalIntegrate;
     GLOBAL_RAW: [Key::ch('r')] => Action::GlobalRaw;
     GLOBAL_LOG: [Key::ctrl('l')] => Action::GlobalLog;
