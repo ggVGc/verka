@@ -46,7 +46,7 @@ pub fn sessions_dir(store_root: &Path, workspace_id: &str) -> PathBuf {
 
 /// Durable parent for linked Git worktrees created on behalf of this Workspace.
 pub fn worktrees_dir(store_root: &Path, workspace_id: &str) -> PathBuf {
-    workspace_dir(store_root, workspace_id).join("worktrees")
+    workspace_dir(store_root, workspace_id).join(styra_protocol::WORKTREES_DIR)
 }
 
 /// Create a durable Workspace for `host_path`.

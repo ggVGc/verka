@@ -20,6 +20,7 @@ pub use types::{
     LaunchPolicy, LogEntry, LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent,
     QuotaStatus, RawLine, RecentMessage, SessionOrigin, SessionSummary, TemplateSummary,
     VariableOrigin, WorkspaceSummary, WorktreeCleanup, WorktreeSession, WorktreeSummary,
+    WORKTREES_DIR,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export

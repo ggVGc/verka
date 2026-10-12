@@ -42,6 +42,7 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
         last_accessed_at_ms: app.workspace.last_accessed_at_ms,
         root: app.workspace.root().map(ToOwned::to_owned),
         working_directory: app.workspace.working_directory_or_current(),
+        worktrees: app.workspace.worktrees_path(),
     };
     DrivaView {
         chrome: super::panel_chrome(app, Some("details")),

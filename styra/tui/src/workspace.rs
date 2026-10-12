@@ -69,6 +69,14 @@ impl Location {
         self.last_accessed_at_ms = Some(workspace.last_accessed_at_ms);
     }
 
+    /// Where the server parks this Workspace's linked worktrees, once the
+    /// server has said where the Workspace is stored.
+    pub fn worktrees_path(&self) -> Option<PathBuf> {
+        self.server_path
+            .as_ref()
+            .map(|path| path.join(styra_protocol::WORKTREES_DIR))
+    }
+
     /// The host directory backing the agent's workspace, if there is a live
     /// one. `None` for a replayed journal.
     pub fn root(&self) -> Option<&Path> {

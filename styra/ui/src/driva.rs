@@ -20,6 +20,7 @@
 //! mount, the profile's credential mounts, the broker's control mount.
 
 use crate::chrome::{panel_block, PanelChrome};
+use crate::placeholders::{self, Placeholders};
 use crate::text_prompt::{self, TextPrompt};
 use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -105,66 +106,31 @@ pub struct DrivaWorkspace {
     pub last_accessed_at_ms: Option<u64>,
     pub root: Option<PathBuf>,
     pub working_directory: Option<PathBuf>,
+    /// Where the server parks this Workspace's linked worktrees.
+    pub worktrees: Option<PathBuf>,
 }
 
 impl DrivaWorkspace {
-    fn root(&self) -> Option<&std::path::Path> {
-        self.root.as_deref()
-    }
     fn working_directory_or_current(&self) -> Option<PathBuf> {
         self.working_directory.clone()
     }
-    /// The path [`WORKSPACE_PLACEHOLDER`] stands for: the Workspace's own
-    /// directory, or the live root when the server has not named one.
+    /// The path [`placeholders::WORKSPACE`] stands for: the Workspace's own
+    /// directory, or the live root before the server has named one. Not the
+    /// root first: an interaction in a linked worktree has that as its root,
+    /// and it is the worktree's name that should show.
     fn placeholder_path(&self) -> Option<&Path> {
         self.host_path.as_deref().or(self.root.as_deref())
     }
-    /// `lines` with every whole occurrence of the workspace path, or of a path
-    /// under it, written with [`WORKSPACE_PLACEHOLDER`] instead.
+    fn placeholders(&self) -> Placeholders {
+        Placeholders::default()
+            .with(self.placeholder_path(), placeholders::WORKSPACE)
+            .with(self.worktrees.as_deref(), placeholders::WORKTREES)
+    }
+    /// `lines` with the workspace and worktrees directories, and the paths
+    /// under them, written as their placeholders.
     fn abbreviate(&self, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-        let Some(path) = self.placeholder_path().and_then(Path::to_str) else {
-            return lines;
-        };
-        if path.is_empty() || path == "/" {
-            return lines;
-        }
-        let path = path.trim_end_matches('/');
-        lines
-            .into_iter()
-            .map(|mut line| {
-                for span in &mut line.spans {
-                    if span.content.contains(path) {
-                        span.content = abbreviate_path(&span.content, path).into();
-                    }
-                }
-                line
-            })
-            .collect()
+        self.placeholders().lines(lines)
     }
-}
-
-/// What the workspace path is written as everywhere but the one row that says
-/// what it stands for.
-const WORKSPACE_PLACEHOLDER: &str = "<ws>";
-
-/// `text` with each occurrence of `path` that is a whole path, or the leading
-/// part of one, replaced by [`WORKSPACE_PLACEHOLDER`]. `/a/proj` is not taken
-/// out of `/a/project` or `/b/a/proj`.
-fn abbreviate_path(text: &str, path: &str) -> String {
-    let part_of_path = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/');
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find(path) {
-        let before = rest[..at].chars().last().or_else(|| out.chars().last());
-        let after = rest[at + path.len()..].chars().next();
-        out.push_str(&rest[..at]);
-        let whole = !before.is_some_and(part_of_path)
-            && !after.is_some_and(|c| c != '/' && part_of_path(c));
-        out.push_str(if whole { WORKSPACE_PLACEHOLDER } else { path });
-        rest = &rest[at + path.len()..];
-    }
-    out.push_str(rest);
-    out
 }
 
 pub struct DrivaActivity {
@@ -265,15 +231,6 @@ pub fn render(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
     render_tabs(frame, app.tab, tabs);
     inner.y = inner.y.saturating_add(tabs.height);
     inner.height = inner.height.saturating_sub(tabs.height);
-    if let Some(path) = app.workspace.placeholder_path() {
-        let legend = Rect {
-            height: inner.height.min(1),
-            ..inner
-        };
-        render_workspace_legend(frame, path, legend);
-        inner.y = inner.y.saturating_add(legend.height);
-        inner.height = inner.height.saturating_sub(legend.height);
-    }
 
     if app.tab == DetailsTab::Sandbox {
         return render_sandbox(frame, app, options, inner);
@@ -351,30 +308,6 @@ fn render_tabs(frame: &mut Frame, selected: DetailsTab, area: Rect) {
     );
 }
 
-/// The one place the workspace path is spelled out; everywhere else on both
-/// tabs it reads as [`WORKSPACE_PLACEHOLDER`], so the paths under it stay short
-/// enough to read and the part that differs between them is what stands out.
-fn render_workspace_legend(frame: &mut Frame, path: &Path, area: Rect) {
-    if area.height == 0 {
-        return;
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!(" {WORKSPACE_PLACEHOLDER} "),
-                Style::default()
-                    .fg(theme::ACCENT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                path.display().to_string(),
-                Style::default().fg(theme::TEXT),
-            ),
-        ])),
-        area,
-    );
-}
-
 /// Take `wanted` rows off the bottom of `area`, leaving at least `floor` there,
 /// and shrink `area` by what was taken. A zero-height result is a pane there was
 /// no room for; rendering it draws nothing.
@@ -394,8 +327,8 @@ fn render_overview(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedb
     if area.height == 0 {
         return DrivaFeedback::default();
     }
-    let workspace = app.workspace.abbreviate(workspace_lines(app));
-    let interaction = app.workspace.abbreviate(interaction_lines(app));
+    let workspace = workspace_lines(app);
+    let interaction = interaction_lines(app);
     let sandbox = app.workspace.abbreviate(sandbox_summary_lines(app));
 
     // A single-column form is also the scrollable fallback: it retains the
@@ -1026,6 +959,10 @@ fn workspace_lines(app: &DrivaView) -> Vec<Line<'static>> {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "unknown".into()),
     ));
+    let mut lines = app.workspace.abbreviate(lines);
+    if let Some(worktrees) = &app.workspace.worktrees {
+        lines.push(defining_line("worktrees", worktrees, placeholders::WORKTREES));
+    }
     let sessions = app
         .workspace
         .session_count
@@ -1133,6 +1070,9 @@ fn interaction_lines(app: &DrivaView) -> Vec<Line<'static>> {
     if app.session_id.is_empty() {
         lines.push(detail_field_line("state", "none — not started"));
         lines.push(detail_field_line("profile", &app.selection_name));
+        if app.workspace.placeholder_path().is_some() {
+            lines.push(workspace_path_line(app));
+        }
         return lines;
     }
     lines.extend([
@@ -1161,13 +1101,9 @@ fn interaction_lines(app: &DrivaView) -> Vec<Line<'static>> {
                 "no"
             },
         ),
-        detail_field_line(
-            "workspace",
-            &app.workspace
-                .root()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "unknown".into()),
-        ),
+    ]);
+    lines.push(workspace_path_line(app));
+    let mut rest = vec![
         detail_field_line(
             "working dir",
             &app.workspace
@@ -1176,13 +1112,46 @@ fn interaction_lines(app: &DrivaView) -> Vec<Line<'static>> {
                 .unwrap_or_else(|| "unknown".into()),
         ),
         detail_field_line("queued", &app.queued_count.to_string()),
-    ]);
-    lines.extend(checkout_lines(app.checkout.as_ref()));
-    lines.extend(app.branched_from.as_ref().map(branched_from_line));
+    ];
+    rest.extend(checkout_lines(app.checkout.as_ref()));
+    rest.extend(app.branched_from.as_ref().map(branched_from_line));
     if let Some(message) = &app.last_message {
-        lines.push(detail_field_line("last message", &message));
+        rest.push(detail_field_line("last message", &message));
     }
+    lines.extend(app.workspace.abbreviate(rest));
     lines
+}
+
+/// The one row that spells the workspace path out, saying what it is written
+/// as everywhere else in the view.
+fn workspace_path_line(app: &DrivaView) -> Line<'static> {
+    let Some(path) = app.workspace.placeholder_path() else {
+        return detail_field_line("workspace", "unknown");
+    };
+    let mut line = defining_line("workspace", path, placeholders::WORKSPACE);
+    // An interaction in a linked worktree is rooted there instead, which is
+    // the one thing about it this row would otherwise leave out.
+    if let Some(root) = app.workspace.root.as_deref().filter(|root| *root != path) {
+        line.push_span(Span::styled(
+            format!(
+                " · rooted at {}",
+                app.workspace.placeholders().apply(&root.display().to_string())
+            ),
+            Style::default().fg(theme::TEXT),
+        ));
+    }
+    line
+}
+
+/// A row giving `path` in full, as the definition of `placeholder`, which the
+/// rest of the view writes it as.
+fn defining_line(label: &str, path: &Path, placeholder: &str) -> Line<'static> {
+    let mut line = detail_field_line(label, &path.display().to_string());
+    line.push_span(Span::styled(
+        format!(" ({placeholder})"),
+        Style::default().fg(theme::ADDITIONAL_INFO),
+    ));
+    line
 }
 
 /// Where the agent was working, in Git's terms: the branch it was on and the
@@ -1828,6 +1797,7 @@ mod tests {
                 last_accessed_at_ms: None,
                 root: None,
                 working_directory: None,
+                worktrees: None,
             },
             activity: DrivaActivity {
                 status: if editable {
@@ -2008,17 +1978,58 @@ mod tests {
         assert!(lines[0].contains("not a Git checkout"), "{lines:?}");
     }
 
+    fn row(lines: &[String], label: &str) -> String {
+        lines
+            .iter()
+            .find(|line| line.trim_start().starts_with(label))
+            .unwrap_or_else(|| panic!("no {label} row in {lines:?}"))
+            .clone()
+    }
+
     #[test]
-    fn the_workspace_path_is_written_as_the_placeholder_only_where_it_is_whole() {
-        let ws = "/home/me/proj";
-        assert_eq!(abbreviate_path("/home/me/proj", ws), "<ws>");
-        assert_eq!(
-            abbreviate_path("/home/me/proj → /home/me/proj/src (rw)", ws),
-            "<ws> → <ws>/src (rw)"
+    fn the_workspace_row_spells_out_the_path_the_placeholder_stands_for() {
+        let policy = LaunchPolicy::default();
+        let mut view = view(true, &policy, &policy);
+        view.workspace.root = Some(PathBuf::from("/home/me/proj"));
+        view.workspace.working_directory = Some(PathBuf::from("/home/me/proj/src"));
+        let lines = text(interaction_lines(&view));
+
+        assert!(
+            row(&lines, "workspace").trim_end().ends_with(" /home/me/proj (<ws>)"),
+            "{lines:?}"
         );
-        assert_eq!(abbreviate_path("/home/me/project", ws), "/home/me/project");
-        assert_eq!(abbreviate_path("/mnt/home/me/proj", ws), "/mnt/home/me/proj");
-        assert_eq!(abbreviate_path("PWD=/home/me/proj:", ws), "PWD=<ws>:");
+        assert!(row(&lines, "working dir").contains("<ws>/src"), "{lines:?}");
+    }
+
+    /// An interaction in a linked worktree reads by the worktree's name, with
+    /// the directory all worktrees share spelled out once in the Workspace.
+    #[test]
+    fn a_linked_worktree_is_named_under_the_worktrees_placeholder() {
+        let policy = LaunchPolicy::default();
+        let mut view = view(true, &policy, &policy);
+        view.workspace.host_path = Some(PathBuf::from("/home/me/proj"));
+        view.workspace.worktrees = Some(PathBuf::from("/store/w1/worktrees"));
+        view.workspace.root = Some(PathBuf::from("/store/w1/worktrees/fix-retries"));
+        view.workspace.working_directory =
+            Some(PathBuf::from("/store/w1/worktrees/fix-retries/src"));
+        view.checkout = Some(state(
+            "/store/w1/worktrees/fix-retries",
+            "/home/me/proj",
+            Some("styra/fix-retries"),
+        ));
+        let interaction = text(interaction_lines(&view));
+        let workspace = text(workspace_lines(&view));
+
+        assert!(
+            row(&interaction, "workspace")
+                .contains("/home/me/proj (<ws>) · rooted at <wt>/fix-retries"),
+            "{interaction:?}"
+        );
+        assert!(row(&interaction, "working dir").contains("<wt>/fix-retries/src"));
+        assert!(row(&interaction, "worktree")
+            .contains("<wt>/fix-retries · linked from <ws>"));
+        assert!(row(&workspace, "worktrees").contains("/store/w1/worktrees (<wt>)"));
+        assert!(row(&workspace, "host path").contains("<ws>"));
     }
 
     #[test]

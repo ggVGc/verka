@@ -14,6 +14,7 @@ use std::time::Duration;
 use styra_protocol::{CompletionState, WorkspaceSummary, WorktreeSession, WorktreeSummary};
 use styra_server::Client;
 use styra_ui::fuzzy_list::FuzzyList;
+use styra_ui::placeholders::{self, Placeholders};
 use styra_ui::worktrees::WorktreePickerView;
 use styra_ui::Ui;
 
@@ -145,13 +146,33 @@ fn detail(
     session: Option<&WorktreeSession>,
     workspaces: &[WorkspaceSummary],
 ) -> Vec<(&'static str, String)> {
+    // The directory every worktree of a Workspace shares is written as a
+    // placeholder, so the worktree's own name is what the path shows, and is
+    // spelled out on a line of its own.
+    let root = workspaces
+        .iter()
+        .find(|workspace| workspace.id == worktree.workspace_id)
+        .map(WorkspaceSummary::worktrees_path);
+    let placeholders = Placeholders::default().with(root.as_deref(), placeholders::WORKTREES);
+    let shorten = |path: &std::path::Path| placeholders.apply(&path.display().to_string());
     let location = match &worktree.worktree {
-        Some(path) if worktree.exists => path.display().to_string(),
-        Some(path) => format!("{} — not on disk any more", path.display()),
+        Some(path) if worktree.exists => shorten(path),
+        Some(path) => format!("{} — not on disk any more", shorten(path)),
         None => "none; opening the session checks its branch out again".to_owned(),
     };
-    let mut lines = vec![
-        ("worktree", location),
+    let mut lines = vec![("worktree", location)];
+    if let Some(root) = root.filter(|root| {
+        worktree
+            .worktree
+            .as_deref()
+            .is_some_and(|path| path.starts_with(root))
+    }) {
+        lines.push((
+            "worktrees",
+            format!("{} ({})", root.display(), placeholders::WORKTREES),
+        ));
+    }
+    lines.extend([
         (
             "branch",
             worktree
@@ -159,7 +180,7 @@ fn detail(
                 .clone()
                 .unwrap_or_else(|| "unknown; no session records this checkout".to_owned()),
         ),
-    ];
+    ]);
     lines.push((
         "Workspace",
         workspace_name(workspaces, &worktree.workspace_id),
@@ -465,6 +486,16 @@ mod tests {
                 ("shared", "2 sessions work in this checkout".to_owned()),
             ]
         );
+        let parked = detail(
+            &worktrees[0],
+            Some(&worktrees[0].sessions[1]),
+            &[WorkspaceSummary {
+                path: "/state".into(),
+                ..workspace("w-1")
+            }],
+        );
+        assert_eq!(parked[0], ("worktree", "<wt>/fix-flaky-test-s-1".to_owned()));
+        assert_eq!(parked[1], ("worktrees", "/state/worktrees (<wt>)".to_owned()));
         let gone = detail(&worktrees[1], Some(&worktrees[1].sessions[0]), &workspaces);
         assert_eq!(
             gone[0],

@@ -522,10 +522,20 @@ fn draw_main(
             },
         })
         .collect::<Vec<_>>();
+    // A linked worktree's path is long and the same up to its name, which is
+    // what tells one interaction's checkout from another's.
+    let worktrees = app.workspace.worktrees_path();
     let working_directory = app
         .workspace
         .working_directory_or_current()
-        .map(|path| path.display().to_string())
+        .map(|path| {
+            styra_ui::placeholders::Placeholders::default()
+                .with(
+                    worktrees.as_deref(),
+                    styra_ui::placeholders::WORKTREES,
+                )
+                .apply(&path.display().to_string())
+        })
         .unwrap_or_default();
     let quota_alert = quota::alert(app);
     let footer = styra_ui::footer::FooterView {

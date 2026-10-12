@@ -36,6 +36,7 @@ pub mod overlays;
 pub mod overview;
 pub mod palette;
 pub mod picker;
+pub mod placeholders;
 pub mod preview;
 pub mod quota;
 pub mod raw;

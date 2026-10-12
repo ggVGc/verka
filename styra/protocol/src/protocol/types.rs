@@ -52,6 +52,17 @@ pub struct WorkspaceSummary {
     pub launch: LaunchPolicy,
 }
 
+/// The directory under a Workspace's [`WorkspaceSummary::path`] holding the
+/// linked Git worktrees the server creates for its Sessions.
+pub const WORKTREES_DIR: &str = "worktrees";
+
+impl WorkspaceSummary {
+    /// Where the server parks this Workspace's linked worktrees.
+    pub fn worktrees_path(&self) -> PathBuf {
+        self.path.join(WORKTREES_DIR)
+    }
+}
+
 /// An update delivered from the interaction's threads to the UI.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
