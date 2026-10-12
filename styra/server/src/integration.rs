@@ -105,6 +105,147 @@ mod tests {
     }
 
     #[test]
+    fn completion_allows_shared_work_but_blocks_the_last_active_interaction() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        let session = fixture.state.stored_summary(&fixture.id).unwrap();
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile =
+            crate::agent::resolve_profile(&selection, &workspace_layout(&fixture.host)).unwrap();
+        let (journal, separate_id) = Journal::create_in_workspace(
+            fixture.state.store_root(),
+            &session.workspace_id,
+            &profile,
+            &selection,
+            None,
+        )
+        .unwrap();
+        let separate_path = journal.path().parent().unwrap().to_path_buf();
+        let workspace =
+            crate::workspace::get(fixture.state.store_root(), &session.workspace_id).unwrap();
+        let separate_checkout = fixture
+            .state
+            .workspace_worktrees(&workspace, true)
+            .unwrap()
+            .unwrap()
+            .checkout(&separate_id, None)
+            .unwrap();
+        journal::store_session_checkout(&separate_path, &separate_checkout).unwrap();
+        assert!(
+            fixture
+                .state
+                .handle(Request::SetSessionCompleted {
+                    id: fixture.id.clone(),
+                    completed: CompletionState::Completed,
+                })
+                .is_err(),
+            "an interaction in another worktree does not count"
+        );
+        drop(journal);
+        let (journal, other_id) = Journal::create_in_workspace(
+            fixture.state.store_root(),
+            &session.workspace_id,
+            &profile,
+            &selection,
+            None,
+        )
+        .unwrap();
+        let other_path = journal.path().parent().unwrap().to_path_buf();
+        journal::store_session_checkout(&other_path, &fixture.checkout).unwrap();
+        drop(journal);
+
+        // Dirty work is safe to leave with another active interaction too.
+        std::fs::write(fixture.path().join("untracked"), "work").unwrap();
+        fixture
+            .state
+            .handle(Request::SetSessionCompleted {
+                id: fixture.id.clone(),
+                completed: CompletionState::Completed,
+            })
+            .unwrap();
+        assert_eq!(
+            journal::read_session_completed(&fixture.session).unwrap(),
+            CompletionState::Completed
+        );
+        for completed in [
+            CompletionState::Completed,
+            CompletionState::Abandoned,
+            CompletionState::Sealed,
+        ] {
+            journal::store_session_completed(&fixture.session, completed).unwrap();
+            let error = fixture
+                .state
+                .handle(Request::SetSessionCompleted {
+                    id: other_id.clone(),
+                    completed: CompletionState::Completed,
+                })
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("last active interaction"),
+                "{error:#}"
+            );
+            assert_eq!(
+                journal::read_session_completed(&other_path).unwrap(),
+                CompletionState::Active
+            );
+        }
+        std::fs::remove_file(fixture.path().join("untracked")).unwrap();
+        git(
+            &fixture.host,
+            &["merge", "--ff-only", &fixture.checkout.branch],
+        );
+        fixture
+            .state
+            .handle(Request::SetSessionCompleted {
+                id: other_id,
+                completed: CompletionState::Completed,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn completion_counts_active_interactions_in_an_unrecorded_worktree() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        let workspace =
+            crate::workspace::create(fixture.state.store_root(), fixture.path(), None).unwrap();
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile =
+            crate::agent::resolve_profile(&selection, &workspace_layout(fixture.path())).unwrap();
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let (journal, id) = Journal::create_in_workspace(
+                fixture.state.store_root(),
+                &workspace.id,
+                &profile,
+                &selection,
+                None,
+            )
+            .unwrap();
+            assert!(
+                journal::read_session_checkout(journal.path().parent().unwrap())
+                    .unwrap()
+                    .is_none()
+            );
+            ids.push(id);
+        }
+        fixture
+            .state
+            .handle(Request::SetSessionCompleted {
+                id: ids[0].clone(),
+                completed: CompletionState::Completed,
+            })
+            .unwrap();
+        assert!(fixture
+            .state
+            .handle(Request::SetSessionCompleted {
+                id: ids[1].clone(),
+                completed: CompletionState::Completed,
+            })
+            .is_err());
+    }
+
+    #[test]
     fn completion_refuses_unmerged_changes_and_leaves_the_session_active() {
         let fixture = Fixture::new();
         let complete = || {
@@ -558,12 +699,12 @@ mod tests {
 }
 
 impl ServerState {
-    /// Operator completion must not hide work still waiting to be merged.
-    /// Integration itself completes through `set_session_completion` after
-    /// verifying its squash commit and removing the checkout.
-    pub(super) fn ensure_checkout_integrated(&self, id: &str) -> Result<()> {
-        let session = self.stored_summary(id)?;
-        let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
+    /// Resolve both recorded checkouts and worktrees reached by the agent.
+    fn completion_checkout(
+        &self,
+        session: &SessionSummary,
+    ) -> Result<Option<crate::worktree::Checkout>> {
+        let id = &session.id;
         let mut checkout = self.session_checkout(&session.path, &session.workspace_id, id)?;
         // A Workspace can itself be a linked worktree, or the agent can move
         // into one. Neither requires a Styra-created checkout record.
@@ -575,7 +716,7 @@ impl ServerState {
         {
             None
         } else {
-            let (host, sandbox) = self.stored_workspace_mount(&session)?;
+            let (host, sandbox) = self.stored_workspace_mount(session)?;
             let meta = journal::read_session_meta(&session.path)?;
             let reported = journal::last_reported_cwd(&session.path, meta.protocol)?;
             Some(
@@ -610,10 +751,34 @@ impl ServerState {
                 }
             }
         }
-        let Some(checkout) = checkout else {
+        Ok(checkout)
+    }
+
+    /// The last active interaction must not hide work waiting to be merged.
+    /// Integration itself completes through `set_session_completion` after
+    /// verifying its squash commit and removing the checkout.
+    pub(super) fn ensure_checkout_integrated(&self, id: &str) -> Result<()> {
+        let session = self.stored_summary(id)?;
+        let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
+        let Some(checkout) = self.completion_checkout(&session)? else {
             return Ok(());
         };
-        let refusal = "this interaction has unmerged checkout changes; integrate it before marking it completed";
+        if let Some(path) = &checkout.path {
+            for other in journal::list_workspace_sessions(&self.inner.store_root, &workspace.id)? {
+                if other.id == id || other.completed != CompletionState::Active {
+                    continue;
+                }
+                if self
+                    .completion_checkout(&other)?
+                    .and_then(|checkout| checkout.path)
+                    .as_ref()
+                    == Some(path)
+                {
+                    return Ok(());
+                }
+            }
+        }
+        let refusal = "this is the last active interaction in a checkout with unmerged changes; integrate it before marking it completed";
         let path = checkout.path.as_deref().filter(|path| path.exists());
         if let Some(path) = path {
             anyhow::ensure!(!self.inner.git.has_uncommitted_changes(path)?, "{refusal}");
