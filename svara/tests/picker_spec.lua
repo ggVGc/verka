@@ -252,9 +252,38 @@ do
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   assert(lines[3] == "three and four", vim.inspect(lines))
   assert(vim.api.nvim_win_get_cursor(0)[1] == 1, "the edit moved the cursor")
+  -- Its marker, at the first line of the range, says it is done.
+  local markers = require("svara.markers")
+  local marker = assert(markers.all()[1], "no marker where the edit was asked")
+  assert(markers.row(marker) == 1, tostring(markers.row(marker)))
+  assert(markers.text(marker):find("✓ svara edited: make it four", 1, true), markers.text(marker))
+
+  -- A follow-up from its view continues the same interaction, on the same
+  -- marker.
+  local compose, continued = require("svara.compose"), nil
+  local open = compose.open
+  compose.open = function(options)
+    options.on_send("and five", false, { done = function() end, failed = error })
+  end
+  local continue_interaction = core.continue_interaction
+  core.continue_interaction = function(interaction, message, _, on_done)
+    continued = { interaction = interaction, message = message, on_done = on_done }
+    return {}, nil, { id = "styra-5" }
+  end
+  marker.follow_up(marker)
+  compose.open, core.continue_interaction = open, continue_interaction
+  assert(continued.interaction.id == "styra-5" and continued.interaction.kind == "edit",
+    vim.inspect(continued.interaction))
+  assert(continued.message == "and five", continued.message)
+  assert(#markers.all() == 1 and marker.state == "waiting")
+  assert(markers.text(marker):find("following up: and five · 2 turns", 1, true), markers.text(marker))
+  continued.on_done({ { filename = file, lnum = 3, text = "five" } })
+  assert(markers.text(marker):find("✓ svara edited: and five", 1, true), markers.text(marker))
+  vim.cmd("SvaraAck")
+  assert(#markers.all() == 0, "the marker was not acknowledged")
   vim.cmd("SvaraJump")
   assert(vim.api.nvim_win_get_cursor(0)[1] == 3, vim.inspect(vim.api.nvim_win_get_cursor(0)))
-  assert(vim.fn.getqflist({ title = 0 }).title == "Svara edit: make it four")
+  assert(vim.fn.getqflist({ title = 0 }).title == "Svara edit: and five")
 end
 
 print("svara picker tests passed")

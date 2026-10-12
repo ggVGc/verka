@@ -441,5 +441,95 @@ do
   assert(long:find("… 3s$"), long)
 end
 
+-- The markers left where a request was made --------------------------------
+
+do
+  local markers = require("svara.markers")
+  local file = home .. "/docs/auth.md"
+  vim.fn.writefile({ "a", "b", "c", "d" }, file)
+  vim.cmd.edit(file)
+  local buffer = vim.api.nvim_get_current_buf()
+
+  local function text_on(row)
+    local found = vim.api.nvim_buf_get_extmarks(buffer, markers.namespace, { row, 0 }, { row, -1 }, { details = true })
+    return found[1] and found[1][4].virt_text[1][1]
+  end
+
+  local scratch = vim.api.nvim_create_buf(false, true)
+  assert(markers.place(scratch, 1, "nowhere", "ask") == nil, "a buffer with no file got a marker")
+  markers.finish(nil, {})
+
+  local marker = assert(markers.place(buffer, 3, "where is auth?", "ask"))
+  assert(text_on(2):find("asking: where is auth?", 1, true), text_on(2))
+  assert(not text_on(2):find(":SvaraAck", 1, true), "a waiting marker offers to be acknowledged")
+
+  -- It follows its line as lines are added above it.
+  vim.api.nvim_buf_set_lines(buffer, 0, 0, false, { "new" })
+  assert(markers.row(marker) == 3, tostring(markers.row(marker)))
+
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  assert(markers.near_cursor() == marker, "no marker found in the buffer")
+  assert(markers.near_cursor(true) == nil, "a waiting marker counted as finished")
+
+  markers.finish(marker, {
+    items = { { filename = file, lnum = 2, text = "the check" } },
+    answer = { source = "It is checked here." },
+  })
+  assert(text_on(3):find("✓ svara answered: where is auth?", 1, true), text_on(3))
+  assert(markers.near_cursor(true) == marker)
+
+  local lines, places = markers.view_lines(marker)
+  assert(lines[1] == "Asked: where is auth?", lines[1])
+  assert(vim.tbl_contains(lines, "It is checked here."), vim.inspect(lines))
+  assert(lines[#lines]:find(":2 — the check", 1, true), lines[#lines])
+  assert(places[#lines].lnum == 2)
+
+  local window = markers.view(marker)
+  assert(vim.api.nvim_get_current_win() == window)
+  vim.api.nvim_win_set_cursor(window, { #lines, 0 })
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  assert(not vim.api.nvim_win_is_valid(window), "the view stayed open")
+  assert(vim.api.nvim_win_get_cursor(0)[1] == 2)
+
+  local failed = assert(markers.place(buffer, 1, "make it four", "edit"))
+  markers.finish(failed, { error = "no <styra:answer>", answer = { source = "I could not" } })
+  assert(text_on(0):find("✗ svara failed: make it four", 1, true), text_on(0))
+  lines = markers.view_lines(failed)
+  assert(vim.tbl_contains(lines, "Failed: no <styra:answer>"), vim.inspect(lines))
+  assert(vim.tbl_contains(lines, "I could not"), vim.inspect(lines))
+
+  -- A follow-up is another turn on the same marker.
+  markers.follow(marker, "and where is it refreshed?")
+  assert(text_on(3):find("⧗ svara following up: and where is it refreshed? · 2 turns", 1, true), text_on(3))
+  lines = markers.view_lines(marker)
+  assert(lines[1] == "Asked: where is auth?", lines[1])
+  assert(vim.tbl_contains(lines, "Follow-up: and where is it refreshed?"), vim.inspect(lines))
+  assert(lines[#lines] == "Still following up…", lines[#lines])
+  markers.finish(marker, { items = {}, answer = { source = "In the middleware." } })
+  assert(text_on(3):find("✓ svara answered: and where is it refreshed? · 2 turns", 1, true), text_on(3))
+  assert(vim.tbl_contains(markers.view_lines(marker), "In the middleware."))
+
+  -- One that never started is taken back, and the marker says what it did.
+  markers.follow(marker, "never sent")
+  markers.unfollow(marker)
+  assert(#marker.turns == 2 and marker.state == "done")
+
+  -- `f` in the view hands the marker to whoever can follow it up.
+  local followed
+  marker.follow_up = function(which)
+    followed = which
+  end
+  window = markers.view(marker)
+  vim.api.nvim_feedkeys("f", "x", false)
+  assert(followed == marker, "f did not follow up")
+  assert(not vim.api.nvim_win_is_valid(window), "the view stayed open")
+
+  markers.remove(marker)
+  markers.remove(failed)
+  assert(#markers.all() == 0)
+  assert(#vim.api.nvim_buf_get_extmarks(buffer, markers.namespace, 0, -1, {}) == 0, "an extmark was left")
+  vim.cmd("bwipeout!")
+end
+
 vim.fn.delete(home, "rf")
 print("svara find tests passed")

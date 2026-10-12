@@ -385,6 +385,21 @@ places the last finished edit changed the quickfix list and goes to the first.
 From Lua it is `require("svara").edit(instruction, options, on_done)`, called
 like `find`.
 
+While a request from `:SvaraAsk` or `:SvaraEdit` runs, a marker sits at the
+end of the line it was made on — the first line of a range, or the cursor's —
+saying `⧗ svara asking: where is the session token checked?`. It moves with
+its line as the buffer changes. When the request finishes the marker stays and
+says how it went: `✓ svara answered`, `✓ svara edited` or `✗ svara failed`.
+`:SvaraView` opens what the interaction answered in a float: the request, what
+the agent said, and the places it named; Enter on a place goes there, `a`
+acknowledges the marker and `q` closes. `f` follows the request up in the same
+interaction, in the message box: the marker goes back to `⧗ svara following
+up: …` with a turn count, and the view shows every turn in order. A follow-up
+to an edit becomes the edit `:SvaraJump` goes to. `:SvaraAck` removes the marker; both
+act on the newest marker on the cursor's line, or else in the buffer.
+`:SvaraAck!` removes every finished marker. A request that could not start
+leaves no marker.
+
 `:SvaraContinue` opens a picker of the twenty most recently used interactions
 started by `:SvaraNew`, `:SvaraAsk` or `:SvaraEdit` in the Workspace covering
 the viewed file. The list is kept until Neovim exits, with the newest first.
@@ -452,5 +467,5 @@ nvim --headless -u NONE -l tests/picker_spec.lua  # the model list :SvaraNew off
 nvim --headless -u NONE -l tests/compose_spec.lua # the window its prompt and model are chosen in
 nvim --headless -u NONE -l tests/send_spec.lua    # :Svara's message box and interaction picker
 nvim --headless -u NONE -l tests/continue_spec.lua # recent interactions and follow-ups
-nvim --headless -u NONE -l tests/find_spec.lua    # what :SvaraAsk and :SvaraEdit ask, the quickfix items, the float
+nvim --headless -u NONE -l tests/find_spec.lua    # what :SvaraAsk and :SvaraEdit ask, the quickfix items, the float, the markers
 ```

@@ -343,22 +343,71 @@ local function files_command(spec, command)
   -- not wherever a prompt or a picker left the cursor. A range given to the
   -- command — a visual selection, usually — is the location instead.
   local location = spec.location or core.viewing(0, command.range > 0 and { command.line1, command.line2 } or nil)
+  -- And where its marker goes: the first line of the range, or the cursor's.
+  local buffer = vim.api.nvim_get_current_buf()
+  local line = command.range > 0 and command.line1 or vim.api.nvim_win_get_cursor(0)[1]
+
+  local run
+
+  --- Follow a marker's request up in the interaction that answered it: the
+  --- message box, as `:SvaraContinue` opens it, and the answer as another
+  --- turn on the same marker.
+  local function follow_up(marker, interaction)
+    require("svara.compose").open(vim.tbl_extend("force", spec.box, {
+      title = " follow-up ",
+      worktree = false,
+      interaction = interaction.id,
+      on_cancel = function()
+        vim.notify("Svara: nothing sent", vim.log.levels.INFO)
+      end,
+      on_send = function(typed, _, progress)
+        run(typed, nil, progress, { marker = marker, interaction = interaction })
+      end,
+    }))
+  end
 
   --- `progress` is the message box's, when the request was typed in one: it
   --- closes once the interaction is up, or hands the request back to be
-  --- edited if it could not start.
-  local function run(request, selection, progress)
-    local finished = require("svara.pending").add(request)
+  --- edited if it could not start. `following`, for a follow-up from a
+  --- marker's view, is the marker and the interaction to continue.
+  function run(request, selection, progress, following)
+    local markers = require("svara.markers")
+    local marker = following and following.marker
+    local start = spec.run
+    if following then
+      markers.follow(marker, request)
+      start = function(prompt, options, on_done)
+        return core.continue_interaction(following.interaction, prompt, options, on_done)
+      end
+    else
+      marker = markers.place(buffer, line, request, spec.kind)
+    end
+    local done_waiting = require("svara.pending").add(request)
+    local function finished(result)
+      done_waiting()
+      if result then
+        markers.finish(marker, result)
+      elseif following then
+        markers.unfollow(marker)
+      elseif marker then
+        -- It never started, so there is nothing to come back to.
+        markers.remove(marker)
+        marker = nil
+      end
+    end
     -- Run so the editor is not held while the interaction starts, which is
     -- the float's first stretch of spinning; a raise is a failure like any
     -- other, rather than a spinner that never stops.
     require("svara.nvim").run(function()
-      local called, handle, err, session = pcall(spec.run, core.prompt_from_view(request, location), {
+      -- A follow-up is about what the request was, so it says no place of
+      -- its own: the interaction has the first one already.
+      local prompt = following and request or core.prompt_from_view(request, location)
+      local called, handle, err, session = pcall(start, prompt, {
         directory = directory,
         selection = selection,
         kind = spec.kind,
-      }, function(items, missed, _, completion_error)
-        finished()
+      }, function(items, missed, answer, completion_error)
+        finished({ items = items, error = missed and tostring(missed), answer = answer })
         if completion_error then
           vim.notify("Svara: could not mark it completed — " .. completion_error, vim.log.levels.WARN)
         end
@@ -381,6 +430,12 @@ local function files_command(spec, command)
       end
       if progress then
         progress.done()
+      end
+      if marker then
+        local interaction = { id = session.id, session = session, kind = spec.kind }
+        marker.follow_up = function()
+          follow_up(marker, interaction)
+        end
       end
       vim.notify("Svara: " .. spec.under_way .. " in " .. session.id, vim.log.levels.INFO)
     end)
@@ -597,6 +652,46 @@ vim.api.nvim_create_user_command("SvaraJump", function()
   jump_to_edit(last_edit)
 end, {
   desc = "Go to the places the last finished :SvaraEdit changed, as a quickfix list",
+})
+
+-- The markers `:SvaraAsk` and `:SvaraEdit` leave where they were asked from
+-- (see `svara.markers`). Both act on the newest marker on the cursor's line,
+-- or failing that in the buffer; `:SvaraAck!` takes every finished one.
+vim.api.nvim_create_user_command("SvaraView", function()
+  local markers = require("svara.markers")
+  local marker = markers.near_cursor()
+  if not marker then
+    vim.notify("Svara: no marker in this buffer", vim.log.levels.WARN)
+    return
+  end
+  markers.view(marker)
+end, {
+  desc = "Show what the request marked on this line, or in this buffer, answered",
+})
+
+vim.api.nvim_create_user_command("SvaraAck", function(command)
+  local markers = require("svara.markers")
+  if command.bang then
+    local count = 0
+    for _, marker in ipairs(markers.all()) do
+      if marker.state ~= "waiting" then
+        markers.remove(marker)
+        count = count + 1
+      end
+    end
+    vim.notify(string.format("Svara: %d marker%s acknowledged", count, count == 1 and "" or "s"),
+      vim.log.levels.INFO)
+    return
+  end
+  local marker = markers.near_cursor(true)
+  if not marker then
+    vim.notify("Svara: no finished marker in this buffer", vim.log.levels.WARN)
+    return
+  end
+  markers.remove(marker)
+end, {
+  bang = true,
+  desc = "Remove the finished marker on this line or in this buffer; with !, every finished one",
 })
 
 vim.api.nvim_create_user_command("SvaraInfo", function()
