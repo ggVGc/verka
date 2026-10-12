@@ -1331,9 +1331,6 @@ fn run_rounds(
                     if let Ok(interactions) = client.list_interactions() {
                         app.interactions.refresh(interactions);
                     }
-                    if app.interactions.show_completed {
-                        continue;
-                    }
                     let workspace_id = app.workspace.id.clone();
                     let Some(next) = app
                         .interactions
@@ -1342,6 +1339,9 @@ fn run_rounds(
                         app.interactions.close();
                         return Ok(RunOutcome::Reset);
                     };
+                    if next.id == interaction.id {
+                        continue;
+                    }
                     make_interaction_current(app, live, client, standing_launch, next);
                     continue;
                 }

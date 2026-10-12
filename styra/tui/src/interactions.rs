@@ -830,15 +830,11 @@ impl LiveInteractions {
         self.show_completed = !self.show_completed;
     }
 
-    /// Select the entry that takes the place of one still listed but no longer
-    /// shown — the interaction the operator just completed, with completed
-    /// rows hidden. The row itself stays: it is the listing that filters it,
-    /// so nothing here removes it from the list.
+    /// Select the entry to move to after completing or abandoning an interaction.
+    /// The finished row stays listed; the completion filter controls its visibility.
     ///
-    /// Work still live in the completed interaction's own Workspace comes
-    /// first, nearest after it and then nearest before: finishing one piece
-    /// of a Workspace's work leads on to the rest of it, rather than off into
-    /// whichever Workspace happens to sit next in the list.
+    /// Prefer live work in the same worktree, then in the same Workspace,
+    /// nearest after it and then nearest before within each group.
     pub fn select_past_hidden(
         &mut self,
         id: &str,
@@ -857,17 +853,29 @@ impl LiveInteractions {
                 *index != hidden
                     && interaction.workspace_id == *own_workspace
                     && interaction.activity.accepting()
+                    && !interaction.completed.is_done()
             })
             .collect::<Vec<_>>();
-        if let Some(index) = live_alongside
+        let same_worktree = live_alongside
             .iter()
             .copied()
-            .find(|index| *index > hidden)
-            .or_else(|| live_alongside.last().copied())
-        {
+            .filter(|index| self.items[*index].workspace == self.items[hidden].workspace)
+            .collect::<Vec<_>>();
+        let nearest = |indices: &[usize]| {
+            indices
+                .iter()
+                .copied()
+                .find(|index| *index > hidden)
+                .or_else(|| indices.last().copied())
+        };
+        if let Some(index) = nearest(&same_worktree).or_else(|| nearest(&live_alongside)) {
             // The cursor is not left on an entry the navigator no longer offers.
             self.rest();
             return self.items.get(index).cloned();
+        }
+        if self.show_completed {
+            self.rest();
+            return self.items.get(hidden).cloned();
         }
         self.select_from(hidden, workspace_id)
     }
@@ -1333,6 +1341,76 @@ pub(crate) mod tests {
 
         assert_eq!(next.id, "next");
         assert_eq!(live.items.len(), 2, "the completed row is still listed");
+    }
+
+    #[test]
+    fn finishing_prefers_the_same_worktree_before_the_rest_of_the_workspace() {
+        for finished_state in [CompletionState::Completed, CompletionState::Abandoned] {
+            for show_completed in [false, true] {
+                for sibling_before in [false, true] {
+                    let mut finished = completed("finished");
+                    finished.completed = finished_state;
+                    finished.workspace = PathBuf::from("/worktrees/shared");
+                    let mut sibling = interaction("sibling", InteractionActivity::Pending);
+                    sibling.workspace = finished.workspace.clone();
+                    let other_worktree =
+                        interaction("other-worktree", InteractionActivity::Running);
+                    let items = if sibling_before {
+                        vec![sibling, finished, other_worktree]
+                    } else {
+                        vec![finished, other_worktree, sibling]
+                    };
+                    let mut live = LiveInteractions::default();
+                    live.open(items, vec![]);
+                    live.show_completed = show_completed;
+
+                    let next = live.select_past_hidden("finished", None).unwrap();
+
+                    assert_eq!(next.id, "sibling");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finishing_skips_stopped_and_finished_worktree_siblings() {
+        let mut finished = completed("finished");
+        finished.workspace = PathBuf::from("/worktrees/shared");
+        let mut stopped = interaction("stopped", InteractionActivity::Stopped);
+        stopped.workspace = finished.workspace.clone();
+        let mut done = interaction("done", InteractionActivity::Pending);
+        done.workspace = finished.workspace.clone();
+        done.completed = CompletionState::Completed;
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                finished,
+                stopped,
+                done,
+                interaction("next", InteractionActivity::Pending),
+            ],
+            vec![],
+        );
+        live.show_completed = true;
+
+        assert_eq!(
+            live.select_past_hidden("finished", None).unwrap().id,
+            "next"
+        );
+    }
+
+    #[test]
+    fn finishing_with_completed_rows_shown_stays_when_no_local_work_remains() {
+        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
+        elsewhere.workspace_id = "other".into();
+        let mut live = LiveInteractions::default();
+        live.open(vec![completed("finished"), elsewhere], vec![]);
+        live.show_completed = true;
+
+        assert_eq!(
+            live.select_past_hidden("finished", None).unwrap().id,
+            "finished"
+        );
     }
 
     /// The rest of the completed interaction's own Workspace comes before any
