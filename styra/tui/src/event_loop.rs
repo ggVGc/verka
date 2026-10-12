@@ -978,11 +978,8 @@ fn run_rounds(
             && app.integration_prompt.is_none()
             && app.launch.prompt.is_none()
             && !app.search.typing()
-            && !(app.view == View::CheckoutDiff
-                && app
-                    .checkout_diff
-                    .as_ref()
-                    .is_some_and(|diff| diff.search.typing()))
+            // The diff owns the keyboard; `?` is not one of its keys.
+            && app.view != View::CheckoutDiff
             && !app
                 .tag_picker
                 .as_ref()
@@ -1193,7 +1190,7 @@ fn run_rounds(
                 .as_ref()
                 .is_some_and(|diff| diff.search.typing())
         {
-            input::handle_diff_search_key(app, key);
+            input::handle_diff_key(app, key);
             continue;
         }
         if app.search.typing() {

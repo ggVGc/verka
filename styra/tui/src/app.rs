@@ -1518,12 +1518,12 @@ impl App {
             // rather than navigated copies the whole value, which is what an
             // operator reaching for `y` on a JSON or prose answer wants.
             View::Answer => self.answer.copy_text(),
-            // The whole diff, ready to paste into a message or a patch.
-            View::CheckoutDiff => self
-                .checkout_diff
-                .as_ref()
-                .and_then(|diff| diff.diff.as_ref().ok().cloned()),
-            View::Log | View::Quota | View::Transcript | View::Driva | View::Overview => None,
+            View::Log
+            | View::Quota
+            | View::Transcript
+            | View::CheckoutDiff
+            | View::Driva
+            | View::Overview => None,
         }
     }
 

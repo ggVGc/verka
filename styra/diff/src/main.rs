@@ -16,7 +16,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Block;
 use ratatui::DefaultTerminal;
-use styra_diff::{git, render, Action, CheckoutDiff, CheckoutDiffFeedback};
+use styra_diff::{git, render, CheckoutDiff, CheckoutDiffFeedback, Outcome};
 use styra_ui::theme;
 
 /// Browse a Git working tree's changes as Styra's diff view shows them:
@@ -144,45 +144,20 @@ enum Step {
     Edit,
 }
 
-/// Styra's keys for its diff view, `v` to edit the file at the top, and `q`
-/// — or Esc, once a file filter is cleared — to quit.
+/// The view's own keys, as Styra answers them, with Esc closing the view —
+/// which here is the program. `q` and ctrl-c quit too: they are the program's,
+/// not the view's, as there is no Styra around it to go back to.
 fn handle(diff: &mut CheckoutDiff, key: KeyEvent) -> Step {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return Step::Quit;
     }
-    if diff.search.typing() {
-        diff.search_key(key);
-        return Step::Stay;
+    match diff.handle_key(key) {
+        Outcome::Handled => Step::Stay,
+        Outcome::Close => Step::Quit,
+        Outcome::OpenFile => Step::Edit,
+        Outcome::Ignored if key.code == KeyCode::Char('q') => Step::Quit,
+        Outcome::Ignored => Step::Stay,
     }
-    if key
-        .modifiers
-        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-    {
-        return Step::Stay;
-    }
-    let action = match key.code {
-        KeyCode::Esc if diff.clear_filter() => return Step::Stay,
-        KeyCode::Esc | KeyCode::Char('q') => return Step::Quit,
-        KeyCode::Char('/') => Action::Search,
-        KeyCode::Char('f') => Action::ToggleFiles,
-        KeyCode::Char('v') => return Step::Edit,
-        KeyCode::Char('r') => Action::ToggleRemoved,
-        KeyCode::Char('c') => Action::ToggleCompactDirs,
-        KeyCode::Char('t') => Action::CycleTint,
-        KeyCode::Char('j') => Action::Down,
-        KeyCode::Char('k') => Action::Up,
-        KeyCode::Char('J') => Action::FilesDown,
-        KeyCode::Char('K') => Action::FilesUp,
-        KeyCode::Down => Action::ScrollDown,
-        KeyCode::Up => Action::ScrollUp,
-        KeyCode::PageDown => Action::HalfPageDown,
-        KeyCode::PageUp => Action::HalfPageUp,
-        KeyCode::Char('g') => Action::First,
-        KeyCode::Char('G') => Action::Last,
-        _ => return Step::Stay,
-    };
-    diff.apply(action);
-    Step::Stay
 }
 
 #[cfg(test)]
@@ -209,7 +184,8 @@ mod tests {
     }
 
     /// Esc clears a file filter before it quits, and `q` typed into the
-    /// filter is part of it rather than a way out.
+    /// filter is part of it rather than a way out. The view's keys are
+    /// [`styra_diff::keys`]'s; these only check how the program answers them.
     #[test]
     fn q_and_esc_quit_once_nothing_else_wants_them() {
         let mut diff = diff();

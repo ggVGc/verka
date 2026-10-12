@@ -1371,6 +1371,7 @@ styra/diff/              # package styra-diff: library styra_diff, [[bin]] styra
   src/
     lib.rs               # the checkout diff view `d` opens, built on styra-ui
     state.rs             # what is compared, the diff read, and the view's actions
+    keys.rs              # the view's keys, answered the same in Styra and on its own
     view.rs              # the header, file tree and patch, drawn as a styra-ui Panel
     files.rs             # a diff split into one patch per file (pure)
     git.rs               # reading the diff, and the standalone program's base

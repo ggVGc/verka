@@ -192,5 +192,7 @@ pub(crate) use bindings;
 pub(crate) enum ReferenceRow {
     Section(&'static str),
     Binding(&'static Binding),
+    /// A key of the diff view, whose table is `styra-diff`'s own.
+    Diff(&'static styra_diff::keys::Binding),
     Blank,
 }

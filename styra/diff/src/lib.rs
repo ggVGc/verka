@@ -3,17 +3,18 @@
 //! as a scrolling view.
 //!
 //! Styra opens the view with `d`; the `styra-diff` program opens it on its
-//! own, over any repository. Both drive the same [`CheckoutDiff`]: the host
-//! decides which keys ask for which [`Action`], and draws the view where its
-//! layout has room.
+//! own, over any repository. Both drive the same [`CheckoutDiff`] with the
+//! same keys ([`keys`]), and draw the view where their layout has room.
 //!
 //! The view is built on `styra-ui`, so a diff here is styled and highlighted
 //! exactly as Styra styles diffs elsewhere.
 
 pub mod files;
 pub mod git;
+pub mod keys;
 mod state;
 mod view;
 
-pub use state::{Action, CheckoutDiff, DiffTarget};
+pub use keys::Outcome;
+pub use state::{CheckoutDiff, DiffTarget};
 pub use view::{render, CheckoutDiffFeedback, CheckoutDiffView, Tint};

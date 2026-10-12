@@ -17,7 +17,7 @@ use crate::launch;
 use crate::link_menu::LinkAction;
 use crate::preferences;
 use crate::session::{self, Attachment};
-use styra_diff::{Action, DiffTarget};
+use styra_diff::{DiffTarget, Outcome};
 use styra_protocol::{CompletionState, Contract, LogEntry};
 use styra_server::Client;
 
@@ -81,10 +81,20 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// File-list search consumes command letters while its prompt is open.
-pub fn handle_diff_search_key(app: &mut App, key: KeyEvent) {
-    if let Some(diff) = app.checkout_diff.as_mut() {
-        diff.search_key(key);
+/// Keys for the checkout diff. The diff owns the keyboard while it is open:
+/// `styra-diff` answers every key, the same way its own program does, and
+/// none of the global bindings or the other views' keys act from it. What it
+/// hands back is what only Styra can do.
+pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
+    let outcome = match app.checkout_diff.as_mut() {
+        Some(diff) => diff.handle_key(key),
+        None if key.code == KeyCode::Esc => Outcome::Close,
+        None => Outcome::Ignored,
+    };
+    match outcome {
+        Outcome::Handled | Outcome::Ignored => {}
+        Outcome::Close => app.view = View::Events,
+        Outcome::OpenFile => open_diff_file(app),
     }
 }
 
@@ -270,22 +280,7 @@ pub fn handle_list_key(
     preferences_path: &Path,
 ) {
     if app.view == View::CheckoutDiff {
-        if app
-            .checkout_diff
-            .as_ref()
-            .is_some_and(|diff| diff.search.typing())
-        {
-            handle_diff_search_key(app, key);
-            return;
-        }
-        if key.code == KeyCode::Esc
-            && app
-                .checkout_diff
-                .as_mut()
-                .is_some_and(|diff| diff.clear_filter())
-        {
-            return;
-        }
+        return handle_diff_key(app, key);
     }
     if std::mem::take(pending_fold) {
         match key {
@@ -336,13 +331,7 @@ pub fn handle_list_key(
         // views, goes back to events when pressed there again. `D` hands the
         // same diff to the configured tool in a window of its own — except in
         // the details view, which keeps `D` for saving the launch default.
-        k if GLOBAL_DIFF.matches(k) => {
-            if app.view == View::CheckoutDiff {
-                app.view = View::Events;
-                return;
-            }
-            return ask_for_diff(app, Request::ShowDiff);
-        }
+        k if GLOBAL_DIFF.matches(k) => return ask_for_diff(app, Request::ShowDiff),
         k if GLOBAL_DIFF_EXTERNAL.matches(k) && app.view != View::Driva => {
             return ask_for_diff(app, Request::OpenDiff)
         }
@@ -356,8 +345,7 @@ pub fn handle_list_key(
         // Global, unlike `y`: what it copies is the session's exchange, which
         // does not change with the view the operator happens to be in.
         k if GLOBAL_COPY_CONVERSATION.matches(k) => return copy_conversation(app),
-        // The diff keeps `r` for hiding removed lines.
-        k if GLOBAL_RAW.matches(k) && app.view != View::CheckoutDiff => return app.toggle_raw(),
+        k if GLOBAL_RAW.matches(k) => return app.toggle_raw(),
         k if GLOBAL_LOG.matches(k) => return app.toggle_view(View::Log),
         k if GLOBAL_LAUNCHER.matches(k) => return app.open_launcher(),
         // Opening the view also refreshes it: the log lives in the daemon's
@@ -366,10 +354,7 @@ pub fn handle_list_key(
             app.toggle_view(View::Quota);
             return app.ask(Request::Quota);
         }
-        // The diff keeps `t` for its tint.
-        k if GLOBAL_TRANSCRIPT.matches(k) && app.view != View::CheckoutDiff => {
-            return app.toggle_view(View::Transcript)
-        }
+        k if GLOBAL_TRANSCRIPT.matches(k) => return app.toggle_view(View::Transcript),
         // `e` toggles the pane below the event list. The files and answer
         // views keep the key for opening the editor, which is the one thing
         // `e` already meant there.
@@ -381,10 +366,7 @@ pub fn handle_list_key(
         k if GLOBAL_AUTO_COMMIT.matches(k) => return toggle_auto_commit(app),
         k if GLOBAL_FILES.matches(k) && app.view != View::Answer => return app.toggle_files(),
         k if GLOBAL_FILES_ALIAS.matches(k)
-            && !matches!(
-                app.view,
-                View::Events | View::Transcript | View::Preview | View::CheckoutDiff
-            ) =>
+            && !matches!(app.view, View::Events | View::Transcript | View::Preview) =>
         {
             return app.toggle_files()
         }
@@ -394,11 +376,8 @@ pub fn handle_list_key(
         k if GLOBAL_INTERACTIONS.matches(k) && app.view != View::Files => {
             return app.ask(Request::Interactions)
         }
-        // The raw view keeps `v` for switching to the provider's own record,
-        // and the diff for hiding removed lines.
-        k if GLOBAL_OVERVIEW.matches(k) && !matches!(app.view, View::Raw | View::CheckoutDiff) => {
-            return app.toggle_overview()
-        }
+        // The raw view keeps `v` for switching to the provider's own record.
+        k if GLOBAL_OVERVIEW.matches(k) && app.view != View::Raw => return app.toggle_overview(),
         k if GLOBAL_WORKSPACES.matches(k) => return app.ask(Request::Workspace),
         // Details keeps `w` for the network toggle it already meant there.
         k if GLOBAL_WORKTREES.matches(k) && app.view != View::Driva => {
@@ -572,31 +551,8 @@ pub fn handle_list_key(
             k if READING_UP.matches(k) => app.quota.scroll_up(),
             _ => {}
         },
-        View::CheckoutDiff => {
-            let action = match key {
-                k if DIFF_SEARCH.matches(k) => Action::Search,
-                k if DIFF_TOGGLE_FILES.matches(k) => Action::ToggleFiles,
-                k if DIFF_TOGGLE_REMOVED.matches(k) => Action::ToggleRemoved,
-                k if DIFF_TOGGLE_COMPACT.matches(k) => Action::ToggleCompactDirs,
-                k if DIFF_CYCLE_TINT.matches(k) => Action::CycleTint,
-                k if DIFF_DOWN.matches(k) => Action::Down,
-                k if DIFF_UP.matches(k) => Action::Up,
-                k if DIFF_FILES_DOWN.matches(k) => Action::FilesDown,
-                k if DIFF_FILES_UP.matches(k) => Action::FilesUp,
-                k if DIFF_SCROLL_DOWN.matches(k) => Action::ScrollDown,
-                k if DIFF_SCROLL_UP.matches(k) => Action::ScrollUp,
-                k if DIFF_FIRST.matches(k) => Action::First,
-                k if DIFF_LAST.matches(k) => Action::Last,
-                k if DIFF_PAGE_DOWN.matches(k) => Action::HalfPageDown,
-                k if DIFF_PAGE_UP.matches(k) => Action::HalfPageUp,
-                k if DIFF_COPY.matches(k) => return copy_selection(app),
-                k if DIFF_OPEN_FILE.matches(k) => return open_diff_file(app),
-                _ => return,
-            };
-            if let Some(diff) = app.checkout_diff.as_mut() {
-                diff.apply(action);
-            }
-        }
+        // Every key was taken by `handle_diff_key`.
+        View::CheckoutDiff => {}
         View::Transcript => match key {
             k if READING_LINKS.matches(k) => app.highlight_first_link(),
             k if READING_ALL_EVENTS.matches(k) => app.toggle_all_events(),
@@ -2125,18 +2081,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Like the other views, `d` pressed in the diff goes back to events
-    /// rather than reading the diff again.
+    /// The diff owns the keyboard: global keys do nothing there, and Esc is
+    /// the one way back to events.
     #[test]
-    fn d_in_the_diff_view_returns_to_events() {
-        let root = tree("diff-toggle");
+    fn only_esc_leaves_the_diff_view() {
+        let root = tree("diff-exclusive");
         let mut app = app_with_diffable_interaction(&root);
         app.view = View::CheckoutDiff;
 
-        press_d(&mut app, &root);
+        for character in "dDqilawnAQPXe".chars() {
+            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char(character)));
+            assert_eq!(app.view, View::CheckoutDiff, "{character} left the diff");
+            assert_eq!(app.take_request(), None, "{character} asked for something");
+            assert_eq!(
+                app.focus,
+                crate::app::Focus::List,
+                "{character} moved the focus"
+            );
+        }
+        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Esc));
 
         assert_eq!(app.view, View::Events);
-        assert_eq!(app.take_request(), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

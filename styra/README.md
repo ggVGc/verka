@@ -257,6 +257,8 @@ The checkout diff view (`d`) is its own crate, `styra-diff` in `styra/diff`,
 built on `styra-ui`; its `styra-diff` binary opens the same view over any
 repository: `styra-diff [-C DIR] [BASE]` shows the working tree against where
 the current branch left `BASE`, or against `HEAD` when no base is given.
+The view's keys live in that crate too, so both answer them the same way;
+while the view is open in Styra no other shortcut acts, and Esc closes it.
 The Rust wire types are in `styra_server::api`, and the blocking client used by
 the TUI is `styra_server::Client`.
 

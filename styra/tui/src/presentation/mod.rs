@@ -232,6 +232,10 @@ pub(crate) fn help_rows(
                     action: binding.action().description(),
                 }
             }
+            crate::keybindings::ReferenceRow::Diff(binding) => styra_ui::help::HelpRow::Binding {
+                keys: binding.label.into(),
+                action: binding.description,
+            },
             crate::keybindings::ReferenceRow::Blank => styra_ui::help::HelpRow::Blank,
         })
         .collect()

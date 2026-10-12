@@ -1,5 +1,5 @@
 //! What a diff view compares, the diff it read, and how it is being looked
-//! at: scrolled, split per file, filtered. Hosts turn their keys into
+//! at: scrolled, split per file, filtered. [`crate::keys`] turns keys into
 //! [`Action`]s, so what each one does is decided here once.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -31,7 +31,7 @@ pub struct DiffTarget {
 
 /// What a key can ask of the view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Action {
+pub(crate) enum Action {
     /// Start typing a file-name filter. Per-file view only.
     Search,
     /// Switch between the combined diff and one file's patch at a time.
@@ -178,7 +178,7 @@ impl CheckoutDiff {
         self.file_list_offset = measured.file_list_offset;
     }
 
-    pub fn apply(&mut self, action: Action) {
+    pub(crate) fn apply(&mut self, action: Action) {
         match action {
             Action::Search if self.per_file => {
                 self.search.open();
@@ -229,7 +229,7 @@ impl CheckoutDiff {
 
     /// The file-name filter's prompt takes every key while it is open, the
     /// letters bound to commands included.
-    pub fn search_key(&mut self, key: KeyEvent) {
+    pub(crate) fn search_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.search.cancel(),
             KeyCode::Enter => self.search.accept(),
@@ -249,7 +249,7 @@ impl CheckoutDiff {
 
     /// Drop a standing file-name filter, saying whether there was one: Esc
     /// clears it before it means anything else to the host.
-    pub fn clear_filter(&mut self) -> bool {
+    pub(crate) fn clear_filter(&mut self) -> bool {
         if !(self.per_file && self.search.query().is_some()) {
             return false;
         }

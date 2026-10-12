@@ -27,7 +27,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_DIFF: [Key::ch('d')] ("checkout with a branch point") => Action::GlobalDiff;
     GLOBAL_DIFF_EXTERNAL: [Key::ch('D')] ("not in details") => Action::GlobalDiffExternal;
     GLOBAL_INTERACTIONS: [Key::ch('a')] => Action::GlobalInteractions;
-    GLOBAL_OVERVIEW: [Key::ch('v')] ("not in raw, diff") => Action::GlobalOverview;
+    GLOBAL_OVERVIEW: [Key::ch('v')] ("not in raw") => Action::GlobalOverview;
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
     GLOBAL_WORKSPACES: [Key::ch('V')] => Action::GlobalWorkspaces;
     GLOBAL_WORKTREES: [Key::ch('w')] ("not in details") => Action::GlobalWorktrees;
@@ -35,9 +35,9 @@ bindings! { GLOBAL = "Global";
         => Action::GlobalSessionWorktree;
     GLOBAL_TAGS: [Key::ch('T')] => Action::GlobalTags;
     GLOBAL_INTEGRATE: [Key::ch('I')] => Action::GlobalIntegrate;
-    GLOBAL_RAW: [Key::ch('r')] ("not in diff") => Action::GlobalRaw;
+    GLOBAL_RAW: [Key::ch('r')] => Action::GlobalRaw;
     GLOBAL_LOG: [Key::ctrl('l')] => Action::GlobalLog;
-    GLOBAL_TRANSCRIPT: [Key::ch('t')] ("not in diff") => Action::GlobalTranscript;
+    GLOBAL_TRANSCRIPT: [Key::ch('t')] => Action::GlobalTranscript;
     GLOBAL_DETAILS: [Key::ctrl('s')] => Action::GlobalDetails;
     GLOBAL_JUMP_BACK: [Key::ctrl('o')] => Action::GlobalJumpBack;
     GLOBAL_AUTO_COMMIT: [Key::ctrl('g')] => Action::GlobalAutoCommit;
@@ -106,27 +106,7 @@ bindings! { READING = "Raw, log, quota, and transcript";
     READING_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::ReadingPageUp;
     READING_PROVIDER_RAW: [Key::ch('v')] ("raw")
         => Action::ReadingProviderRaw;
-    READING_COPY: [Key::ch('y')] ("raw, diff") => Action::ReadingCopy;
-}
-
-bindings! { CHECKOUT_DIFF = "Checkout diff";
-    DIFF_SEARCH: [Key::ch('/')] ("per-file view") => Action::DiffSearch;
-    DIFF_TOGGLE_FILES: [Key::ch('f')] => Action::DiffToggleFiles;
-    DIFF_TOGGLE_REMOVED: [Key::ch('r')] => Action::DiffToggleRemoved;
-    DIFF_TOGGLE_COMPACT: [Key::ch('c')] ("per-file view") => Action::DiffToggleCompact;
-    DIFF_OPEN_FILE: [Key::ch('v')] => Action::DiffOpenFile;
-    DIFF_CYCLE_TINT: [Key::ch('t')] => Action::DiffCycleTint;
-    DIFF_DOWN: [Key::ch('j')] => Action::DiffDown;
-    DIFF_UP: [Key::ch('k')] => Action::DiffUp;
-    DIFF_FILES_DOWN: [Key::ch('J')] ("per-file view") => Action::DiffFilesDown;
-    DIFF_FILES_UP: [Key::ch('K')] ("per-file view") => Action::DiffFilesUp;
-    DIFF_SCROLL_DOWN: [Key::code(KeyCode::Down)] => Action::DiffScrollDown;
-    DIFF_SCROLL_UP: [Key::code(KeyCode::Up)] => Action::DiffScrollUp;
-    DIFF_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::DiffPageDown;
-    DIFF_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::DiffPageUp;
-    DIFF_FIRST: [Key::ch('g')] => Action::ReadingFirst;
-    DIFF_LAST: [Key::ch('G')] => Action::ReadingLast;
-    DIFF_COPY: [Key::ch('y')] => Action::ReadingCopy;
+    READING_COPY: [Key::ch('y')] ("raw") => Action::ReadingCopy;
 }
 
 bindings! { PREVIEW = "Full-screen preview";
@@ -467,7 +447,8 @@ impl Window {
     fn sections(self) -> &'static [&'static [ReferenceRow]] {
         match self {
             Self::Events => &[EVENTS, MESSAGE_EDITOR, GLOBAL],
-            Self::CheckoutDiff => &[CHECKOUT_DIFF, MESSAGE_EDITOR, GLOBAL],
+            // Its one section is `styra-diff`'s table; see `reference`.
+            Self::CheckoutDiff => &[],
             Self::Raw | Self::Log | Self::Quota | Self::Transcript => {
                 &[READING, MESSAGE_EDITOR, GLOBAL]
             }
@@ -491,6 +472,12 @@ impl Window {
     /// This window's reference, in display order, with a blank line between
     /// sections.
     pub(crate) fn reference(self) -> Vec<ReferenceRow> {
+        // The diff owns the keyboard: nothing outside its own keys acts.
+        if self == Self::CheckoutDiff {
+            return std::iter::once(ReferenceRow::Section("Checkout diff"))
+                .chain(styra_diff::keys::BINDINGS.iter().map(ReferenceRow::Diff))
+                .collect();
+        }
         let mut rows = Vec::new();
         for section in self.sections() {
             if !rows.is_empty() {
@@ -544,7 +531,7 @@ mod reference_tests {
             );
             assert!(
                 rows.iter()
-                    .any(|row| matches!(row, ReferenceRow::Binding(_))),
+                    .any(|row| matches!(row, ReferenceRow::Binding(_) | ReferenceRow::Diff(_))),
                 "{} lists at least one binding",
                 window.name()
             );
