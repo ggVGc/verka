@@ -172,15 +172,13 @@ fn detail(
             format!("{} ({})", root.display(), placeholders::WORKTREES),
         ));
     }
-    lines.extend([
-        (
-            "branch",
-            worktree
-                .branch
-                .clone()
-                .unwrap_or_else(|| "unknown; no session records this checkout".to_owned()),
-        ),
-    ]);
+    lines.extend([(
+        "branch",
+        worktree
+            .branch
+            .clone()
+            .unwrap_or_else(|| "unknown; no session records this checkout".to_owned()),
+    )]);
     lines.push((
         "Workspace",
         workspace_name(workspaces, &worktree.workspace_id),
@@ -494,8 +492,14 @@ mod tests {
                 ..workspace("w-1")
             }],
         );
-        assert_eq!(parked[0], ("worktree", "<wt>/fix-flaky-test-s-1".to_owned()));
-        assert_eq!(parked[1], ("worktrees", "/state/worktrees (<wt>)".to_owned()));
+        assert_eq!(
+            parked[0],
+            ("worktree", "<wt>/fix-flaky-test-s-1".to_owned())
+        );
+        assert_eq!(
+            parked[1],
+            ("worktrees", "/state/worktrees (<wt>)".to_owned())
+        );
         let gone = detail(&worktrees[1], Some(&worktrees[1].sessions[0]), &workspaces);
         assert_eq!(
             gone[0],

@@ -961,7 +961,11 @@ fn workspace_lines(app: &DrivaView) -> Vec<Line<'static>> {
     ));
     let mut lines = app.workspace.abbreviate(lines);
     if let Some(worktrees) = &app.workspace.worktrees {
-        lines.push(defining_line("worktrees", worktrees, placeholders::WORKTREES));
+        lines.push(defining_line(
+            "worktrees",
+            worktrees,
+            placeholders::WORKTREES,
+        ));
     }
     let sessions = app
         .workspace
@@ -1135,7 +1139,9 @@ fn workspace_path_line(app: &DrivaView) -> Line<'static> {
         line.push_span(Span::styled(
             format!(
                 " · rooted at {}",
-                app.workspace.placeholders().apply(&root.display().to_string())
+                app.workspace
+                    .placeholders()
+                    .apply(&root.display().to_string())
             ),
             Style::default().fg(theme::TEXT),
         ));
@@ -1995,7 +2001,9 @@ mod tests {
         let lines = text(interaction_lines(&view));
 
         assert!(
-            row(&lines, "workspace").trim_end().ends_with(" /home/me/proj (<ws>)"),
+            row(&lines, "workspace")
+                .trim_end()
+                .ends_with(" /home/me/proj (<ws>)"),
             "{lines:?}"
         );
         assert!(row(&lines, "working dir").contains("<ws>/src"), "{lines:?}");
@@ -2026,8 +2034,7 @@ mod tests {
             "{interaction:?}"
         );
         assert!(row(&interaction, "working dir").contains("<wt>/fix-retries/src"));
-        assert!(row(&interaction, "worktree")
-            .contains("<wt>/fix-retries · linked from <ws>"));
+        assert!(row(&interaction, "worktree").contains("<wt>/fix-retries · linked from <ws>"));
         assert!(row(&workspace, "worktrees").contains("/store/w1/worktrees (<wt>)"));
         assert!(row(&workspace, "host path").contains("<ws>"));
     }
@@ -2047,7 +2054,10 @@ mod tests {
         view.workspace.host_path = Some(PathBuf::from("/home/me/proj"));
         let rows = text(pane_rows(&view, LaunchScope::Interaction));
 
-        assert!(rows.iter().any(|row| row.contains("<ws>/data (ro)")), "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.contains("<ws>/data (ro)")),
+            "{rows:?}"
+        );
         assert!(!rows.iter().any(|row| row.contains("/home/me")), "{rows:?}");
     }
 

@@ -113,12 +113,11 @@ mod tests {
 
     #[test]
     fn a_worktree_is_named_under_its_own_placeholder() {
-        let both = workspace().with(
-            Some(Path::new("/store/workspaces/w1/worktrees")),
-            WORKTREES,
-        );
+        let both = workspace().with(Some(Path::new("/store/workspaces/w1/worktrees")), WORKTREES);
         assert_eq!(
-            both.apply("/store/workspaces/w1/worktrees/fix-retries/src · linked from /home/me/proj"),
+            both.apply(
+                "/store/workspaces/w1/worktrees/fix-retries/src · linked from /home/me/proj"
+            ),
             "<wt>/fix-retries/src · linked from <ws>"
         );
     }

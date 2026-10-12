@@ -543,10 +543,7 @@ fn draw_main(
         .working_directory_or_current()
         .map(|path| {
             styra_ui::placeholders::Placeholders::default()
-                .with(
-                    worktrees.as_deref(),
-                    styra_ui::placeholders::WORKTREES,
-                )
+                .with(worktrees.as_deref(), styra_ui::placeholders::WORKTREES)
                 .apply(&path.display().to_string())
         })
         .unwrap_or_default();
