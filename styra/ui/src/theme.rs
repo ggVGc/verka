@@ -45,6 +45,10 @@ pub const UNCOMMITTED: Color = palette::AMBER_YELLOW;
 /// hue on its row, a step brighter than the yellow that means work left
 /// uncommitted.
 pub const RUNNING: Color = palette::BRIGHT_AMBER;
+/// An idle overview tile's frame, distinct from the green that calls
+/// attention to an interaction that has just become idle.
+pub const OVERVIEW_IDLE_FRAME: Color = palette::SOFT_CYAN;
+pub const OVERVIEW_NEWLY_IDLE_FRAME: Color = SUCCESS;
 pub const ERROR: Color = palette::TERMINAL_RED;
 /// `Special`.
 pub const SPECIAL: Color = palette::PINK;

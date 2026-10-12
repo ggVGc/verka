@@ -240,8 +240,22 @@ fn render_tile(
         },
     ));
     title.push(Span::raw(" "));
-    // The cursor's tile is told apart by a heavier border in the accent; the
-    // one attached below by the navigator's own `•`.
+    let border_color = if tile.rate_limited.is_some() {
+        theme::STOP_RATE_LIMITED
+    } else {
+        match tile.status {
+            InteractionStatus::Idle | InteractionStatus::Pending => {
+                if tile.newly_idle {
+                    theme::OVERVIEW_NEWLY_IDLE_FRAME
+                } else {
+                    theme::OVERVIEW_IDLE_FRAME
+                }
+            }
+            _ => marker_color,
+        }
+    };
+    // The frame keeps its status color under the cursor: its heavier border
+    // marks selection, and the attached interaction has the navigator's `•`.
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(if selected {
@@ -249,11 +263,7 @@ fn render_tile(
         } else {
             BorderType::Rounded
         })
-        .border_style(Style::default().fg(if selected {
-            theme::SELECTION_MARKER
-        } else {
-            theme::INACTIVE
-        }))
+        .border_style(Style::default().fg(border_color))
         .title(Line::from(title));
     if tile.current {
         block = block.title(
@@ -423,6 +433,66 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         (screen, feedback.unwrap())
+    }
+
+    #[test]
+    fn tile_frames_show_state_even_when_selected() {
+        let cases = [
+            (
+                InteractionStatus::Running { events: 1 },
+                false,
+                false,
+                theme::RUNNING,
+            ),
+            (
+                InteractionStatus::Idle,
+                false,
+                false,
+                theme::OVERVIEW_IDLE_FRAME,
+            ),
+            (
+                InteractionStatus::Pending,
+                true,
+                false,
+                theme::OVERVIEW_NEWLY_IDLE_FRAME,
+            ),
+            (
+                InteractionStatus::Background,
+                false,
+                false,
+                theme::MUTED_WARNING,
+            ),
+            (InteractionStatus::Error, false, false, theme::ERROR),
+            (InteractionStatus::Ended, false, false, theme::INACTIVE),
+            (
+                InteractionStatus::Idle,
+                true,
+                true,
+                theme::STOP_RATE_LIMITED,
+            ),
+        ];
+        for (status, newly_idle, rate_limited, color) in cases {
+            let mut interaction = tile("interaction", status);
+            interaction.newly_idle = newly_idle;
+            interaction.rate_limited = rate_limited.then(|| "1h".into());
+            for selected in [false, true] {
+                let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        render_tile(
+                            frame,
+                            &interaction,
+                            selected,
+                            frame.area(),
+                            LinkDisplay::Compact,
+                        )
+                    })
+                    .unwrap();
+                let corner = &terminal.backend().buffer()[(0, 0)];
+                assert_eq!(corner.fg, color, "{status:?}, selected={selected}");
+                assert_eq!(corner.symbol(), if selected { "┏" } else { "╭" });
+            }
+        }
     }
 
     #[test]
