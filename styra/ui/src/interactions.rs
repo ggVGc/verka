@@ -36,17 +36,35 @@ pub enum InteractionStatus {
 
 pub enum InteractionRow<'a> {
     Workspace(Cow<'a, str>),
-    /// The directory several interactions in one workspace share, heading the
-    /// rows for them, which follow it with `grouped` set.
-    Directory(Cow<'a, str>),
+    /// A worktree heading the rows of the interactions working in it, which
+    /// follow it one `level` further in, and then the headings of the
+    /// worktrees integrated into it, also one further in.
+    Directory {
+        name: Cow<'a, str>,
+        /// How many headings it sits beneath, as an interaction's `level`.
+        level: usize,
+        /// The branch integrating the worktree's work merges it into.
+        into: Option<Cow<'a, str>>,
+    },
     Interaction {
         name: Cow<'a, str>,
-        /// The row sits under a [`InteractionRow::Directory`] heading, and is
-        /// indented beneath it.
-        grouped: bool,
+        /// How many [`InteractionRow::Directory`] headings the row sits
+        /// beneath, each one indenting it a step further. Zero for a row
+        /// directly under its Workspace.
+        level: usize,
         /// How many sources deep this interaction was branched: nested
         /// beneath the entry it came from, as the Session picker nests it.
         depth: usize,
+        /// The name of the interaction this one was branched from, when it is
+        /// not nested beneath it: it works in another checkout, or is not
+        /// listed.
+        branched_from: Option<Cow<'a, str>>,
+        /// How many listed interactions name this one as their source with
+        /// `branched_from`, rather than being nested beneath it.
+        branches: usize,
+        /// The cursor's interaction names this one as its `branched_from`, so
+        /// it is marked for the eye to find.
+        source_of_selected: bool,
         provider: &'a str,
         model: &'a str,
         /// The Git branch checked out for this interaction. `None` means the
@@ -175,13 +193,10 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
         .iter()
         .enumerate()
         .map(|(index, row)| {
-            let last_in_directory = !matches!(
-                view.rows.get(index + 1),
-                Some(InteractionRow::Interaction { grouped: true, .. })
-            );
-            let mut item = row_item(row, view.all_workspaces, last_in_directory);
+            let columns = tree_columns(&view.rows, index);
+            let mut item = row_item(row, view.all_workspaces, &columns);
             match row {
-                InteractionRow::Workspace(_) | InteractionRow::Directory(_) => striped = false,
+                InteractionRow::Workspace(_) | InteractionRow::Directory { .. } => striped = false,
                 InteractionRow::Interaction { selected, .. } => {
                     let background = if *selected {
                         Some(theme::SELECTED_ROW_BACKGROUND)
@@ -307,12 +322,66 @@ fn row_height(row: &InteractionRow<'_>) -> usize {
     }
 }
 
+/// How far in `row` is drawn, and whether it is one of the entries the tree
+/// line in its innermost column connects — a heading, or an interaction not
+/// hanging beneath another as its branch. `None` for a Workspace heading,
+/// which every tree ends at.
+fn row_level(row: &InteractionRow<'_>) -> Option<(usize, bool)> {
+    match row {
+        InteractionRow::Workspace(_) => None,
+        InteractionRow::Directory { level, .. } => Some((*level, true)),
+        InteractionRow::Interaction { level, depth, .. } => Some((*level, *depth == 0)),
+    }
+}
+
+/// For each worktree column the row at `index` is drawn in, outermost first,
+/// whether the tree line in it carries on past the row: whether another entry
+/// connected in that column follows before the heading the column hangs from
+/// is left.
+fn tree_columns(rows: &[InteractionRow<'_>], index: usize) -> Vec<bool> {
+    let Some((level, _)) = row_level(&rows[index]) else {
+        return Vec::new();
+    };
+    (1..=level)
+        .map(|column| {
+            for row in &rows[index + 1..] {
+                match row_level(row) {
+                    Some((level, _)) if level < column => return false,
+                    Some((level, connected)) if level == column && connected => return true,
+                    Some(_) => {}
+                    None => return false,
+                }
+            }
+            false
+        })
+        .collect()
+}
+
+/// The tree lines ahead of a row in `columns` — see [`tree_columns`]. A
+/// `connected` row is joined to the line in its innermost column; any other
+/// line of the row, and every outer column, only carries a line past it.
+fn tree_prefix(columns: &[bool], connected: bool) -> String {
+    columns
+        .iter()
+        .enumerate()
+        .map(
+            |(at, continues)| match (connected && at + 1 == columns.len(), continues) {
+                (true, true) => "├─ ",
+                (true, false) => "└─ ",
+                (false, true) => "│  ",
+                (false, false) => "   ",
+            },
+        )
+        .collect()
+}
+
 /// `under_workspaces` says whether the list is drawn under Workspace
-/// headings, which every row then steps in beneath.
+/// headings, which every row then steps in beneath. `columns` are the
+/// worktree headings it is drawn beneath — see [`tree_columns`].
 fn row_item(
     row: &InteractionRow<'_>,
     under_workspaces: bool,
-    last_in_directory: bool,
+    columns: &[bool],
 ) -> Vec<Line<'static>> {
     // Bright, undimmed tree lines make membership readable independently of
     // heading colors, including when the heading has scrolled out of view.
@@ -329,21 +398,37 @@ fn row_item(
                     .add_modifier(Modifier::BOLD),
             ))];
         }
-        InteractionRow::Directory(name) => {
-            return vec![Line::from(vec![
-                Span::styled(workspace_edge, group_style),
+        InteractionRow::Directory { name, into, .. } => {
+            let mut spans = vec![
+                Span::styled(
+                    format!("{workspace_edge}{}", tree_prefix(columns, true)),
+                    group_style,
+                ),
                 Span::styled(
                     format!("[{name}]"),
                     Style::default().fg(theme::DIRECTORY_NAME),
                 ),
-            ])];
+            ];
+            // Where its work goes, quietly: the nesting already says so for a
+            // worktree under another's heading, but not for one whose target
+            // is not listed, nor once the heading above has scrolled away.
+            if let Some(into) = into {
+                spans.push(Span::styled(
+                    format!("  → {into}"),
+                    Style::default().fg(theme::MUTED_TEXT),
+                ));
+            }
+            return vec![Line::from(spans)];
         }
         InteractionRow::Interaction { .. } => {}
     }
     let InteractionRow::Interaction {
         name,
-        grouped,
+        level,
         depth,
+        branched_from,
+        branches,
+        source_of_selected,
         provider,
         model,
         branch,
@@ -372,13 +457,9 @@ fn row_item(
         .bg(status_background(*status, *selected))
         .add_modifier(Modifier::BOLD);
     let running = matches!(status, InteractionStatus::Running { .. });
-    let directory_edge = if !*grouped {
-        ""
-    } else if last_in_directory {
-        "└─ "
-    } else {
-        "├─ "
-    };
+    // A branch hangs from its source's row rather than joining the worktree's
+    // line itself, so the line only carries on past it.
+    let directory_edge = tree_prefix(columns, *depth == 0);
     let edge = branch_indent(*depth);
     let mut main = vec![
         Span::styled(format!("{workspace_edge}{directory_edge}"), group_style),
@@ -419,6 +500,13 @@ fn row_item(
             _ => theme::TEXT,
         })
     };
+    // The source of the cursor's branch is underlined, so a branch drawn
+    // under another checkout than its source's can still be traced to it.
+    let name_style = if *source_of_selected {
+        name_style.add_modifier(Modifier::UNDERLINED)
+    } else {
+        name_style
+    };
     let name_index = main.len();
     main.push(Span::styled(name.to_string(), name_style));
     // Tags belong to the prompt they label, so they follow it directly.
@@ -428,8 +516,22 @@ fn row_item(
             Style::default().fg(theme::INTERACTION_TAG),
         ));
     }
-    // A grouped row's worktree heading already says where it works.
-    if let Some(branch) = branch.filter(|_| !*grouped) {
+    // Where the conversation came from, and went, when the rows are not
+    // nested to say so: the tree is laid out by where the work goes.
+    if let Some(source) = branched_from {
+        main.push(Span::styled(
+            format!(" ⑂ {source}"),
+            Style::default().fg(theme::MUTED_TEXT),
+        ));
+    }
+    if *branches > 0 {
+        main.push(Span::styled(
+            format!(" ⑂{branches}"),
+            Style::default().fg(theme::MUTED_TEXT),
+        ));
+    }
+    // A row under a worktree heading has its branch said by the heading.
+    if let Some(branch) = branch.filter(|_| *level == 0) {
         main.push(Span::styled(
             format!(" · {branch}"),
             Style::default().fg(theme::ACCENT),
@@ -500,13 +602,7 @@ fn row_item(
     let message_style = adjust(message_style);
     let mut lines = vec![Line::from(main)];
     if let Some(text) = last_message {
-        let directory_continuation = if !*grouped {
-            ""
-        } else if last_in_directory {
-            "   "
-        } else {
-            "│  "
-        };
+        let directory_continuation = tree_prefix(columns, false);
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{workspace_edge}{directory_continuation}"),
@@ -596,7 +692,10 @@ mod tests {
     ) -> InteractionRow<'static> {
         InteractionRow::Interaction {
             name: name.into(),
-            grouped: false,
+            level: 0,
+            branched_from: None,
+            branches: 0,
+            source_of_selected: false,
             depth,
             provider: "codex",
             model: "gpt-5",
@@ -643,7 +742,10 @@ mod tests {
                 InteractionRow::Workspace("Payments".into()),
                 InteractionRow::Interaction {
                     name: "repair checkout".into(),
-                    grouped: false,
+                    level: 0,
+                    branched_from: None,
+                    branches: 0,
+                    source_of_selected: false,
                     depth: 0,
                     provider: "codex",
                     model: "gpt-5",
@@ -672,14 +774,19 @@ mod tests {
         assert_eq!(height(&view, 12), 5);
     }
 
-    /// Tree lines show workspace and directory membership without color;
-    /// grouped rows also drop the branch the directory heading already gives.
-    #[test]
-    fn rows_have_tree_lines_under_their_headings() {
-        let row = |name: &'static str, grouped| InteractionRow::Interaction {
+    fn placed(
+        name: &'static str,
+        level: usize,
+        depth: usize,
+        branched_from: Option<&'static str>,
+    ) -> InteractionRow<'static> {
+        InteractionRow::Interaction {
             name: name.into(),
-            grouped,
-            depth: 0,
+            level,
+            depth,
+            branched_from: branched_from.map(Cow::Borrowed),
+            branches: 0,
+            source_of_selected: false,
             provider: "claude",
             model: "sonnet",
             branch: Some("feature"),
@@ -692,26 +799,45 @@ mod tests {
             uncommitted: false,
             completion: CompletionState::Active,
             tags: &[],
-            last_message: grouped.then_some("preview"),
-        };
-        let lines = |view: &InteractionNavigator<'_>| {
-            rendered(view)
-                .chars()
-                .collect::<Vec<_>>()
-                .chunks(80)
-                .map(|line| line.iter().collect::<String>())
-                .collect::<Vec<_>>()
-        };
+            last_message: (level > 0).then_some("preview"),
+        }
+    }
 
+    fn directory(
+        name: &'static str,
+        level: usize,
+        into: Option<&'static str>,
+    ) -> InteractionRow<'static> {
+        InteractionRow::Directory {
+            name: name.into(),
+            level,
+            into: into.map(Cow::Borrowed),
+        }
+    }
+
+    fn lines(view: &InteractionNavigator<'_>) -> Vec<String> {
+        rendered(view)
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(80)
+            .map(|line| line.iter().collect::<String>())
+            .collect()
+    }
+
+    /// Tree lines show workspace and directory membership without color;
+    /// grouped rows also drop the branch the directory heading already gives.
+    #[test]
+    fn rows_have_tree_lines_under_their_headings() {
+        let row = |name: &'static str, grouped: bool| placed(name, grouped.into(), 0, None);
         let all = InteractionNavigator {
             all_workspaces: true,
             rows: vec![
                 InteractionRow::Workspace("Payments".into()),
                 row("alone", false),
-                InteractionRow::Directory("checkout".into()),
+                directory("checkout", 0, None),
                 row("first", true),
                 row("second", true),
-                InteractionRow::Directory("other".into()),
+                directory("other", 0, None),
                 row("third", true),
             ],
             ..many_rows(0)
@@ -744,7 +870,7 @@ mod tests {
         let one = InteractionNavigator {
             rows: vec![
                 row("alone", false),
-                InteractionRow::Directory("checkout".into()),
+                directory("checkout", 0, None),
                 row("first", true),
                 row("outside", false),
             ],
@@ -767,6 +893,56 @@ mod tests {
         );
     }
 
+    /// A worktree integrated into another is headed beneath that one's
+    /// heading, after its rows, with the line of the outer worktree carried
+    /// past it. A branch in its source's worktree hangs from the source's row;
+    /// one in another worktree names its source, which counts its branches.
+    #[test]
+    fn nested_worktrees_and_branches_are_drawn_in_their_own_ways() {
+        let mut rows = vec![
+            directory("auth-rework", 0, Some("main")),
+            placed("rework", 1, 0, None),
+            placed("try jwt", 1, 1, None),
+            placed("review", 1, 0, None),
+            directory("token-tests", 1, Some("styra/auth-rework")),
+            placed("tests", 2, 0, None),
+            directory("jwt-spike", 1, Some("styra/auth-rework")),
+            placed("spike", 2, 0, Some("rework")),
+        ];
+        for row in &mut rows {
+            if let InteractionRow::Interaction {
+                name,
+                branches,
+                last_message,
+                ..
+            } = row
+            {
+                *last_message = None;
+                if name == "rework" {
+                    *branches = 1;
+                }
+            }
+        }
+        let view = InteractionNavigator {
+            rows,
+            ..many_rows(0)
+        };
+        let screen = lines(&view);
+        let expected = [
+            "│[auth-rework]  → main",
+            "│├─  ●  rework ⑂1 · claude",
+            "││    └─  ●  try jwt · claude",
+            "│├─  ●  review · claude",
+            "│├─ [token-tests]  → styra/auth-rework",
+            "││  └─  ●  tests · claude",
+            "│└─ [jwt-spike]  → styra/auth-rework",
+            "│   └─  ●  spike ⑂ rework · claude",
+        ];
+        for (line, expected) in screen[1..].iter().zip(expected) {
+            assert!(line.starts_with(expected), "{screen:#?}");
+        }
+    }
+
     /// A stopped entry is one the operator has to decide whether to resume,
     /// and the reason it stopped is what that decision turns on.
     #[test]
@@ -781,7 +957,10 @@ mod tests {
             requested_offset: 0,
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
-                grouped: false,
+                level: 0,
+                branched_from: None,
+                branches: 0,
+                source_of_selected: false,
                 depth: 0,
                 provider: "claude",
                 model: "sonnet",
@@ -816,7 +995,10 @@ mod tests {
             requested_offset: 0,
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
-                grouped: false,
+                level: 0,
+                branched_from: None,
+                branches: 0,
+                source_of_selected: false,
                 depth: 0,
                 provider: "claude",
                 model: "sonnet",
@@ -849,7 +1031,10 @@ mod tests {
             rows: (0..8)
                 .map(|index| InteractionRow::Interaction {
                     name: format!("task {index}").into(),
-                    grouped: false,
+                    level: 0,
+                    branched_from: None,
+                    branches: 0,
+                    source_of_selected: false,
                     depth: 0,
                     provider: "claude",
                     model: "sonnet",

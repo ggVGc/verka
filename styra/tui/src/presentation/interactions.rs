@@ -2,7 +2,6 @@
 
 use crate::activity::{IdleReason, Status};
 use crate::app::App;
-use crate::interactions::shares_directory;
 use std::borrow::Cow;
 use styra_protocol::InteractionSummary;
 use styra_ui::interactions::{InteractionNavigator, InteractionRow, InteractionStatus};
@@ -33,9 +32,12 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
     };
     let mut rows = Vec::new();
     let mut heading = None;
-    let mut directory = None;
-    let shown: Vec<usize> = ordered.iter().map(|(index, _)| *index).collect();
-    for &(index, depth) in &ordered {
+    let source_of_selected = ordered
+        .iter()
+        .find(|row| app.interactions.items[row.index].id == cursor)
+        .and_then(|row| row.branched_from.as_deref());
+    for row in &ordered {
+        let index = row.index;
         let interaction = &app.interactions.items[index];
         let new_workspace = heading.as_deref() != Some(interaction.workspace_id.as_str());
         if all_workspaces && new_workspace {
@@ -49,25 +51,26 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             rows.push(InteractionRow::Workspace(Cow::Owned(name)));
         }
         heading = Some(interaction.workspace_id.clone());
-        // A worktree more than one shown interaction in the Workspace works
-        // in is headed, as the Workspace is, with those rows beneath it. The
-        // order has put them next to each other. The main checkout is not: its
-        // interactions lead the Workspace's group, under its own heading.
-        let grouped = shares_directory(
-            &app.interactions.items,
-            &app.interactions.workspaces,
-            &shown,
-            index,
-        );
-        if grouped && (new_workspace || directory != Some(&interaction.workspace)) {
+        // The order has put a headed worktree's rows, and then the worktrees
+        // integrated into it, right after its heading — see `DisplayRow`.
+        if let Some(worktree) = &row.heading {
             let name = interaction
                 .workspace
                 .file_name()
                 .unwrap_or(interaction.workspace.as_os_str())
                 .to_string_lossy();
-            rows.push(InteractionRow::Directory(name));
+            rows.push(InteractionRow::Directory {
+                name,
+                level: row.level.saturating_sub(1),
+                into: worktree.into.clone().map(Cow::Owned),
+            });
         }
-        directory = Some(&interaction.workspace);
+        let name_of = |id: &str| {
+            app.interactions
+                .name(id)
+                .unwrap_or_else(|| styra_ui::picker::short_id(id))
+                .to_owned()
+        };
         // The navigator's gutter has one cell per row, so the reasons the
         // status carries are dropped here rather than rendered: they belong to
         // the status line of the interaction the panes below are showing. The
@@ -96,8 +99,17 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             .unwrap_or_else(|| Cow::Borrowed(styra_ui::picker::short_id(&interaction.id)));
         rows.push(InteractionRow::Interaction {
             name,
-            grouped,
-            depth,
+            level: row.level,
+            depth: row.depth,
+            branched_from: row
+                .branched_from
+                .as_deref()
+                .map(|source| Cow::Owned(name_of(source))),
+            branches: ordered
+                .iter()
+                .filter(|other| other.branched_from.as_deref() == Some(interaction.id.as_str()))
+                .count(),
+            source_of_selected: source_of_selected == Some(interaction.id.as_str()),
             provider: interaction.selection.provider.as_str(),
             model: &interaction.selection.model,
             branch: interaction
