@@ -277,6 +277,7 @@ pub struct App {
     /// The diff [`View::CheckoutDiff`] shows. Kept after the view is left, but
     /// read afresh each time it is opened.
     pub checkout_diff: Option<styra_diff::CheckoutDiff>,
+    pub diff_preview: bool,
     /// The entry-log pane below the event list: whether it is open, which of
     /// the two windows has the navigation keys, and where it is; see
     /// [`EntryLog`]. It is deliberately a pane state, not a [`View`]: it and
@@ -381,9 +382,11 @@ pub enum Request {
     /// made, in the configured diff tool. The key handler resolves the
     /// target, refusing an interaction that has none.
     OpenDiff(styra_diff::DiffTarget),
-    /// The same diff read into [`View::CheckoutDiff`] instead. Reading it runs
-    /// `git`, so the event loop does it rather than the key handler.
+    /// Read the checkout diff into the preview pane. Reading it runs `git`,
+    /// so the event loop does it rather than the key handler.
     ShowDiff(styra_diff::DiffTarget),
+    /// Read the checkout diff into the fullscreen view.
+    ShowDiffFullscreen(styra_diff::DiffTarget),
     /// Open a Markdown link's resolved path in the configured editor.
     OpenPath(PathBuf),
     /// Open the file at the top of the diff view in the configured editor, at
@@ -514,6 +517,7 @@ impl App {
             auto_commit: false,
             transcript: Scroll::default(),
             checkout_diff: None,
+            diff_preview: false,
             entry_log: EntryLog::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
@@ -1350,6 +1354,14 @@ impl App {
         self.timeline.follow = false;
         self.preview.scroll.reset();
         self.entry_log_follow_selection();
+    }
+
+    /// Whether the checkout diff is taking the reading keys on screen.
+    pub fn diff_visible(&self) -> bool {
+        self.view == View::CheckoutDiff
+            || (self.diff_preview
+                && self.preview.open
+                && matches!(self.view, View::Events | View::Files))
     }
 
     /// The entry the preview panel and the `y` shortcut act on: the one the

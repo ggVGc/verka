@@ -1,7 +1,6 @@
 //! An interaction's checkout diffed against the commit its branch was made
 //! at: what `d` shows inside Styra, in the view `styra-diff` provides, and
-//! what `D` hands to the configured tool instead (see
-//! [`crate::config::Configuration::open_diff`]).
+//! `d` opens it in the preview pane and `D` opens it fullscreen.
 
 use styra_diff::DiffTarget;
 use styra_protocol::InteractionSummary;

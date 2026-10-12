@@ -86,6 +86,16 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
 /// none of the global bindings or the other views' keys act from it. What it
 /// hands back is what only Styra can do.
 pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
+    if key.code == KeyCode::Char('D')
+        && !app
+            .checkout_diff
+            .as_ref()
+            .is_some_and(|diff| diff.search.typing())
+    {
+        app.diff_preview = false;
+        app.view = View::CheckoutDiff;
+        return;
+    }
     let outcome = match app.checkout_diff.as_mut() {
         Some(diff) => diff.handle_key(key),
         None if key.code == KeyCode::Esc => Outcome::Close,
@@ -93,7 +103,13 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
     };
     match outcome {
         Outcome::Handled | Outcome::Ignored => {}
-        Outcome::Close => app.view = View::Events,
+        Outcome::Close => {
+            if app.view == View::CheckoutDiff {
+                app.view = View::Events;
+            } else {
+                app.diff_preview = false;
+            }
+        }
         Outcome::OpenFile => open_diff_file(app),
     }
 }
@@ -279,7 +295,7 @@ pub fn handle_list_key(
     pending_fold: &mut bool,
     preferences_path: &Path,
 ) {
-    if app.view == View::CheckoutDiff {
+    if app.diff_visible() {
         return handle_diff_key(app, key);
     }
     if std::mem::take(pending_fold) {
@@ -327,13 +343,11 @@ pub fn handle_list_key(
         // standing where the interaction is working. That works with no live
         // interaction — a finished one still has a directory to look at.
         k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
-        // `d` reads the diff into a view of its own and, like the other
-        // views, goes back to events when pressed there again. `D` hands the
-        // same diff to the configured tool in a window of its own — except in
-        // the details view, which keeps `D` for saving the launch default.
+        // `d` opens the diff in the preview; `D` opens it fullscreen.
+        // The details view keeps `D` for saving the launch default.
         k if GLOBAL_DIFF.matches(k) => return ask_for_diff(app, Request::ShowDiff),
-        k if GLOBAL_DIFF_EXTERNAL.matches(k) && app.view != View::Driva => {
-            return ask_for_diff(app, Request::OpenDiff)
+        k if GLOBAL_DIFF_FULLSCREEN.matches(k) && app.view != View::Driva => {
+            return ask_for_diff(app, Request::ShowDiffFullscreen)
         }
         // Not from the preview. The overview takes `i` itself, for the tile
         // under its cursor.
@@ -1851,9 +1865,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// `D` asks for the same diff in the configured tool instead.
+    /// `D` asks for the same diff fullscreen.
     #[test]
-    fn shift_d_asks_for_the_same_diff_in_the_configured_tool() {
+    fn shift_d_asks_for_the_same_diff_fullscreen() {
         let root = tree("diff-external");
         let mut app = app_with_diffable_interaction(&root);
 
@@ -1865,7 +1879,7 @@ mod tests {
 
         assert_eq!(
             app.take_request(),
-            Some(Request::OpenDiff(diffable_target()))
+            Some(Request::ShowDiffFullscreen(diffable_target()))
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1884,7 +1898,48 @@ mod tests {
             KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
         );
 
-        assert!(!matches!(app.take_request(), Some(Request::OpenDiff(_))));
+        assert!(!matches!(
+            app.take_request(),
+            Some(Request::ShowDiffFullscreen(_))
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn preview_diff_can_be_scrolled_promoted_and_closed() {
+        let root = tree("diff-preview");
+        let mut app = app_with_diffable_interaction(&root);
+        app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
+        app.diff_preview = true;
+        app.preview.show();
+        app.checkout_diff.as_mut().unwrap().scroll.note_limit(100);
+
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        );
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
+        assert_eq!(app.view, View::Events);
+
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert!(!app.diff_visible());
+        assert!(app.preview.open);
+        assert_eq!(app.view, View::Events);
+
+        app.diff_preview = true;
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
+        );
+        assert_eq!(app.view, View::CheckoutDiff);
+        assert!(!app.diff_preview);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
         let _ = std::fs::remove_dir_all(&root);
     }
 

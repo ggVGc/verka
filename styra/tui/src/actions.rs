@@ -22,7 +22,7 @@ pub(crate) enum Action {
     GlobalShell,
     GlobalDirectory,
     GlobalDiff,
-    GlobalDiffExternal,
+    GlobalDiffFullscreen,
     GlobalInteractions,
     GlobalOverview,
     GlobalSessions,
@@ -289,9 +289,9 @@ impl Action {
             Self::GlobalShell => "open session shell in a new terminal",
             Self::GlobalDirectory => "open a terminal in the interaction's working directory",
             Self::GlobalDiff => {
-                "diff the checkout against where its branch started; Esc returns to events"
+                "diff the checkout in the preview pane; Esc returns to the entry preview"
             }
-            Self::GlobalDiffExternal => "the same diff in the configured tool, in a new terminal",
+            Self::GlobalDiffFullscreen => "the same diff fullscreen; Esc returns to events",
             Self::GlobalInteractions => "live interactions",
             Self::GlobalOverview => "overview: every running and idle interaction as a grid",
             Self::GlobalSessions => "stored sessions",

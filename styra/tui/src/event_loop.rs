@@ -762,7 +762,7 @@ fn run_rounds(
         // The diff on screen is a reading of a checkout the agent may still be
         // writing to, so it is read again while the agent works. An idle or
         // stopped agent leaves the checkout alone: reopening refreshes it then.
-        if app.view == View::CheckoutDiff
+        if app.diff_visible()
             && matches!(app.activity.status, Status::Running | Status::Background)
             && diff_refreshed.elapsed() >= DIFF_REFRESH
         {
@@ -979,7 +979,7 @@ fn run_rounds(
             && app.launch.prompt.is_none()
             && !app.search.typing()
             // The diff owns the keyboard; `?` is not one of its keys.
-            && app.view != View::CheckoutDiff
+            && !app.diff_visible()
             && app
                 .tag_picker
                 .as_ref()
@@ -1181,15 +1181,9 @@ fn run_rounds(
             }
             continue;
         }
-        // The event list's `/` search is modal while it is being typed: every
-        // printable key is part of the term, including the ones bound to
-        // commands on the list it is marking.
-        if app.view == View::CheckoutDiff
-            && app
-                .checkout_diff
-                .as_ref()
-                .is_some_and(|diff| diff.search.typing())
-        {
+        // The diff owns reading keys in either layout, including its modal
+        // file filter, before the event list and navigator handle them.
+        if app.diff_visible() {
             input::handle_diff_key(app, key);
             continue;
         }
@@ -1940,7 +1934,17 @@ fn run_rounds(
             Some(Request::ShowDiff(target)) => {
                 app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
                 diff_refreshed = Instant::now();
-                app.view = crate::app::View::CheckoutDiff;
+                app.diff_preview = true;
+                app.preview.show();
+                if !matches!(app.view, View::Events | View::Files) {
+                    app.view = View::Events;
+                }
+            }
+            Some(Request::ShowDiffFullscreen(target)) => {
+                app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
+                diff_refreshed = Instant::now();
+                app.diff_preview = false;
+                app.view = View::CheckoutDiff;
             }
             Some(Request::OpenShell) => {
                 match crate::terminal::open_shell(client, &app.session_id, config) {

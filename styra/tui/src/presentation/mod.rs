@@ -341,6 +341,20 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
             let navigator = app.interactions.open.then(|| interactions::view(app));
             let entry_log = app.entry_log.open.then(|| entry_log::view(app));
             let preview = app.preview.open.then(|| preview::view(app, false));
+            let diff = app.checkout_diff.as_ref().map(|diff| {
+                diff.view(styra_ui::chrome::panel_block(&panel_chrome(
+                    app,
+                    Some("diff"),
+                )))
+            });
+            let side_preview = if app.diff_visible() {
+                diff.as_ref()
+                    .map(|diff| styra_ui::application::SidePreview::CheckoutDiff(diff))
+            } else {
+                preview
+                    .as_ref()
+                    .map(styra_ui::application::SidePreview::Entry)
+            };
             draw_main(
                 ui,
                 app,
@@ -348,7 +362,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                     list: &list,
                     navigator: navigator.as_ref(),
                     entry_log: entry_log.as_ref(),
-                    preview: preview.as_ref(),
+                    preview: side_preview,
                     link_mode: app.link_highlight.is_some(),
                 }),
             )
@@ -437,6 +451,20 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
         View::Files => {
             let list = list::view(app);
             let preview = app.preview.open.then(|| preview::view(app, false));
+            let diff = app.checkout_diff.as_ref().map(|diff| {
+                diff.view(styra_ui::chrome::panel_block(&panel_chrome(
+                    app,
+                    Some("diff"),
+                )))
+            });
+            let side_preview = if app.diff_visible() {
+                diff.as_ref()
+                    .map(|diff| styra_ui::application::SidePreview::CheckoutDiff(diff))
+            } else {
+                preview
+                    .as_ref()
+                    .map(styra_ui::application::SidePreview::Entry)
+            };
             let items = files::items(app);
             let selected = app
                 .files
@@ -476,7 +504,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 app,
                 MainView::Files(ApplicationFiles {
                     list: &list,
-                    preview: preview.as_ref(),
+                    preview: side_preview,
                     files: &file_views,
                     selected,
                     scope,
@@ -1120,5 +1148,17 @@ mod tests {
         );
         assert!(screen.contains("1 file changed  +1 -1"), "{screen}");
         assert!(screen.contains("new"), "{screen}");
+
+        for view in [View::Events, View::Files] {
+            app.view = view;
+            app.diff_preview = true;
+            app.preview.show();
+            let screen = test_support::screen_sized(&app, 160, 40);
+            let (x, _) = screen.find("+new");
+            assert!(
+                x >= 80,
+                "the checkout diff is in the preview pane: {view:?}"
+            );
+        }
     }
 }

@@ -253,12 +253,13 @@ The server and its client interface are the `server` crate in `styra/server`
 separate `styra-ui` crate. The application passes presentation models through
 an object-safe `Ui` trait whose methods expose each rendering operation
 directly; the Ratatui implementation also supports an in-memory test backend.
-The checkout diff view (`d`) is its own crate, `styra-diff` in `styra/diff`,
+The checkout diff view (`d` in the preview pane, `D` fullscreen) is its own crate, `styra-diff` in `styra/diff`,
 built on `styra-ui`; its `styra-diff` binary opens the same view over any
 repository: `styra-diff [-C DIR] [BASE]` shows the working tree against where
 the current branch left `BASE`, or against `HEAD` when no base is given.
 The view's keys live in that crate too, so both answer them the same way;
-while the view is open in Styra no other shortcut acts, and Esc closes it.
+while the view is open in Styra its navigation keys act, and Esc closes it.
+`D` also expands a diff already open in the preview pane to fullscreen.
 The per-file list uses compact change markers: `A` added, `D` deleted, `M`
 edited, `R` moved, `R+` moved with edits, `C` copied, `C+` copied with edits,
 and `T` file mode changed. A fixed row above the selected patch explains its

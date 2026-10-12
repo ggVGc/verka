@@ -10,11 +10,46 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Modifier;
 use ratatui::Frame;
 
+#[derive(Clone, Copy)]
+pub enum SidePreview<'a> {
+    Entry(&'a preview::PreviewView<'a>),
+    CheckoutDiff(&'a dyn Panel),
+}
+
+fn render_side_preview(
+    frame: &mut Frame,
+    view: SidePreview<'_>,
+    session_id: &str,
+    area: Rect,
+    feedback: &mut RenderFeedback,
+) {
+    let (panel, measured) = match view {
+        SidePreview::Entry(view) => (
+            PanelId::Preview {
+                session: session_id.into(),
+                target: preview_panel(view),
+            },
+            preview::render(frame, view, area),
+        ),
+        SidePreview::CheckoutDiff(view) => {
+            let measured = view.render(frame, area);
+            feedback.diff_file_list_offset = measured.list_offset;
+            (
+                PanelId::CheckoutDiff {
+                    session: session_id.into(),
+                },
+                measured.scroll,
+            )
+        }
+    };
+    note_preview_scroll(feedback, panel, measured);
+}
+
 pub struct EventView<'a> {
     pub list: &'a event_list::EventListView<'a>,
     pub navigator: Option<&'a interactions::InteractionNavigator<'a>>,
     pub entry_log: Option<&'a event_list::EntryLogView<'a>>,
-    pub preview: Option<&'a preview::PreviewView<'a>>,
+    pub preview: Option<SidePreview<'a>>,
     /// Whether link navigation is on, which washes out everything in the
     /// event list but the links and file references it walks.
     pub link_mode: bool,
@@ -22,7 +57,7 @@ pub struct EventView<'a> {
 
 pub struct FilesView<'a> {
     pub list: &'a event_list::EventListView<'a>,
-    pub preview: Option<&'a preview::PreviewView<'a>>,
+    pub preview: Option<SidePreview<'a>>,
     pub files: &'a [files::FileView],
     pub selected: usize,
     pub scope: &'a str,
@@ -240,15 +275,7 @@ fn render_events(
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
         tint_area.width = panes[0].width;
-        let measured = preview::render(frame, preview, panes[1]);
-        note_preview_scroll(
-            feedback,
-            PanelId::Preview {
-                session: session_id.into(),
-                target: preview_panel(preview),
-            },
-            measured,
-        );
+        render_side_preview(frame, preview, session_id, panes[1], feedback);
         panes[0]
     } else {
         area
@@ -288,15 +315,7 @@ fn render_events(
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(event_area);
             tint_area.width = panes[0].width;
-            let measured = preview::render(frame, preview_view, panes[1]);
-            note_preview_scroll(
-                feedback,
-                PanelId::Preview {
-                    session: session_id.into(),
-                    target: preview_panel(preview_view),
-                },
-                measured,
-            );
+            render_side_preview(frame, preview_view, session_id, panes[1], feedback);
             panes[0]
         } else {
             event_area
@@ -349,15 +368,7 @@ fn render_files(
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(columns[1]);
-        let measured = preview::render(frame, preview_view, right[0]);
-        note_preview_scroll(
-            feedback,
-            PanelId::Preview {
-                session: session_id.into(),
-                target: preview_panel(preview_view),
-            },
-            measured,
-        );
+        render_side_preview(frame, preview_view, session_id, right[0], feedback);
         right[1]
     } else {
         columns[1]
