@@ -406,7 +406,6 @@ pub fn handle_list_key(
             }
             k if k.code == KeyCode::Esc && app.search.query().is_some() => app.search.cancel(),
             k if EVENTS_LINK_DESTINATIONS.matches(k) => app.toggle_link_display(),
-            k if EVENTS_FOLLOW_BRANCH.matches(k) => session::follow_branch(app),
             k if EVENTS_ALL_EVENTS.matches(k) => app.toggle_all_events(),
             k if EVENTS_PREVIEW_TARGET.matches(k) && app.preview.open => {
                 app.preview.toggle_target()

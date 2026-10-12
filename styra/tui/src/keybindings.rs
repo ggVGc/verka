@@ -66,8 +66,6 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_PREV_LINE: [Key::ch('k')] => Action::EventsPrevLine;
     EVENTS_FIRST: [Key::ch('g')] => Action::EventsFirst;
     EVENTS_LAST: [Key::ch('G')] => Action::EventsLast;
-    EVENTS_FOLLOW_BRANCH: [Key::ch('b')] ("or Enter on a branch marker")
-        => Action::EventsFollowBranch;
     EVENTS_LINK_MENU: [Key::ch(' ')] ("link highlighted") => Action::EventsLinkMenu;
     EVENTS_TOGGLE_EXPAND: [Key::ch(' '), Key::code(KeyCode::Enter), Key::ch('o')]
         => Action::EventsToggleExpand;
