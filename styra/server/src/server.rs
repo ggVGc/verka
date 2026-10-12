@@ -2341,27 +2341,11 @@ impl ServerState {
             .collect())
     }
 
-    /// The models a session can be launched on, provider by provider in
-    /// picker order, each with the effort ladder it accepts.
-    ///
-    /// Static: `crate::agent` is the catalog, and no Workspace, session or
-    /// agent is consulted. It is on the wire so that a client outside this
-    /// crate builds its picker from the same tables the TUI's launcher does,
-    /// rather than from a copy of them that stops being true when a model
-    /// gains a rung.
     fn list_models(&self) -> Vec<ModelSummary> {
-        let mut models = Vec::new();
-        for provider in crate::agent::PROVIDERS {
-            for model in provider.models() {
-                models.push(ModelSummary {
-                    provider,
-                    model: model.id.to_owned(),
-                    efforts: model.efforts.to_vec(),
-                    default_effort: provider.default_effort_for(model.id),
-                });
-            }
-        }
-        models
+        let recent = crate::model_picker::default_path()
+            .map(|path| crate::model_picker::load(&path))
+            .unwrap_or_default();
+        crate::model_picker::catalog(&recent)
     }
 
     fn resume_session(&self, request: ResumeSession) -> Result<SessionInfo> {
@@ -3894,6 +3878,14 @@ impl ServerState {
                 Ok(Response::Templates(self.list_templates(&workspace_id)?))
             }
             Request::ListModels => Ok(Response::Models(self.list_models())),
+            Request::RememberModel { selection } => {
+                styra_protocol::agent::validate_selection(&selection)?;
+                crate::model_picker::record(
+                    &crate::model_picker::default_path()?,
+                    &selection.model,
+                )?;
+                Ok(Response::ModelRemembered)
+            }
             Request::ResumeSession(request) => {
                 self.ensure_not_integrating(&request.id)?;
                 Ok(Response::SessionResumed(self.resume_session(request)?))

@@ -128,7 +128,7 @@ function M.selection_for_directory(directory, options)
   return selection, source
 end
 
---- Every model a new interaction could run on, most capable first, each with
+--- Every model a new interaction could run on, recently selected first, each with
 --- the reasoning-effort rungs it accepts.
 ---
 --- What to offer an operator who did not want the one they were offered. The
@@ -147,6 +147,15 @@ function M.available_models(options)
     return nil, err
   end
   return styra:models()
+end
+
+--- Record a confirmed picker selection in Styra's shared history.
+function M.record_recent_selection(value, options)
+  local styra, err = require("svara.api").open(options or {})
+  if not styra then
+    return nil, err
+  end
+  return styra:remember_model(value)
 end
 
 --- Remember a selection as the one new interactions run under.

@@ -77,12 +77,19 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
 }
 
 fn confirm(app: &mut App, preferences_path: &Path) {
+    let Some(launcher) = app.launcher.as_ref() else {
+        return;
+    };
+    // A provider conversion keeps app.selection unchanged until the server
+    // answers, but the confirmed model is already the one to remember.
+    let model = launcher.selection().model;
     app.confirm_launcher();
-    if let Err(error) = preferences::save_recent_models(preferences_path, &app.recent_models) {
+    if let Err(error) = preferences::record_recent_model(preferences_path, &model) {
         app.push_log(LogEntry::error(format!(
             "could not save the model ordering: {error:#}"
         )));
     }
+    app.recent_models = preferences::load_recent_models(preferences_path);
 }
 
 /// What a row of the picker says, and what its title spells out.
@@ -146,9 +153,21 @@ impl Launcher {
         } else {
             PROVIDERS.to_vec()
         };
-        let mut rows: Vec<Selection> = providers
-            .iter()
-            .flat_map(|provider| triples(*provider))
+        let mut rows: Vec<Selection> = styra_server::model_picker::catalog(recent_models)
+            .into_iter()
+            .filter(|model| providers.contains(&model.provider))
+            .flat_map(|model| {
+                let efforts = if model.efforts.is_empty() {
+                    vec![model.default_effort]
+                } else {
+                    model.efforts
+                };
+                efforts.into_iter().map(move |effort| Selection {
+                    provider: model.provider,
+                    model: model.model.clone(),
+                    effort,
+                })
+            })
             .collect();
         // A selection the catalogs do not offer — a model retired out of them,
         // or a rung a model has since dropped — is still what the session was
@@ -160,12 +179,7 @@ impl Launcher {
         // catalogs' own order, so the list does not reshuffle wholesale after a
         // single pick. The sort is stable, which is what holds each model's
         // rungs together in ladder order beneath it.
-        rows.sort_by_key(|row| {
-            recent_models
-                .iter()
-                .position(|recent| *recent == row.model)
-                .unwrap_or(usize::MAX)
-        });
+        styra_server::model_picker::sort(&mut rows, recent_models, |row| &row.model);
         let labels = labels_of(&rows);
         let at = rows
             .iter()
@@ -255,29 +269,6 @@ impl Launcher {
     }
 }
 
-/// Every launchable triple of one agent: its catalog crossed with each model's
-/// own ladder. A model that takes no effort setting still gets exactly one row
-/// — a selection carries a rung whether or not the launch sends it, and
-/// [`label`] is what keeps that placeholder off the screen.
-fn triples(provider: Provider) -> Vec<Selection> {
-    provider
-        .models()
-        .iter()
-        .flat_map(|model| {
-            let rungs: Vec<_> = if model.efforts.is_empty() {
-                vec![provider.default_effort_for(model.id)]
-            } else {
-                model.efforts.to_vec()
-            };
-            rungs.into_iter().map(move |effort| Selection {
-                provider,
-                model: model.id.to_owned(),
-                effort,
-            })
-        })
-        .collect()
-}
-
 fn labels_of(rows: &[Selection]) -> Vec<String> {
     rows.iter().map(label).collect()
 }
@@ -286,6 +277,27 @@ fn labels_of(rows: &[Selection]) -> Vec<String> {
 mod tests {
     use super::*;
     use styra_protocol::agent::{validate_selection, Effort};
+
+    #[test]
+    fn confirming_a_provider_conversion_records_the_choice_and_keeps_other_clients_history() {
+        let root =
+            std::env::temp_dir().join(format!("styra-picker-conversion-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let path = root.join("defaults.json");
+        preferences::record_recent_model(&path, "claude-haiku-4-5-20251001").unwrap();
+        let original = Selection::new(Provider::Claude);
+        let chosen = Selection::new(Provider::Codex);
+        let mut app = App::pending(original.clone());
+        app.session_id = "stored-session".into();
+        app.launcher = Some(Launcher::from_selection(&chosen, &[], false));
+        confirm(&mut app, &path);
+        assert_eq!(app.selection, original, "conversion is pending");
+        assert_eq!(
+            preferences::load_recent_models(&path),
+            vec![chosen.model, "claude-haiku-4-5-20251001".into()]
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
 
     fn opened(selection: &str) -> Launcher {
         Launcher::from_selection(&Selection::parse(selection).unwrap(), &[], false)

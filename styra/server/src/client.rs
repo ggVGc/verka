@@ -136,6 +136,14 @@ impl Client {
         }
     }
 
+    /// Record an explicit picker selection in the shared model history.
+    pub fn remember_model(&self, selection: crate::agent::Selection) -> Result<()> {
+        match self.request(Request::RememberModel { selection })? {
+            Response::ModelRemembered => Ok(()),
+            other => unexpected("model_remembered", other),
+        }
+    }
+
     pub fn resume_session(&self, request: &ResumeSession) -> Result<SessionInfo> {
         match self.request(Request::ResumeSession(request.clone()))? {
             Response::SessionResumed(value) => Ok(value),
@@ -812,6 +820,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::PlanSession(_) => "plan_session",
         Request::ListTemplates { .. } => "list_templates",
         Request::ListModels => "list_models",
+        Request::RememberModel { .. } => "remember_model",
         Request::ResumeSession(_) => "resume_session",
         Request::CreateSessionWorktree { .. } => "create_session_worktree",
         Request::CleanWorktrees { .. } => "clean_worktrees",

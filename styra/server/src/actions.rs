@@ -83,7 +83,8 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
             workspace_id: Some(id),
         } => Scope::Workspace(id),
         Request::CleanWorktrees { workspace_id: None } | Request::Shutdown => Scope::All,
-        Request::CreateWorkspace(_)
+        Request::RememberModel { .. }
+        | Request::CreateWorkspace(_)
         | Request::TranscribeAudio { .. }
         | Request::AudioRecordingStarted
         | Request::AudioRecordingStopped

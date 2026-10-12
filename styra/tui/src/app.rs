@@ -142,10 +142,6 @@ impl DetailsTab {
 /// the state machine around it.
 pub use styra_protocol::LaunchPolicy;
 
-/// How many recently selected models the picker remembers to order its model
-/// column by.
-const RECENT_MODELS: usize = 16;
-
 /// The agent, model, and reasoning effort a session is on, as the status line
 /// names them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -692,9 +688,7 @@ impl App {
     /// it first the next time it opens. The list is capped: past a certain
     /// depth it stops being a shortlist and starts being the catalog again.
     fn note_recent_model(&mut self, model: &str) {
-        self.recent_models.retain(|recent| recent != model);
-        self.recent_models.insert(0, model.to_owned());
-        self.recent_models.truncate(RECENT_MODELS);
+        styra_server::model_picker::note(&mut self.recent_models, model);
     }
 
     /// Close the picker, leaving the selection as it was.

@@ -118,6 +118,20 @@ do
   assert(err:find("XDG_RUNTIME_DIR"), err)
 end
 
+-- Explicit picker confirmations update shared history --------------------
+
+do
+  local host = fake_host({ ok({ type = "model_remembered" }) })
+  local styra = assert(api.open({ socket = "/tmp/test.sock", host = host }))
+  assert(styra:remember_model("claude:claude-opus-5/high"))
+  local request = host.last()
+  assert(request.operation == "remember_model", vim.inspect(request))
+  assert(request.data.selection.model == "claude-opus-5", vim.inspect(request))
+  local bad, err = styra:remember_model("claude")
+  assert(not bad and err)
+  assert(#host.sent == 1, "invalid selections are rejected before sending")
+end
+
 -- Selections -------------------------------------------------------------
 
 do

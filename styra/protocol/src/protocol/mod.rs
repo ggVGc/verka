@@ -389,14 +389,13 @@ pub enum Request {
     ListTemplates {
         workspace_id: String,
     },
-    /// Name the models a session can be launched on, provider by provider and
-    /// most capable first, each with the reasoning-effort rungs it accepts.
-    ///
-    /// The same catalog the TUI's launcher is built from, so a client outside
-    /// this crate can offer exactly what would be accepted instead of keeping
-    /// its own copy of tables that move whenever the agents' do. Answers from
-    /// static tables: no Workspace, no session, and no agent is involved.
+    /// Models a session can launch on, recently selected first, then catalog
+    /// order, each with the reasoning-effort rungs it accepts.
     ListModels,
+    /// Remember an explicit picker selection in the shared model history.
+    RememberModel {
+        selection: Selection,
+    },
     ResumeSession(ResumeSession),
     /// Create and associate a linked Git worktree for an existing Session.
     /// Refused when it already has one; the association is used on its next
@@ -716,6 +715,7 @@ pub enum Response {
     SessionPlan(DrivaOptions),
     Templates(Vec<TemplateSummary>),
     Models(Vec<ModelSummary>),
+    ModelRemembered,
     SessionResumed(SessionInfo),
     SessionWorktreeCreated,
     WorktreesCleaned(Vec<CleanedWorktree>),

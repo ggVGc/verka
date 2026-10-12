@@ -56,6 +56,7 @@ pub mod daemon;
 // `git` serves both sides too: a client asks it which directories a launch has
 // to mount, and the session runner asks it what a checkout is.
 pub mod git;
+pub mod model_picker;
 pub mod paths;
 pub mod protocol;
 pub mod spawn;

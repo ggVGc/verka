@@ -129,6 +129,13 @@ M.types.Request = {
       },
     } },
     { name = "list_models", payload = { kind = "unit" } },
+    { name = "remember_model", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "selection", required = true, type = { kind = "ref", name = "Selection" } },
+      },
+    } },
     { name = "resume_session", payload = { kind = "newtype", type = { kind = "ref", name = "ResumeSession" } } },
     { name = "create_session_worktree", payload = {
       kind = "struct",
@@ -390,6 +397,7 @@ M.types.Response = {
     { name = "session_plan", payload = { kind = "newtype", type = { kind = "ref", name = "DrivaOptions" } } },
     { name = "templates", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "TemplateSummary" } } } },
     { name = "models", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "ModelSummary" } } } },
+    { name = "model_remembered", payload = { kind = "unit" } },
     { name = "session_resumed", payload = { kind = "newtype", type = { kind = "ref", name = "SessionInfo" } } },
     { name = "session_worktree_created", payload = { kind = "unit" } },
     { name = "worktrees_cleaned", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "CleanedWorktree" } } } },
@@ -490,6 +498,32 @@ M.types.PlanSession = {
   },
 }
 
+--- What an operator picked to launch: an agent, a model, and a reasoning effort.
+---
+--- All three are always present. A selection never leaves the model or effort to
+--- whatever the agent happens to be configured for, because that configuration is
+--- invisible to Genta and to anything reading a journal afterwards — a session
+--- recorded as plain `codex` says nothing about what actually ran. A profile name
+--- that omits either therefore takes this provider's declared default
+--- (`Provider::default_model`, `Provider::default_effort`) rather than
+--- standing for "unset".
+---
+--- A selection round-trips through one string, `Selection::name`, of the form
+--- `provider:model/effort` — `codex:gpt-5.6-terra/medium`,
+--- `claude:claude-opus-5/xhigh`. That string is the profile name, so it is also
+--- what a journal records and a status line shows: a stored session states which
+--- model and effort ran, and re-parsing it reproduces the launch. Parsing accepts
+--- the shorter `provider[:model][/effort]` forms and fills in the defaults, so
+--- `--profile claude` still works and names itself fully afterwards.
+M.types.Selection = {
+  kind = "struct",
+  fields = {
+    { name = "provider", required = true, type = { kind = "ref", name = "Provider" } },
+    { name = "model", required = true, type = { kind = "string" } },
+    { name = "effort", required = true, type = { kind = "ref", name = "Effort" } },
+  },
+}
+
 M.types.ResumeSession = {
   kind = "struct",
   deny_unknown_fields = true,
@@ -522,32 +556,6 @@ M.types.Provider = {
     { name = "codex", payload = { kind = "unit" } },
     { name = "codex-exec", payload = { kind = "unit" } },
     { name = "claude", payload = { kind = "unit" } },
-  },
-}
-
---- What an operator picked to launch: an agent, a model, and a reasoning effort.
----
---- All three are always present. A selection never leaves the model or effort to
---- whatever the agent happens to be configured for, because that configuration is
---- invisible to Genta and to anything reading a journal afterwards — a session
---- recorded as plain `codex` says nothing about what actually ran. A profile name
---- that omits either therefore takes this provider's declared default
---- (`Provider::default_model`, `Provider::default_effort`) rather than
---- standing for "unset".
----
---- A selection round-trips through one string, `Selection::name`, of the form
---- `provider:model/effort` — `codex:gpt-5.6-terra/medium`,
---- `claude:claude-opus-5/xhigh`. That string is the profile name, so it is also
---- what a journal records and a status line shows: a stored session states which
---- model and effort ran, and re-parsing it reproduces the launch. Parsing accepts
---- the shorter `provider[:model][/effort]` forms and fills in the defaults, so
---- `--profile claude` still works and names itself fully afterwards.
-M.types.Selection = {
-  kind = "struct",
-  fields = {
-    { name = "provider", required = true, type = { kind = "ref", name = "Provider" } },
-    { name = "model", required = true, type = { kind = "string" } },
-    { name = "effort", required = true, type = { kind = "ref", name = "Effort" } },
   },
 }
 
@@ -1773,7 +1781,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "integrate_session", "generate_integration_message", "session_integration_result", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "shutdown" }
+M.enums.Request = { "integrate_session", "generate_integration_message", "session_integration_result", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   INTEGRATE_SESSION = "integrate_session",
@@ -1795,6 +1803,7 @@ M.Request = {
   PLAN_SESSION = "plan_session",
   LIST_TEMPLATES = "list_templates",
   LIST_MODELS = "list_models",
+  REMEMBER_MODEL = "remember_model",
   RESUME_SESSION = "resume_session",
   CREATE_SESSION_WORKTREE = "create_session_worktree",
   CLEAN_WORKTREES = "clean_worktrees",
@@ -1836,7 +1845,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "integration_started", "integration_message", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions" }
+M.enums.Response = { "integration_started", "integration_message", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions" }
 --- Wire spellings of `Response`.
 M.Response = {
   INTEGRATION_STARTED = "integration_started",
@@ -1855,6 +1864,7 @@ M.Response = {
   SESSION_PLAN = "session_plan",
   TEMPLATES = "templates",
   MODELS = "models",
+  MODEL_REMEMBERED = "model_remembered",
   SESSION_RESUMED = "session_resumed",
   SESSION_WORKTREE_CREATED = "session_worktree_created",
   WORKTREES_CLEANED = "worktrees_cleaned",
@@ -2659,15 +2669,18 @@ function M.request.list_templates(data)
   return M.build("list_templates", data)
 end
 
---- Name the models a session can be launched on, provider by provider and
---- most capable first, each with the reasoning-effort rungs it accepts.
----
---- The same catalog the TUI's launcher is built from, so a client outside
---- this crate can offer exactly what would be accepted instead of keeping
---- its own copy of tables that move whenever the agents' do. Answers from
---- static tables: no Workspace, no session, and no agent is involved.
+--- Models a session can launch on, recently selected first, then catalog
+--- order, each with the reasoning-effort rungs it accepts.
 function M.request.list_models()
   return M.build("list_models")
+end
+
+--- Remember an explicit picker selection in the shared model history.
+---
+--- Fields of `data`:
+---   selection  Selection
+function M.request.remember_model(data)
+  return M.build("remember_model", data)
 end
 
 --- Fields of `data`:

@@ -2,8 +2,8 @@
 --
 -- The command's own question, which is the one part of Svara an operator
 -- answers by hand every time, so what is in the list and in what order is
--- worth pinning: the model already in use first, the server's catalog under
--- it, typing one out last, and a reasoning effort asked for only where the
+-- worth pinning: shared server recency order, the current model marked,
+-- typing one out last, and a reasoning effort asked for only where the
 -- model has a ladder to ask about.
 --
 -- `svara.core` is stubbed here rather than served. The wiring it stands for —
@@ -28,6 +28,7 @@ end
 
 local in_use = { provider = "claude", model = "claude-opus-5", effort = "high" }
 local catalog = {
+  { provider = "claude", model = "claude-opus-5", efforts = { "high" }, default_effort = "high" },
   { provider = "codex", model = "gpt-6-astra", efforts = { "low", "high" }, default_effort = "high" },
   { provider = "claude", model = "claude-haiku-4-5-20251001", efforts = {}, default_effort = "high" },
 }
@@ -37,6 +38,12 @@ core.selection_for_directory = function()
 end
 core.available_models = function()
   return catalog
+end
+
+local recorded
+core.record_recent_selection = function(value)
+  recorded = require("svara.api").selection(value)
+  return true
 end
 
 local started, branched
@@ -131,6 +138,21 @@ do
   assert(vim.g.svara_new_selection == nil, "carrying on stores nothing")
 end
 
+-- Shared server ordering wins even when the current model is older -------
+
+do
+  local original = catalog
+  catalog = { original[2], original[3], original[1] }
+  local shown = run({ 1, 2 })
+  assert(shown[1][1] == "codex:gpt-6-astra", vim.inspect(shown[1]))
+  assert(shown[1][3]:find("in use", 1, true), vim.inspect(shown[1]))
+  assert(recorded.model == "gpt-6-astra" and recorded.effort == "high")
+  run({ 3 })
+  assert(recorded.model == "claude-opus-5" and recorded.effort == "high")
+  assert(vim.g.svara_new_selection == nil, "keeping current selection preserves the rules")
+  catalog = original
+end
+
 -- A model from the catalog, and the rungs it accepts ----------------------
 
 do
@@ -195,15 +217,27 @@ do
   assert(opened.model == "claude-opus-5 · high", "the model named is left as it was")
 end
 
+-- Current models outside the catalog remain selectable ------------------
+
+do
+  local original = catalog
+  catalog = { original[2], original[3] }
+  local shown = run({ 3 })
+  assert(shown[1][1] == "codex:gpt-6-astra", vim.inspect(shown[1]))
+  assert(shown[1][3]:find("in use", 1, true), vim.inspect(shown[1]))
+  assert(started.model == "claude-opus-5", vim.inspect(started))
+  catalog = original
+end
+
 -- Nothing in use: the catalog is the whole list ---------------------------
 
 do
   core.selection_for_directory = function()
     return nil, nil, "no Session in Workspace \"verka\" to take a model from"
   end
-  local shown, opened = run({ 1, 2 })
+  local shown, opened = run({ 2, 2 })
   assert(opened.model == "gpt-6-astra · high", "named once one is chosen")
-  assert(shown[1][1] == "codex:gpt-6-astra", vim.inspect(shown[1]))
+  assert(shown[1][2] == "codex:gpt-6-astra", vim.inspect(shown[1]))
   assert(started == "codex:gpt-6-astra/high", vim.inspect(started))
 
   -- And with no catalog either, there is no list to show at all.

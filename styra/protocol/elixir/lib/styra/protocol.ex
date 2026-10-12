@@ -139,6 +139,13 @@ defmodule Styra.Protocol do
           ]
         }},
         %{name: "list_models", payload: %{kind: :unit}},
+        %{name: "remember_model", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "selection", required: true, type: %{kind: :ref, name: "Selection"}}
+          ]
+        }},
         %{name: "resume_session", payload: %{kind: :newtype, type: %{kind: :ref, name: "ResumeSession"}}},
         %{name: "create_session_worktree", payload: %{
           kind: :struct,
@@ -400,6 +407,7 @@ defmodule Styra.Protocol do
         %{name: "session_plan", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}},
         %{name: "templates", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "TemplateSummary"}}}},
         %{name: "models", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "ModelSummary"}}}},
+        %{name: "model_remembered", payload: %{kind: :unit}},
         %{name: "session_resumed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionInfo"}}},
         %{name: "session_worktree_created", payload: %{kind: :unit}},
         %{name: "worktrees_cleaned", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "CleanedWorktree"}}}},
@@ -500,6 +508,32 @@ defmodule Styra.Protocol do
       ]
     },
 
+    # What an operator picked to launch: an agent, a model, and a reasoning effort.
+    #
+    # All three are always present. A selection never leaves the model or effort to
+    # whatever the agent happens to be configured for, because that configuration is
+    # invisible to Genta and to anything reading a journal afterwards — a session
+    # recorded as plain `codex` says nothing about what actually ran. A profile name
+    # that omits either therefore takes this provider's declared default
+    # (`Provider::default_model`, `Provider::default_effort`) rather than
+    # standing for "unset".
+    #
+    # A selection round-trips through one string, `Selection::name`, of the form
+    # `provider:model/effort` — `codex:gpt-5.6-terra/medium`,
+    # `claude:claude-opus-5/xhigh`. That string is the profile name, so it is also
+    # what a journal records and a status line shows: a stored session states which
+    # model and effort ran, and re-parsing it reproduces the launch. Parsing accepts
+    # the shorter `provider[:model][/effort]` forms and fills in the defaults, so
+    # `--profile claude` still works and names itself fully afterwards.
+    "Selection" => %{
+      kind: :struct,
+      fields: [
+        %{name: "provider", required: true, type: %{kind: :ref, name: "Provider"}},
+        %{name: "model", required: true, type: %{kind: :string}},
+        %{name: "effort", required: true, type: %{kind: :ref, name: "Effort"}}
+      ]
+    },
+
     "ResumeSession" => %{
       kind: :struct,
       deny_unknown_fields: true,
@@ -532,32 +566,6 @@ defmodule Styra.Protocol do
         %{name: "codex", payload: %{kind: :unit}},
         %{name: "codex-exec", payload: %{kind: :unit}},
         %{name: "claude", payload: %{kind: :unit}}
-      ]
-    },
-
-    # What an operator picked to launch: an agent, a model, and a reasoning effort.
-    #
-    # All three are always present. A selection never leaves the model or effort to
-    # whatever the agent happens to be configured for, because that configuration is
-    # invisible to Genta and to anything reading a journal afterwards — a session
-    # recorded as plain `codex` says nothing about what actually ran. A profile name
-    # that omits either therefore takes this provider's declared default
-    # (`Provider::default_model`, `Provider::default_effort`) rather than
-    # standing for "unset".
-    #
-    # A selection round-trips through one string, `Selection::name`, of the form
-    # `provider:model/effort` — `codex:gpt-5.6-terra/medium`,
-    # `claude:claude-opus-5/xhigh`. That string is the profile name, so it is also
-    # what a journal records and a status line shows: a stored session states which
-    # model and effort ran, and re-parsing it reproduces the launch. Parsing accepts
-    # the shorter `provider[:model][/effort]` forms and fills in the defaults, so
-    # `--profile claude` still works and names itself fully afterwards.
-    "Selection" => %{
-      kind: :struct,
-      fields: [
-        %{name: "provider", required: true, type: %{kind: :ref, name: "Provider"}},
-        %{name: "model", required: true, type: %{kind: :string}},
-        %{name: "effort", required: true, type: %{kind: :ref, name: "Effort"}}
       ]
     },
 
@@ -1812,6 +1820,7 @@ defmodule Styra.Protocol do
     "plan_session",
     "list_templates",
     "list_models",
+    "remember_model",
     "resume_session",
     "create_session_worktree",
     "clean_worktrees",
@@ -2537,18 +2546,25 @@ defmodule Styra.Protocol do
     def list_templates!(data), do: Styra.Protocol.build!("list_templates", data)
 
     @doc ~S"""
-    Name the models a session can be launched on, provider by provider and
-    most capable first, each with the reasoning-effort rungs it accepts.
-
-    The same catalog the TUI's launcher is built from, so a client outside
-    this crate can offer exactly what would be accepted instead of keeping
-    its own copy of tables that move whenever the agents' do. Answers from
-    static tables: no Workspace, no session, and no agent is involved.
+    Models a session can launch on, recently selected first, then catalog
+    order, each with the reasoning-effort rungs it accepts.
     """
     def list_models, do: Styra.Protocol.build("list_models")
 
     @doc "`list_models/0`, raising on a request the server would refuse."
     def list_models!, do: Styra.Protocol.build!("list_models")
+
+    @doc ~S"""
+    Remember an explicit picker selection in the shared model history.
+
+    Fields of `data`:
+
+      * `selection`  Selection
+    """
+    def remember_model(data), do: Styra.Protocol.build("remember_model", data)
+
+    @doc "`remember_model/1`, raising on a request the server would refuse."
+    def remember_model!(data), do: Styra.Protocol.build!("remember_model", data)
 
     @doc ~S"""
     Fields of `data`:
@@ -3107,6 +3123,7 @@ defmodule Styra.Protocol.Response do
     {:session_plan, "session_plan"},
     {:templates, "templates"},
     {:models, "models"},
+    {:model_remembered, "model_remembered"},
     {:session_resumed, "session_resumed"},
     {:session_worktree_created, "session_worktree_created"},
     {:worktrees_cleaned, "worktrees_cleaned"},
@@ -3192,6 +3209,8 @@ defmodule Styra.Protocol.Response do
   def templates, do: "templates"
 
   def models, do: "models"
+
+  def model_remembered, do: "model_remembered"
 
   def session_resumed, do: "session_resumed"
 

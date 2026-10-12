@@ -123,9 +123,9 @@ for _, summary in ipairs(assert(styra:models())) do
 end
 ```
 
-`styra:models()` is every model a session can be launched on, provider by
-provider and most capable first, each with the reasoning-effort rungs that
-model accepts (`efforts`, lowest first, empty for a model that takes none) and
+`styra:models()` is every model a session can be launched on, most recently
+selected first and then in catalog order, each with the reasoning-effort rungs
+that model accepts (`efforts`, lowest first, empty for a model that takes none) and
 the rung a launch takes when nothing names one (`default_effort`). It is the
 catalog the Styra TUI's launcher is built from, asked for rather than copied
 for the same reason the shorthands are refused.
@@ -239,13 +239,15 @@ goes on, and says when it has finished.
 
 The model named in the border is the one the rules below give. `Ctrl+L` opens
 the model picker over the box, with `vim.ui.select` — so in Telescope, fzf-lua
-or whatever else `vim.ui` is configured with — as one list: that model at the
-top, said with where it came from, then every model the server offers, then
+or whatever else `vim.ui` is configured with — as one list ordered by the
+most recent selections, sharing Styra's model history. The current model is
+marked with where it came from, or appended if outside the catalog, then
 "another model…" for typing a profile name out with `vim.ui.input` — a catalog
 is not a closed set, and an id newer than the server's tables is still
-launchable. Choosing the first entry keeps it and stores nothing, leaving the
-rules in charge. Anything else asks for a reasoning effort next, from the rungs
-that model accepts, and is remembered in `vim.g.svara_new_selection`, so it is
+launchable. Choosing the current model keeps its effort and leaves the selection
+rules in charge. Every confirmed choice updates the shared history. Choosing
+another model asks for a reasoning effort from the rungs that model accepts,
+and remembers it in `vim.g.svara_new_selection`, so it is
 chosen once for a stretch of work rather than at every `:SvaraNew`. The box
 stays open under the picker, and once it closes — chosen or backed out of —
 goes back to the prompt as it was left, naming the model chosen.

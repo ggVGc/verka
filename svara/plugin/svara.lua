@@ -27,16 +27,11 @@ end
 ---
 --- The rules in `svara.core` always have an answer or a reason there is none,
 --- and neither is worth being surprised by once a turn is already running. So
---- one list is offered: the model that would be used at the top of it, said
---- with where it came from, and under it every model the server says a
---- session can be launched on.
+--- one list is offered in the server's shared recency order. The model
+--- already in use is marked where it occurs, or appended if outside the
+--- catalog. Choosing it preserves its current reasoning effort.
 ---
---- One list rather than a yes-or-no and then a list, because the answer to
---- "start on this?" is a model either way, and a question whose usual answer
---- is "yes" is a keystroke charged for nothing. Carrying on with what is
---- already in use stays the first thing under the cursor.
----
---- Anything but that first entry asks for a reasoning effort next, since the
+--- Other entries ask for a reasoning effort next, since the
 --- catalog is models and the rungs each accepts. Typing
 --- `claude:claude-opus-5/xhigh` out in full is last on the list, because a
 --- catalog is not a closed set — an id newer than the server's tables is
@@ -52,12 +47,20 @@ local function choose_selection(directory, kind, on_chosen, on_cancel)
   local typed_out = "another model…"
   local runs = { new = "new interactions", ask = "questions", edit = "edits" }
 
+  local function record(value)
+    local ok, err = core.record_recent_selection(value)
+    if not ok then
+      vim.notify("Svara: could not save the model ordering: " .. tostring(err), vim.log.levels.WARN)
+    end
+  end
+
   local function settle(value)
     local name, err = core.remember_selection(value, kind)
     if not name then
       vim.notify("Svara: " .. err, vim.log.levels.ERROR)
       return
     end
+    record(value)
     vim.notify(string.format("Svara: %s will run on %s", runs[kind], name), vim.log.levels.INFO)
     on_chosen(name)
   end
@@ -101,7 +104,7 @@ local function choose_selection(directory, kind, on_chosen, on_cancel)
   local selection, source, err = core.selection_for_directory(directory, { kind = kind })
   local said = selection and core.selection_said(selection)
   if not selection then
-    -- Nothing in use to put at the top: say why once, and let the catalog
+    -- No current model to mark: say why once, and let the catalog
     -- below be the whole answer.
     vim.notify("Svara: " .. err, vim.log.levels.WARN)
   end
@@ -116,11 +119,17 @@ local function choose_selection(directory, kind, on_chosen, on_cancel)
 
   local in_use = said and { said = said, selection = selection } or nil
   local choices = {}
-  if in_use then
-    choices[1] = in_use
-  end
+  local included_in_use = false
   for _, summary in ipairs(models) do
-    choices[#choices + 1] = summary
+    if in_use and summary.provider == selection.provider and summary.model == selection.model then
+      choices[#choices + 1] = in_use
+      included_in_use = true
+    else
+      choices[#choices + 1] = summary
+    end
+  end
+  if in_use and not included_in_use then
+    choices[#choices + 1] = in_use
   end
   if #choices == 0 then
     -- Nothing in use and no catalog: the list would be the escape hatch
@@ -147,7 +156,7 @@ local function choose_selection(directory, kind, on_chosen, on_cancel)
     elseif choice == typed_out then
       ask_for_one(said)
     elseif choice == in_use then
-      -- Already the answer the rules give, so there is nothing to remember.
+      record(choice.selection)
       on_chosen(choice.selection)
     else
       pick_effort(choice)

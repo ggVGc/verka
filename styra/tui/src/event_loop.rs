@@ -1390,6 +1390,9 @@ fn run_rounds(
         if app.launcher.is_some() {
             launcher::handle_key(app, key, preferences_path);
         } else {
+            if keys::GLOBAL_LAUNCHER.matches(key) || keys::EDITOR_LAUNCHER.matches(key) {
+                app.recent_models = preferences::load_recent_models(preferences_path);
+            }
             match app.focus {
                 Focus::List => input::handle_list_key(
                     app,
