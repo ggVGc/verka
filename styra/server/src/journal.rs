@@ -255,6 +255,11 @@ impl Journal {
                 | Record::Branch { at_ms, .. } => *at_ms,
             };
             if through_ms.is_some_and(|cutoff| at_ms > cutoff) {
+                // Branch markers can precede older inherited history, so a
+                // newer marker does not mean we have passed the selected entry.
+                if matches!(&record, Record::Branch { .. }) {
+                    continue;
+                }
                 break;
             }
             let record = match record {
