@@ -394,33 +394,10 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
             draw_main(ui, app, MainView::Transcript(&transcript))
         }
         View::CheckoutDiff => {
-            let missing = Err("no diff read yet");
-            let view = app.checkout_diff.as_ref().map(|diff| {
-                let worktree = diff.target.worktree.display().to_string();
-                (diff, worktree)
-            });
-            let diff = styra_ui::checkout_diff::CheckoutDiffView {
-                chrome: panel_chrome(app, Some("diff")),
-                worktree: view.as_ref().map_or("", |(_, worktree)| worktree),
-                branch: view
-                    .as_ref()
-                    .and_then(|(diff, _)| diff.target.branch.as_deref()),
-                base_branch: view
-                    .as_ref()
-                    .and_then(|(diff, _)| diff.target.base_branch.as_deref()),
-                base_commit: view.as_ref().map_or("", |(diff, _)| &diff.target.base),
-                diff: view.as_ref().map_or(missing, |(diff, _)| match &diff.diff {
-                    Ok(text) => Ok(text.as_str()),
-                    Err(error) => Err(error.as_str()),
-                }),
-                requested_scroll: view.as_ref().map_or(0, |(diff, _)| diff.scroll.clamped()),
-                search: view
-                    .as_ref()
-                    .map_or(Default::default(), |(diff, _)| diff.search.view()),
-                per_file: view.as_ref().is_some_and(|(diff, _)| diff.per_file),
-                hide_removed: view.as_ref().is_some_and(|(diff, _)| diff.hide_removed),
-                selected_file: view.as_ref().map_or(0, |(diff, _)| diff.selected_file),
-                file_list_offset: view.as_ref().map_or(0, |(diff, _)| diff.file_list_offset),
+            let block = styra_ui::chrome::panel_block(&panel_chrome(app, Some("diff")));
+            let diff = match &app.checkout_diff {
+                Some(diff) => diff.view(block),
+                None => styra_diff::CheckoutDiffView::unread(block),
             };
             draw_main(ui, app, MainView::CheckoutDiff(&diff))
         }
@@ -1067,20 +1044,25 @@ mod tests {
     #[test]
     fn the_checkout_diff_names_both_branches_above_the_diff() {
         let mut app = test_support::app("s1");
-        app.checkout_diff = Some(crate::checkout_diff::CheckoutDiff {
-            target: crate::checkout_diff::DiffTarget {
+        app.checkout_diff = Some(styra_diff::CheckoutDiff {
+            target: styra_diff::DiffTarget {
                 worktree: "/state/worktrees/styra-7".into(),
                 branch: Some("styra/rename".into()),
                 base_branch: Some("main".into()),
                 base: "4bf5c35d".into(),
+                branch_point: true,
             },
             diff: Ok(
                 "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n"
                     .into(),
             ),
+            base_names: Vec::new(),
             scroll: Default::default(),
+            combined_scroll: Default::default(),
             per_file: false,
             hide_removed: false,
+            compact_dirs: true,
+            tint: Default::default(),
             selected_file: 0,
             file_list_offset: 0,
             search: Default::default(),

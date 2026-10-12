@@ -19,7 +19,7 @@
 //! selection on every draw, and an absolute index would point somewhere else
 //! as soon as an event arrived ahead of it.
 
-use crate::app::Scroll;
+use styra_ui::scroll::Scroll;
 
 /// Entries the cursor moves by one PageUp/PageDown press, matching the lines
 /// [`Scroll`] pages by: the rows here are one line each.

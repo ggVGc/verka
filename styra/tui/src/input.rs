@@ -11,12 +11,13 @@ use std::path::Path;
 
 use crate::activity::Status;
 use crate::app::{App, Request, View};
-use crate::checkout_diff::DiffTarget;
+use crate::checkout_diff;
 use crate::insert;
 use crate::launch;
 use crate::link_menu::LinkAction;
 use crate::preferences;
 use crate::session::{self, Attachment};
+use styra_diff::{Action, DiffTarget};
 use styra_protocol::{CompletionState, Contract, LogEntry};
 use styra_server::Client;
 
@@ -82,24 +83,9 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
 
 /// File-list search consumes command letters while its prompt is open.
 pub fn handle_diff_search_key(app: &mut App, key: KeyEvent) {
-    let Some(diff) = app.checkout_diff.as_mut() else {
-        return;
-    };
-    match key.code {
-        KeyCode::Esc => diff.search.cancel(),
-        KeyCode::Enter => diff.search.accept(),
-        KeyCode::Backspace => diff.search.backspace(),
-        KeyCode::Char(character)
-            if !character.is_control()
-                && !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-        {
-            diff.search.push(character)
-        }
-        _ => {}
+    if let Some(diff) = app.checkout_diff.as_mut() {
+        diff.search_key(key);
     }
-    diff.update_search();
 }
 
 /// Keys for the driva view's "add a mount" prompt. It is modal — every
@@ -292,16 +278,13 @@ pub fn handle_list_key(
             handle_diff_search_key(app, key);
             return;
         }
-        if key.code == KeyCode::Esc {
-            if let Some(diff) = app
+        if key.code == KeyCode::Esc
+            && app
                 .checkout_diff
                 .as_mut()
-                .filter(|diff| diff.per_file && diff.search.query().is_some())
-            {
-                diff.search.cancel();
-                diff.update_search();
-                return;
-            }
+                .is_some_and(|diff| diff.clear_filter())
+        {
+            return;
         }
     }
     if std::mem::take(pending_fold) {
@@ -373,7 +356,8 @@ pub fn handle_list_key(
         // Global, unlike `y`: what it copies is the session's exchange, which
         // does not change with the view the operator happens to be in.
         k if GLOBAL_COPY_CONVERSATION.matches(k) => return copy_conversation(app),
-        k if GLOBAL_RAW.matches(k) => return app.toggle_raw(),
+        // The diff keeps `r` for hiding removed lines.
+        k if GLOBAL_RAW.matches(k) && app.view != View::CheckoutDiff => return app.toggle_raw(),
         k if GLOBAL_LOG.matches(k) => return app.toggle_view(View::Log),
         k if GLOBAL_LAUNCHER.matches(k) => return app.open_launcher(),
         // Opening the view also refreshes it: the log lives in the daemon's
@@ -382,7 +366,10 @@ pub fn handle_list_key(
             app.toggle_view(View::Quota);
             return app.ask(Request::Quota);
         }
-        k if GLOBAL_TRANSCRIPT.matches(k) => return app.toggle_view(View::Transcript),
+        // The diff keeps `t` for its tint.
+        k if GLOBAL_TRANSCRIPT.matches(k) && app.view != View::CheckoutDiff => {
+            return app.toggle_view(View::Transcript)
+        }
         // `e` toggles the pane below the event list. The files and answer
         // views keep the key for opening the editor, which is the one thing
         // `e` already meant there.
@@ -407,8 +394,11 @@ pub fn handle_list_key(
         k if GLOBAL_INTERACTIONS.matches(k) && app.view != View::Files => {
             return app.ask(Request::Interactions)
         }
-        // The raw view keeps `v` for switching to the provider's own record.
-        k if GLOBAL_OVERVIEW.matches(k) && app.view != View::Raw => return app.toggle_overview(),
+        // The raw view keeps `v` for switching to the provider's own record,
+        // and the diff for hiding removed lines.
+        k if GLOBAL_OVERVIEW.matches(k) && !matches!(app.view, View::Raw | View::CheckoutDiff) => {
+            return app.toggle_overview()
+        }
         k if GLOBAL_WORKSPACES.matches(k) => return app.ask(Request::Workspace),
         // Details keeps `w` for the network toggle it already meant there.
         k if GLOBAL_WORKTREES.matches(k) && app.view != View::Driva => {
@@ -583,36 +573,28 @@ pub fn handle_list_key(
             _ => {}
         },
         View::CheckoutDiff => {
-            let Some(diff) = app.checkout_diff.as_mut() else {
-                return;
+            let action = match key {
+                k if DIFF_SEARCH.matches(k) => Action::Search,
+                k if DIFF_TOGGLE_FILES.matches(k) => Action::ToggleFiles,
+                k if DIFF_TOGGLE_REMOVED.matches(k) => Action::ToggleRemoved,
+                k if DIFF_TOGGLE_COMPACT.matches(k) => Action::ToggleCompactDirs,
+                k if DIFF_CYCLE_TINT.matches(k) => Action::CycleTint,
+                k if DIFF_DOWN.matches(k) => Action::Down,
+                k if DIFF_UP.matches(k) => Action::Up,
+                k if DIFF_FILES_DOWN.matches(k) => Action::FilesDown,
+                k if DIFF_FILES_UP.matches(k) => Action::FilesUp,
+                k if DIFF_SCROLL_DOWN.matches(k) => Action::ScrollDown,
+                k if DIFF_SCROLL_UP.matches(k) => Action::ScrollUp,
+                k if DIFF_FIRST.matches(k) => Action::First,
+                k if DIFF_LAST.matches(k) => Action::Last,
+                k if DIFF_PAGE_DOWN.matches(k) => Action::HalfPageDown,
+                k if DIFF_PAGE_UP.matches(k) => Action::HalfPageUp,
+                k if DIFF_COPY.matches(k) => return copy_selection(app),
+                k if DIFF_OPEN_FILE.matches(k) => return open_diff_file(app),
+                _ => return,
             };
-            match key {
-                k if DIFF_SEARCH.matches(k) && diff.per_file => {
-                    diff.search.open();
-                    diff.update_search();
-                }
-                k if DIFF_TOGGLE_FILES.matches(k) => {
-                    diff.per_file = !diff.per_file;
-                    diff.scroll.reset();
-                }
-                k if DIFF_TOGGLE_REMOVED.matches(k) => {
-                    diff.hide_removed = !diff.hide_removed;
-                    diff.scroll.reset();
-                }
-                k if DIFF_DOWN.matches(k) && diff.per_file => diff.select_file(true, 1),
-                k if DIFF_UP.matches(k) && diff.per_file => diff.select_file(false, 1),
-                k if DIFF_FILES_DOWN.matches(k) && diff.per_file => diff.select_file(true, 5),
-                k if DIFF_FILES_UP.matches(k) && diff.per_file => diff.select_file(false, 5),
-                k if DIFF_DOWN.matches(k) => diff.scroll.line_down(),
-                k if DIFF_UP.matches(k) => diff.scroll.line_up(),
-                k if DIFF_SCROLL_DOWN.matches(k) => diff.scroll.page_down(),
-                k if DIFF_SCROLL_UP.matches(k) => diff.scroll.page_up(),
-                k if DIFF_FIRST.matches(k) => diff.scroll.reset(),
-                k if DIFF_LAST.matches(k) => diff.scroll.scroll_to_end(),
-                k if DIFF_PAGE_DOWN.matches(k) => diff.scroll.half_page_down(),
-                k if DIFF_PAGE_UP.matches(k) => diff.scroll.half_page_up(),
-                k if DIFF_COPY.matches(k) => copy_selection(app),
-                _ => {}
+            if let Some(diff) = app.checkout_diff.as_mut() {
+                diff.apply(action);
             }
         }
         View::Transcript => match key {
@@ -983,14 +965,26 @@ fn toggle_auto_commit(app: &mut App) {
     app.ask(Request::SetAutoCommit(!app.auto_commit));
 }
 
+/// Ask for the file at the top of the diff to be opened, at the line there,
+/// or say why there is none to open.
+fn open_diff_file(app: &mut App) {
+    let Some(diff) = app.checkout_diff.as_ref() else {
+        return;
+    };
+    match diff.location() {
+        Ok((path, line)) => app.ask(Request::OpenPathAt(path, line)),
+        Err(reason) => app.show_error(reason),
+    }
+}
+
 /// Ask for a diff of the interaction's checkout against the commit its branch
 /// was made at, as `request` — in this window or another. An interaction with
-/// nothing to diff says why instead (see [`DiffTarget::of`]).
+/// nothing to diff says why instead (see [`checkout_diff::target`]).
 fn ask_for_diff(app: &mut App, request: fn(DiffTarget) -> Request) {
     let Some(interaction) = app.interactions.current(&app.session_id) else {
         return app.show_warning("no interaction to diff");
     };
-    match DiffTarget::of(interaction) {
+    match checkout_diff::target(interaction) {
         Ok(target) => app.ask(request(target)),
         Err(reason) => app.show_error(reason),
     }
@@ -1878,6 +1872,7 @@ mod tests {
             branch: Some("styra/rename".into()),
             base_branch: Some("main".into()),
             base: "4bf5c35d".into(),
+            branch_point: true,
         }
     }
 
@@ -1941,12 +1936,16 @@ mod tests {
         let mut app = app_with_diffable_interaction(&root);
         app.enter_list();
         app.view = View::CheckoutDiff;
-        app.checkout_diff = Some(crate::checkout_diff::CheckoutDiff {
+        app.checkout_diff = Some(styra_diff::CheckoutDiff {
             target: diffable_target(),
             diff: Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n".into()),
+            base_names: Vec::new(),
             scroll: Default::default(),
+            combined_scroll: Default::default(),
             per_file: false,
             hide_removed: false,
+            compact_dirs: true,
+            tint: Default::default(),
             selected_file: 0,
                         file_list_offset: 0,
             search: Default::default(),
@@ -1958,16 +1957,35 @@ mod tests {
         press(&mut app, KeyCode::Down);
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
         assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);
-        press(&mut app, KeyCode::Char('h'));
+        press(&mut app, KeyCode::Char('r'));
         assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
-        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 0);
-        press(&mut app, KeyCode::Char('h'));
+        // The place is kept rather than reset: "+d", row 10 of the eleven
+        // with the rules around the headers, is row 8 once the two removed
+        // lines are gone.
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 8);
+        assert_eq!(app.view, View::CheckoutDiff, "r is the diff's here");
+        press(&mut app, KeyCode::Char('r'));
         assert!(!app.checkout_diff.as_ref().unwrap().hide_removed);
         press(&mut app, KeyCode::Tab);
         assert!(!app.checkout_diff.as_ref().unwrap().per_file);
         press(&mut app, KeyCode::Char('f'));
         assert!(app.checkout_diff.as_ref().unwrap().per_file);
-        press(&mut app, KeyCode::Char('h'));
+        // As drawing the per-file view would.
+        let diff = app.checkout_diff.as_mut().unwrap();
+        diff.scroll.note_limit(100);
+        diff.scroll.note_viewport(30);
+        press(&mut app, KeyCode::Char('c'));
+        assert!(!app.checkout_diff.as_ref().unwrap().compact_dirs);
+        assert_eq!(app.view, View::CheckoutDiff, "c is the diff's here");
+        press(&mut app, KeyCode::Char('c'));
+        assert!(app.checkout_diff.as_ref().unwrap().compact_dirs);
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(
+            app.checkout_diff.as_ref().unwrap().tint,
+            styra_diff::Tint::Half
+        );
+        assert_eq!(app.view, View::CheckoutDiff, "t is the diff's here");
+        press(&mut app, KeyCode::Char('r'));
         assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
         press(&mut app, KeyCode::Down);
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
@@ -1990,8 +2008,10 @@ mod tests {
         press(&mut app, KeyCode::Char('f'));
         assert!(!app.checkout_diff.as_ref().unwrap().per_file);
         assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
+        // Back where it was left, with removed lines hidden since: "+d", row 8.
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 8);
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 1);
+        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 9);
 
         press(&mut app, KeyCode::Char('f'));
         press(&mut app, KeyCode::Char('/'));
@@ -2070,6 +2090,38 @@ mod tests {
             press(&mut app, KeyCode::Char(key));
             assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, selected);
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `v` asks for the file at the top of the diff, at the line there, and
+    /// says why when that file is gone rather than asking for it.
+    #[test]
+    fn v_in_the_diff_opens_the_file_at_the_top_at_its_line() {
+        let root = tree("diff-open");
+        let mut app = app_with_diffable_interaction(&root);
+        app.view = View::CheckoutDiff;
+        let mut diff = styra_diff::CheckoutDiff::read(DiffTarget {
+            worktree: root.clone(),
+            ..diffable_target()
+        });
+        diff.diff = Ok("diff --git a/notes.txt b/notes.txt\n@@ -3 +3 @@\n-x\n+y\n\
+                        diff --git a/gone.txt b/gone.txt\n@@ -1 +0,0 @@\n-gone\n"
+            .into());
+        diff.scroll.note_limit(100);
+        diff.scroll.offset = 3;
+        app.checkout_diff = Some(diff);
+        let v = KeyEvent::from(KeyCode::Char('v'));
+
+        press_list_key(&mut app, &root, v);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenPathAt(root.join("notes.txt"), Some(3)))
+        );
+        assert_eq!(app.view, View::CheckoutDiff, "v is the diff's here");
+
+        app.checkout_diff.as_mut().unwrap().scroll.offset = 5;
+        press_list_key(&mut app, &root, v);
+        assert_eq!(app.take_request(), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

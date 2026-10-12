@@ -6,7 +6,7 @@
 //! near-identical methods over four [`App`](crate::app::App) fields; here it is
 //! one type used twice.
 //!
-//! Distinct from [`Scroll`](crate::app::Scroll), which measures a rendered
+//! Distinct from [`Scroll`](styra_ui::scroll::Scroll), which measures a rendered
 //! panel in lines and is clamped by whatever the renderer could fit. This
 //! counts entries, which are known without rendering.
 

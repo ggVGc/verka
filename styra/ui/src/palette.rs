@@ -82,6 +82,8 @@ pub const FAINT_GRAY: Color = Color::Rgb(28, 28, 28);
 pub const FAINT_ORANGE: Color = Color::Rgb(43, 33, 25);
 /// 236, `CursorLine`.
 pub const DARK_GRAY: Color = Color::Rgb(48, 48, 48);
+/// 238, a step brighter than [`DARK_GRAY`]: enough to draw a line along it.
+pub const RULE_GRAY: Color = Color::Rgb(68, 68, 68);
 /// [`PALE_PINK`] a fifth of the way up from [`NEAR_BLACK`].
 pub const PALE_PINK_TINT: Color = Color::Rgb(70, 61, 61);
 /// [`AMBER_YELLOW`] a fifth of the way up from [`NEAR_BLACK`].

@@ -2,7 +2,8 @@
 //!
 //! The `tui` crate owns application state, server effects, and input handling.
 //! This crate owns the terminal lifecycle and the rendering operations used by
-//! those loops.
+//! those loops, along with the scroll and search state those renderings are
+//! measured against, which `styra-diff` shares.
 
 use anyhow::Context;
 use crossterm::terminal::{
@@ -16,7 +17,6 @@ use std::time::Duration;
 pub mod answer;
 pub mod application;
 pub mod busy;
-pub mod checkout_diff;
 pub mod chrome;
 pub mod code;
 pub mod diff;
@@ -41,6 +41,7 @@ pub mod quota;
 pub mod raw;
 pub mod recording;
 mod render_cache;
+pub mod scroll;
 pub mod search;
 pub mod text_prompt;
 pub mod theme;

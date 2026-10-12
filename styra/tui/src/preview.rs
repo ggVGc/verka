@@ -12,7 +12,7 @@
 //! the timeline, and only [`App`](crate::app::App) has both.
 //! [`crate::presentation::preview`] renders it.
 
-use crate::app::Scroll;
+use styra_ui::scroll::Scroll;
 
 /// Which entry the preview panel shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -41,7 +41,6 @@ mod preferences;
 mod presentation;
 mod preview;
 mod raw;
-mod search;
 mod session;
 mod snippet;
 mod tag_picker;

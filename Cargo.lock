@@ -2841,6 +2841,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "styra-diff"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm 0.28.1",
+ "ratatui",
+ "styra-ui",
+]
+
+[[package]]
 name = "styra-ui"
 version = "0.1.0"
 dependencies = [
@@ -3318,6 +3329,7 @@ dependencies = [
  "serde",
  "serde_json",
  "server",
+ "styra-diff",
  "styra-ui",
  "tempfile",
  "tracing",

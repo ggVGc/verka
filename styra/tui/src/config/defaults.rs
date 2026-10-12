@@ -39,6 +39,12 @@ impl Configuration for Defaults {
         command
     }
 
+    fn open_file_at(&self, path: &Path, line: u32) -> Command {
+        let mut command = in_terminal();
+        command.arg(FILE_OPENER).arg(format!("+{line}")).arg(path);
+        command
+    }
+
     fn open_url(&self, url: &str) -> Command {
         let mut command = Command::new(BROWSER);
         command.arg(url);
@@ -84,6 +90,22 @@ mod tests {
 
     fn argv(command: &Command) -> Vec<&OsStr> {
         command.get_args().collect()
+    }
+
+    #[test]
+    fn a_file_opens_at_a_line_by_neovims_plus_argument() {
+        let command = Defaults.open_file_at(Path::new("/work/src/monitor.c"), 42);
+
+        assert_eq!(command.get_program(), OsStr::new("urxvt"));
+        assert_eq!(
+            argv(&command),
+            [
+                OsStr::new("-e"),
+                OsStr::new("nvim"),
+                OsStr::new("+42"),
+                OsStr::new("/work/src/monitor.c"),
+            ]
+        );
     }
 
     #[test]

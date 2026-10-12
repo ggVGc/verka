@@ -98,7 +98,7 @@ pub struct Launch {
     /// a terminal — mounts, the backend's own floor, the whole environment,
     /// and the private root — and everything in it is worth being able to
     /// reach, so the part that does not fit is scrolled to rather than lost.
-    pub scroll: crate::app::Scroll,
+    pub scroll: styra_ui::scroll::Scroll,
     /// The (selection, effective policy) `driva` was planned for, recorded even
     /// when the plan could not be fetched. Anything that changes the policy
     /// makes this differ from the current one and the plan is re-asked for; a

@@ -37,7 +37,24 @@ pub fn diff_block_lines(
     compact: bool,
     indent: &str,
 ) -> Vec<Line<'static>> {
-    diff_body_lines(text, path, compact)
+    diff_block_lines_fading(text, path, compact, indent, CONTEXT_FADE)
+}
+
+/// How far, in tenths, context and other metadata are faded toward the
+/// background, so the changes stand out from them.
+pub const CONTEXT_FADE: u16 = 4;
+
+/// [`diff_block_lines`], with context and other metadata faded
+/// `context_fade` tenths of the way toward the background rather than
+/// [`CONTEXT_FADE`].
+pub fn diff_block_lines_fading(
+    text: &str,
+    path: Option<&str>,
+    compact: bool,
+    indent: &str,
+    context_fade: u16,
+) -> Vec<Line<'static>> {
+    diff_body_lines_fading(text, path, compact, context_fade)
         .into_iter()
         .map(|line| with_gutter(line, indent))
         .collect()
@@ -45,6 +62,15 @@ pub fn diff_block_lines(
 
 /// The diff's rows, without the gutter.
 pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> Vec<Line<'static>> {
+    diff_body_lines_fading(text, path, compact, CONTEXT_FADE)
+}
+
+fn diff_body_lines_fading(
+    text: &str,
+    path: Option<&str>,
+    compact: bool,
+    context_fade: u16,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut file_name_rows = Vec::new();
     let mut language = path.and_then(language_of);
@@ -118,9 +144,13 @@ pub(crate) fn diff_body_lines(text: &str, path: Option<&str>, compact: bool) -> 
     // Keep additions and file names at full brightness; subdue context and
     // other metadata.
     for (index, line) in lines.iter_mut().enumerate() {
-        if line.style.bg.is_none() && file_name_rows.binary_search(&index).is_err() {
+        // Not even dimmed, as a named colour would be, at no fade at all.
+        if context_fade > 0
+            && line.style.bg.is_none()
+            && file_name_rows.binary_search(&index).is_err()
+        {
             for span in &mut line.spans {
-                span.style = faded_style(span.style, 4);
+                span.style = faded_style(span.style, context_fade);
             }
         }
     }
@@ -285,7 +315,7 @@ fn tinted(row: Line<'static>, line: &str) -> Line<'static> {
 /// Pad each changed diff row out to `width`, so its background hint is a band
 /// across the panel rather than stopping where the code does — `Paragraph`
 /// colors only the cells it writes. For rows already wrapped to `width`.
-pub(crate) fn fill_changed_rows(lines: &mut [Line<'static>], width: usize) {
+pub fn fill_changed_rows(lines: &mut [Line<'static>], width: usize) {
     for line in lines {
         let Some(background) = line
             .spans

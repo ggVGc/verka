@@ -29,4 +29,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 server.workspace = true
 protocol.workspace = true
+styra-diff.workspace = true
 styra-ui.workspace = true

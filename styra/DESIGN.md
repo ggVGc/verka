@@ -1332,7 +1332,7 @@ styra/server/            # the server application + its client interface library
     naming.rs            # an interaction's topic: what its branch and its Session are called
 
 styra/tui/               # the terminal client application
-  Cargo.toml             # package tui: [[bin]] styra; depends on server and styra-ui
+  Cargo.toml             # package tui: [[bin]] styra; depends on server, styra-diff and styra-ui
   src/
     main.rs              # CLI entry and event-loop composition
     app.rs               # the App struct: what is left when each field below has a module
@@ -1366,6 +1366,15 @@ styra/ui/                # package styra-ui, library styra_ui
     driva.rs             # launch-policy/details rendering
     picker.rs            # session/workspace/template picker rendering
     ...                  # shared chrome and the remaining focused renderers
+
+styra/diff/              # package styra-diff: library styra_diff, [[bin]] styra-diff
+  src/
+    lib.rs               # the checkout diff view `d` opens, built on styra-ui
+    state.rs             # what is compared, the diff read, and the view's actions
+    view.rs              # the header, file tree and patch, drawn as a styra-ui Panel
+    files.rs             # a diff split into one patch per file (pure)
+    git.rs               # reading the diff, and the standalone program's base
+    main.rs              # `styra-diff [-C DIR] [BASE]`: the same view on its own
 ```
 
 Each of those owns one field of [`App`] and everything that is only about it,

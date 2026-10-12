@@ -1,4 +1,10 @@
-//! Highlighting the words a `/` search matches.
+//! The `/` search: what has been typed, who holds the keys, and highlighting
+//! the words it matches.
+//!
+//! The search only marks what is already on screen — it moves neither the
+//! selection nor the viewport — so it is a display choice like the filters
+//! beside it rather than a way to navigate. Highlighting starts once enough
+//! has been typed to be looking for something; see [`MIN_TERM`].
 //!
 //! The search marks whole words rather than the matched letters alone: what
 //! the operator is looking for in a log is a path, an identifier, or a message
@@ -16,6 +22,65 @@ use ratatui::text::{Line, Span};
 /// that nothing stands out — and the list would flash on the way to every
 /// term. Three is enough to be looking for something.
 pub const MIN_TERM: usize = 3;
+
+/// The term being typed or standing, kept by whoever drives the view.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Search {
+    query: String,
+    typing: bool,
+}
+
+impl Search {
+    /// Start typing a new term. An earlier one is dropped: `/` asks what to
+    /// look for, and the answer to that is not the last question's.
+    pub fn open(&mut self) {
+        self.query.clear();
+        self.typing = true;
+    }
+
+    /// Whether the prompt has the keys, and so every printable one is part of
+    /// the term rather than a command on the list underneath.
+    pub fn typing(&self) -> bool {
+        self.typing
+    }
+
+    /// What has been typed, while the prompt is open or a search stands.
+    pub fn query(&self) -> Option<&str> {
+        (self.typing || !self.query.is_empty()).then_some(self.query.as_str())
+    }
+
+    pub fn push(&mut self, character: char) {
+        self.query.push(character);
+    }
+
+    /// Delete the last character, closing the prompt once nothing is left: a
+    /// search backspaced away is a search abandoned.
+    pub fn backspace(&mut self) {
+        self.query.pop();
+        if self.query.is_empty() {
+            self.typing = false;
+        }
+    }
+
+    /// Hand the keys back to the list, leaving the term marked.
+    pub fn accept(&mut self) {
+        self.typing = false;
+    }
+
+    /// Leave the list as it was, unmarked.
+    pub fn cancel(&mut self) {
+        self.query.clear();
+        self.typing = false;
+    }
+
+    /// This search as the renderers read it.
+    pub fn view(&self) -> SearchView<'_> {
+        SearchView {
+            query: self.query(),
+            typing: self.typing,
+        }
+    }
+}
 
 /// The `/` search as the event list sees it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -216,5 +281,60 @@ mod tests {
 
         assert_eq!(highlighted.spans.len(), line.spans.len());
         assert!(marked(&highlighted).is_empty());
+    }
+
+    #[test]
+    fn a_term_marks_nothing_until_it_is_long_enough() {
+        let mut search = Search::default();
+        search.open();
+        for character in "re".chars() {
+            search.push(character);
+        }
+        assert_eq!(search.view().term(), None);
+
+        search.push('t');
+        assert_eq!(search.view().term(), Some("ret"));
+    }
+
+    #[test]
+    fn accepting_keeps_the_search_and_cancelling_drops_it() {
+        let mut search = Search::default();
+        search.open();
+        for character in "retry".chars() {
+            search.push(character);
+        }
+
+        search.accept();
+        assert!(!search.typing());
+        assert_eq!(search.view().term(), Some("retry"));
+
+        search.cancel();
+        assert_eq!(search.query(), None);
+        assert_eq!(search.view().term(), None);
+    }
+
+    #[test]
+    fn backspacing_the_last_character_closes_the_prompt() {
+        let mut search = Search::default();
+        search.open();
+        search.push('r');
+        search.backspace();
+
+        assert!(!search.typing());
+        assert_eq!(search.query(), None);
+    }
+
+    #[test]
+    fn opening_again_asks_a_fresh_question() {
+        let mut search = Search::default();
+        search.open();
+        for character in "retry".chars() {
+            search.push(character);
+        }
+        search.accept();
+        search.open();
+
+        assert_eq!(search.query(), Some(""));
+        assert_eq!(search.view().term(), None);
     }
 }

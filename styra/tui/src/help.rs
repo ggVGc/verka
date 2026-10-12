@@ -10,7 +10,7 @@
 //! That rule lived in the event loop, which closed the overlay and zeroed the
 //! offset as two statements, and reset the offset again by hand for `g`.
 
-use crate::app::Scroll;
+use styra_ui::scroll::Scroll;
 
 /// Whether the reference is showing, and where in it.
 #[derive(Default)]

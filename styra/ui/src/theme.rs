@@ -152,6 +152,11 @@ pub const DIFF_ADDED_BACKGROUND: Color = palette::FAINT_GREEN;
 pub const DIFF_REMOVED_BACKGROUND: Color = palette::FAINT_RED;
 /// Red mixed into removed lines' syntax colors.
 pub const DIFF_REMOVED_FOREGROUND_TINT: Color = palette::RED_FG;
+/// Behind a diff's file headers, so each file's patch opens under a bar.
+pub const DIFF_FILE_HEADER_BACKGROUND: Color = palette::DARK_GRAY;
+/// The rules either side of a diff's file headers: the header bar's grey, a
+/// little brighter, so they read as the bar's edges.
+pub const DIFF_FILE_RULE: Color = palette::RULE_GRAY;
 /// `CursorLine`.
 pub const SELECTION_BACKGROUND: Color = palette::DARK_GRAY;
 /// What a branched Session's inherited history fades toward: the code

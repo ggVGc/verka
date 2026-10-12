@@ -1,0 +1,20 @@
+[package]
+name = "styra-diff"
+version.workspace = true
+edition.workspace = true
+description = "A Git working tree diffed against where its branch started, as Styra shows it and as a program of its own"
+
+[lib]
+name = "styra_diff"
+path = "src/lib.rs"
+
+[[bin]]
+name = "styra-diff"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+styra-ui.workspace = true

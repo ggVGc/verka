@@ -25,6 +25,12 @@ pub trait Configuration {
     /// nothing to assume — it spawns what it is given.
     fn open_file(&self, path: &Path) -> Command;
 
+    /// The command that opens `path` at `line`, counted from one — what `v`
+    /// in the diff view opens the file at the top of the diff with, at the
+    /// line there. A command of its own because how an opener is told where
+    /// to start is the opener's business.
+    fn open_file_at(&self, path: &Path, line: u32) -> Command;
+
     /// The command that opens a web address from a reply — a link whose
     /// destination is `http://` or `https://`, which an editor has nothing to
     /// show for. A whole command for the same reason [`Self::open_file`] is.

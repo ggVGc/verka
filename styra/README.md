@@ -253,6 +253,10 @@ The server and its client interface are the `server` crate in `styra/server`
 separate `styra-ui` crate. The application passes presentation models through
 an object-safe `Ui` trait whose methods expose each rendering operation
 directly; the Ratatui implementation also supports an in-memory test backend.
+The checkout diff view (`d`) is its own crate, `styra-diff` in `styra/diff`,
+built on `styra-ui`; its `styra-diff` binary opens the same view over any
+repository: `styra-diff [-C DIR] [BASE]` shows the working tree against where
+the current branch left `BASE`, or against `HEAD` when no base is given.
 The Rust wire types are in `styra_server::api`, and the blocking client used by
 the TUI is `styra_server::Client`.
 

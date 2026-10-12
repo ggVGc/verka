@@ -11,7 +11,7 @@
 
 use styra_protocol::RawLine;
 
-use crate::app::Scroll;
+use styra_ui::scroll::Scroll;
 
 /// The provider's persisted JSONL session file. It is deliberately separate
 /// from [`RawView`]: its records did not travel over Styra's stdin/stdout.

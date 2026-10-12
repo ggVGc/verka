@@ -11,6 +11,7 @@ members = [
     "orka-tui",
     "orka-web",
     "styra/cli",
+    "styra/diff",
     "styra/protocol",
     "styra/server",
     "styra/transcription",
@@ -65,6 +66,7 @@ nota = { path = "nota" }
 server = { path = "styra/server" }
 transcription = { path = "styra/transcription" }
 protocol = { path = "styra/protocol" }
+styra-diff = { path = "styra/diff" }
 styra-ui = { path = "styra/ui" }
 
 # Whisper inference is the only compute-bound work in the workspace. Keep its

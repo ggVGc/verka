@@ -362,14 +362,18 @@ pub struct RunContext<'a> {
     pub config: &'a dyn Configuration,
 }
 
-/// Hand one host path to the configured opener, reporting the outcome the way
+/// Hand one host path to the configured opener, at `line` when one is known,
+/// reporting the outcome the way
 /// [`terminal::open_shell`](crate::terminal::open_shell) does.
 ///
 /// The one place a file is opened, so the Files view, a typed `files` answer,
-/// and a selected Markdown link obey the same configuration and say the same
-/// thing afterwards.
-fn open_path(app: &mut App, config: &dyn Configuration, path: &Path) {
-    let mut command = config.open_file(path);
+/// a selected Markdown link, and the diff view obey the same configuration
+/// and say the same thing afterwards.
+fn open_path(app: &mut App, config: &dyn Configuration, path: &Path, line: Option<u32>) {
+    let mut command = match line {
+        Some(line) => config.open_file_at(path, line),
+        None => config.open_file(path),
+    };
     // Named in both messages, because what opens a file is configuration: an
     // operator who set it needs to see which command Styra actually ran.
     let described = crate::terminal::describe(&command);
@@ -1879,9 +1883,10 @@ fn run_rounds(
                 let Some(path) = app.selected_file_path() else {
                     continue;
                 };
-                open_path(app, config, &path);
+                open_path(app, config, &path, None);
             }
-            Some(Request::OpenPath(path)) => open_path(app, config, &path),
+            Some(Request::OpenPath(path)) => open_path(app, config, &path, None),
+            Some(Request::OpenPathAt(path, line)) => open_path(app, config, &path, line),
             Some(Request::OpenUrl(url)) => open_url(app, config, &url),
             Some(Request::OpenDirectory) => {
                 let Some(directory) = app.workspace.working_directory_or_current() else {
@@ -1912,7 +1917,7 @@ fn run_rounds(
                 }
             }
             Some(Request::ShowDiff(target)) => {
-                app.checkout_diff = Some(crate::checkout_diff::CheckoutDiff::read(target));
+                app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
                 diff_refreshed = Instant::now();
                 app.view = crate::app::View::CheckoutDiff;
             }

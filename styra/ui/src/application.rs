@@ -1,8 +1,8 @@
 //! Top-level main-application layout and overlay ordering.
 
 use crate::{
-    answer, busy, checkout_diff, driva, event_list, files, footer, interactions, launcher, log,
-    messages, modal_input, overlays, overview, preview, quota, raw, recording, transcript, PanelId,
+    answer, busy, driva, event_list, files, footer, interactions, launcher, log, messages,
+    modal_input, overlays, overview, preview, quota, raw, recording, transcript, PanelId,
     RenderFeedback, ScrollFeedback,
 };
 use crate::{markdown, theme};
@@ -40,12 +40,28 @@ pub enum MainView<'a> {
     },
     Quota(&'a quota::QuotaView<'a>),
     Transcript(&'a transcript::TranscriptView<'a>),
-    CheckoutDiff(&'a checkout_diff::CheckoutDiffView<'a>),
+    /// The checkout diff, which `styra-diff` draws: it is built on this
+    /// crate so that it can also run as a program of its own.
+    CheckoutDiff(&'a dyn Panel),
     Driva(&'a driva::DrivaView<'a>),
     Files(FilesView<'a>),
     Answer(&'a answer::AnswerView<'a>),
     Preview(&'a preview::PreviewView<'a>),
     Overview(&'a overview::OverviewView<'a>),
+}
+
+/// A main view drawn by a crate built on this one rather than by this crate,
+/// given the area the layout leaves it.
+pub trait Panel {
+    fn render(&self, frame: &mut Frame, area: Rect) -> PanelFeedback;
+}
+
+/// What a [`Panel`] measured while drawing, for the host to scroll by.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PanelFeedback {
+    pub scroll: preview::PreviewFeedback,
+    /// First visible row of a list the panel keeps beside its scrolling text.
+    pub list_offset: Option<usize>,
 }
 
 #[derive(Default)]
@@ -146,9 +162,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
                 transcript_view.requested_scroll.min(limit),
             );
         }
-        MainView::CheckoutDiff(diff_view) => {
-            let measured = checkout_diff::render(frame, diff_view, chunks[0]);
-            feedback.diff_file_list_offset = Some(measured.file_list_offset);
+        MainView::CheckoutDiff(panel) => {
+            let measured = panel.render(frame, chunks[0]);
+            feedback.diff_file_list_offset = measured.list_offset;
             note_preview_scroll(
                 &mut feedback,
                 PanelId::CheckoutDiff {
