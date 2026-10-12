@@ -27,7 +27,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use styra_protocol::{
     AttributedMount, BranchPoint, CheckoutState, DrivaOptions, FloorKind, LaunchMount,
     LaunchPolicy, Mount, MountAccess, MountOrigin, VariableOrigin, WritableMountMode,
@@ -114,6 +114,57 @@ impl DrivaWorkspace {
     fn working_directory_or_current(&self) -> Option<PathBuf> {
         self.working_directory.clone()
     }
+    /// The path [`WORKSPACE_PLACEHOLDER`] stands for: the Workspace's own
+    /// directory, or the live root when the server has not named one.
+    fn placeholder_path(&self) -> Option<&Path> {
+        self.host_path.as_deref().or(self.root.as_deref())
+    }
+    /// `lines` with every whole occurrence of the workspace path, or of a path
+    /// under it, written with [`WORKSPACE_PLACEHOLDER`] instead.
+    fn abbreviate(&self, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+        let Some(path) = self.placeholder_path().and_then(Path::to_str) else {
+            return lines;
+        };
+        if path.is_empty() || path == "/" {
+            return lines;
+        }
+        let path = path.trim_end_matches('/');
+        lines
+            .into_iter()
+            .map(|mut line| {
+                for span in &mut line.spans {
+                    if span.content.contains(path) {
+                        span.content = abbreviate_path(&span.content, path).into();
+                    }
+                }
+                line
+            })
+            .collect()
+    }
+}
+
+/// What the workspace path is written as everywhere but the one row that says
+/// what it stands for.
+const WORKSPACE_PLACEHOLDER: &str = "<ws>";
+
+/// `text` with each occurrence of `path` that is a whole path, or the leading
+/// part of one, replaced by [`WORKSPACE_PLACEHOLDER`]. `/a/proj` is not taken
+/// out of `/a/project` or `/b/a/proj`.
+fn abbreviate_path(text: &str, path: &str) -> String {
+    let part_of_path = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/');
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(path) {
+        let before = rest[..at].chars().last().or_else(|| out.chars().last());
+        let after = rest[at + path.len()..].chars().next();
+        out.push_str(&rest[..at]);
+        let whole = !before.is_some_and(part_of_path)
+            && !after.is_some_and(|c| c != '/' && part_of_path(c));
+        out.push_str(if whole { WORKSPACE_PLACEHOLDER } else { path });
+        rest = &rest[at + path.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 pub struct DrivaActivity {
@@ -214,6 +265,15 @@ pub fn render(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
     render_tabs(frame, app.tab, tabs);
     inner.y = inner.y.saturating_add(tabs.height);
     inner.height = inner.height.saturating_sub(tabs.height);
+    if let Some(path) = app.workspace.placeholder_path() {
+        let legend = Rect {
+            height: inner.height.min(1),
+            ..inner
+        };
+        render_workspace_legend(frame, path, legend);
+        inner.y = inner.y.saturating_add(legend.height);
+        inner.height = inner.height.saturating_sub(legend.height);
+    }
 
     if app.tab == DetailsTab::Sandbox {
         return render_sandbox(frame, app, options, inner);
@@ -291,6 +351,30 @@ fn render_tabs(frame: &mut Frame, selected: DetailsTab, area: Rect) {
     );
 }
 
+/// The one place the workspace path is spelled out; everywhere else on both
+/// tabs it reads as [`WORKSPACE_PLACEHOLDER`], so the paths under it stay short
+/// enough to read and the part that differs between them is what stands out.
+fn render_workspace_legend(frame: &mut Frame, path: &Path, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!(" {WORKSPACE_PLACEHOLDER} "),
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                path.display().to_string(),
+                Style::default().fg(theme::TEXT),
+            ),
+        ])),
+        area,
+    );
+}
+
 /// Take `wanted` rows off the bottom of `area`, leaving at least `floor` there,
 /// and shrink `area` by what was taken. A zero-height result is a pane there was
 /// no room for; rendering it draws nothing.
@@ -310,9 +394,9 @@ fn render_overview(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedb
     if area.height == 0 {
         return DrivaFeedback::default();
     }
-    let workspace = workspace_lines(app);
-    let interaction = interaction_lines(app);
-    let sandbox = sandbox_summary_lines(app);
+    let workspace = app.workspace.abbreviate(workspace_lines(app));
+    let interaction = app.workspace.abbreviate(interaction_lines(app));
+    let sandbox = app.workspace.abbreviate(sandbox_summary_lines(app));
 
     // A single-column form is also the scrollable fallback: it retains the
     // three section headings and their order when the two-column overview no
@@ -754,7 +838,7 @@ fn sandbox_prefix_lines(app: &DrivaView, options: Option<&DrivaOptions>) -> Vec<
     ));
     lines.extend(floor_lines(options));
     lines.extend(environment_lines(options));
-    lines
+    app.workspace.abbreviate(lines)
 }
 
 /// Paint the private-root listing.  Its heading remains full width, while an
@@ -1373,7 +1457,7 @@ fn pane_rows(app: &DrivaView, scope: LaunchScope) -> Vec<Line<'static>> {
             "mounts",
             "none — m adds one",
         ));
-        return rows;
+        return app.workspace.abbreviate(rows);
     }
     let selected = app.launch.cursor(scope);
     for (index, mount) in policy.mounts.iter().enumerate() {
@@ -1384,7 +1468,7 @@ fn pane_rows(app: &DrivaView, scope: LaunchScope) -> Vec<Line<'static>> {
             &launch_mount_label(mount),
         ));
     }
-    rows
+    app.workspace.abbreviate(rows)
 }
 
 /// What one layer says about networking, as that layer alone.
@@ -1922,6 +2006,38 @@ mod tests {
 
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("not a Git checkout"), "{lines:?}");
+    }
+
+    #[test]
+    fn the_workspace_path_is_written_as_the_placeholder_only_where_it_is_whole() {
+        let ws = "/home/me/proj";
+        assert_eq!(abbreviate_path("/home/me/proj", ws), "<ws>");
+        assert_eq!(
+            abbreviate_path("/home/me/proj → /home/me/proj/src (rw)", ws),
+            "<ws> → <ws>/src (rw)"
+        );
+        assert_eq!(abbreviate_path("/home/me/project", ws), "/home/me/project");
+        assert_eq!(abbreviate_path("/mnt/home/me/proj", ws), "/mnt/home/me/proj");
+        assert_eq!(abbreviate_path("PWD=/home/me/proj:", ws), "PWD=<ws>:");
+    }
+
+    #[test]
+    fn mount_rows_name_the_workspace_by_its_placeholder() {
+        let workspace = LaunchPolicy::default();
+        let interaction = LaunchPolicy {
+            mounts: vec![LaunchMount {
+                source: PathBuf::from("/home/me/proj/data"),
+                destination: None,
+                writable: false,
+            }],
+            ..LaunchPolicy::default()
+        };
+        let mut view = view(true, &workspace, &interaction);
+        view.workspace.host_path = Some(PathBuf::from("/home/me/proj"));
+        let rows = text(pane_rows(&view, LaunchScope::Interaction));
+
+        assert!(rows.iter().any(|row| row.contains("<ws>/data (ro)")), "{rows:?}");
+        assert!(!rows.iter().any(|row| row.contains("/home/me")), "{rows:?}");
     }
 
     #[test]
