@@ -66,6 +66,7 @@ mod tests {
             focused: true,
             workspace: None,
             worktree: None,
+            source_branch: None,
             agent: "codex".into(),
             model: "gpt".into(),
             model_reported: true,

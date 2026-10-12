@@ -58,6 +58,8 @@ pub struct PanelChrome {
     /// Workspace's own checkout. `None` for a plain checkout, so the bar does
     /// not repeat what the Workspace name already said.
     pub worktree: Option<String>,
+    /// The branch a new interaction would fork, shown before it starts.
+    pub source_branch: Option<String>,
     pub agent: String,
     pub model: String,
     pub model_reported: bool,
@@ -147,6 +149,13 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
         ));
         spans.push(Span::styled(" · ", text));
     }
+    if let Some(source) = &chrome.source_branch {
+        spans.push(Span::styled(
+            format!("from {source}"),
+            Style::default().fg(theme::ACCENT),
+        ));
+        spans.push(Span::styled(" · ", text));
+    }
     spans.push(Span::styled(format!("{} · ", chrome.agent), text));
     spans.push(Span::styled(
         chrome.model.clone(),
@@ -197,6 +206,7 @@ mod tests {
             workspace: workspace.map(str::to_owned),
             session: None,
             worktree: None,
+            source_branch: None,
             agent: "codex".into(),
             model: "default model".into(),
             model_reported: false,

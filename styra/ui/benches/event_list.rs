@@ -107,6 +107,7 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
             focused: true,
             workspace: None,
             worktree: None,
+            source_branch: None,
             agent: "codex".into(),
             model: "gpt-5.6-sol".into(),
             model_reported: true,

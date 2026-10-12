@@ -153,6 +153,14 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         focused: app.focus == Focus::List,
         workspace: app.workspace.name.clone(),
         worktree,
+        source_branch: app.session_id.is_empty().then(|| {
+            app.checkout_from
+                .as_deref()
+                .and_then(|id| app.interactions.current(id))
+                .and_then(|interaction| interaction.checkout.as_ref())
+                .and_then(|checkout| checkout.branch.clone())
+                .unwrap_or_else(|| "Workspace branch".into())
+        }),
         agent: label.agent,
         model: label.model.unwrap_or_else(|| "default model".into()),
         model_reported: label.model_reported,
@@ -287,16 +295,7 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
             .contract()
             .map(|contract| format!(" asking for {} ", contract.as_str())),
         preceding,
-        notice: app.session_id.is_empty().then(|| {
-            let source = app
-                .checkout_from
-                .as_deref()
-                .and_then(|id| app.interactions.current(id))
-                .and_then(|interaction| interaction.checkout.as_ref())
-                .and_then(|checkout| checkout.branch.as_deref())
-                .unwrap_or("Workspace branch");
-            format!("Ctrl+Enter: new worktree from {source}")
-        }),
+        notice: None,
         parts: composer.parts(),
         focused: composer.focused(),
         choosing: composer.choosing(),
@@ -963,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_message_box_names_the_branch_ctrl_enter_will_fork() {
+    fn a_new_interaction_header_names_the_source_branch() {
         let mut app = test_support::app("");
         app.checkout_from = Some("source-session".into());
         app.interactions.items.push(interaction_with_checkout(
@@ -974,15 +973,17 @@ mod tests {
                 repository: "/workspace".into(),
             }),
         ));
-        assert_eq!(
-            modal_input(&app).notice.as_deref(),
-            Some("Ctrl+Enter: new worktree from styra/source-work")
-        );
+        let title = test_support::screen(&app).title();
+        assert!(title.contains("from styra/source-work"), "{title}");
+        assert!(modal_input(&app).notice.is_none());
         app.checkout_from = None;
-        assert_eq!(
-            modal_input(&app).notice.as_deref(),
-            Some("Ctrl+Enter: new worktree from Workspace branch")
-        );
+        let title = test_support::screen(&app).title();
+        assert!(title.contains("from Workspace branch"), "{title}");
+        assert!(modal_input(&app).notice.is_none());
+
+        app.session_id = "source-session".into();
+        let title = test_support::screen(&app).title();
+        assert!(!title.contains("from "), "{title}");
     }
 
     #[test]
