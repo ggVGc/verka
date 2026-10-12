@@ -287,7 +287,16 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
             .contract()
             .map(|contract| format!(" asking for {} ", contract.as_str())),
         preceding,
-        notice: None,
+        notice: app.session_id.is_empty().then(|| {
+            let source = app
+                .checkout_from
+                .as_deref()
+                .and_then(|id| app.interactions.current(id))
+                .and_then(|interaction| interaction.checkout.as_ref())
+                .and_then(|checkout| checkout.branch.as_deref())
+                .unwrap_or("Workspace branch");
+            format!("Ctrl+Enter: new worktree from {source}")
+        }),
         parts: composer.parts(),
         focused: composer.focused(),
         choosing: composer.choosing(),
@@ -954,6 +963,29 @@ mod tests {
             crate::activity::Status::Stopped(crate::activity::StopReason::Abandoned);
         let title = rendered(&app);
         assert!(title.contains("abandoned"), "{title}");
+    }
+
+    #[test]
+    fn a_new_message_box_names_the_branch_ctrl_enter_will_fork() {
+        let mut app = test_support::app("");
+        app.checkout_from = Some("source-session".into());
+        app.interactions.items.push(interaction_with_checkout(
+            "source-session",
+            Some(CheckoutState {
+                branch: Some("styra/source-work".into()),
+                worktree: "/state/worktrees/source-work".into(),
+                repository: "/workspace".into(),
+            }),
+        ));
+        assert_eq!(
+            modal_input(&app).notice.as_deref(),
+            Some("Ctrl+Enter: new worktree from styra/source-work")
+        );
+        app.checkout_from = None;
+        assert_eq!(
+            modal_input(&app).notice.as_deref(),
+            Some("Ctrl+Enter: new worktree from Workspace branch")
+        );
     }
 
     #[test]

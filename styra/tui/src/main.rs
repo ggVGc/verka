@@ -159,6 +159,9 @@ fn pending_app_from_session(app: &App, workspace: &WorkspaceSummary) -> App {
     // Workspace root, so the footer names the checkout being carried over
     // instead of a directory this Session is not going to work in.
     if pending.checkout_from.is_some() {
+        if let Some(source) = app.interactions.current(&app.session_id) {
+            pending.interactions.items.push(source.clone());
+        }
         if let Some(root) = app.workspace.root() {
             pending.workspace.enter(root.to_path_buf());
         }

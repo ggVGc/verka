@@ -240,7 +240,8 @@ pub struct App {
     /// the operator, and the next screen holds different ones.
     pub search: Search,
     pub session_id: String,
-    /// Session whose linked checkout a pending new Session should reuse.
+    /// Session whose linked checkout a pending new Session shares with Enter
+    /// or branches from with Ctrl-Enter.
     /// Set by `n`; the server resolves and validates the association rather
     /// than accepting a client-supplied path.
     pub checkout_from: Option<String>,

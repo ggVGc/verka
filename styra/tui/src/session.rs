@@ -382,8 +382,8 @@ pub fn turn(message: &str, selection: &Selection, contract: Option<Contract>) ->
 ///
 /// The two checkout fields are the blank screen's two answers to "which
 /// directory": `create_worktree` is `Ctrl-Enter` asking for a branch of its
-/// own, and `checkout_from` names the Session whose checkout this one shares.
-/// Asking for both is asking for a fresh one; the server settles it.
+/// own, and `checkout_from` names the source Session. Plain Enter shares its
+/// checkout; Ctrl-Enter branches from its current branch into a fresh one.
 #[derive(Clone, Debug, Default)]
 pub struct Start {
     pub contract: Option<Contract>,

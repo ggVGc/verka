@@ -1413,6 +1413,22 @@ impl ServerState {
         self.session_checkout(&source.path, workspace_id, source_id)
     }
 
+    /// Make a fresh checkout from the source Session's current branch, or the
+    /// Workspace checkout when the source has no linked checkout.
+    fn new_session_worktree(
+        &self,
+        workspace_id: &str,
+        worktrees: &crate::worktree::Worktrees,
+        id: &str,
+        topic: Option<&str>,
+        source_id: Option<&str>,
+    ) -> Result<crate::worktree::Checkout> {
+        match self.inherited_checkout(workspace_id, source_id)? {
+            Some(source) => worktrees.fork(id, topic, &source.branch),
+            None => worktrees.checkout(id, topic),
+        }
+    }
+
     /// Give a Session that launched without one a checkout of its own.
     ///
     /// The `W` shortcut takes this path after the Session already has a
@@ -1772,8 +1788,8 @@ impl ServerState {
     fn create_session(&self, request: CreateSession) -> Result<SessionInfo> {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
-        // Ctrl-Enter remains an explicit request for a fresh checkout even on
-        // a blank screen reached with `n` from a Session that already has one.
+        // Plain Enter shares the source checkout; Ctrl-Enter makes a fresh
+        // checkout from its branch below.
         let inherited_checkout = if request.create_worktree {
             None
         } else {
@@ -1862,7 +1878,13 @@ impl ServerState {
                 path
             }
             (None, Some(worktrees)) => {
-                let made = worktrees.checkout(&id, topic.as_ref().map(Topic::branch))?;
+                let made = self.new_session_worktree(
+                    &request.workspace_id,
+                    worktrees,
+                    &id,
+                    topic.as_ref().map(Topic::branch),
+                    request.checkout_from.as_deref(),
+                )?;
                 // Written down here, while the name and the branch are known
                 // first-hand, rather than left to be recognised later from
                 // the shape of a directory name.
@@ -2228,10 +2250,12 @@ impl ServerState {
     fn plan_session(&self, request: crate::protocol::PlanSession) -> Result<DrivaOptions> {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
+        let source_checkout =
+            self.inherited_checkout(&owning_workspace.id, request.checkout_from.as_deref())?;
         let inherited_checkout = if request.create_worktree {
             None
         } else {
-            self.inherited_checkout(&owning_workspace.id, request.checkout_from.as_deref())?
+            source_checkout
         };
         let repository_mounts = owning_workspace
             .git_repository
@@ -6302,6 +6326,111 @@ mod tests {
                 if Some(source) == checkout.path.as_ref() && destination == &sandbox
         )));
 
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn a_new_worktree_starts_at_the_source_sessions_current_branch() {
+        let (store, host, _, workspace, id, session_path) = stored_session("fork-new-checkout");
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let state = ServerState::with_git(git.clone(), store.clone());
+        let worktrees = state
+            .workspace_worktrees(&workspace, true)
+            .unwrap()
+            .unwrap();
+        let source = worktrees.checkout(&id, Some("source-work")).unwrap();
+        journal::store_session_checkout(&session_path, &source).unwrap();
+        let source_commit = git.commit_on(&source.branch);
+        let source_path = source.path.as_ref().unwrap();
+        std::fs::write(source_path.join("uncommitted.txt"), "only in source").unwrap();
+
+        let fresh = state
+            .new_session_worktree(
+                &workspace.id,
+                &worktrees,
+                "new-session",
+                Some("new-work"),
+                Some(&id),
+            )
+            .unwrap();
+        assert_ne!(fresh.path, source.path);
+        assert_ne!(fresh.branch, source.branch);
+        assert_eq!(
+            fresh.branched_from,
+            Some(crate::worktree::BranchPoint {
+                branch: Some(source.branch.clone()),
+                commit: source_commit.clone(),
+            })
+        );
+        assert_eq!(
+            git.commit(&host, &fresh.branch).unwrap(),
+            Some(source_commit.clone())
+        );
+        assert!(!fresh
+            .path
+            .as_ref()
+            .unwrap()
+            .join("uncommitted.txt")
+            .exists());
+        assert!(source_path.join("uncommitted.txt").exists());
+
+        // The durable branch remains a usable source after checkout cleanup.
+        worktrees.remove(source_path).unwrap();
+        journal::clear_session_worktree(&session_path).unwrap();
+        let restored_source = state
+            .new_session_worktree(&workspace.id, &worktrees, "after-cleanup", None, Some(&id))
+            .unwrap();
+        assert_eq!(restored_source.branched_from, fresh.branched_from);
+        assert!(!source_path.exists());
+
+        // Without a linked source, use the Workspace's checked-out HEAD.
+        let fallback = state
+            .new_session_worktree(&workspace.id, &worktrees, "from-workspace", None, None)
+            .unwrap();
+        assert_eq!(
+            fallback.branched_from.as_ref().unwrap().commit,
+            git.commit(&host, "HEAD").unwrap().unwrap()
+        );
+        assert_ne!(fallback.branched_from, fresh.branched_from);
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn a_fresh_worktree_plan_uses_a_new_directory_and_validates_its_source() {
+        let (store, host, state, workspace, id, session_path) =
+            stored_session("plan-fork-checkout");
+        let worktrees = state
+            .workspace_worktrees(&workspace, true)
+            .unwrap()
+            .unwrap();
+        let source = worktrees.checkout(&id, Some("source-work")).unwrap();
+        journal::store_session_checkout(&session_path, &source).unwrap();
+        let mut request = crate::protocol::PlanSession {
+            workspace_id: workspace.id.clone(),
+            selection: Selection::new(crate::agent::Provider::Codex),
+            launch: LaunchPolicy::default(),
+            create_worktree: true,
+            checkout_from: Some(id),
+        };
+        let plan = state.plan_session(request.clone()).unwrap();
+        let pending_path = worktrees.path(PENDING_SESSION_ID);
+        assert!(plan.mounts.iter().any(|attributed| matches!(
+            &attributed.mount,
+            Mount::Bind { source, .. } if source == &pending_path
+        )));
+        assert!(!pending_path.exists());
+        let other_host = host.join("other-workspace");
+        std::fs::create_dir_all(&other_host).unwrap();
+        let other = crate::workspace::create(&store, &other_host, None).unwrap();
+        request.workspace_id = other.id;
+        let error = state.plan_session(request).unwrap_err();
+        assert!(
+            error.to_string().contains("belongs to Workspace"),
+            "{error:#}"
+        );
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
     }

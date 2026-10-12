@@ -66,8 +66,9 @@ pub struct CreateSession {
     #[serde(default)]
     pub create_worktree: bool,
     /// Reuse the checkout associated with this Session, when it has one.
-    /// The source must belong to `workspace_id`. Ignored when
-    /// `create_worktree` explicitly asks for a fresh checkout instead.
+    /// With `create_worktree`, fork its current branch into a fresh checkout
+    /// instead. The source must belong to `workspace_id`. A source without a
+    /// linked checkout falls back to the Workspace checkout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout_from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
