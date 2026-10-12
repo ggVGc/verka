@@ -329,6 +329,8 @@ end, {
 --- takes the locations once there are some; `spec.box` is what the message
 --- box says when nothing was typed after the command; and `spec.under_way`
 --- and `spec.nothing` are the notes for a request started and a box closed.
+--- `spec.reload`, if there is one, runs whenever the turn is over, answered
+--- with locations or not.
 local function files_command(spec, command)
   local core = require("svara.core")
   local directory, directory_error = spec.directory, nil
@@ -408,6 +410,11 @@ local function files_command(spec, command)
         kind = spec.kind,
       }, function(items, missed, answer, completion_error)
         finished({ items = items, error = missed and tostring(missed), answer = answer })
+        if spec.reload then
+          -- Before anything else: an edit whose answer missed its contract
+          -- may still have changed the files.
+          spec.reload()
+        end
         if completion_error then
           vim.notify("Svara: could not mark it completed — " .. completion_error, vim.log.levels.WARN)
         end
@@ -538,10 +545,32 @@ local function jump_to_edit(edit)
   vim.cmd("cfirst")
 end
 
+--- Read again every buffer whose file the agent changed on disk, so the edit
+--- is in sight rather than a warning at the next write. `:checktime` alone
+--- would only ask under 'noautoread', and `silent!` would answer the asking
+--- with "keep the old text", so 'autoread' is on while it runs. A buffer with
+--- changes of its own is left alone: its text is the operator's, and
+--- `:checktime` will warn about it when they come back to it.
+local function reload_edited_buffers()
+  local autoread = vim.go.autoread
+  vim.go.autoread = true
+  for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buffer)
+      and vim.bo[buffer].buftype == ""
+      and not vim.bo[buffer].modified
+      and vim.api.nvim_buf_get_name(buffer) ~= ""
+    then
+      pcall(vim.cmd, "silent! checktime " .. buffer)
+    end
+  end
+  vim.go.autoread = autoread
+end
+
 local function edit_spec()
   return {
     kind = "edit",
     run = require("svara.core").edit,
+    reload = reload_edited_buffers,
     box = {
       title = " edit ",
       placeholder = "Enter to edit · :SvaraJump goes to the change once it is made",
@@ -550,9 +579,6 @@ local function edit_spec()
     under_way = "editing",
     nothing = "nothing edited",
     answered = function(instruction, items)
-      -- The agent changed the files on disk; buffers showing them are read
-      -- again, so the edit is in sight rather than a warning at the next write.
-      vim.cmd("silent! checktime")
       last_edit = { instruction = instruction, items = items }
       if #items == 0 then
         vim.notify("Svara: the edit names no places it changed", vim.log.levels.WARN)

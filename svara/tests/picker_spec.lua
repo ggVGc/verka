@@ -243,10 +243,14 @@ do
   vim.cmd("SvaraJump")
   assert(notified[#notified]:find("no edit has finished"), notified[#notified])
 
-  -- The agent changes the file on disk, and says where.
+  -- The agent changes the file on disk, and says where. It is read again
+  -- under 'noautoread' too, which is left as it was.
+  vim.o.autoread = false
   vim.fn.writefile({ "one", "two", "three and four" }, file)
   vim.cmd("1")
   finish.on_done({ { filename = file, lnum = 3, col = 2, text = "four" } })
+  assert(vim.go.autoread == false, "'autoread' was not put back")
+  vim.o.autoread = true
   assert(notified[#notified]:find(":3 — :SvaraJump", 1, true), notified[#notified])
   -- The changed file is read again; the operator is not moved.
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
@@ -284,6 +288,20 @@ do
   vim.cmd("SvaraJump")
   assert(vim.api.nvim_win_get_cursor(0)[1] == 3, vim.inspect(vim.api.nvim_win_get_cursor(0)))
   assert(vim.fn.getqflist({ title = 0 }).title == "Svara edit: and five")
+
+  -- An edit whose answer named no places may still have changed the file.
+  local missed
+  core.edit = function(_, _, on_done)
+    missed = on_done
+    return {}, nil, { id = "styra-6" }
+  end
+  vim.cmd("SvaraEdit make it six")
+  vim.fn.writefile({ "one", "two", "six" }, file)
+  vim.uv.fs_utime(file, os.time() + 5, os.time() + 5)
+  missed(nil, "no locations in the reply")
+  lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  assert(lines[3] == "six", vim.inspect(lines))
+  require("svara.markers").remove(require("svara.markers").all()[1])
 end
 
 print("svara picker tests passed")

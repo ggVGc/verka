@@ -378,7 +378,9 @@ no argument it opens the box, titled ` edit `. The difference is the turn: the
 agent is told to make the change in the files, then answer with the places it
 changed. It runs in the Workspace's own directory, not in a Git workspace of
 its own, so the change lands in the files you have open. When it finishes,
-buffers showing changed files are reloaded (`:checktime`), your cursor stays
+buffers showing changed files are reloaded — even under `noautoread`, and
+even when the answer named no places, though never a buffer with unsaved
+changes of your own — your cursor stays
 put, and a notification names the first changed place: `edited
 src/auth.lua:42 (+1 more) — :SvaraJump to go there`. `:SvaraJump` makes the
 places the last finished edit changed the quickfix list and goes to the first.
