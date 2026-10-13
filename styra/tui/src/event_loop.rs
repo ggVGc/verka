@@ -49,6 +49,24 @@ const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
 /// the server for updates, interactions and quota.
 const KEY_POLL: Duration = Duration::from_millis(100);
 
+/// The message box owns paste only when no inner prompt or chooser owns input.
+fn message_paste_active(app: &App) -> bool {
+    app.focus == Focus::Input
+        && !app.help.is_open()
+        && app.rebase_status.is_none()
+        && app.launcher.is_none()
+        && app.template_picker.is_none()
+        && app.integration_prompt.is_none()
+        && app.branch_prompt.is_none()
+        && app.link_menu.is_none()
+        && app.insert.is_none()
+        && app.git_repository_prompt.is_none()
+        && app.launch.prompt.is_none()
+        && app.tag_picker.is_none()
+        && !app.diff_visible()
+        && !app.search.typing()
+}
+
 /// How long a level-meter frame waits for one instead.
 ///
 /// The loop's own period is the server's, and a meter repainted on it moves in
@@ -667,6 +685,8 @@ fn run_rounds(
     //
     // It starts set: the first round has a blank terminal to fill.
     let mut dirty = true;
+    terminal.set_bracketed_paste(false)?;
+    let mut bracketed_paste = false;
     loop {
         session::save_composer(app, client, false);
         let workspace_id = app.workspace.id.clone().unwrap_or_default();
@@ -946,6 +966,11 @@ fn run_rounds(
             dirty = false;
         }
 
+        let paste_active = message_paste_active(app) && !audio.is_recording();
+        if bracketed_paste != paste_active {
+            terminal.set_bracketed_paste(paste_active)?;
+            bracketed_paste = paste_active;
+        }
         let waited = if audio.is_recording() {
             meter_frames(terminal, app, &mut audio)?
         } else {
@@ -957,6 +982,13 @@ fn run_rounds(
         // is no longer there.
         if let Some(Event::Resize(..)) = &waited {
             dirty = true;
+        }
+        if let Some(Event::Paste(text)) = &waited {
+            if paste_active {
+                app.composer.paste(text);
+                dirty = true;
+            }
+            continue;
         }
         let Some(Event::Key(key)) = waited else {
             continue;
@@ -2005,6 +2037,27 @@ mod tests {
             },
             results,
         )
+    }
+
+    #[test]
+    fn message_paste_follows_editor_focus_and_modal_ownership() {
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
+        app.focus = Focus::List;
+        assert!(!message_paste_active(&app));
+        app.focus = Focus::Input;
+        assert!(message_paste_active(&app));
+        app.integration_prompt = Some(String::new());
+        assert!(!message_paste_active(&app));
+        app.integration_prompt = None;
+        app.insert = Some(crate::insert::Prompt::new(None, None, false));
+        assert!(!message_paste_active(&app));
+        app.insert = None;
+        app.help.open();
+        assert!(!message_paste_active(&app));
+        app.help.close();
+        app.composer.add_part();
+        app.composer.start_choosing();
+        assert!(message_paste_active(&app));
     }
 
     #[test]

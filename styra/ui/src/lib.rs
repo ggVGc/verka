@@ -6,6 +6,7 @@
 //! measured against, which `styra-diff` shares.
 
 use anyhow::Context;
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
 };
@@ -244,6 +245,10 @@ pub trait Ui {
 
     fn render_template_picker_loading(&mut self) -> UiResult<RenderFeedback>;
     fn poll_event(&mut self, timeout: Duration) -> UiResult<Option<crossterm::event::Event>>;
+    /// Keep paste grouped while the message editor owns input.
+    fn set_bracketed_paste(&mut self, _enabled: bool) -> UiResult<()> {
+        Ok(())
+    }
     fn close(&mut self) -> UiResult<()>;
 }
 
@@ -251,6 +256,7 @@ pub trait Ui {
 pub struct TerminalUi<B: Backend> {
     terminal: Option<Terminal<B>>,
     restore: fn(&mut Terminal<B>),
+    bracketed_paste: fn(bool) -> UiResult<()>,
 }
 
 pub type RatatuiUi = TerminalUi<CrosstermBackend<Stdout>>;
@@ -274,6 +280,7 @@ impl RatatuiUi {
             Ok(terminal) => Ok(Self {
                 terminal: Some(terminal),
                 restore: restore_crossterm,
+                bracketed_paste: set_crossterm_paste,
             }),
             Err(error) => {
                 disable_raw_mode().ok();
@@ -292,12 +299,28 @@ impl RatatuiUi {
 
 fn restore_crossterm(terminal: &mut Terminal<CrosstermBackend<Stdout>>) {
     disable_raw_mode().ok();
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
+    crossterm::execute!(
+        terminal.backend_mut(),
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )
+    .ok();
     terminal.show_cursor().ok();
     Write::flush(terminal.backend_mut()).ok();
 }
 
 fn no_restore(_: &mut Terminal<TestBackend>) {}
+
+fn set_crossterm_paste(enabled: bool) -> UiResult<()> {
+    let mut stdout = std::io::stdout();
+    if enabled {
+        crossterm::execute!(stdout, EnableBracketedPaste)
+    } else {
+        crossterm::execute!(stdout, DisableBracketedPaste)
+    }
+    .context("setting bracketed paste mode")
+    .map_err(UiError::from)
+}
 
 impl<B> TerminalUi<B>
 where
@@ -590,6 +613,9 @@ where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    fn set_bracketed_paste(&mut self, enabled: bool) -> UiResult<()> {
+        (self.bracketed_paste)(enabled)
+    }
     fn render_application(
         &mut self,
         view: &application::ApplicationView<'_>,
@@ -774,6 +800,7 @@ impl TestUi {
                     .map_err(UiError::from)?,
             ),
             restore: no_restore,
+            bracketed_paste: |_| Ok(()),
         })
     }
 

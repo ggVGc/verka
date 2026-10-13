@@ -14,6 +14,9 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::theme;
 
+/// Inactive boxes remain short enough to scan while editing another one.
+const COLLAPSED_LINES: usize = 3;
+
 /// Everything the box draws: its titles, whatever stands above the buffer
 /// (the main view's queued messages), and the buffer being typed.
 pub struct ModalInput<'a> {
@@ -160,8 +163,8 @@ pub struct InputDisplay {
     pub cursor_row: u16,
 }
 
-/// Wrap the box's content to `width` and place the cursor at the end of the
-/// current box, which is where typing continues.
+/// Wrap the box's content to `width`, collapse boxes that are not being
+/// edited, and place the cursor at the end of the current box.
 pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
     let width = usize::from(width.max(1));
     let mut lines = Vec::new();
@@ -204,6 +207,10 @@ pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
             (false, _) => Style::default().fg(theme::MUTED_TEXT),
         };
         let mut part_lines = wrapped_input_lines(text, width, style);
+        if (!current || input.choosing) && part_lines.len() > COLLAPSED_LINES {
+            part_lines.truncate(COLLAPSED_LINES - 1);
+            part_lines.push(Line::from(Span::styled("…", style)));
+        }
         if current {
             let mut cursor_col = part_lines
                 .last()
@@ -212,7 +219,7 @@ pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
             // At the right edge, a terminal cursor advances to the next visual
             // row. Represent that row explicitly so the cursor never lands on
             // the border.
-            if cursor_col == width {
+            if !input.choosing && cursor_col == width {
                 part_lines.push(Line::default());
                 cursor_col = 0;
             }
@@ -325,5 +332,44 @@ mod tests {
         assert_eq!(rows[3], "second");
         assert_eq!(rows[5], "empty");
         assert_eq!((display.cursor_col, display.cursor_row), (6, 3));
+    }
+
+    #[test]
+    fn long_boxes_expand_only_while_being_edited() {
+        let parts = ["one\ntwo\nthree\nfour\nfive".into(), "draft".into()];
+        let mut boxes = input(&parts, Vec::new());
+        let collapsed = display(&boxes, 20);
+        let rows: Vec<String> = collapsed
+            .lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        assert_eq!(&rows[1..4], ["one", "two", "…"]);
+        assert_eq!(rows[5], "draft");
+        assert_eq!((collapsed.cursor_col, collapsed.cursor_row), (5, 5));
+
+        boxes.focused = 0;
+        let expanded = display(&boxes, 20);
+        let rows: Vec<String> = expanded.lines.iter().map(|line| line.to_string()).collect();
+        assert_eq!(&rows[1..6], ["one", "two", "three", "four", "five"]);
+        assert_eq!((expanded.cursor_col, expanded.cursor_row), (4, 5));
+
+        boxes.choosing = true;
+        let choosing = display(&boxes, 20);
+        assert_eq!(choosing.lines.len(), 6);
+        assert_eq!(choosing.lines[3].to_string(), "…");
+        assert_eq!(choosing.cursor_row, 3);
+    }
+
+    #[test]
+    fn collapsed_height_counts_wrapped_lines_and_does_not_change_text() {
+        let parts = ["abcdefghijklmnopqrst".into(), "z".into()];
+        let boxes = input(&parts, Vec::new());
+        let collapsed = display(&boxes, 5);
+        assert_eq!(collapsed.lines.len(), 6);
+        assert_eq!(collapsed.lines[1].to_string(), "abcde");
+        assert_eq!(collapsed.lines[2].to_string(), "fghij");
+        assert_eq!(collapsed.lines[3].to_string(), "…");
+        assert_eq!(parts[0], "abcdefghijklmnopqrst");
     }
 }

@@ -179,6 +179,15 @@ impl Composer {
         self.choosing = false;
     }
 
+    /// Keep each paste in its own box, preserving its whitespace verbatim.
+    pub fn paste(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.add_part();
+        self.text_mut().push_str(text);
+    }
+
     /// Step back from typing to choose between boxes. Returns whether there
     /// was more than one box to choose between; with one there is nothing to
     /// choose, and the caller treats the key as leaving the box instead.
@@ -423,6 +432,46 @@ mod tests {
         composer.add_part();
         composer.insert("second");
         assert_eq!(composer.parts(), ["first", "second", "third"]);
+    }
+
+    #[test]
+    fn pastes_create_separate_boxes_after_the_focused_box() {
+        let mut composer = Composer::default();
+        composer.set("instruction".into());
+        composer.add_part();
+        composer.insert("constraint");
+        composer.start_choosing();
+        composer.choose_previous();
+
+        composer.paste("  log\n世界\n");
+        assert_eq!(
+            composer.parts(),
+            ["instruction", "  log\n世界\n", "constraint"]
+        );
+        assert_eq!(composer.focused(), 1);
+        assert!(!composer.choosing());
+        composer.paste("another log");
+        composer.char('!');
+        assert_eq!(
+            composer.parts(),
+            ["instruction", "  log\n世界\n", "another log!", "constraint"]
+        );
+        assert_eq!(
+            composer.take(),
+            Some("instruction\n\nlog\n世界\n\nanother log!\n\nconstraint".into())
+        );
+    }
+
+    #[test]
+    fn pasting_into_an_empty_editor_creates_a_box_and_empty_paste_is_ignored() {
+        let mut composer = Composer::default();
+        composer.paste("");
+        assert_eq!(composer.parts(), [""]);
+        assert_eq!(composer.unsaved(), None);
+        composer.paste("text");
+        assert_eq!(composer.parts(), ["", "text"]);
+        assert_eq!(composer.focused(), 1);
+        assert_eq!(composer.unsaved().unwrap().parts, ["", "text"]);
     }
 
     /// Choosing needs something to choose between, and stays within the boxes.
