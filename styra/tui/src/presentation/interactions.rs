@@ -153,6 +153,7 @@ pub(super) fn status(reported: &Status, interaction: &InteractionSummary) -> Int
         Status::Running => InteractionStatus::Running {
             events: interaction.events,
         },
+        Status::Idle(IdleReason::Failed { .. }) => InteractionStatus::IdleFailed,
         Status::Idle(_) => InteractionStatus::Idle,
         Status::Background => InteractionStatus::Background,
         Status::Stopped(why) => InteractionStatus::Stopped(super::stop_tone(why)),

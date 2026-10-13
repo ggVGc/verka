@@ -140,7 +140,10 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
             query: None,
             typing: false,
         },
-        status: EventListStatus::Idle { reason: None },
+        status: EventListStatus::Idle {
+            reason: None,
+            failed: false,
+        },
         queued: &[],
     };
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(

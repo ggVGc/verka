@@ -358,6 +358,7 @@ fn status_line(tile: &OverviewTile<'_>) -> Line<'static> {
         InteractionStatus::Running { .. } => ("running", theme::RUNNING),
         InteractionStatus::Background => ("background task", theme::MUTED_WARNING),
         InteractionStatus::Pending | InteractionStatus::Idle => ("idle", theme::SUCCESS),
+        InteractionStatus::IdleFailed => ("idle · turn failed", theme::ERROR),
         InteractionStatus::Stopped(tone) => ("stopped", tone.color()),
         InteractionStatus::Error => ("failed", theme::ERROR),
         InteractionStatus::Ended => ("ended", theme::INACTIVE),

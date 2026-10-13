@@ -26,8 +26,14 @@ pub(crate) fn running_indicator(events: usize) -> &'static str {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InteractionStatus {
     Pending,
-    Running { events: usize },
+    Running {
+        events: usize,
+    },
     Idle,
+    /// Idle because its last turn failed: the agent survived and still takes
+    /// messages, but the turn it was given did not get done, so the row must
+    /// not read as an ordinary "your turn" idle.
+    IdleFailed,
     Background,
     Stopped(StopTone),
     Error,
@@ -556,6 +562,14 @@ fn row_item(
             Style::default().fg(theme::INACTIVE),
         ));
     }
+    if matches!(status, InteractionStatus::IdleFailed) {
+        main.push(Span::styled(
+            " · TURN FAILED",
+            Style::default()
+                .fg(theme::ERROR)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if let Some(window) = rate_limited {
         main.push(Span::styled(
             format!(" · RATE LIMITED ({window})"),
@@ -634,6 +648,8 @@ pub(crate) fn status_marker(status: InteractionStatus) -> (&'static str, ratatui
         InteractionStatus::Pending => ("●", theme::INFO),
         InteractionStatus::Running { events } => (running_indicator(events), theme::RUNNING),
         InteractionStatus::Idle => ("●", theme::SUCCESS),
+        // Idle's shape, since it still takes messages, in the error's hue.
+        InteractionStatus::IdleFailed => ("●", theme::ERROR),
         InteractionStatus::Background => ("◎", theme::MUTED_WARNING),
         // Not `#`, which starts the row's tags. In the hue of how it stopped,
         // as its reason is, so the reason reads from the left edge too.
@@ -657,8 +673,12 @@ fn status_background(status: InteractionStatus, selected: bool) -> ratatui::styl
         (InteractionStatus::Background, true) => theme::BACKGROUND_STATUS_HIGHLIGHT,
         (InteractionStatus::Stopped(_), false) => theme::STOPPED_STATUS_BACKGROUND,
         (InteractionStatus::Stopped(_), true) => theme::STOPPED_STATUS_HIGHLIGHT,
-        (InteractionStatus::Error, false) => theme::ERROR_STATUS_BACKGROUND,
-        (InteractionStatus::Error, true) => theme::ERROR_STATUS_HIGHLIGHT,
+        (InteractionStatus::Error | InteractionStatus::IdleFailed, false) => {
+            theme::ERROR_STATUS_BACKGROUND
+        }
+        (InteractionStatus::Error | InteractionStatus::IdleFailed, true) => {
+            theme::ERROR_STATUS_HIGHLIGHT
+        }
         (InteractionStatus::Ended, false) => theme::ENDED_STATUS_BACKGROUND,
         (InteractionStatus::Ended, true) => theme::ENDED_STATUS_HIGHLIGHT,
     }
@@ -978,6 +998,44 @@ mod tests {
             }],
         };
         assert!(rendered(&view).contains("repair checkout · claude · sonnet · paused"));
+    }
+
+    /// A turn that failed leaves the agent idle and taking messages, but the
+    /// row must not read as a turn that got done.
+    #[test]
+    fn an_idle_interaction_says_when_its_turn_failed() {
+        let view = InteractionNavigator {
+            scope: "Payments".into(),
+            all_workspaces: false,
+            completion_filter: "completed hidden".into(),
+            tag_filter: &[],
+            filter: None,
+            typing_filter: false,
+            requested_offset: 0,
+            rows: vec![InteractionRow::Interaction {
+                name: "repair checkout".into(),
+                level: 0,
+                branched_from: None,
+                branches: 0,
+                source_of_selected: false,
+                depth: 0,
+                provider: "claude",
+                model: "sonnet",
+                branch: None,
+                status: InteractionStatus::IdleFailed,
+                selected: false,
+                loading: false,
+                newly_idle: false,
+                stop_reason: None,
+                rate_limited: None,
+                uncommitted: false,
+                completion: CompletionState::Active,
+                tags: &[],
+                last_message: None,
+            }],
+        };
+        assert!(rendered(&view).contains("repair checkout · claude · sonnet · TURN FAILED"));
+        assert_eq!(status_marker(InteractionStatus::IdleFailed).1, theme::ERROR);
     }
 
     /// An interaction idling because a plan window refused it looks exactly

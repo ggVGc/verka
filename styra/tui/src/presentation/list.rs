@@ -93,8 +93,9 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
             quiet: progress.since_event,
             events: progress.events,
         },
-        Status::Idle(_) => styra_ui::event_list::EventListStatus::Idle {
+        Status::Idle(ref why) => styra_ui::event_list::EventListStatus::Idle {
             reason: app.activity.status.reason_label(),
+            failed: matches!(why, crate::activity::IdleReason::Failed { .. }),
         },
         Status::Background => styra_ui::event_list::EventListStatus::Background {
             elapsed: progress.in_status,

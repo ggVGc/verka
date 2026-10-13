@@ -135,6 +135,9 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
     let tone = match app.activity.status {
         Status::Pending => StatusTone::Pending,
         Status::Running => StatusTone::Running,
+        // The agent survived the failure, but the title must not read as an
+        // ordinary idle: the turn it was given did not get done.
+        Status::Idle(crate::activity::IdleReason::Failed { .. }) => StatusTone::Error,
         Status::Idle(_) => StatusTone::Idle,
         Status::Background => StatusTone::Background,
         Status::Stopped(ref why) => StatusTone::Stopped(stop_tone(why)),

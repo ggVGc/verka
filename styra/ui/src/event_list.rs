@@ -80,6 +80,9 @@ pub enum EventListStatus {
     /// screen otherwise.
     Idle {
         reason: Option<String>,
+        /// The turn that left it idle failed, so the line is drawn as an
+        /// error rather than as the green of a turn that got done.
+        failed: bool,
     },
     Background {
         elapsed: Duration,
@@ -855,9 +858,14 @@ fn status_tail(status: &EventListStatus) -> Line<'static> {
         } => (running_tail(*elapsed, *quiet, *events), theme::RUNNING),
         // Idle carries no elapsed figure: nothing is happening, so a
         // climbing counter only draws the eye to a number that means nothing.
-        EventListStatus::Idle { reason } => {
-            (format!("  ── idle{} ──", why(reason)), theme::SUCCESS)
-        }
+        EventListStatus::Idle { reason, failed } => (
+            format!("  ── idle{} ──", why(reason)),
+            if *failed {
+                theme::ERROR
+            } else {
+                theme::SUCCESS
+            },
+        ),
         EventListStatus::Background { elapsed } => (
             format!(
                 "  ── idle {} · background work still running ──",
@@ -2216,7 +2224,10 @@ mod tests {
                 query: None,
                 typing: false,
             },
-            status: EventListStatus::Idle { reason: None },
+            status: EventListStatus::Idle {
+                reason: None,
+                failed: false,
+            },
             queued: &[],
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
@@ -2367,7 +2378,10 @@ mod tests {
             protocol: Protocol::default(),
             links: LinkDisplay::Compact,
             search,
-            status: EventListStatus::Idle { reason: None },
+            status: EventListStatus::Idle {
+                reason: None,
+                failed: false,
+            },
             queued: &[],
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
