@@ -11,14 +11,19 @@ pub(crate) fn view(app: &App) -> OverviewView<'_> {
     let now_ms = super::quota::now_ms();
     let tiles = app
         .overview
-        .indices(&app.interactions)
+        .indices(&app.interactions, app.workspace.id.as_deref())
         .into_iter()
         .map(|index| tile(app, &app.interactions.items[index], now_ms))
         .collect();
     OverviewView {
         tiles,
         running_only: app.overview.running_only,
-        selected: app.overview.selected(&app.interactions, &app.session_id),
+        only_current_workspace: app.interactions.only_current_workspace,
+        selected: app.overview.selected(
+            &app.interactions,
+            &app.session_id,
+            app.workspace.id.as_deref(),
+        ),
         links: super::list::ui_link_display(app.link_display),
         search: app.search.view(),
     }
@@ -106,7 +111,7 @@ fn elapsed(interaction: &InteractionSummary, now_ms: u64) -> Option<String> {
 pub(crate) fn clock_reading(app: &App) -> String {
     let now_ms = super::quota::now_ms();
     app.overview
-        .indices(&app.interactions)
+        .indices(&app.interactions, app.workspace.id.as_deref())
         .into_iter()
         .filter_map(|index| elapsed(&app.interactions.items[index], now_ms))
         .collect::<Vec<_>>()

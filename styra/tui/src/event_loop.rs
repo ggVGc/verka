@@ -1787,7 +1787,11 @@ fn run_rounds(
                 let overview =
                     (app.view == crate::app::View::Overview).then(|| app.overview.clone());
                 let next = if let Some(overview) = &overview {
-                    overview.next_attention_or_live(&app.interactions, &app.session_id)
+                    overview.next_attention_or_live(
+                        &app.interactions,
+                        &app.session_id,
+                        app.workspace.id.as_deref(),
+                    )
                 } else {
                     app.interactions
                         .next_attention_or_live(&app.session_id, app.workspace.id.as_deref())
@@ -1802,7 +1806,7 @@ fn run_rounds(
                     if app.session_id == target_id {
                         if overview.running_only
                             && overview
-                                .indices(&app.interactions)
+                                .indices(&app.interactions, app.workspace.id.as_deref())
                                 .iter()
                                 .all(|index| app.interactions.items[*index].id != app.session_id)
                         {

@@ -1756,6 +1756,7 @@ mod tests {
         app.preview.show();
         app.toggle_link_display();
         app.files.set_scope(true);
+        app.interactions.toggle_workspace_scope();
         app.recent_models = vec!["gpt-5.6-sol".into()];
 
         let mut next = App::new(app.selection.clone(), "session-2");
@@ -1765,6 +1766,7 @@ mod tests {
         assert!(next.preview.open);
         assert_eq!(next.link_display, LinkDisplay::Full);
         assert!(next.files.shows_all());
+        assert!(next.interactions.only_current_workspace);
         assert_eq!(next.recent_models, vec!["gpt-5.6-sol".to_owned()]);
     }
 

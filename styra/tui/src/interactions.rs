@@ -23,6 +23,8 @@ const LOAD_SETTLE: Duration = Duration::from_millis(120);
 #[derive(Clone, Debug, Default)]
 pub struct LiveInteractions {
     pub open: bool,
+    /// Global interaction scope shared by the live list, overview and n/N.
+    /// Carried with operator state when the current interaction changes.
     pub only_current_workspace: bool,
     /// Completed interactions stay in the server's list, but are normally out
     /// of the navigator until the operator asks to see them. Hiding them is
@@ -286,13 +288,21 @@ impl LiveInteractions {
         tags
     }
 
+    fn in_workspace_scope(
+        &self,
+        interaction: &InteractionSummary,
+        workspace_id: Option<&str>,
+    ) -> bool {
+        !self.only_current_workspace
+            || workspace_id.is_some_and(|id| interaction.workspace_id == id)
+    }
+
     pub fn visible_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
         self.items
             .iter()
             .enumerate()
             .filter_map(|(index, interaction)| {
-                ((!self.only_current_workspace
-                    || workspace_id.is_some_and(|id| interaction.workspace_id == id))
+                (self.in_workspace_scope(interaction, workspace_id)
                     && (self.show_completed || !interaction.completed.is_done())
                     && self.matches_filter(interaction))
                 .then_some(index)
@@ -305,19 +315,18 @@ impl LiveInteractions {
     /// operator — working ones first, then idle ones, each grouped by
     /// Workspace as the navigator's All scope is.
     ///
-    /// Unlike [`Self::visible_indices`] this follows none of the navigator's
-    /// settings. The overview is the whole of the work in flight, and a scope
-    /// or filter left over from the list would hide some of it with nothing
-    /// on the grid to say so. Completed ones are left out with the stopped
-    /// ones: completion stops an interaction, and one still taking turns
-    /// after being completed has been signed off on all the same.
-    pub fn overview_indices(&self) -> Vec<usize> {
+    /// Shares the global Workspace scope with the navigator and n/N, while
+    /// ignoring the navigator's search, tag and completion filters. Completed
+    /// and stopped interactions are never tiled.
+    pub fn overview_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
         let active = self
             .items
             .iter()
             .enumerate()
             .filter(|(_, interaction)| {
-                interaction.activity.accepting() && !interaction.completed.is_done()
+                interaction.activity.accepting()
+                    && !interaction.completed.is_done()
+                    && self.in_workspace_scope(interaction, workspace_id)
             })
             .map(|(index, _)| index)
             .collect();
@@ -369,15 +378,9 @@ impl LiveInteractions {
     /// and the `/` filter: each step picks its own candidates, and one it lands
     /// on behind the filter is revealed rather than skipped.
     fn step_order(&self, workspace_id: Option<&str>) -> Vec<usize> {
-        let candidates = if self.only_current_workspace {
-            (0..self.items.len())
-                .filter(|index| {
-                    workspace_id.is_some_and(|id| self.items[*index].workspace_id == id)
-                })
-                .collect()
-        } else {
-            (0..self.items.len()).collect()
-        };
+        let candidates = (0..self.items.len())
+            .filter(|index| self.in_workspace_scope(&self.items[*index], workspace_id))
+            .collect();
         display_tree(&self.items, &self.workspaces, candidates)
             .into_iter()
             .map(|row| row.index)

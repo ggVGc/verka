@@ -732,18 +732,43 @@ pub fn handle_list_key(
 fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
     let current = app.session_id.clone();
     match key {
-        k if OVERVIEW_LEFT.matches(k) => app.overview.left(&app.interactions, &current),
-        k if OVERVIEW_RIGHT.matches(k) => app.overview.right(&app.interactions, &current),
-        k if OVERVIEW_DOWN.matches(k) => app.overview.down(&app.interactions, &current),
-        k if OVERVIEW_UP.matches(k) => app.overview.up(&app.interactions, &current),
-        k if OVERVIEW_NEXT.matches(k) => app.overview.next(&app.interactions, &current),
-        k if OVERVIEW_PREV.matches(k) => app.overview.prev(&app.interactions, &current),
-        k if OVERVIEW_FIRST.matches(k) => app.overview.first(&app.interactions),
-        k if OVERVIEW_LAST.matches(k) => app.overview.last(&app.interactions),
+        k if OVERVIEW_LEFT.matches(k) => {
+            app.overview
+                .left(&app.interactions, &current, app.workspace.id.as_deref())
+        }
+        k if OVERVIEW_RIGHT.matches(k) => {
+            app.overview
+                .right(&app.interactions, &current, app.workspace.id.as_deref())
+        }
+        k if OVERVIEW_DOWN.matches(k) => {
+            app.overview
+                .down(&app.interactions, &current, app.workspace.id.as_deref())
+        }
+        k if OVERVIEW_UP.matches(k) => {
+            app.overview
+                .up(&app.interactions, &current, app.workspace.id.as_deref())
+        }
+        k if OVERVIEW_NEXT.matches(k) => {
+            app.overview
+                .next(&app.interactions, &current, app.workspace.id.as_deref())
+        }
+        k if OVERVIEW_PREV.matches(k) => {
+            app.overview
+                .prev(&app.interactions, &current, app.workspace.id.as_deref())
+        }
+        k if OVERVIEW_FIRST.matches(k) => app
+            .overview
+            .first(&app.interactions, app.workspace.id.as_deref()),
+        k if OVERVIEW_LAST.matches(k) => app
+            .overview
+            .last(&app.interactions, app.workspace.id.as_deref()),
         // Loading another interaction is a server round-trip the event loop
         // makes, as it does for the navigator.
         k if OVERVIEW_OPEN.matches(k) => {
-            match app.overview.selected_id(&app.interactions, &current) {
+            match app
+                .overview
+                .selected_id(&app.interactions, &current, app.workspace.id.as_deref())
+            {
                 Some(id) => {
                     let id = id.to_owned();
                     app.ask(Request::ShowInteraction(id))
@@ -758,7 +783,10 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
         // The message box sends to the interaction on screen, so the tile's
         // has to be made current first — unless it already is.
         k if OVERVIEW_MESSAGE.matches(k) => {
-            match app.overview.selected_id(&app.interactions, &current) {
+            match app
+                .overview
+                .selected_id(&app.interactions, &current, app.workspace.id.as_deref())
+            {
                 Some(id) if id == current => app.enter_input(),
                 Some(id) => {
                     let id = id.to_owned();
@@ -770,6 +798,10 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
                     "no interaction is running or idle"
                 }),
             }
+        }
+        k if OVERVIEW_SCOPE.matches(k) => {
+            app.interactions.toggle_workspace_scope();
+            app.overview.open();
         }
         k if OVERVIEW_RUNNING_ONLY.matches(k) => app.overview.toggle_running_only(),
         k if OVERVIEW_SEARCH.matches(k) => app.search.open(),
@@ -1458,6 +1490,46 @@ mod tests {
         press(&mut app, KeyCode::Char('v'));
         assert_eq!(app.view, View::Events);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overview_scope_key_toggles_the_shared_interaction_scope() {
+        let mut app = crate::app::App::new(
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+            "current",
+        );
+        let mut current = crate::interactions::tests::interaction(
+            "current",
+            styra_protocol::InteractionActivity::Running,
+        );
+        current.workspace_id = "here".into();
+        let mut other = current.clone();
+        other.id = "other".into();
+        other.workspace_id = "elsewhere".into();
+        app.interactions.open(vec![current, other], vec![]);
+        app.workspace.id = Some("here".into());
+        app.view = View::Overview;
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
+        assert!(handle_overview_key(&mut app, key));
+        assert!(app.interactions.only_current_workspace);
+        assert_eq!(app.interactions.visible_indices(Some("here")).len(), 1);
+        assert_eq!(
+            app.overview.indices(&app.interactions, Some("here")).len(),
+            1
+        );
+        assert!(app
+            .interactions
+            .next_active("current", Some("here"))
+            .is_none());
+        // Changing scope in the live list is immediately reflected in the grid.
+        app.interactions.toggle_workspace_scope();
+        assert_eq!(
+            app.overview.indices(&app.interactions, Some("here")).len(),
+            2
+        );
+        assert!(handle_overview_key(&mut app, key));
+        assert!(handle_overview_key(&mut app, key));
+        assert!(!app.interactions.only_current_workspace);
     }
 
     #[test]

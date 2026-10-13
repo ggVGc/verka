@@ -59,6 +59,7 @@ pub struct OverviewMessage<'a> {
 pub struct OverviewView<'a> {
     pub tiles: Vec<OverviewTile<'a>>,
     pub running_only: bool,
+    pub only_current_workspace: bool,
     /// The tile under the cursor, an index into [`Self::tiles`].
     pub selected: usize,
     /// How links in the messages are drawn, as in the event list.
@@ -147,11 +148,16 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
             )
         })
         .count();
+    let scope = if view.only_current_workspace {
+        "current Workspace"
+    } else {
+        "All"
+    };
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT))
         .title(format!(
-            " overview · {running} running · {} idle · r running only: {} · ? keys ",
+            " overview · w scope: {scope} · {running} running · {} idle · r running only: {} · ? keys ",
             view.tiles.len() - running,
             if view.running_only { "on" } else { "off" }
         ));
@@ -528,6 +534,7 @@ mod tests {
         waiting.newly_idle = true;
         let view = OverviewView {
             running_only: false,
+            only_current_workspace: false,
             tiles: vec![working, waiting],
             selected: 0,
             links: LinkDisplay::Compact,
@@ -562,6 +569,7 @@ mod tests {
             .collect();
         let view = OverviewView {
             running_only: false,
+            only_current_workspace: false,
             tiles: vec![talking],
             selected: 0,
             links: LinkDisplay::Compact,
@@ -598,6 +606,7 @@ mod tests {
         ];
         let view = OverviewView {
             running_only: false,
+            only_current_workspace: false,
             tiles: vec![talking],
             selected: 0,
             links: LinkDisplay::Compact,
@@ -620,6 +629,7 @@ mod tests {
     fn a_narrow_screen_stacks_the_tiles_in_one_column() {
         let view = OverviewView {
             running_only: false,
+            only_current_workspace: false,
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
@@ -641,6 +651,7 @@ mod tests {
     fn the_tiles_fill_the_whole_frame() {
         let mut view = OverviewView {
             running_only: false,
+            only_current_workspace: false,
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
@@ -706,6 +717,7 @@ mod tests {
         let names = ["one", "two", "three", "four", "five", "six", "seven"];
         let view = OverviewView {
             running_only: false,
+            only_current_workspace: false,
             tiles: names
                 .iter()
                 .map(|name| tile(name, InteractionStatus::Idle))
@@ -745,6 +757,7 @@ mod tests {
         let names = ["one", "two", "three", "four", "five", "six"];
         let view = OverviewView {
             running_only: false,
+            only_current_workspace: false,
             tiles: names
                 .iter()
                 .map(|name| tile(name, InteractionStatus::Idle))
@@ -780,6 +793,7 @@ mod tests {
                 query: Some("retry"),
                 typing: true,
             },
+            only_current_workspace: false,
         };
         let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
         terminal
@@ -820,6 +834,7 @@ mod tests {
     fn an_empty_fleet_says_so() {
         let view = OverviewView {
             running_only: false,
+            only_current_workspace: false,
             tiles: Vec::new(),
             selected: 0,
             links: LinkDisplay::Compact,
@@ -833,9 +848,27 @@ mod tests {
     }
 
     #[test]
+    fn the_grid_shows_the_shared_workspace_scope() {
+        let mut view = OverviewView {
+            running_only: false,
+            only_current_workspace: true,
+            tiles: Vec::new(),
+            selected: 0,
+            links: LinkDisplay::Compact,
+            search: SearchView::default(),
+        };
+        let (screen, _) = draw(&view, 120, 5);
+        assert!(screen.contains("w scope: current Workspace"), "{screen}");
+        view.only_current_workspace = false;
+        let (screen, _) = draw(&view, 120, 5);
+        assert!(screen.contains("w scope: All"), "{screen}");
+    }
+
+    #[test]
     fn an_empty_running_filter_shows_its_state() {
         let view = OverviewView {
             running_only: true,
+            only_current_workspace: false,
             tiles: Vec::new(),
             selected: 0,
             links: LinkDisplay::Compact,
