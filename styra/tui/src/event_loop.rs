@@ -1,11 +1,13 @@
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::action_menu::{self, ActionMenu};
 use crate::activity::Status;
 use crate::app::{App, Focus, LaunchPolicy, Request, View};
 use crate::audio::AudioInput;
@@ -59,12 +61,34 @@ fn message_paste_active(app: &App) -> bool {
         && app.integration_prompt.is_none()
         && app.branch_prompt.is_none()
         && app.link_menu.is_none()
+        && app.action_menu.is_none()
         && app.insert.is_none()
         && app.git_repository_prompt.is_none()
         && app.launch.prompt.is_none()
         && app.tag_picker.is_none()
         && !app.diff_visible()
         && !app.search.typing()
+}
+
+/// Whether Space opens the action menu: on the list of one of the session's
+/// windows, with nothing modal over it and nothing being typed. A highlighted
+/// link keeps Space for its own menu.
+fn action_menu_available(app: &App) -> bool {
+    app.focus == Focus::List
+        && app.launcher.is_none()
+        && app.template_picker.is_none()
+        && app.integration_prompt.is_none()
+        && app.branch_prompt.is_none()
+        && app.link_menu.is_none()
+        && app.link_highlight.is_none()
+        && app.insert.is_none()
+        && app.git_repository_prompt.is_none()
+        && app.launch.prompt.is_none()
+        && app.tag_picker.is_none()
+        && !app.diff_visible()
+        && !app.search.typing()
+        && !app.interactions.typing_filter()
+        && presentation::current_window(app).has_action_menu()
 }
 
 /// How long a level-meter frame waits for one instead.
@@ -668,6 +692,8 @@ fn run_rounds(
     let launch_effects = LaunchEffects::new(client.clone());
     let mut audio = AudioInput::new();
     let mut pending_fold = false;
+    // Keys the action menu chose, still to be handled as if they were typed.
+    let mut replay: VecDeque<crossterm::event::KeyEvent> = VecDeque::new();
     let mut interactions_refreshed = Instant::now();
     let mut quota_refreshed = Instant::now();
     let mut diff_refreshed = Instant::now();
@@ -972,7 +998,9 @@ fn run_rounds(
             terminal.set_bracketed_paste(paste_active)?;
             bracketed_paste = paste_active;
         }
-        let waited = if audio.is_recording() {
+        let waited = if let Some(key) = replay.pop_front() {
+            Some(Event::Key(key))
+        } else if audio.is_recording() {
             meter_frames(terminal, app, &mut audio)?
         } else {
             terminal.poll_event(KEY_POLL)?
@@ -1047,6 +1075,28 @@ fn run_rounds(
             && (app.focus == Focus::List || app.launcher.is_some() || app.template_picker.is_some())
         {
             app.help.open();
+            continue;
+        }
+
+        // The action menu is typed at, so while it is open it owns every key
+        // but the `?` above. What it runs is pressed back through this loop,
+        // so a command chosen from it takes the same path as its own key.
+        if let Some(menu) = app.action_menu.as_mut() {
+            match menu.handle_key(key) {
+                action_menu::Outcome::Stay => {}
+                action_menu::Outcome::Cancel => app.action_menu = None,
+                action_menu::Outcome::Run(presses) => {
+                    app.action_menu = None;
+                    replay.extend(presses);
+                }
+            }
+            continue;
+        }
+        if keys::GLOBAL_ACTION_MENU.matches(key) && action_menu_available(app) {
+            // A `z` pressed before Space would otherwise swallow the first key
+            // the menu runs.
+            pending_fold = false;
+            app.action_menu = Some(ActionMenu::new(presentation::current_window(app)));
             continue;
         }
 
@@ -2060,6 +2110,28 @@ mod tests {
         app.composer.add_part();
         app.composer.start_choosing();
         assert!(message_paste_active(&app));
+    }
+
+    /// Space is a letter wherever something is being typed and a link's own
+    /// menu while one is highlighted, so the action menu answers it only on a
+    /// window's list.
+    #[test]
+    fn the_action_menu_opens_only_from_a_windows_list() {
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
+        app.focus = Focus::List;
+        assert!(action_menu_available(&app));
+        app.focus = Focus::Input;
+        assert!(!action_menu_available(&app));
+        app.focus = Focus::List;
+        app.search.open();
+        assert!(!action_menu_available(&app));
+        app.search.cancel();
+        app.view = View::CheckoutDiff;
+        assert!(!action_menu_available(&app), "the diff owns the keyboard");
+        app.view = View::Overview;
+        assert!(action_menu_available(&app));
+        app.integration_prompt = Some(String::new());
+        assert!(!action_menu_available(&app));
     }
 
     #[test]

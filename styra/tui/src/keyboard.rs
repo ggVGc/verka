@@ -55,6 +55,11 @@ impl Key {
         }
     }
 
+    /// The keypress this key is, as the terminal would deliver it.
+    pub(crate) fn event(self) -> KeyEvent {
+        KeyEvent::new(self.code, self.modifiers)
+    }
+
     fn matches(self, event: KeyEvent) -> bool {
         let compared = KeyModifiers::CONTROL | KeyModifiers::ALT;
         event.code == self.code && (event.modifiers & compared) == (self.modifiers & compared)
@@ -125,7 +130,16 @@ impl Binding {
 
     /// The keys column of the reference.
     pub(crate) fn label(&self) -> String {
-        let keys = match self.label {
+        let keys = self.keys_label();
+        match self.note {
+            Some(note) => format!("{keys} ({note})"),
+            None => keys,
+        }
+    }
+
+    /// The keys alone, without the situation they are narrowed to.
+    pub(crate) fn keys_label(&self) -> String {
+        match self.label {
             Some(label) => label.to_owned(),
             None => self
                 .keys
@@ -133,11 +147,18 @@ impl Binding {
                 .map(|key| key.label())
                 .collect::<Vec<_>>()
                 .join("/"),
-        };
-        match self.note {
-            Some(note) => format!("{keys} ({note})"),
-            None => keys,
         }
+    }
+
+    pub(crate) const fn note(&self) -> Option<&'static str> {
+        self.note
+    }
+
+    /// The first key that reaches this command, as a keypress: what the action
+    /// menu sends on the operator's behalf. `None` for a binding the event loop
+    /// does not dispatch.
+    pub(crate) fn press(&self) -> Option<KeyEvent> {
+        self.keys.first().map(|key| key.event())
     }
 
     pub(crate) const fn action(&self) -> Action {

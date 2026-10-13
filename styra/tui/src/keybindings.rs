@@ -11,6 +11,8 @@ use crossterm::event::KeyCode;
 
 bindings! { GLOBAL = "Global";
     HELP: [Key::ch('?')] => Action::Help;
+    // A highlighted link keeps Space for its own menu of actions.
+    GLOBAL_ACTION_MENU: [Key::ch(' ')] => Action::GlobalActionMenu;
     GLOBAL_FOCUS_MESSAGE: [Key::ch('i')] => Action::GlobalFocusMessage;
     GLOBAL_LEAVE_MESSAGE: [Key::code(KeyCode::Esc)] => Action::GlobalLeaveMessage;
     GLOBAL_BACK: [Key::code(KeyCode::Esc)] ("other views") => Action::GlobalBack;
@@ -68,7 +70,7 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_FIRST: [Key::ch('g')] => Action::EventsFirst;
     EVENTS_LAST: [Key::ch('G')] => Action::EventsLast;
     EVENTS_LINK_MENU: [Key::ch(' ')] ("link highlighted") => Action::EventsLinkMenu;
-    EVENTS_TOGGLE_EXPAND: [Key::ch(' '), Key::code(KeyCode::Enter), Key::ch('o')]
+    EVENTS_TOGGLE_EXPAND: [Key::code(KeyCode::Enter), Key::ch('o')]
         => Action::EventsToggleExpand;
     EVENTS_EXPAND_ONLY: [Key::ch('O')] => Action::EventsExpandOnly;
     EVENTS_EXPAND_ALL: [Key::ch('R')] as "z R" => Action::EventsExpandAll;
@@ -372,6 +374,22 @@ bindings! { TEMPLATE_PICKER = "Driva templates";
     TEMPLATES_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => Action::TemplatesCancel;
 }
 
+bindings! { ACTION_MENU = "Actions";
+    // Typed at, as the launcher is: letters are the query, and the commands
+    // are on Enter, Esc, the arrows and control chords. `?` stays the
+    // reference: no action's description needs one to be found.
+    ACTION_MENU_FILTER: [] as "any letter" => Action::ActionsFilter;
+    ACTION_MENU_NEXT: [Key::code(KeyCode::Down), Key::ctrl('j'), Key::ctrl('n')]
+        => Action::ActionsNext;
+    ACTION_MENU_PREV: [Key::code(KeyCode::Up), Key::ctrl('k'), Key::ctrl('p')]
+        => Action::ActionsPrev;
+    ACTION_MENU_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::ActionsPageDown;
+    ACTION_MENU_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::ActionsPageUp;
+    ACTION_MENU_DELETE_WORD: [Key::ctrl('w')] => Action::ActionsDeleteWord;
+    ACTION_MENU_RUN: [Key::code(KeyCode::Enter)] => Action::ActionsRun;
+    ACTION_MENU_CANCEL: [Key::code(KeyCode::Esc)] => Action::ActionsCancel;
+}
+
 // Bindings that belong to no window's reference: the prefix of a chord, and
 // the keys of the reference overlay itself, which says how to leave in its own
 // footer rather than in a list of rows.
@@ -411,6 +429,7 @@ pub(crate) enum Window {
     WorktreePicker,
     Launcher,
     TemplatePicker,
+    ActionMenu,
 }
 
 impl Window {
@@ -439,6 +458,7 @@ impl Window {
             Self::WorktreePicker => "worktrees",
             Self::Launcher => "launch",
             Self::TemplatePicker => "Driva templates",
+            Self::ActionMenu => "actions",
         }
     }
 
@@ -466,7 +486,64 @@ impl Window {
             Self::WorktreePicker => &[WORKTREE_PICKER],
             Self::Launcher => &[LAUNCHER],
             Self::TemplatePicker => &[TEMPLATE_PICKER],
+            Self::ActionMenu => &[ACTION_MENU],
         }
+    }
+
+    /// Whether Space offers this window's actions as a menu: the session's
+    /// own views and the navigator over them. The modal overlays and the
+    /// standalone choosers are short lists already, and most of them are
+    /// typed at.
+    pub(crate) fn has_action_menu(self) -> bool {
+        matches!(
+            self,
+            Self::Events
+                | Self::Raw
+                | Self::Log
+                | Self::Quota
+                | Self::Transcript
+                | Self::Driva
+                | Self::Files
+                | Self::Answer
+                | Self::Preview
+                | Self::Overview
+                | Self::Interactions
+        )
+    }
+
+    /// What the action menu offers here: the reference's bindings that a
+    /// keypress reaches from the list, most specific first, each command once.
+    ///
+    /// The message editor's keys are left out — the menu is opened from the
+    /// list, where they mean something else — as is everything on Space, which
+    /// is the menu's own key wherever it can be opened.
+    pub(crate) fn actions(self) -> Vec<&'static Binding> {
+        let mut bindings: Vec<&'static Binding> = Vec::new();
+        for section in self.sections() {
+            if section.first() == MESSAGE_EDITOR.first() {
+                continue;
+            }
+            for row in *section {
+                let ReferenceRow::Binding(binding) = row else {
+                    continue;
+                };
+                if binding.press().is_none()
+                    || matches!(
+                        binding.action(),
+                        Action::GlobalActionMenu
+                            | Action::GlobalLeaveMessage
+                            | Action::EventsLinkMenu
+                    )
+                    || bindings
+                        .iter()
+                        .any(|seen| seen.action() == binding.action())
+                {
+                    continue;
+                }
+                bindings.push(binding);
+            }
+        }
+        bindings
     }
 
     /// This window's reference, in display order, with a blank line between
@@ -489,12 +566,22 @@ impl Window {
     }
 }
 
+/// The keypresses that run `binding`, in order: its first key, after the
+/// prefix of the chord it completes.
+pub(crate) fn presses(binding: &Binding) -> Vec<crossterm::event::KeyEvent> {
+    let prefix = [EVENTS_EXPAND_ALL, EVENTS_COLLAPSE_ALL]
+        .contains(binding)
+        .then(|| EVENTS_FOLD_PREFIX.press())
+        .flatten();
+    prefix.into_iter().chain(binding.press()).collect()
+}
+
 #[cfg(test)]
 mod reference_tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
 
-    const WINDOWS: [Window; 20] = [
+    const WINDOWS: [Window; 21] = [
         Window::Events,
         Window::Raw,
         Window::Log,
@@ -515,6 +602,7 @@ mod reference_tests {
         Window::WorktreePicker,
         Window::Launcher,
         Window::TemplatePicker,
+        Window::ActionMenu,
     ];
 
     /// Every window answers `?` with something, and with its own commands
@@ -597,7 +685,7 @@ mod reference_tests {
         assert_eq!(GLOBAL_FILES_ALIAS.action(), Action::GlobalFiles);
         assert_eq!(EVENTS_SCROLL_DOWN.label(), "J");
         assert_eq!(EVENTS_NEXT_ENTRY.label(), "↓");
-        assert_eq!(EVENTS_TOGGLE_EXPAND.label(), "Space/Enter/o");
+        assert_eq!(EVENTS_TOGGLE_EXPAND.label(), "Enter/o");
         assert_eq!(EDITOR_NEWLINE.label(), "alt-Enter");
         assert_eq!(
             GLOBAL_SESSION_WORKTREE.label(),
@@ -605,6 +693,54 @@ mod reference_tests {
             "a narrower binding says where it applies"
         );
         assert_eq!(EVENTS_EXPAND_ALL.label(), "z R", "a chord names its prefix");
+    }
+
+    /// The menu offers what the window's reference lists, so the operator
+    /// finds the same commands there — but only those a keypress from the list
+    /// reaches, and each command once however many keys it has.
+    #[test]
+    fn the_action_menu_offers_the_windows_dispatchable_commands() {
+        let actions: Vec<Action> = Window::Events
+            .actions()
+            .iter()
+            .map(|binding| binding.action())
+            .collect();
+        assert_eq!(actions.first(), Some(&Action::EventsPreviewScrollDown));
+        assert!(actions.contains(&Action::EventsToggleExpand));
+        assert!(actions.contains(&Action::GlobalQuit));
+        assert!(!actions.contains(&Action::GlobalActionMenu), "not itself");
+        assert!(!actions.contains(&Action::EditorSend), "not the editor's");
+        assert!(!actions.contains(&Action::GlobalLeaveMessage));
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| **action == Action::GlobalFiles)
+                .count(),
+            1,
+            "F and its alias are one command"
+        );
+        assert!(Window::Overview
+            .actions()
+            .iter()
+            .any(|binding| binding.action() == Action::OverviewSearch));
+        assert!(!Window::Launcher.has_action_menu());
+        assert!(!Window::ActionMenu.has_action_menu());
+    }
+
+    /// A chord is run by pressing its prefix first, as the operator would.
+    #[test]
+    fn a_chord_is_run_with_its_prefix() {
+        assert_eq!(
+            presses(&EVENTS_EXPAND_ALL),
+            [
+                KeyEvent::from(KeyCode::Char('z')),
+                KeyEvent::from(KeyCode::Char('R'))
+            ]
+        );
+        assert_eq!(
+            presses(&GLOBAL_LOG),
+            [KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL)]
+        );
     }
 
     /// Control is part of the binding, so ctrl-l is not plain `l`.

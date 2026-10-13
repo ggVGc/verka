@@ -117,6 +117,15 @@ transcript, details, files, answer, preview) stack over the event list, and
 `Esc` in any of them, with no prompt or chooser open, goes straight back to it.
 `q` quits the client without stopping live interactions.
 
+`Space` opens the action menu: every command of the window that is showing —
+the event list, the other views, the overview and the interaction list — in
+one list, each with its current shortcut in parentheses. Type to narrow it
+(the letters are matched fuzzily, so `trv` finds `transcript view`), move with
+the arrows or `Ctrl+J`/`Ctrl+K`, and `Enter` runs the selected action exactly
+as its key would; `Esc` closes the menu. It is not offered while the message
+editor, a prompt or a chooser has the keys, or while a link is highlighted,
+where `Space` keeps its own link menu.
+
 | Key | Use |
 | --- | --- |
 | `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send it in a new Git workspace and branch (later in a Session, as `W` does, then sends; refused while the agent is mid-turn) / insert editor newline |
@@ -308,7 +317,7 @@ interaction ten text lines without changing the selection.
 At the bottom, at least the final five interaction lines remain visible (or
 all of them when the interaction is shorter).
 `g`/`G` jumps first/last, and `Enter` on a `branch` marker opens the linked
-interaction (from either side of a branch). Otherwise, `Space`/`Enter`/`o`
+interaction (from either side of a branch). Otherwise, `Enter`/`o`
 folds the selected event; `O` expands only it, `z R` expands all, `z M`
 collapses all, and `m` hides/shows minor events. With a preview open, side or
 full-screen, `↑`/`↓` scroll it ten lines and `PgUp`/`PgDn` half its height;

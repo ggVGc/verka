@@ -6,6 +6,7 @@ use clap::Parser;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+mod action_menu;
 mod actions;
 mod activity;
 mod answer;

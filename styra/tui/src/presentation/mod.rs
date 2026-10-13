@@ -195,6 +195,9 @@ pub(crate) fn launcher_view(
 /// answer before it does.
 pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
     use crate::keybindings::Window;
+    if app.action_menu.is_some() {
+        return Window::ActionMenu;
+    }
     if app.launcher.is_some() {
         return Window::Launcher;
     }
@@ -637,6 +640,14 @@ fn draw_main(
             insert,
             branch,
             link_menu,
+            action_menu: app
+                .action_menu
+                .as_ref()
+                .map(|menu| styra_ui::overlays::ActionMenuView {
+                    window: menu.window().name(),
+                    rows: menu.rows(),
+                    list: &menu.list,
+                }),
             tags,
             busy: app
                 .busy

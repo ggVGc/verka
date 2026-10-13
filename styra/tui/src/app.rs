@@ -297,6 +297,8 @@ pub struct App {
     pub link_highlight: Option<LinkHighlight>,
     /// The actions offered on the highlighted link, while that menu is open.
     pub link_menu: Option<LinkMenu>,
+    /// The current window's actions, searchable, while Space has them open.
+    pub action_menu: Option<crate::action_menu::ActionMenu>,
     /// The modal choice of how the selected entry seeds a new Session.
     pub branch_prompt: Option<BranchPrompt>,
     /// The linked Session's log, while the preview is on a `branch` marker;
@@ -528,6 +530,7 @@ impl App {
             answer: AnswerView::default(),
             link_highlight: None,
             link_menu: None,
+            action_menu: None,
             branch_prompt: None,
             branch_log: None,
             recording: None,

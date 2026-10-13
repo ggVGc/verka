@@ -1,4 +1,4 @@
-use crate::fuzzy_list::{marked, FuzzyList};
+use crate::fuzzy_list::{marked, render_fuzzy_list, FuzzyList, FuzzyListView};
 use crate::text_prompt::{self, TextPrompt};
 use crate::theme;
 use ratatui::layout::Rect;
@@ -150,6 +150,49 @@ pub fn render_link_menu(frame: &mut Frame, menu: LinkMenuView<'_>, frame_area: R
     let mut state = ListState::default();
     state.select(Some(menu.selected));
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+#[derive(Clone, Copy)]
+pub struct ActionMenuView<'a> {
+    /// The window whose actions these are, which the menu covers.
+    pub window: &'a str,
+    /// Each action with its keys, in the order the reference lists them.
+    pub rows: &'a [String],
+    pub list: &'a FuzzyList,
+}
+
+/// How tall the action list may grow before it scrolls to its cursor; a
+/// window's reference is longer than a short terminal.
+const ACTION_MENU_ROWS: u16 = 16;
+
+pub fn render_action_menu(frame: &mut Frame, menu: ActionMenuView<'_>, frame_area: Rect) {
+    // Sized to every action rather than the matches, so the box does not
+    // jump about as the query narrows it.
+    let height = (menu.rows.len() as u16)
+        .min(ACTION_MENU_ROWS)
+        .saturating_add(2)
+        .max(4)
+        .min(frame_area.height);
+    let width = frame_area.width.saturating_sub(4).min(88);
+    let area = Rect {
+        x: frame_area.x + frame_area.width.saturating_sub(width) / 2,
+        y: frame_area.y + frame_area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, area);
+    render_fuzzy_list(
+        frame,
+        &FuzzyListView {
+            title: &format!(" {} actions ", menu.window),
+            rows: menu.rows,
+            list: menu.list,
+            focused: true,
+            empty_note: "no actions here",
+            hint: " type to narrow · Enter runs · Esc closes ",
+        },
+        area,
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -466,6 +509,40 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn action_menu_names_its_window_and_narrows_to_the_query() {
+        let rows = vec!["quit (q)".to_owned(), "log view (ctrl-l)".to_owned()];
+        let mut list = FuzzyList::at(&rows, 0);
+        for character in "log".chars() {
+            list.push(character);
+        }
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_action_menu(
+                    frame,
+                    ActionMenuView {
+                        window: "events",
+                        rows: &rows,
+                        list: &list,
+                    },
+                    frame.area(),
+                )
+            })
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains("events actions"), "{screen}");
+        assert!(screen.contains("log view (ctrl-l)"), "{screen}");
+        assert!(!screen.contains("quit (q)"), "{screen}");
+        assert!(screen.contains("/log"), "the query is shown: {screen}");
     }
 
     #[test]
