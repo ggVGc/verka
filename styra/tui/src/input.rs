@@ -39,7 +39,7 @@ pub fn handle_search_key(app: &mut App, key: KeyEvent) {
 
 pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
     match key.code {
-        KeyCode::Esc => app.integration_prompt = None,
+        KeyCode::Esc => app.close_integration_prompt(),
         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.ask(Request::GenerateIntegrationMessage)
         }
@@ -332,7 +332,7 @@ pub fn handle_list_key(
             return app.ask(Request::Rebase);
         }
         k if GLOBAL_INTEGRATE.matches(k) && !app.session_id.is_empty() => {
-            app.integration_prompt = Some(String::new());
+            app.open_integration_prompt();
             return;
         }
         k if GLOBAL_SHELL.matches(k) => {
@@ -1066,6 +1066,32 @@ mod tests {
     use styra_protocol::{
         AttributedMount, DrivaOptions, LaunchMount, Mount, MountAccess, MountOrigin,
     };
+
+    #[test]
+    fn integration_message_defaults_to_the_name_and_keeps_edits_on_escape() {
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
+            "session-1",
+        );
+        app.interactions
+            .note_name("session-1", Some("Fix integration".into()));
+        app.open_integration_prompt();
+        assert_eq!(app.integration_prompt.as_deref(), Some("Fix integration"));
+        handle_integration_prompt_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE),
+        );
+        handle_integration_prompt_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.integration_prompt.is_none());
+        app.open_integration_prompt();
+        assert_eq!(app.integration_prompt.as_deref(), Some("Fix integration!"));
+
+        // Clearing the default is also an intentional draft.
+        app.integration_prompt = Some(String::new());
+        handle_integration_prompt_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.open_integration_prompt();
+        assert_eq!(app.integration_prompt.as_deref(), Some(""));
+    }
 
     #[test]
     fn ctrl_w_deletes_the_previous_integration_message_word() {

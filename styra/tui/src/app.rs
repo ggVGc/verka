@@ -228,6 +228,8 @@ pub struct App {
     /// details view. An empty value deliberately clears the association.
     pub git_repository_prompt: Option<String>,
     pub integration_prompt: Option<String>,
+    /// Commit-message drafts kept in this client, keyed by interaction.
+    integration_drafts: std::collections::HashMap<String, String>,
     pub rebase_status: Option<styra_protocol::RebaseStatus>,
     pub pending_rebase: Option<String>,
     pub pending_integration: Option<String>,
@@ -451,6 +453,7 @@ pub enum Request {
 #[derive(Default)]
 pub struct OperatorState {
     interactions: LiveInteractions,
+    integration_drafts: std::collections::HashMap<String, String>,
     /// The event list's own filter, which is a display choice like the rest;
     /// a caller that wants a different one sets it after adopting.
     all_events: bool,
@@ -501,6 +504,7 @@ impl App {
             workspace: Location::default(),
             git_repository_prompt: None,
             integration_prompt: None,
+            integration_drafts: std::collections::HashMap::new(),
             rebase_status: None,
             pending_rebase: None,
             pending_integration: None,
@@ -554,8 +558,10 @@ impl App {
     /// straight afterwards, so what is left behind is the Interaction's own
     /// state, which the replacement rebuilds from the server.
     pub fn take_operator_state(&mut self) -> OperatorState {
+        self.close_integration_prompt();
         OperatorState {
             interactions: std::mem::take(&mut self.interactions),
+            integration_drafts: std::mem::take(&mut self.integration_drafts),
             all_events: self.timeline.all_events,
             preview: self.preview.choices(),
             link_display: self.link_display,
@@ -575,6 +581,7 @@ impl App {
         let mut interactions = state.interactions;
         interactions.adopt_names_from(&self.interactions);
         self.interactions = interactions;
+        self.integration_drafts = state.integration_drafts;
         self.timeline.all_events = state.all_events;
         self.preview.adopt(state.preview);
         self.link_display = state.link_display;
@@ -582,6 +589,27 @@ impl App {
         self.outbox.set_contract(state.contract);
         self.files.set_scope(state.file_show_all);
         self.quota = state.quota;
+    }
+
+    pub fn open_integration_prompt(&mut self) {
+        self.integration_prompt = Some(
+            self.integration_drafts
+                .get(&self.session_id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    self.interactions
+                        .name(&self.session_id)
+                        .unwrap_or_default()
+                        .to_owned()
+                }),
+        );
+    }
+
+    pub fn close_integration_prompt(&mut self) {
+        if let Some(message) = self.integration_prompt.take() {
+            self.integration_drafts
+                .insert(self.session_id.clone(), message);
+        }
     }
 
     /// Point this screen at `workspace`: which one it is, what to call it,
@@ -1706,6 +1734,37 @@ mod tests {
         assert_eq!(next.link_display, LinkDisplay::Full);
         assert!(next.files.shows_all());
         assert_eq!(next.recent_models, vec!["gpt-5.6-sol".to_owned()]);
+    }
+
+    #[test]
+    fn integration_drafts_follow_their_interaction_across_screen_switches() {
+        let mut first = app();
+        first.integration_prompt = Some("First draft\nwith details".into());
+
+        let mut second = App::new(first.selection.clone(), "session-2");
+        second
+            .interactions
+            .note_name("session-2", Some("Second interaction".into()));
+        second.adopt(first.take_operator_state());
+        assert!(second.integration_prompt.is_none());
+        second.open_integration_prompt();
+        assert_eq!(
+            second.integration_prompt.as_deref(),
+            Some("Second interaction")
+        );
+        second.integration_prompt = Some("Second draft".into());
+        second.close_integration_prompt();
+
+        first.adopt(second.take_operator_state());
+        first.open_integration_prompt();
+        assert_eq!(
+            first.integration_prompt.as_deref(),
+            Some("First draft\nwith details")
+        );
+
+        second.adopt(first.take_operator_state());
+        second.open_integration_prompt();
+        assert_eq!(second.integration_prompt.as_deref(), Some("Second draft"));
     }
 
     /// The log is partly the server's, replayed with the rest of an

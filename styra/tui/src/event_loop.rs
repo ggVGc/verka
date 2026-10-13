@@ -1107,7 +1107,7 @@ fn run_rounds(
                     }
                     Request::Integrate(message) => match client.integrate_session(&id, &message) {
                         Ok(()) => {
-                            app.integration_prompt = None;
+                            app.close_integration_prompt();
                             app.pending_integration = Some(id.clone());
                             app.show_action_message(
                                 "integration started — progress appears in the interaction log",
