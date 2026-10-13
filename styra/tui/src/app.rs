@@ -600,10 +600,11 @@ impl App {
                 .get(&self.session_id)
                 .cloned()
                 .unwrap_or_else(|| {
-                    self.interactions
-                        .name(&self.session_id)
-                        .unwrap_or_default()
-                        .to_owned()
+                    let name = self.interactions.name(&self.session_id).unwrap_or_default();
+                    match self.workspace.name.as_deref() {
+                        Some(workspace) => format!("{workspace}: {name}"),
+                        None => name.to_owned(),
+                    }
                 }),
         );
     }
@@ -1776,6 +1777,7 @@ mod tests {
         first.integration_prompt = Some("First draft\nwith details".into());
 
         let mut second = App::new(first.selection.clone(), "session-2");
+        second.workspace.name = Some("payments".into());
         second
             .interactions
             .note_name("session-2", Some("Second interaction".into()));
@@ -1784,7 +1786,7 @@ mod tests {
         second.open_integration_prompt();
         assert_eq!(
             second.integration_prompt.as_deref(),
-            Some("Second interaction")
+            Some("payments: Second interaction")
         );
         second.integration_prompt = Some("Second draft".into());
         second.close_integration_prompt();
