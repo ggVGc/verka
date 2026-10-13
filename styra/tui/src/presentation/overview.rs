@@ -20,6 +20,7 @@ pub(crate) fn view(app: &App) -> OverviewView<'_> {
         running_only: app.overview.running_only,
         selected: app.overview.selected(&app.interactions, &app.session_id),
         links: super::list::ui_link_display(app.link_display),
+        search: app.search.view(),
     }
 }
 

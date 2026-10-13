@@ -13,7 +13,7 @@
 //! ends.
 
 use crate::theme;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 /// How much has to be typed before anything is highlighted.
@@ -103,6 +103,32 @@ impl<'a> SearchView<'a> {
 pub fn term(query: &str) -> Option<&str> {
     let query = query.trim();
     (query.chars().count() >= MIN_TERM).then_some(query)
+}
+
+/// The `/` search, shown along the bottom of the view it is marking.
+///
+/// It says how much is still missing while the term is too short, so a search
+/// that highlights nothing yet does not look like a search that found nothing.
+pub fn prompt(search: &SearchView<'_>) -> Option<Line<'static>> {
+    let query = search.query?;
+    let mut text = format!(" /{query}");
+    if search.typing {
+        text.push('▌');
+    }
+    let missing = MIN_TERM.saturating_sub(query.trim().chars().count());
+    if missing > 0 {
+        text.push_str(&format!(
+            " · {missing} more character{}",
+            if missing == 1 { "" } else { "s" }
+        ));
+    }
+    text.push(' ');
+    Some(Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(theme::ACCENT)
+            .add_modifier(Modifier::BOLD),
+    )))
 }
 
 /// The mark drawn over a matching word.

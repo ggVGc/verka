@@ -301,7 +301,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     if view.uncommitted_changes {
         block = crate::chrome::uncommitted_title(block);
     }
-    if let Some(search) = search_title(&view.search) {
+    if let Some(search) = search::prompt(&view.search) {
         block = block.title_bottom(search);
     }
 
@@ -2044,32 +2044,6 @@ pub fn detail_lines_with_links(
         }
     }
     lines
-}
-
-/// The `/` search, shown along the bottom of the list it is marking.
-///
-/// It says how much is still missing while the term is too short, so a search
-/// that highlights nothing yet does not look like a search that found nothing.
-fn search_title(search: &SearchView<'_>) -> Option<Line<'static>> {
-    let query = search.query?;
-    let mut text = format!(" /{query}");
-    if search.typing {
-        text.push('▌');
-    }
-    let missing = search::MIN_TERM.saturating_sub(query.trim().chars().count());
-    if missing > 0 {
-        text.push_str(&format!(
-            " · {missing} more character{}",
-            if missing == 1 { "" } else { "s" }
-        ));
-    }
-    text.push(' ');
-    Some(Line::from(Span::styled(
-        text,
-        Style::default()
-            .fg(theme::ACCENT)
-            .add_modifier(Modifier::BOLD),
-    )))
 }
 
 /// `running/idle/stopped`, each number in its own colour and nothing else:

@@ -203,6 +203,10 @@ the ends, `g`/`G` jump to the first and last, and `Enter` opens the selected
 interaction in the event list. `n` makes the next newly idle interaction current,
 or the next live interaction when none is newly idle, while staying in the grid.
 It starts from the selected tile and reveals idle work hidden by `r`.
+`/` searches the grid as it does the event list: once three characters are
+typed, every matching word in every tile is marked — names, Workspaces,
+branches, tags and messages. `Esc` clears a standing search before it leaves
+the grid.
 `i` opens the message box for the selected
 interaction, as it does on the event list, while the grid stays up behind it;
 after sending or `Esc` you are back on the grid. `v` or `Esc` goes back without switching.

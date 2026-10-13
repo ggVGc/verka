@@ -183,6 +183,7 @@ pub(crate) enum Action {
     OverviewOpen,
     OverviewMessage,
     OverviewRunningOnly,
+    OverviewSearch,
     OverviewClose,
     BranchNext,
     BranchPrev,
@@ -477,6 +478,9 @@ impl Action {
             Self::OverviewOpen => "open the selected interaction",
             Self::OverviewMessage => "message the selected interaction",
             Self::OverviewRunningOnly => "toggle currently running only",
+            Self::OverviewSearch => {
+                "search: mark words matching a term of 3+ characters in every tile (Esc clears)"
+            }
             Self::OverviewClose => "return to the event list",
             Self::BranchNext => "entire interaction through this entry",
             Self::BranchPrev => "only this entry",

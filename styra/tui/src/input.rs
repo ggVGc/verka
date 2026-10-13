@@ -772,6 +772,10 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
             }
         }
         k if OVERVIEW_RUNNING_ONLY.matches(k) => app.overview.toggle_running_only(),
+        k if OVERVIEW_SEARCH.matches(k) => app.search.open(),
+        // As in the event list, Esc clears a standing search before it
+        // leaves the grid.
+        k if k.code == KeyCode::Esc && app.search.query().is_some() => app.search.cancel(),
         k if OVERVIEW_CLOSE.matches(k) => app.view = View::Events,
         _ => return false,
     }
@@ -1436,6 +1440,20 @@ mod tests {
         );
         press(&mut app, KeyCode::Char('r'));
         assert!(!app.overview.running_only);
+
+        // `/` opens the search over the grid; the event loop then hands the
+        // typed keys to the prompt. Esc clears a standing term before a
+        // second one leaves the grid.
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.search.typing());
+        for character in "retry".chars() {
+            handle_search_key(&mut app, KeyEvent::from(KeyCode::Char(character)));
+        }
+        handle_search_key(&mut app, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.search.query(), Some("retry"));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.search.query(), None);
+        assert_eq!(app.view, View::Overview);
 
         press(&mut app, KeyCode::Char('v'));
         assert_eq!(app.view, View::Events);

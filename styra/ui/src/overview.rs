@@ -4,6 +4,7 @@
 use crate::event_list::message_rows;
 use crate::interactions::{status_marker, InteractionStatus};
 use crate::markdown::LinkDisplay;
+use crate::search::{self, SearchView};
 use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -61,6 +62,9 @@ pub struct OverviewView<'a> {
     pub selected: usize,
     /// How links in the messages are drawn, as in the event list.
     pub links: LinkDisplay,
+    /// The `/` search, marking matching words across every tile as it marks
+    /// them in the event list. See [`crate::search`].
+    pub search: SearchView<'a>,
 }
 
 /// How the grid was laid out, which the application needs to move the cursor
@@ -142,7 +146,7 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
             )
         })
         .count();
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT))
         .title(format!(
@@ -150,6 +154,9 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
             view.tiles.len() - running,
             if view.running_only { "on" } else { "off" }
         ));
+    if let Some(prompt) = search::prompt(&view.search) {
+        block = block.title_bottom(prompt);
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if view.tiles.is_empty() {
@@ -195,6 +202,7 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
                 index == selected,
                 tile_area,
                 view.links,
+                view.search.term(),
             );
         }
         start += length;
@@ -208,6 +216,7 @@ fn render_tile(
     selected: bool,
     area: Rect,
     links: LinkDisplay,
+    search: Option<&str>,
 ) {
     let (marker, marker_color) = status_marker(tile.status);
     let running = matches!(tile.status, InteractionStatus::Running { .. });
@@ -264,7 +273,7 @@ fn render_tile(
             BorderType::Rounded
         })
         .border_style(Style::default().fg(border_color))
-        .title(Line::from(title));
+        .title(search::highlight_lines(vec![Line::from(title)], search).remove(0));
     if tile.current {
         block = block.title(
             Line::from(Span::styled(
@@ -301,6 +310,7 @@ fn render_tile(
             Style::default().fg(theme::INTERACTION_TAG),
         )));
     }
+    let lines = search::highlight_lines(lines, search);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let description = Paragraph::new(lines).wrap(Wrap { trim: true });
@@ -330,7 +340,7 @@ fn render_tile(
             break;
         }
         used += rows.len();
-        shown.push(rows);
+        shown.push(search::highlight_lines(rows, search));
     }
     let shown = shown.into_iter().rev().flatten().collect::<Vec<_>>();
     frame.render_widget(
@@ -486,6 +496,7 @@ mod tests {
                             selected,
                             frame.area(),
                             LinkDisplay::Compact,
+                            None,
                         )
                     })
                     .unwrap();
@@ -515,6 +526,7 @@ mod tests {
             tiles: vec![working, waiting],
             selected: 0,
             links: LinkDisplay::Compact,
+            search: SearchView::default(),
         };
         let (screen, feedback) = draw(&view, 100, 14);
 
@@ -548,6 +560,7 @@ mod tests {
             tiles: vec![talking],
             selected: 0,
             links: LinkDisplay::Compact,
+            search: SearchView::default(),
         };
         // Three description lines and three of messages inside the borders.
         let (screen, _) = draw(&view, 40, 10);
@@ -583,6 +596,7 @@ mod tests {
             tiles: vec![talking],
             selected: 0,
             links: LinkDisplay::Compact,
+            search: SearchView::default(),
         };
         let (screen, _) = draw(&view, 50, 14);
         assert!(
@@ -607,6 +621,7 @@ mod tests {
             ],
             selected: 0,
             links: LinkDisplay::Compact,
+            search: SearchView::default(),
         };
         let (screen, feedback) = draw(&view, 50, 20);
         assert_eq!(feedback.rows, vec![1, 1], "{screen}");
@@ -630,6 +645,7 @@ mod tests {
             // thick then.
             selected: 0,
             links: LinkDisplay::Compact,
+            search: SearchView::default(),
         };
         let (screen, feedback) = draw(&view, 151, 31);
         assert_eq!(feedback.rows, vec![2, 1], "{screen}");
@@ -691,6 +707,7 @@ mod tests {
                 .collect(),
             selected: 0,
             links: LinkDisplay::Compact,
+            search: SearchView::default(),
         };
         let (screen, feedback) = draw(&view, 150, 30);
         assert_eq!(feedback.rows, vec![3, 2, 2], "{screen}");
@@ -729,11 +746,69 @@ mod tests {
                 .collect(),
             selected: 5,
             links: LinkDisplay::Compact,
+            search: SearchView::default(),
         };
         // One column, two seven-row tiles high.
         let (screen, _) = draw(&view, 40, 16);
         assert!(screen.contains("six"), "{screen}");
         assert!(!screen.contains("one"), "{screen}");
+    }
+
+    /// A search marks matching words across every tile — names, places and
+    /// messages alike — and shows its prompt along the bottom of the grid.
+    #[test]
+    fn a_search_marks_matches_in_every_tile() {
+        let mut fixing = tile("fix retry_backoff", InteractionStatus::Idle);
+        fixing.messages = vec![OverviewMessage {
+            from_operator: false,
+            text: "Moved it to src/retry.rs",
+            contract: None,
+        }];
+        let mut other = tile("write the docs", InteractionStatus::Idle);
+        other.branch = Some("styra/retry-docs");
+        let view = OverviewView {
+            running_only: false,
+            tiles: vec![fixing, other],
+            selected: 0,
+            links: LinkDisplay::Compact,
+            search: SearchView {
+                query: Some("retry"),
+                typing: true,
+            },
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(frame, &view, frame.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut marked = Vec::new();
+        for y in 0..14 {
+            let mut word = String::new();
+            for x in 0..100 {
+                let cell = &buffer[(x, y)];
+                if cell.bg == theme::ACCENT {
+                    word.push_str(cell.symbol());
+                } else if !word.is_empty() {
+                    marked.push(std::mem::take(&mut word));
+                }
+            }
+            if !word.is_empty() {
+                marked.push(word);
+            }
+        }
+        assert!(marked.contains(&"retry_backoff".to_owned()), "{marked:?}");
+        assert!(marked.contains(&"src/retry.rs".to_owned()), "{marked:?}");
+        assert!(
+            marked.contains(&"styra/retry-docs".to_owned()),
+            "{marked:?}"
+        );
+        assert!(!marked
+            .iter()
+            .any(|word| word.contains("docs") && !word.contains("retry")));
+        let (screen, _) = draw(&view, 100, 14);
+        assert!(screen.contains("/retry▌"), "{screen}");
     }
 
     #[test]
@@ -743,6 +818,7 @@ mod tests {
             tiles: Vec::new(),
             selected: 0,
             links: LinkDisplay::Compact,
+            search: SearchView::default(),
         };
         let (screen, _) = draw(&view, 60, 5);
         assert!(
@@ -758,6 +834,7 @@ mod tests {
             tiles: Vec::new(),
             selected: 0,
             links: LinkDisplay::Compact,
+            search: SearchView::default(),
         };
         let (screen, feedback) = draw(&view, 100, 5);
         assert!(screen.contains("r running only: on"), "{screen}");
