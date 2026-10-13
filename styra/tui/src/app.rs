@@ -22,7 +22,7 @@ use styra_protocol::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 use styra_ui::scroll::Scroll;
 use styra_ui::search::Search;
 
-use crate::activity::{Activity, RateLimit, Status};
+use crate::activity::{Activity, RateLimit, Status, StopReason};
 use crate::answer::AnswerView;
 use crate::audio::Recorded;
 use crate::branch::BranchPrompt;
@@ -984,6 +984,35 @@ impl App {
     /// Record that the session ended; see [`ingest::on_ended`].
     pub fn on_ended(&mut self, end: InteractionEnd) {
         ingest::on_ended(self, end);
+    }
+
+    /// Read integration off the listing into the status of the interaction
+    /// on screen, once its agent is gone. Integration stops the agent itself,
+    /// so the update stream only says the process went; what the operator
+    /// wants to read is that the work landed. Returns whether the status
+    /// changed.
+    pub fn adopt_integration(&mut self) -> bool {
+        if !matches!(
+            self.activity.status,
+            Status::Stopped(_) | Status::Ended { .. }
+        ) {
+            return false;
+        }
+        let Some(reason) = self
+            .interactions
+            .current(&self.session_id)
+            .and_then(|interaction| {
+                StopReason::integrated(interaction.completed, interaction.integration.as_ref())
+            })
+        else {
+            return false;
+        };
+        let status = Status::Stopped(reason);
+        if self.activity.status == status {
+            return false;
+        }
+        self.activity.status = status;
+        true
     }
 
     /// Put the selection on the last entry, where following leaves it, and

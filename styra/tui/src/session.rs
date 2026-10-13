@@ -1153,6 +1153,7 @@ mod tests {
             origin: None,
             branched_from: None,
             completed: CompletionState::Active,
+            integration: None,
         }
     }
 

@@ -809,6 +809,7 @@ mod tests {
             origin: None,
             branched_from: None,
             completed: styra_protocol::CompletionState::Active,
+            integration: None,
         }
     }
 
@@ -1262,6 +1263,7 @@ mod tests {
             completed: styra_protocol::CompletionState::Active,
             focus_requested: false,
             origin: None,
+            integration: None,
             restored: false,
         }
     }

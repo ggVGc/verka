@@ -20,6 +20,19 @@ pub struct IntegrationResult {
     pub message: String,
 }
 
+/// Where integration landed a Session's work: the squash commit it made on
+/// the branch the Session's own branch was made from — see
+/// [`crate::protocol::Request::IntegrateSession`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Integration {
+    /// The branch the commit landed on. `None` for an integration recorded
+    /// before the branch was, whose Session no longer says where it came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The squash commit.
+    pub commit: String,
+}
+
 /// Progress and final outcome of a standalone interaction rebase.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RebaseStatus {
@@ -1051,6 +1064,11 @@ pub struct InteractionSummary {
     /// it on, not anything a client does to this summary.
     #[serde(default)]
     pub completed: CompletionState,
+    /// Whether integration has landed the Session's work — see
+    /// [`SessionSummary::integration`], which this projects onto the
+    /// interaction as [`Self::completed`] does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration: Option<Integration>,
     /// True when this interaction was created with
     /// [`crate::protocol::CreateSession::focus`]. A client showing another
     /// interaction in the same Workspace switches to this one when it first
@@ -1195,6 +1213,15 @@ pub struct SessionSummary {
     /// cleared this way because it can no longer be resumed at all.
     #[serde(default)]
     pub completed: CompletionState,
+    /// Set once integration has committed this Session's work to the branch
+    /// it came from — see [`Integration`]. Integration then cleans up after
+    /// it and seals it, so an integrated Session that is not
+    /// [`CompletionState::Sealed`] is one whose cleanup failed or was cut
+    /// short, and retrying integration finishes the job. Integration is what
+    /// a sealed Session was sealed by when this is set; a Session sealed
+    /// without it was sealed for some other reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration: Option<Integration>,
 }
 
 /// An operator message persisted but not yet sent.

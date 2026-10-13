@@ -87,6 +87,10 @@ pub const STOP_COMPLETED: Color = palette::GREEN;
 pub const STOP_ABANDONED: Color = palette::SLATE;
 /// Finished for good.
 pub const STOP_SEALED: Color = palette::DEEP_GREEN;
+/// Integration landed its work and cleaned up after it.
+pub const STOP_INTEGRATED: Color = palette::SEA_GREEN;
+/// Integration landed its work, but not the cleanup after it.
+pub const STOP_INTEGRATION_PENDING: Color = palette::GOLD;
 /// A plan window refused the work.
 pub const STOP_RATE_LIMITED: Color = palette::AMBER_ORANGE;
 /// The last turn failed.

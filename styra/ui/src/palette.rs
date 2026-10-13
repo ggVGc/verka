@@ -64,6 +64,8 @@ pub const GREEN: Color = Color::Rgb(135, 200, 140);
 pub const SLATE: Color = Color::Rgb(140, 155, 185);
 /// The completed green a step deeper.
 pub const DEEP_GREEN: Color = Color::Rgb(95, 165, 110);
+/// A sea green, the finished greens with the work carried somewhere else.
+pub const SEA_GREEN: Color = Color::Rgb(110, 195, 175);
 /// An amber orange, waiting rather than broken.
 pub const AMBER_ORANGE: Color = Color::Rgb(230, 145, 80);
 /// A mauve, the one hue in the palette that says "not anything the agent

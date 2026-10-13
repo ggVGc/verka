@@ -798,6 +798,9 @@ impl ManagedInteraction {
             events: self.events.load(Ordering::Acquire),
             completed: *self.completed.lock().expect("completion lock poisoned"),
             focus_requested: self.focus_requested,
+            integration: stored
+                .as_ref()
+                .and_then(|summary| summary.integration.clone()),
             origin: stored.and_then(|summary| summary.origin),
             restored: false,
         }
@@ -3099,6 +3102,7 @@ impl ServerState {
             auto_commit,
             events: 0,
             completed: branched.completed,
+            integration: branched.integration.clone(),
             focus_requested: false,
             origin: branched.origin.clone(),
             restored: false,
@@ -6162,6 +6166,7 @@ mod tests {
                 completed: CompletionState::Active,
                 focus_requested: false,
                 origin: None,
+                integration: None,
                 restored: false,
             },
         )]);
@@ -7612,6 +7617,7 @@ mod tests {
                 completed: CompletionState::Active,
                 focus_requested: false,
                 origin: None,
+                integration: None,
                 restored: false,
             },
         )]);

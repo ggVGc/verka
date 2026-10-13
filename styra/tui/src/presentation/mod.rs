@@ -116,6 +116,8 @@ pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrom
         StopReason::Completed => StopTone::Completed,
         StopReason::Abandoned => StopTone::Abandoned,
         StopReason::Sealed => StopTone::Sealed,
+        StopReason::Integrated { sealed: true, .. } => StopTone::Integrated,
+        StopReason::Integrated { sealed: false, .. } => StopTone::IntegrationPending,
         StopReason::RateLimited(_) => StopTone::RateLimited,
         StopReason::Failed { .. } => StopTone::Failed,
         StopReason::Exited { .. } => StopTone::Exited,
@@ -909,6 +911,7 @@ mod tests {
             completed: styra_protocol::CompletionState::Active,
             focus_requested: false,
             origin: None,
+            integration: None,
             restored: false,
         }
     }
@@ -991,6 +994,31 @@ mod tests {
             crate::activity::Status::Stopped(crate::activity::StopReason::Abandoned);
         let title = rendered(&app);
         assert!(title.contains("abandoned"), "{title}");
+    }
+
+    /// Integration stops the agent itself, so the update stream only says the
+    /// process ended. The listing is what says the work landed, and the header
+    /// reads it from there.
+    #[test]
+    fn header_names_integration_once_the_agent_is_gone() {
+        let mut app = test_support::app("s1");
+        let mut interaction = interaction_with_checkout("s1", None);
+        interaction.integration = Some(styra_protocol::Integration {
+            branch: Some("main".into()),
+            commit: "0123456789abcdef".into(),
+        });
+        interaction.completed = styra_protocol::CompletionState::Sealed;
+        app.interactions.items.push(interaction);
+        app.activity.status = crate::activity::Status::ended(Some(0), None);
+
+        assert!(app.adopt_integration());
+        let title = rendered(&app);
+        assert!(title.contains("integrated into main · 0123456"), "{title}");
+        assert!(!title.contains("ended"), "{title}");
+        assert!(
+            !app.adopt_integration(),
+            "the second reading changes nothing"
+        );
     }
 
     #[test]

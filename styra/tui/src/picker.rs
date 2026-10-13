@@ -1186,6 +1186,7 @@ mod tests {
             origin: None,
             branched_from: None,
             completed: CompletionState::Active,
+            integration: None,
         }
     }
 
@@ -1221,6 +1222,7 @@ mod tests {
             completed: CompletionState::Active,
             focus_requested: false,
             origin: None,
+            integration: None,
             restored: false,
         }
     }

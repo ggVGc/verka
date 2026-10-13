@@ -1,6 +1,7 @@
 //! The overview: every active interaction laid out as a tile in a grid, so
 //! the whole fleet can be watched at once instead of one row at a time.
 
+use crate::chrome::StopTone;
 use crate::event_list::message_rows;
 use crate::interactions::{status_marker, InteractionStatus};
 use crate::markdown::LinkDisplay;
@@ -369,6 +370,10 @@ fn status_line(tile: &OverviewTile<'_>) -> Line<'static> {
         InteractionStatus::Background => ("background task", theme::MUTED_WARNING),
         InteractionStatus::Pending | InteractionStatus::Idle => ("idle", theme::SUCCESS),
         InteractionStatus::IdleFailed => ("idle · turn failed", theme::ERROR),
+        InteractionStatus::Stopped(tone @ StopTone::Integrated) => ("integrated", tone.color()),
+        InteractionStatus::Stopped(tone @ StopTone::IntegrationPending) => {
+            ("integrated · cleanup pending", tone.color())
+        }
         InteractionStatus::Stopped(tone) => ("stopped", tone.color()),
         InteractionStatus::Error => ("failed", theme::ERROR),
         InteractionStatus::Ended => ("ended", theme::INACTIVE),

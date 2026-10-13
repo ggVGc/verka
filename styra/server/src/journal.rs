@@ -17,8 +17,8 @@
 use crate::agent::{Profile, Selection, SessionMeta};
 use crate::event::{decode_line, AgentEvent, BranchDirection, Protocol};
 use crate::protocol::{
-    CompletionState, ComposerState, Contract, Direction, QueuedMessage, RawLine, SessionOrigin,
-    SessionSummary, COMPOSER_HISTORY_LIMIT,
+    CompletionState, ComposerState, Contract, Direction, Integration, QueuedMessage, RawLine,
+    SessionOrigin, SessionSummary, COMPOSER_HISTORY_LIMIT,
 };
 use crate::worktree::Checkout;
 use anyhow::{Context, Result};
@@ -343,6 +343,9 @@ const JOURNAL_FILE: &str = "journal.jsonl";
 const SESSION_META_FILE: &str = "session.json";
 const QUEUE_FILE: &str = "queue.json";
 const COMPOSER_FILE: &str = "composer.json";
+/// Where integration keeps its progress through a Session — see
+/// `crate::integration`.
+pub(crate) const INTEGRATION_FILE: &str = "integration.json";
 
 /// Read the operator messages a Session's interaction had queued but not yet
 /// sent, so the queue survives a client disconnect (closing the Styra UI) or a
@@ -449,6 +452,13 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let meta = read_stored_session_meta(path)?;
+    let branched_from = meta.checkout.and_then(|checkout| checkout.branched_from);
+    let integration = integration_at(
+        path,
+        branched_from
+            .as_ref()
+            .and_then(|point| point.branch.as_deref()),
+    );
     let created_at_ms = session_created_at_ms(&id);
     let last_event_at_ms = last_event_at_ms(path).or(created_at_ms);
     Ok(SessionSummary {
@@ -464,8 +474,41 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
         last_event_at_ms,
         last_event_age: humanize_age(now_ms(), last_event_at_ms),
         origin: meta.origin,
-        branched_from: meta.checkout.and_then(|checkout| checkout.branched_from),
+        branched_from,
         completed: meta.completed,
+        integration,
+    })
+}
+
+/// Read whether integration has landed a stored Session's work — see
+/// [`SessionSummary::integration`].
+pub fn read_session_integration(path: &Path) -> Option<Integration> {
+    let meta = read_stored_session_meta(path).ok()?;
+    let branched_from = meta.checkout.and_then(|checkout| checkout.branched_from);
+    integration_at(
+        path,
+        branched_from.and_then(|point| point.branch).as_deref(),
+    )
+}
+
+/// The squash commit the Session's integration record names, if one has
+/// landed. `source` stands in for the branch on a record written before the
+/// branch was kept in it: integration always lands on the branch the
+/// Session's own was made from.
+fn integration_at(path: &Path, source: Option<&str>) -> Option<Integration> {
+    /// The part of integration's progress record that says where the work
+    /// went; the rest is integration's own business.
+    #[derive(Deserialize)]
+    struct Landed {
+        commit: Option<String>,
+        #[serde(default)]
+        branch: Option<String>,
+    }
+    let bytes = std::fs::read(path.join(INTEGRATION_FILE)).ok()?;
+    let landed: Landed = serde_json::from_slice(&bytes).ok()?;
+    Some(Integration {
+        commit: landed.commit?,
+        branch: landed.branch.or_else(|| source.map(str::to_owned)),
     })
 }
 
@@ -2036,6 +2079,7 @@ mod tests {
             origin: None,
             branched_from: None,
             completed: CompletionState::Active,
+            integration: None,
         };
         let mut sessions = vec![
             summary(Some(100)),

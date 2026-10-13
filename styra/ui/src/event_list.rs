@@ -1,7 +1,7 @@
 //! The main event list: each entry a summary line that grows inline when
 //! expanded, plus the empty-list start screen and the trailing status tail.
 
-use crate::chrome::{all_events_title, panel_block, PanelChrome};
+use crate::chrome::{all_events_title, panel_block, PanelChrome, StopTone};
 use crate::code::{code_block_lines, is_error_diagnostic};
 use crate::footer::{message_text_color, tag_color};
 use crate::markdown::{
@@ -873,6 +873,13 @@ fn status_tail(status: &EventListStatus) -> Line<'static> {
             ),
             theme::WARNING,
         ),
+        // Integration is the outcome rather than a way of stopping; its reason
+        // says so on its own.
+        EventListStatus::Stopped {
+            reason: Some(reason),
+            tone: tone @ (StopTone::Integrated | StopTone::IntegrationPending),
+            ..
+        } => (format!("  ── {reason} ──"), tone.color()),
         EventListStatus::Stopped { reason, tone, .. } => {
             (format!("  ── stopped{} ──", why(reason)), tone.color())
         }

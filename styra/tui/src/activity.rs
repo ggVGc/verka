@@ -13,7 +13,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use styra_protocol::event::{AgentEvent, TokenUsage, UsageTracker};
 use styra_protocol::{
-    CompletionState, InteractionActivity, InteractionActivityReason, InteractionSummary,
+    CompletionState, Integration, InteractionActivity, InteractionActivityReason,
+    InteractionSummary,
 };
 
 /// The wall clock in the epoch milliseconds the server dates an interaction's
@@ -146,6 +147,14 @@ pub enum StopReason {
     /// The operator gave up on the interaction (`Z`): stopped, and stopped
     /// because the work it was doing is not worth finishing.
     Abandoned,
+    /// Integration committed the interaction's work to the branch it came
+    /// from. `sealed` once integration has also cleaned up after it — removed
+    /// its worktree and sealed the Session; until then, retrying integration
+    /// is what finishes the job.
+    Integrated {
+        integration: Integration,
+        sealed: bool,
+    },
     /// The operator sealed the interaction: stopped, done, and — unlike
     /// [`Self::Completed`] — not something resuming or a client action can
     /// undo.
@@ -174,9 +183,10 @@ pub enum StopReason {
 impl StopReason {
     /// The server's reason for an interaction that takes no more messages.
     ///
-    /// Completion is checked first and independently of `reason`: it is a
-    /// property of the Session, not one of the ways a turn can end, so it can
-    /// be true alongside any reason the interaction happened to stop for.
+    /// Integration and completion are checked first and independently of
+    /// `reason`: they are properties of the Session, not ways a turn can end,
+    /// so they can be true alongside any reason the interaction happened to
+    /// stop for.
     ///
     /// The reasons that describe a turn ending — interrupted, background work
     /// running out — say nothing about why the interaction then stopped, so
@@ -184,7 +194,13 @@ impl StopReason {
     pub fn reported(
         completed: CompletionState,
         reason: Option<&InteractionActivityReason>,
+        integration: Option<&Integration>,
     ) -> Self {
+        // Integration ahead of completion: it is what sealed the Session, and
+        // until it has, finishing it is what the Session is waiting on.
+        if let Some(integrated) = Self::integrated(completed, integration) {
+            return integrated;
+        }
         match completed {
             CompletionState::Sealed => return StopReason::Sealed,
             CompletionState::Completed => return StopReason::Completed,
@@ -212,6 +228,17 @@ impl StopReason {
         }
     }
 
+    /// What integration made of a Session, once it has landed the work.
+    pub fn integrated(
+        completed: CompletionState,
+        integration: Option<&Integration>,
+    ) -> Option<Self> {
+        integration.map(|integration| StopReason::Integrated {
+            integration: integration.clone(),
+            sealed: completed == CompletionState::Sealed,
+        })
+    }
+
     /// The reason as a status-line fragment. Always worth naming — unlike
     /// idling, stopping is never just what a session does next.
     pub fn label(&self) -> String {
@@ -220,6 +247,17 @@ impl StopReason {
             StopReason::Completed => "completed".into(),
             StopReason::Abandoned => "abandoned".into(),
             StopReason::Sealed => "sealed".into(),
+            StopReason::Integrated {
+                integration,
+                sealed: true,
+            } => {
+                let commit = short_commit(&integration.commit);
+                match &integration.branch {
+                    Some(branch) => format!("integrated into {branch} · {commit}"),
+                    None => format!("integrated · {commit}"),
+                }
+            }
+            StopReason::Integrated { sealed: false, .. } => "integrated · cleanup pending".into(),
             StopReason::RateLimited(limit) => format!("rate limited ({})", limit.window),
             StopReason::Failed { message } => format!("failed: {message}"),
             StopReason::Exited {
@@ -231,6 +269,11 @@ impl StopReason {
             StopReason::NotAccepting => "not accepting messages".into(),
         }
     }
+}
+
+/// A commit id as short as `git log --oneline` writes it.
+fn short_commit(commit: &str) -> &str {
+    commit.get(..7).unwrap_or(commit)
 }
 
 /// Why the agent process is gone.
@@ -345,6 +388,9 @@ impl Status {
                 None => "idle".into(),
             },
             Status::Background => "idle · background work running".into(),
+            // Integration is the outcome, not one more way of stopping: "stopped"
+            // in front of it would bury what the operator came to read.
+            Status::Stopped(reason @ StopReason::Integrated { .. }) => reason.label(),
             Status::Stopped(reason) => format!("stopped · {}", reason.label()),
             Status::Ended { error: Some(_), .. } => "failed".into(),
             // An ending the operator asked for is named as such rather than by
@@ -390,9 +436,11 @@ impl Status {
             InteractionActivity::Pending => Status::Idle(IdleReason::reported(reason)),
             InteractionActivity::Running => Status::Running,
             InteractionActivity::Background => Status::Background,
-            InteractionActivity::Stopped => {
-                Status::Stopped(StopReason::reported(interaction.completed, reason))
-            }
+            InteractionActivity::Stopped => Status::Stopped(StopReason::reported(
+                interaction.completed,
+                reason,
+                interaction.integration.as_ref(),
+            )),
         }
     }
 }
@@ -864,6 +912,7 @@ mod tests {
             completed: CompletionState::Active,
             focus_requested: false,
             origin: None,
+            integration: None,
             restored: false,
         }
     }
@@ -932,6 +981,30 @@ mod tests {
                 Some(InteractionActivityReason::Paused),
             )),
             Status::Idle(IdleReason::Reported)
+        );
+    }
+
+    /// Integration is what sealed the Session, so it is what the status names;
+    /// until integration has cleaned up after it, the status says that is
+    /// still to come, whatever else stopped the interaction.
+    #[test]
+    fn an_integrated_interaction_reads_as_integrated() {
+        let mut interaction = reported(
+            InteractionActivity::Stopped,
+            Some(InteractionActivityReason::Paused),
+        );
+        interaction.integration = Some(Integration {
+            branch: Some("main".into()),
+            commit: "0123456789abcdef".into(),
+        });
+        assert_eq!(
+            Status::reported(&interaction).label(),
+            "integrated · cleanup pending"
+        );
+        interaction.completed = CompletionState::Sealed;
+        assert_eq!(
+            Status::reported(&interaction).label(),
+            "integrated into main · 0123456"
         );
     }
 

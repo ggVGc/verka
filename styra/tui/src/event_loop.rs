@@ -780,6 +780,7 @@ fn run_rounds(
             }
             if let Ok(interactions) = client.list_interactions() {
                 dirty |= app.interactions.refresh(interactions);
+                dirty |= app.adopt_integration();
             }
         }
         // An editor started work in the Workspace on screen and asked for it

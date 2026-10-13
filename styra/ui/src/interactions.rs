@@ -587,6 +587,10 @@ fn row_item(
         ));
     }
     let badge = match completion {
+        // Sealed by integration, which is the part worth reading.
+        CompletionState::Sealed if *status == InteractionStatus::Stopped(StopTone::Integrated) => {
+            Some((" · INTEGRATED", theme::STOP_INTEGRATED))
+        }
         CompletionState::Active => None,
         CompletionState::Completed => Some((" · COMPLETED", theme::STOP_COMPLETED)),
         CompletionState::Abandoned => Some((" · ABANDONED", theme::STOP_ABANDONED)),
@@ -653,6 +657,7 @@ pub(crate) fn status_marker(status: InteractionStatus) -> (&'static str, ratatui
         InteractionStatus::Background => ("◎", theme::MUTED_WARNING),
         // Not `#`, which starts the row's tags. In the hue of how it stopped,
         // as its reason is, so the reason reads from the left edge too.
+        InteractionStatus::Stopped(StopTone::Integrated) => ("✓", theme::STOP_INTEGRATED),
         InteractionStatus::Stopped(tone) => ("■", tone.color()),
         // Not `!`, which marks work left uncommitted on the same row.
         InteractionStatus::Error => ("✗", theme::ERROR),
@@ -1289,6 +1294,25 @@ mod tests {
         let screen = rendered(&view);
         assert!(!screen.contains("COMPLETED"), "{screen}");
         assert!(!screen.contains("ABANDONED"), "{screen}");
+        assert!(!screen.contains("SEALED"), "{screen}");
+    }
+
+    /// A Session sealed by integration says so, and is marked as done rather
+    /// than as merely stopped.
+    #[test]
+    fn a_session_sealed_by_integration_reads_as_integrated() {
+        let mut view = many_rows(0);
+        view.rows.truncate(1);
+        if let InteractionRow::Interaction {
+            completion, status, ..
+        } = &mut view.rows[0]
+        {
+            *completion = CompletionState::Sealed;
+            *status = InteractionStatus::Stopped(StopTone::Integrated);
+        }
+        let screen = rendered(&view);
+        assert!(screen.contains("✓"), "{screen}");
+        assert!(screen.contains("· INTEGRATED"), "{screen}");
         assert!(!screen.contains("SEALED"), "{screen}");
     }
 }

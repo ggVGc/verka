@@ -11,6 +11,10 @@ struct Progress {
     result: Option<crate::protocol::IntegrationResult>,
     #[serde(default)]
     branch_commit: Option<String>,
+    /// The branch `commit` landed on, for listings to name — see
+    /// `journal::read_session_integration`.
+    #[serde(default)]
+    branch: Option<String>,
 }
 
 fn store_progress(path: &Path, progress: &Progress) -> Result<()> {
@@ -159,7 +163,7 @@ impl ServerState {
             }
             // Squash integration does not make the interaction's commits
             // ancestors of the source. Verify the recorded squash instead.
-            let record = session.path.join("integration.json");
+            let record = session.path.join(journal::INTEGRATION_FILE);
             if record.exists() {
                 let progress: Progress = serde_json::from_slice(&std::fs::read(record)?)?;
                 if progress.branch_commit.as_ref() == Some(&head) {
@@ -182,7 +186,7 @@ impl ServerState {
             return Ok(None);
         }
         let session = self.stored_summary(id)?;
-        let record = session.path.join("integration.json");
+        let record = session.path.join(journal::INTEGRATION_FILE);
         if !record.exists() {
             anyhow::bail!("integration has not been started");
         }
@@ -304,7 +308,7 @@ impl ServerState {
         self.ensure_not_integrating(id)?;
         anyhow::ensure!(!message.trim().is_empty(), "enter a squash commit message");
         let (session, checkout, source) = self.integration_checkout(id)?;
-        let record = session.path.join("integration.json");
+        let record = session.path.join(journal::INTEGRATION_FILE);
         anyhow::ensure!(
             journal::read_queued_messages(&session.path)?.is_empty(),
             "send or discard queued messages before integrating"
@@ -402,6 +406,7 @@ impl ServerState {
                 temporary_source: None,
                 result: None,
                 branch_commit: None,
+                branch: None,
             });
             progress.result = None;
             if progress.commit.is_none() {
@@ -499,7 +504,7 @@ impl ServerState {
             let target = target.unwrap_or_else(|| session.path.join("integration-source"));
             if temporary {
                 progress.temporary_source = Some(target.clone());
-                store_progress(&session.path.join("integration.json"), &progress)?;
+                store_progress(&session.path.join(journal::INTEGRATION_FILE), &progress)?;
                 self.inner.git.add_worktree(path, &source, &target)?;
             }
             anyhow::ensure!(
@@ -512,8 +517,9 @@ impl ServerState {
                 .squash_merge(&target, &checkout.branch, &progress.message);
             if let Ok(commit) = &merged {
                 progress.commit = Some(commit.clone());
+                progress.branch = Some(source.clone());
                 progress.branch_commit = self.inner.git.commit(path, &checkout.branch)?;
-                store_progress(&session.path.join("integration.json"), &progress)?;
+                store_progress(&session.path.join(journal::INTEGRATION_FILE), &progress)?;
             }
             merged?;
         }
@@ -970,7 +976,7 @@ mod tests {
                 .squash_merge(&fixture.host, &fixture.checkout.branch, "squash")
                 .unwrap(),
         );
-        store_progress(&fixture.session.join("integration.json"), &progress).unwrap();
+        store_progress(&fixture.session.join(journal::INTEGRATION_FILE), &progress).unwrap();
         fixture
             .state
             .ensure_checkout_integrated(&fixture.id)
@@ -981,6 +987,30 @@ mod tests {
             .state
             .ensure_checkout_integrated(&fixture.id)
             .is_err());
+    }
+
+    /// A listing names what integration landed only once a commit has, and
+    /// a record from before the branch was kept in it still names one.
+    #[test]
+    fn a_landed_integration_is_listed_with_the_branch_it_landed_on() {
+        let fixture = Fixture::new();
+        let record = fixture.session.join(journal::INTEGRATION_FILE);
+        assert!(journal::read_session_integration(&fixture.session).is_none());
+        let mut progress = fixture.progress();
+        store_progress(&record, &progress).unwrap();
+        assert!(
+            journal::read_session_integration(&fixture.session).is_none(),
+            "an integration that has not committed anything has landed nothing"
+        );
+        progress.commit = Some("0123456789abcdef".into());
+        store_progress(&record, &progress).unwrap();
+        assert_eq!(
+            journal::read_session_integration(&fixture.session),
+            Some(crate::protocol::Integration {
+                branch: Some("main".into()),
+                commit: "0123456789abcdef".into(),
+            })
+        );
     }
 
     #[test]
@@ -1126,6 +1156,7 @@ mod tests {
                 temporary_source: None,
                 result: None,
                 branch_commit: None,
+                branch: None,
             }
         }
 
@@ -1176,7 +1207,7 @@ mod tests {
             journal::read_session_completed(&fixture.session).unwrap(),
             CompletionState::Active
         );
-        assert!(!fixture.session.join("integration.json").exists());
+        assert!(!fixture.session.join(journal::INTEGRATION_FILE).exists());
     }
 
     #[test]
@@ -1386,6 +1417,12 @@ mod tests {
         );
         assert!(fixture.host.join("upstream").exists());
         assert!(!fixture.path().exists());
+        let integration = journal::read_session_integration(&fixture.session).unwrap();
+        assert_eq!(integration.branch.as_deref(), Some("main"));
+        assert_eq!(
+            Some(integration.commit),
+            SystemGit.commit(&fixture.host, "main").unwrap()
+        );
         assert!(journal::read_session_checkout(&fixture.session)
             .unwrap()
             .unwrap()
