@@ -159,6 +159,8 @@ pub(crate) enum Action {
     EditorMountNeither,
     InteractionsNext,
     InteractionsPrev,
+    InteractionsFirst,
+    InteractionsLast,
     InteractionsNextWorkspace,
     InteractionsPrevWorkspace,
     InteractionsNextWorking,
@@ -453,6 +455,8 @@ impl Action {
                 "move the cursor down; the rested-on interaction becomes current"
             }
             Self::InteractionsPrev => "move the cursor up",
+            Self::InteractionsFirst => "move the cursor to the first visible interaction",
+            Self::InteractionsLast => "move the cursor to the last visible interaction",
             Self::InteractionsNextWorkspace => "first interaction of the next Workspace, in All",
             Self::InteractionsPrevWorkspace => {
                 "first interaction of the previous Workspace, in All"

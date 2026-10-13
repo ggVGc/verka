@@ -161,7 +161,8 @@ from it becomes the first history entry of the Session it starts.
 Sending a message to a stopped or viewed Session automatically attempts native
 provider resume. In the main interaction view, `T` edits the current
 interaction's tags. `a` opens the live-interaction list; there, `w` switches
-current/all-Workspace scope, `j`/`k` selects, `T` edits the selected
+current/all-Workspace scope, `j`/`k` selects, `g`/`G` jumps to the first/last
+visible interaction, `T` edits the selected
 interaction's tags, `C` / `Z` marks it completed / abandoned and stops it (also
 available directly in the event view), and `c` shows or hides those rows
 again. Completing or abandoning an interaction in the list moves to another

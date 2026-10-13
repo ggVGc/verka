@@ -595,6 +595,18 @@ impl LiveInteractions {
         }
     }
 
+    pub fn cursor_first(&mut self, current: &str, workspace_id: Option<&str>) {
+        if let Some(index) = self.display_indices(workspace_id).first() {
+            self.move_cursor_to(self.items[*index].id.clone(), current);
+        }
+    }
+
+    pub fn cursor_last(&mut self, current: &str, workspace_id: Option<&str>) {
+        if let Some(index) = self.display_indices(workspace_id).last() {
+            self.move_cursor_to(self.items[*index].id.clone(), current);
+        }
+    }
+
     /// The ctrl-j/ctrl-k group skips move the cursor exactly as j/k do, so
     /// crossing several Workspaces costs the one load the cursor comes to rest
     /// on rather than one per group passed through.
@@ -2027,6 +2039,49 @@ pub(crate) mod tests {
         live.rest();
         assert_eq!(live.cursor("three"), "three");
         assert!(live.due("three").is_none());
+    }
+
+    #[test]
+    fn cursor_endpoints_follow_visible_rows_and_defer_loading() {
+        let mut live = LiveInteractions::default();
+        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
+        elsewhere.workspace_id = "other-workspace".into();
+        live.open(
+            vec![
+                completed("finished"),
+                interaction("one", InteractionActivity::Pending),
+                interaction("two", InteractionActivity::Pending),
+                interaction("three", InteractionActivity::Pending),
+                elsewhere,
+            ],
+            vec![],
+        );
+        live.toggle_workspace_scope();
+        let scope = Some("workspace");
+
+        live.cursor_last("one", scope);
+        assert_eq!(live.cursor("one"), "three");
+        assert!(live.pending("one").is_some());
+        assert!(live.due("one").is_none());
+
+        live.cursor_first("one", scope);
+        assert_eq!(live.cursor("one"), "one");
+        assert!(live.pending("one").is_none());
+
+        live.items[1].tags = vec!["match".into()];
+        live.items[2].tags = vec!["match".into()];
+        live.set_tag_filter(vec!["match".into()], "three", scope);
+        live.cursor_last("three", scope);
+        assert_eq!(live.cursor("three"), "two");
+        live.cursor_first("three", scope);
+        assert_eq!(live.cursor("three"), "one");
+
+        live.set_tag_filter(vec!["missing".into()], "three", scope);
+        live.rest();
+        live.cursor_first("three", scope);
+        live.cursor_last("three", scope);
+        assert_eq!(live.cursor("three"), "three");
+        assert!(live.pending("three").is_none());
     }
 
     #[test]

@@ -1410,6 +1410,16 @@ fn run_rounds(
                         .cursor_previous(&session_id, app.workspace.id.as_deref());
                     continue;
                 }
+                k if keys::INTERACTIONS_FIRST.matches(k) => {
+                    app.interactions
+                        .cursor_first(&session_id, app.workspace.id.as_deref());
+                    continue;
+                }
+                k if keys::INTERACTIONS_LAST.matches(k) => {
+                    app.interactions
+                        .cursor_last(&session_id, app.workspace.id.as_deref());
+                    continue;
+                }
                 _ => {}
             }
             // Every other key acts on the row under the cursor, so a move

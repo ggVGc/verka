@@ -218,6 +218,8 @@ bindings! { INTERACTIONS = "Interactions";
     INTERACTIONS_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)]
         => Action::InteractionsNext;
     INTERACTIONS_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::InteractionsPrev;
+    INTERACTIONS_FIRST: [Key::ch('g')] => Action::InteractionsFirst;
+    INTERACTIONS_LAST: [Key::ch('G')] => Action::InteractionsLast;
     INTERACTIONS_NEXT_WORKSPACE: [Key::ch('J')]
         => Action::InteractionsNextWorkspace;
     INTERACTIONS_PREV_WORKSPACE: [Key::ch('K')]
