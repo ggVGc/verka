@@ -40,6 +40,9 @@ pub struct RebaseStatus {
     pub succeeded: bool,
     pub message: String,
     pub source_commit: String,
+    /// Model output from the conflict-resolution turn, updated while it runs.
+    #[serde(default)]
+    pub output: String,
 }
 
 /// A durable Styra Workspace, which groups provider Sessions that operate on

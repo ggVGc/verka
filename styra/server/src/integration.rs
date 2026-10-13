@@ -576,6 +576,17 @@ impl ServerState {
         path: &Path,
         integrate: bool,
     ) -> Result<()> {
+        self.resolve_rebase_conflicts_with_progress(id, source, path, integrate, |_| Ok(()))
+    }
+
+    pub(super) fn resolve_rebase_conflicts_with_progress(
+        &self,
+        id: &str,
+        source: &str,
+        path: &Path,
+        integrate: bool,
+        mut progress: impl FnMut(String) -> Result<()>,
+    ) -> Result<()> {
         if let Ok(interaction) = self.interaction(id) {
             if interaction.activity.activity().accepting() && interaction.workspace != path {
                 interaction.kill()?;
@@ -600,6 +611,8 @@ impl ServerState {
             "Styra will record the new base when the rebase succeeds. Keep the interaction branch and checkout."
         };
         let resolution = (|| -> Result<()> {
+            let mut cursor = interaction.updates.lock().unwrap().len();
+            let mut events = Vec::new();
             interaction.send_message(SendMessage {
                 text: format!("Resolve conflicts from rebase onto {source}. Resolve each conflict, stage the resolved files, \
                     and run GIT_EDITOR=true git rebase --continue until the rebase finishes. \
@@ -609,6 +622,24 @@ impl ServerState {
             })?;
             loop {
                 std::thread::sleep(Duration::from_millis(250));
+                let changed = {
+                    let updates = interaction.updates.lock().unwrap();
+                    let before = events.len();
+                    events.extend(updates[cursor..].iter().filter_map(|update| {
+                        if let InteractionUpdate::Event(event) = &update.update {
+                            Some(event.clone())
+                        } else {
+                            None
+                        }
+                    }));
+                    cursor = updates.len();
+                    events.len() != before
+                };
+                if changed {
+                    progress(crate::protocol::render::render_events(
+                        &events, false, false,
+                    ))?;
+                }
                 let summary = interaction.summary();
                 match summary.activity {
                     InteractionActivity::Running | InteractionActivity::Background => continue,
@@ -1259,6 +1290,7 @@ mod tests {
             finished: false,
             succeeded: false,
             message: String::new(),
+            output: String::new(),
             source_commit: source.clone(),
         };
         fixture
@@ -1294,6 +1326,7 @@ mod tests {
             finished: false,
             succeeded: false,
             message: String::new(),
+            output: String::new(),
             source_commit: source.clone(),
         };
         let record = fixture.session.join("rebase.json");
@@ -1305,10 +1338,10 @@ mod tests {
                 fixture.checkout.clone(),
                 &mut status,
                 &record,
-                |id, target, path| {
+                |id, path, status| {
                     called = true;
                     assert_eq!(id, fixture.id);
-                    assert_eq!(target, source);
+                    assert_eq!(status.source_commit, source);
                     assert!(SystemGit.rebase_in_progress(path)?);
                     assert_eq!(
                         journal::read_session_checkout(&fixture.session)?,
@@ -1317,6 +1350,7 @@ mod tests {
                     let progress: crate::protocol::RebaseStatus =
                         serde_json::from_slice(&std::fs::read(&record)?)?;
                     assert!(progress.message.contains("Conflicts found"));
+                    status.output = "Resolved file; continuing the rebase".into();
                     std::fs::write(path.join("file"), "source and feature\n")?;
                     git(path, &["add", "file"]);
                     let output = Command::new("git")
@@ -1331,6 +1365,10 @@ mod tests {
             )
             .unwrap();
         assert!(called);
+        let progress: crate::protocol::RebaseStatus =
+            serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+        assert_eq!(progress.output, "Resolved file; continuing the rebase");
+        assert_eq!(status.output, progress.output);
         assert_eq!(
             journal::read_session_checkout(&fixture.session)
                 .unwrap()
@@ -1361,6 +1399,7 @@ mod tests {
             finished: false,
             succeeded: false,
             message: String::new(),
+            output: String::new(),
             source_commit: git(&fixture.host, &["rev-parse", "main"]),
         };
         assert!(fixture
@@ -1370,9 +1409,13 @@ mod tests {
                 fixture.checkout.clone(),
                 &mut status,
                 &fixture.session.join("rebase.json"),
-                |_, _, _| { anyhow::bail!("resolver stopped") }
+                |_, _, status| {
+                    status.output = "I could not resolve this conflict".into();
+                    anyhow::bail!("resolver stopped")
+                }
             )
             .is_err());
+        assert_eq!(status.output, "I could not resolve this conflict");
         assert_eq!(
             journal::read_session_checkout(&fixture.session).unwrap(),
             Some(fixture.checkout.clone())

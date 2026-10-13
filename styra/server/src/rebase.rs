@@ -88,6 +88,7 @@ impl ServerState {
             succeeded: false,
             message: format!("Rebasing onto {source} ({source_commit})…"),
             source_commit,
+            output: String::new(),
         };
         anyhow::ensure!(
             self.inner.integrating.lock().unwrap().insert(id.into()),
@@ -133,8 +134,12 @@ impl ServerState {
         status: &mut RebaseStatus,
         record: &Path,
     ) -> Result<()> {
-        self.run_rebase_with_resolver(id, checkout, status, record, |id, source, path| {
-            self.resolve_rebase_conflicts(id, source, path, false)
+        self.run_rebase_with_resolver(id, checkout, status, record, |id, path, status| {
+            let source = status.source_commit.clone();
+            self.resolve_rebase_conflicts_with_progress(id, &source, path, false, |output| {
+                status.output = output;
+                store_status(record, status)
+            })
         })
     }
 
@@ -144,7 +149,7 @@ impl ServerState {
         mut checkout: crate::worktree::Checkout,
         status: &mut RebaseStatus,
         record: &Path,
-        resolve: impl FnOnce(&str, &str, &Path) -> Result<()>,
+        resolve: impl FnOnce(&str, &Path, &mut RebaseStatus) -> Result<()>,
     ) -> Result<()> {
         let path = checkout
             .path
@@ -159,7 +164,7 @@ impl ServerState {
                 "Conflicts found. Launching the interaction's current model to resolve them…"
                     .into();
             store_status(record, status)?;
-            resolve(id, &status.source_commit, path)?;
+            resolve(id, path, status)?;
         }
         status.message = "Verifying the rebase and recording the new source commit…".into();
         store_status(record, status)?;

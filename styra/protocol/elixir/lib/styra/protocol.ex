@@ -698,7 +698,8 @@ defmodule Styra.Protocol do
         %{name: "finished", required: true, type: %{kind: :boolean}},
         %{name: "succeeded", required: true, type: %{kind: :boolean}},
         %{name: "message", required: true, type: %{kind: :string}},
-        %{name: "source_commit", required: true, type: %{kind: :string}}
+        %{name: "source_commit", required: true, type: %{kind: :string}},
+        %{name: "output", required: false, type: %{kind: :string}}
       ]
     },
 

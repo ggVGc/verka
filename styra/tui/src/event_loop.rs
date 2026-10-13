@@ -1496,6 +1496,7 @@ fn run_rounds(
                 app.rebase_status = Some(styra_protocol::RebaseStatus {
                     finished: started.is_err(),
                     succeeded: false,
+                    output: String::new(),
                     source_commit: String::new(),
                     message: match &started {
                         Ok(()) => "Starting rebase…".into(),

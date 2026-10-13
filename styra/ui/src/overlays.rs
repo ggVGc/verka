@@ -9,8 +9,16 @@ use ratatui::Frame;
 
 pub fn render_rebase_status(frame: &mut Frame, status: &styra_protocol::RebaseStatus) {
     let outer = frame.area();
-    let width = outer.width.saturating_sub(4).min(82);
-    let height = outer.height.min(10);
+    let has_output = !status.output.is_empty();
+    let width = outer
+        .width
+        .saturating_sub(4)
+        .min(if has_output { 120 } else { 82 });
+    let height = if has_output {
+        outer.height.saturating_sub(4)
+    } else {
+        outer.height.min(10)
+    };
     let area = Rect {
         x: outer.x + outer.width.saturating_sub(width) / 2,
         y: outer.y + outer.height.saturating_sub(height) / 2,
@@ -30,18 +38,37 @@ pub fn render_rebase_status(frame: &mut Frame, status: &styra_protocol::RebaseSt
         " Working · conflicts are resolved by the current model "
     };
     frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(status.message.as_str())
-            .wrap(ratatui::widgets::Wrap { trim: false })
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme::ACCENT))
-                    .title(title)
-                    .title_bottom(footer),
-            ),
-        area,
-    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(title)
+        .title_bottom(footer);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let message =
+        Paragraph::new(status.message.as_str()).wrap(ratatui::widgets::Wrap { trim: false });
+    let message_height = (message.line_count(inner.width) as u16).min(inner.height);
+    let message_area = Rect {
+        height: message_height,
+        ..inner
+    };
+    frame.render_widget(message, message_area);
+    if has_output {
+        let gap = message_height.saturating_add(1).min(inner.height);
+        let output_area = Rect {
+            y: inner.y + gap,
+            height: inner.height.saturating_sub(gap),
+            ..inner
+        };
+        let output = Paragraph::new(status.output.as_str())
+            .style(Style::default().fg(theme::TEXT))
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        let scroll = output
+            .line_count(output_area.width)
+            .saturating_sub(output_area.height as usize)
+            .min(u16::MAX as usize) as u16;
+        frame.render_widget(output.scroll((scroll, 0)), output_area);
+    }
 }
 
 pub fn render_integration_message(frame: &mut Frame, message: &str) {
@@ -453,6 +480,7 @@ mod tests {
                 finished,
                 succeeded,
                 message: "Resolving conflicts in file.rs".into(),
+                output: "MODEL: Resolved file.rs and continuing the rebase".into(),
                 source_commit: "abc123".into(),
             };
             terminal
@@ -467,7 +495,41 @@ mod tests {
                 .collect();
             assert!(screen.contains(title));
             assert!(screen.contains(&status.message));
+            assert!(screen.contains(&status.output));
             assert_eq!(screen.contains("Enter / Esc close"), finished);
+        }
+    }
+
+    #[test]
+    fn rebase_modal_follows_the_latest_wrapped_model_output() {
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+        let status = styra_protocol::RebaseStatus {
+            finished: false,
+            succeeded: false,
+            message: "Resolving rebase conflicts".into(),
+            source_commit: "abc123".into(),
+            output: format!(
+                "{}\nLATEST: rebase continued successfully",
+                "older output that wraps across multiple rows ".repeat(80)
+            ),
+        };
+        terminal
+            .draw(|frame| render_rebase_status(frame, &status))
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains(&status.message));
+        assert!(screen.contains("LATEST: rebase continued successfully"));
+        for (width, height) in [(1, 1), (4, 4), (20, 6)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| render_rebase_status(frame, &status))
+                .unwrap();
         }
     }
 
