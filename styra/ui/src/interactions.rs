@@ -127,9 +127,11 @@ pub struct InteractionNavigator<'a> {
 /// before it scrolls, where the list has rows there to show.
 const SCROLL_MARGIN: usize = 2;
 
-/// How far, in tenths, every interaction but the cursor's has the text after
-/// its name faded toward the background, so the cursor's row reads as the
-/// brightest while every name and status marker stays as it is.
+/// How far, in tenths, every interaction but the cursor's is faded toward
+/// the background, including its name, status marker and message line.
+const UNSELECTED_ROW_FADE: u16 = 2;
+
+/// Additional fading for the supporting text after an unselected row's name.
 const UNSELECTED_FADE: u16 = 2;
 
 /// How far, in tenths, the cursor's row has the text after its name lifted
@@ -216,6 +218,14 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
                     if let Some(background) = background {
                         for line in &mut item {
                             line.style = line.style.bg(background);
+                        }
+                    }
+                    if !*selected {
+                        for line in &mut item {
+                            line.style = faded_style(line.style, UNSELECTED_ROW_FADE);
+                            for span in &mut line.spans {
+                                span.style = faded_style(span.style, UNSELECTED_ROW_FADE);
+                            }
                         }
                     }
                     striped = !striped;
@@ -495,9 +505,8 @@ fn row_item(
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    // The prompt is never dimmed, so it stays apart from the gray message line
-    // beneath it. The cursor's prompt is bold and in its own color, apart from
-    // every other row's, whatever its status.
+    // The prompt stays brighter than the gray message line beneath it. The
+    // cursor's prompt is bold and in its own color, whatever its status.
     let name_style = if *selected {
         Style::default()
             .fg(theme::SELECTED_LIVE_INTERACTION_TEXT)
@@ -603,8 +612,8 @@ fn row_item(
     }
     // Everything after the name is lifted toward white and bolded on the
     // cursor's row, and faded on every other, so the cursor's row stands out.
-    // The tree edges, status marker and name ahead of it are left as they are
-    // on every row, so state and names read the same down the whole list.
+    // The tree edges, status marker and name keep their base styles here;
+    // render applies the whole-row fade to unselected interactions afterward.
     let message_style = Style::default().fg(theme::SUBORDINATE_TEXT);
     let adjust = |style: Style| {
         if *selected {
@@ -1195,10 +1204,10 @@ mod tests {
         assert_eq!(drawn_offset(7, 100), 6);
     }
 
-    /// Every row but the cursor's has all but its name drawn faded, so the
-    /// cursor's is the brightest in the list and every name stays readable.
+    /// Every row but the cursor's is gently faded, with supporting text
+    /// further subdued so the cursor's row stays the brightest in the list.
     #[test]
-    fn the_cursor_row_is_lifted_and_the_rest_faded_after_their_names() {
+    fn the_cursor_row_is_lifted_and_the_rest_faded() {
         let view = many_rows(0);
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         terminal
@@ -1225,15 +1234,23 @@ mod tests {
                 .fg
                 .unwrap()
         };
+        let unselected = |color| {
+            faded_style(Style::default().fg(color), UNSELECTED_ROW_FADE)
+                .fg
+                .unwrap()
+        };
         // The cursor's row on lines 1 and 2, the next row on lines 3 and 4.
         assert_eq!(color("●", 1), theme::SUCCESS);
         assert_eq!(color("t", 1), theme::SELECTED_LIVE_INTERACTION_TEXT);
         assert_eq!(color("c", 1), brightened(theme::INTERACTION_STATUS_INFO));
         assert_eq!(color("d", 2), brightened(theme::SUBORDINATE_TEXT));
-        assert_eq!(color("●", 3), theme::SUCCESS);
-        assert_eq!(color("t", 3), theme::TEXT);
-        assert_eq!(color("c", 3), faded(theme::INTERACTION_STATUS_INFO));
-        assert_eq!(color("d", 4), faded(theme::SUBORDINATE_TEXT));
+        assert_eq!(color("●", 3), unselected(theme::SUCCESS));
+        assert_eq!(color("t", 3), unselected(theme::TEXT));
+        assert_eq!(
+            color("c", 3),
+            unselected(faded(theme::INTERACTION_STATUS_INFO))
+        );
+        assert_eq!(color("d", 4), unselected(faded(theme::SUBORDINATE_TEXT)));
     }
 
     /// The cursor's row, message line and all, is marked by a bar over the
