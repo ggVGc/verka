@@ -2,13 +2,13 @@
 //! the whole fleet can be watched at once instead of one row at a time.
 
 use crate::chrome::StopTone;
-use crate::event_list::message_rows;
+use crate::event_list::{faded_style, message_rows};
 use crate::interactions::{status_marker, InteractionStatus};
 use crate::markdown::LinkDisplay;
 use crate::search::{self, SearchView};
 use crate::theme;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use ratatui::Frame;
@@ -22,6 +22,9 @@ const MIN_TILE_WIDTH: u16 = 38;
 /// Room for the border, the three description lines and two of the message.
 /// Shorter than this and the grid scrolls instead.
 const MIN_TILE_HEIGHT: u16 = 7;
+/// How far, in tenths, a tile off the cursor fades toward the background, as
+/// far as the navigator fades its rows off the cursor.
+const UNSELECTED_FADE: u16 = 2;
 
 pub struct OverviewTile<'a> {
     pub name: Cow<'a, str>,
@@ -358,6 +361,28 @@ fn render_tile(
             ..inner
         },
     );
+    if !selected {
+        fade(frame, area);
+    }
+}
+
+/// Fade a tile off the cursor: every foreground a step toward the background,
+/// as the navigator fades the rows off its cursor, so the tile keeps its hues
+/// — its frame still tells its state — but the one under the cursor stands
+/// out.
+fn fade(frame: &mut Frame, area: Rect) {
+    let buffer = frame.buffer_mut();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buffer[(x, y)];
+            let fg = match cell.fg {
+                Color::Reset => theme::TEXT,
+                fg => fg,
+            };
+            let style = faded_style(Style::default().fg(fg), UNSELECTED_FADE);
+            cell.set_style(style);
+        }
+    }
 }
 
 fn message_event(message: &OverviewMessage<'_>) -> AgentEvent {
@@ -512,10 +537,57 @@ mod tests {
                     })
                     .unwrap();
                 let corner = &terminal.backend().buffer()[(0, 0)];
-                assert_eq!(corner.fg, color, "{status:?}, selected={selected}");
+                let expected = if selected {
+                    Style::default().fg(color)
+                } else {
+                    faded_style(Style::default().fg(color), UNSELECTED_FADE)
+                };
+                assert_eq!(
+                    Some(corner.fg),
+                    expected.fg,
+                    "{status:?}, selected={selected}"
+                );
                 assert_eq!(corner.symbol(), if selected { "┏" } else { "╭" });
             }
         }
+    }
+
+    #[test]
+    fn tiles_off_the_cursor_are_faded() {
+        let view = OverviewView {
+            running_only: false,
+            only_current_workspace: false,
+            tiles: vec![
+                tile("first", InteractionStatus::Idle),
+                tile("second", InteractionStatus::Idle),
+            ],
+            selected: 1,
+            links: LinkDisplay::Compact,
+            search: SearchView::default(),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(frame, &view, frame.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let frame = theme::OVERVIEW_IDLE_FRAME;
+        let faded = faded_style(Style::default().fg(frame), UNSELECTED_FADE).fg;
+        assert_ne!(faded, Some(frame));
+        // Inside the outer border, the first tile spans x 1..50, the second
+        // 50..99; their top borders run along row 1.
+        let fg = |x| Some(buffer[(x, 1)].fg);
+        assert_eq!(fg(1), faded);
+        assert_eq!(fg(49), faded);
+        assert_eq!(fg(50), Some(frame));
+        assert_eq!(fg(98), Some(frame));
+        // The text inside fades too, not only the frame.
+        let name = (1..50).find(|&x| buffer[(x, 1)].symbol() == "f").unwrap();
+        assert_eq!(
+            Some(buffer[(name, 1)].fg),
+            faded_style(Style::default().fg(theme::TEXT), UNSELECTED_FADE).fg
+        );
     }
 
     #[test]
