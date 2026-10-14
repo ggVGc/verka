@@ -108,17 +108,9 @@ pub const ALTERNATE_ROW_BACKGROUND: Color = palette::FAINT_GRAY;
 /// Behind the navigator's cursor row: a faint warm orange, a step above
 /// [`ALTERNATE_ROW_BACKGROUND`].
 pub const SELECTED_ROW_BACKGROUND: Color = palette::FAINT_ORANGE;
-/// The prompt of a running navigator row: [`TEXT`] leaning toward [`RUNNING`].
-pub const RUNNING_INTERACTION_TEXT: Color = palette::YELLOW_WHITE;
-/// The prompt of an idle navigator row: [`TEXT`] leaning toward [`SUCCESS`].
-pub const IDLE_INTERACTION_TEXT: Color = palette::GREEN_WHITE;
-/// The name on the navigator's cursor row, whatever its status, and the text
-/// of the event list's selected entry: apart from the colors around them.
-pub const SELECTED_LIVE_INTERACTION_TEXT: Color = palette::RED_FG;
 pub const SELECTED_INTERACTION_TEXT: Color = palette::YELLOW_WHITE;
-/// The bar drawn over the navigator's left border beside the cursor's row:
-/// the cursor name's own color, so the two read as one mark.
-pub const SELECTED_ROW_EDGE: Color = SELECTED_LIVE_INTERACTION_TEXT;
+/// The bar on the navigator's left border beside the cursor's row.
+pub const SELECTED_ROW_EDGE: Color = palette::RED_FG;
 /// The block behind the status marker at the head of a navigator row, a
 /// subdued tint of the marker's own hue.
 ///

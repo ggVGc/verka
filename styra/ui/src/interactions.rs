@@ -159,7 +159,11 @@ pub fn height(view: &InteractionNavigator<'_>, available: u16) -> u16 {
 pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) -> usize {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::ACCENT))
+        .border_style(
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )
         // Scope, completion and tag filters are state the list cannot be
         // read without; the commands that change them are behind `?`.
         .title(format!(
@@ -193,6 +197,10 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
     // Every other interaction under a heading is drawn on a faint stripe, so
     // the eye can follow a row across the pane and down to its message line.
     // The cursor's row is drawn on a slightly lighter tint in its place.
+    let selected = view
+        .rows
+        .iter()
+        .position(|row| matches!(row, InteractionRow::Interaction { selected: true, .. }));
     let mut striped = false;
     let mut items = view
         .rows
@@ -214,6 +222,14 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
                             line.style = line.style.bg(background);
                         }
                     }
+                    if !*selected {
+                        for line in &mut item {
+                            line.style = faded_style(line.style, 2);
+                            for span in &mut line.spans {
+                                span.style = faded_style(span.style, 2);
+                            }
+                        }
+                    }
                     striped = !striped;
                 }
             }
@@ -230,10 +246,6 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
             ))]);
         }
     }
-    let selected = view
-        .rows
-        .iter()
-        .position(|row| matches!(row, InteractionRow::Interaction { selected: true, .. }));
     // The list is laid out by line rather than by row, so a row with a message
     // line that does not fit is drawn as far as it goes instead of leaving the
     // foot of the pane empty, as `List` would.
@@ -491,20 +503,13 @@ fn row_item(
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    // The prompt is never dimmed, so it stays apart from the gray message line
-    // beneath it; a working or idle agent's leans slightly toward its marker's
-    // hue instead. The cursor's prompt is a soft cyan and bold, apart from
-    // every other row's, whatever its status.
+    // Names use neutral text; bold and the row background mark the cursor.
     let name_style = if *selected {
         Style::default()
-            .fg(theme::SELECTED_LIVE_INTERACTION_TEXT)
+            .fg(theme::TEXT)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(match status {
-            InteractionStatus::Running { .. } => theme::RUNNING_INTERACTION_TEXT,
-            InteractionStatus::Idle => theme::IDLE_INTERACTION_TEXT,
-            _ => theme::TEXT,
-        })
+        Style::default().fg(theme::TEXT)
     };
     // The source of the cursor's branch is underlined, so a branch drawn
     // under another checkout than its source's can still be traced to it.
@@ -519,7 +524,7 @@ fn row_item(
     if !tags.is_empty() {
         main.push(Span::styled(
             format!(" #{}", tags.join(" #")),
-            Style::default().fg(theme::INTERACTION_TAG),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     }
     // Where the conversation came from, and went, when the rows are not
@@ -540,7 +545,7 @@ fn row_item(
     if let Some(branch) = branch.filter(|_| *level == 0) {
         main.push(Span::styled(
             format!(" · {branch}"),
-            Style::default().fg(theme::ACCENT),
+            Style::default().fg(theme::MUTED_TEXT),
         ));
     }
     main.push(Span::styled(
@@ -548,13 +553,10 @@ fn row_item(
         Style::default().fg(theme::INTERACTION_STATUS_INFO),
     ));
     if let Some(why) = stop_reason {
-        // In the stop's own color, so how it ended is told apart down the
-        // foot of the list without reading every word.
-        let tone = match status {
-            InteractionStatus::Stopped(tone) => tone.color(),
-            _ => theme::INTERACTION_STATUS_INFO,
-        };
-        main.push(Span::styled(format!(" · {why}"), Style::default().fg(tone)));
+        main.push(Span::styled(
+            format!(" · {why}"),
+            Style::default().fg(theme::INTERACTION_STATUS_INFO),
+        ));
     }
     if *loading {
         main.push(Span::styled(
@@ -566,7 +568,7 @@ fn row_item(
         main.push(Span::styled(
             " · TURN FAILED",
             Style::default()
-                .fg(theme::ERROR)
+                .fg(theme::INTERACTION_STATUS_INFO)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -574,7 +576,7 @@ fn row_item(
         main.push(Span::styled(
             format!(" · RATE LIMITED ({window})"),
             Style::default()
-                .fg(theme::ERROR)
+                .fg(theme::INTERACTION_STATUS_INFO)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -582,24 +584,26 @@ fn row_item(
         main.push(Span::styled(
             " · NEWLY IDLE",
             Style::default()
-                .fg(theme::SUCCESS)
+                .fg(theme::INTERACTION_STATUS_INFO)
                 .add_modifier(Modifier::BOLD),
         ));
     }
     let badge = match completion {
         // Sealed by integration, which is the part worth reading.
         CompletionState::Sealed if *status == InteractionStatus::Stopped(StopTone::Integrated) => {
-            Some((" · INTEGRATED", theme::STOP_INTEGRATED))
+            Some(" · INTEGRATED")
         }
         CompletionState::Active => None,
-        CompletionState::Completed => Some((" · COMPLETED", theme::STOP_COMPLETED)),
-        CompletionState::Abandoned => Some((" · ABANDONED", theme::STOP_ABANDONED)),
-        CompletionState::Sealed => Some((" · SEALED", theme::STOP_SEALED)),
+        CompletionState::Completed => Some(" · COMPLETED"),
+        CompletionState::Abandoned => Some(" · ABANDONED"),
+        CompletionState::Sealed => Some(" · SEALED"),
     };
-    if let Some((badge, color)) = badge {
+    if let Some(badge) = badge {
         main.push(Span::styled(
             badge,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::INTERACTION_STATUS_INFO)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     // Everything after the name is lifted toward white and bolded on the
@@ -1196,8 +1200,8 @@ mod tests {
         assert_eq!(drawn_offset(7, 100), 6);
     }
 
-    /// Every row but the cursor's has all but its name drawn faded, so the
-    /// cursor's is the brightest in the list and every name stays readable.
+    /// Every row but the cursor's is gently faded, with supporting text
+    /// further subdued so the cursor's row stays the brightest in the list.
     #[test]
     fn the_cursor_row_is_lifted_and_the_rest_faded_after_their_names() {
         let view = many_rows(0);
@@ -1226,15 +1230,19 @@ mod tests {
                 .fg
                 .unwrap()
         };
+        let unselected = |color| faded_style(Style::default().fg(color), 2).fg.unwrap();
         // The cursor's row on lines 1 and 2, the next row on lines 3 and 4.
         assert_eq!(color("●", 1), theme::SUCCESS);
-        assert_eq!(color("t", 1), theme::SELECTED_LIVE_INTERACTION_TEXT);
+        assert_eq!(color("t", 1), theme::TEXT);
         assert_eq!(color("c", 1), brightened(theme::INTERACTION_STATUS_INFO));
         assert_eq!(color("d", 2), brightened(theme::SUBORDINATE_TEXT));
-        assert_eq!(color("●", 3), theme::SUCCESS);
-        assert_eq!(color("t", 3), theme::IDLE_INTERACTION_TEXT);
-        assert_eq!(color("c", 3), faded(theme::INTERACTION_STATUS_INFO));
-        assert_eq!(color("d", 4), faded(theme::SUBORDINATE_TEXT));
+        assert_eq!(color("●", 3), unselected(theme::SUCCESS));
+        assert_eq!(color("t", 3), unselected(theme::TEXT));
+        assert_eq!(
+            color("c", 3),
+            unselected(faded(theme::INTERACTION_STATUS_INFO))
+        );
+        assert_eq!(color("d", 4), unselected(faded(theme::SUBORDINATE_TEXT)));
     }
 
     /// The cursor's row, message line and all, is marked by a bar over the

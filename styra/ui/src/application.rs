@@ -315,6 +315,10 @@ fn render_events(
             measured.limit,
             measured.effective_scroll,
         );
+        if view.navigator.is_some() {
+            fade_log_border(frame, panes[0]);
+            fade_log_border(frame, panes[1]);
+        }
     } else {
         let list_area = if let Some(preview_view) = view.preview {
             let panes = Layout::default()
@@ -330,9 +334,26 @@ fn render_events(
         let list = event_list::render(frame, view.list, list_area);
         feedback.list_offset = Some(list.effective_offset);
         feedback.list_row_offset = Some(list.effective_row_offset);
+        if view.navigator.is_some() {
+            fade_log_border(frame, list_area);
+        }
     }
     if view.link_mode {
         tint_all_but_entries(frame, tint_area);
+    }
+}
+
+/// Gently fade the log's border while navigation holds focus.
+fn fade_log_border(frame: &mut Frame, area: Rect) {
+    let buffer = frame.buffer_mut();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if x > area.left() && x + 1 < area.right() && y > area.top() && y + 1 < area.bottom() {
+                continue;
+            }
+            let cell = &mut buffer[(x, y)];
+            cell.set_style(event_list::faded_style(cell.style(), 2));
+        }
     }
 }
 
