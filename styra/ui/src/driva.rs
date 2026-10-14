@@ -144,6 +144,8 @@ pub struct DrivaLaunch<'a> {
     pub workspace_cursor: usize,
     pub interaction_cursor: usize,
     pub prompt: Option<&'a str>,
+    /// The paths `Tab` steps through in the prompt, and the one it is on.
+    pub completion: Option<(&'a [String], Option<usize>)>,
     pub driva: Option<&'a DrivaOptions>,
     pub planned: bool,
     pub requested_scroll: u16,
@@ -1644,11 +1646,14 @@ fn render_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
         ));
     }
     let prompt = TextPrompt::new(
-        " mount · source[:destination][:ro|rw] · Ctrl-W parent · Enter add · Esc cancel ",
+        " mount · source[:destination][:ro|rw] · Tab complete · Ctrl-W parent · Enter add · Esc cancel ",
         text,
     )
     .bottom(bottom);
-    text_prompt::render(frame, &prompt, area);
+    let rect = text_prompt::render(frame, &prompt, area);
+    if let Some((choices, selected)) = app.launch.completion {
+        text_prompt::render_choices(frame, rect, area, choices, selected);
+    }
 }
 
 /// The durable Workspace Git checkout, which is intentionally not an extra
@@ -1787,6 +1792,7 @@ mod tests {
                 workspace_cursor: 0,
                 interaction_cursor: 0,
                 prompt: None,
+                completion: None,
                 driva: None,
                 planned: false,
                 requested_scroll: 0,

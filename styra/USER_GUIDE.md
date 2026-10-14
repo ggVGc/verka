@@ -436,7 +436,12 @@ switches focused layer; `j`/`k` selects a mount.
 | `D` | save this interaction's additions as new-client defaults |
 | `G` | set the Workspace Git checkout; submit an empty path to clear it |
 
-In the mount prompt, `Ctrl+W` removes the final path component.
+In the mount prompt, `Ctrl+W` removes the final path component. `Tab` and
+`Shift+Tab` step down and up through a list of the paths under the one typed
+(or, for a partial name, the entries beside it that start with it). `Enter`
+accepts the highlighted path and, for a directory, opens the list of what is
+under it so `Tab` keeps completing; `Esc` closes the list and restores what was
+typed. With the list closed, `Enter` adds the mount.
 
 Workspace edits take effect for future launches everywhere in that Workspace.
 Interaction edits apply only to its next launch/resume unless promoted. Existing

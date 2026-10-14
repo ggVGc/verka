@@ -95,6 +95,97 @@ pub fn expand_home(text: &str) -> PathBuf {
     }
 }
 
+/// The paths `Tab` steps through in the mount prompt, and what was typed before
+/// it started, so `Esc` can put that back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Completion {
+    pub typed: String,
+    /// Each candidate as the whole prompt text it would leave behind.
+    pub candidates: Vec<String>,
+    /// Each candidate as the list shows it: the entry's own name, with a
+    /// trailing `/` on a directory.
+    pub labels: Vec<String>,
+    /// The candidate in the prompt now; `None` until the first `Tab`.
+    pub selected: Option<usize>,
+}
+
+impl Completion {
+    /// Move one step through the list, wrapping at either end, and return the
+    /// prompt text for the candidate landed on.
+    pub fn step(&mut self, forward: bool) -> Option<&str> {
+        let len = self.candidates.len();
+        if len == 0 {
+            return None;
+        }
+        let next = match (self.selected, forward) {
+            (None, true) => 0,
+            (None, false) => len - 1,
+            (Some(index), true) => (index + 1) % len,
+            (Some(index), false) => (index + len - 1) % len,
+        };
+        self.selected = Some(next);
+        Some(&self.candidates[next])
+    }
+}
+
+/// The host paths that could finish `text`, the prompt's whole contents.
+///
+/// Only the part after the last `:` is completed — the source, or the
+/// destination once one is being typed. A part naming an existing directory
+/// lists what is under it; otherwise it lists the entries of its parent that
+/// start with what follows the last `/`. Hidden entries only appear once a `.`
+/// has been typed for them, as in a shell. A part with no `/` is not a path
+/// the prompt would accept, so nothing completes it.
+pub fn complete(text: &str) -> Completion {
+    let start = text.rfind(':').map_or(0, |colon| colon + 1);
+    let (head, part) = text.split_at(start);
+    // `.` and `..` are directories too, but typed at the end they are the
+    // start of a hidden name rather than somewhere to list.
+    let dotted = part.ends_with("/.") || part.ends_with("/..");
+    let names_directory =
+        (part == "~" || part.contains('/')) && !dotted && expand_home(part).is_dir();
+    let (directory, stem) = if part.ends_with('/') || names_directory {
+        (format!("{}/", part.trim_end_matches('/')), "")
+    } else {
+        match part.rfind('/') {
+            Some(slash) => (part[..=slash].to_owned(), &part[slash + 1..]),
+            None => (String::new(), ""),
+        }
+    };
+    let mut entries: Vec<(String, bool)> = match directory.is_empty() {
+        true => Vec::new(),
+        false => std::fs::read_dir(expand_home(&directory))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                let visible = !name.starts_with('.') || stem.starts_with('.');
+                (visible && name.starts_with(stem)).then(|| (name, entry.path().is_dir()))
+            })
+            .collect(),
+    };
+    entries.sort();
+    Completion {
+        typed: text.to_owned(),
+        candidates: entries
+            .iter()
+            .map(|(name, _)| format!("{head}{directory}{name}"))
+            .collect(),
+        labels: entries
+            .iter()
+            .map(|(name, is_dir)| {
+                if *is_dir {
+                    format!("{name}/")
+                } else {
+                    name.clone()
+                }
+            })
+            .collect(),
+        selected: None,
+    }
+}
+
 /// Where a host path turns out to be reachable from inside the sandbox, and on
 /// what terms. See [`visibility`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -272,6 +363,64 @@ mod tests {
         // A prefix that is not a path prefix does not count: `/srv-old` merely
         // starts with the same characters as `/srv`.
         assert_eq!(visibility(&mounts, Path::new("/srv-old/data")), None);
+    }
+
+    fn completion_tree(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "styra-mount-complete-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in ["data", "docs", ".hidden"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        std::fs::write(root.join("notes.txt"), "").unwrap();
+        root
+    }
+
+    /// A directory lists what is under it, whether or not the `/` was typed;
+    /// a partial name lists its siblings that start with it.
+    #[test]
+    fn completion_lists_paths_under_the_typed_one() {
+        let root = completion_tree("under");
+        let base = root.display().to_string();
+
+        let under = complete(&base);
+        assert_eq!(under.labels, ["data/", "docs/", "notes.txt"]);
+        assert_eq!(under.candidates[0], format!("{base}/data"));
+        assert_eq!(complete(&format!("{base}/")).candidates, under.candidates);
+
+        let partial = complete(&format!("{base}/d"));
+        assert_eq!(partial.labels, ["data/", "docs/"]);
+
+        assert_eq!(complete(&format!("{base}/.")).labels, [".hidden/"]);
+        assert!(complete("relative").candidates.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The destination after a `:` completes on its own, keeping the source.
+    #[test]
+    fn completion_keeps_what_comes_before_the_last_colon() {
+        let root = completion_tree("colon");
+        let base = root.display().to_string();
+        let completion = complete(&format!("/srv:{base}/no"));
+        assert_eq!(completion.candidates, [format!("/srv:{base}/notes.txt")]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stepping_wraps_in_both_directions() {
+        let mut completion = Completion {
+            typed: "/x/".into(),
+            candidates: vec!["/x/a".into(), "/x/b".into()],
+            labels: vec!["a".into(), "b".into()],
+            selected: None,
+        };
+        assert_eq!(completion.clone().step(false), Some("/x/b"));
+        assert_eq!(completion.step(true), Some("/x/a"));
+        assert_eq!(completion.step(true), Some("/x/b"));
+        assert_eq!(completion.step(true), Some("/x/a"));
+        assert_eq!(completion.step(false), Some("/x/b"));
     }
 
     /// The client resolves `~` itself: a path left for the server to expand

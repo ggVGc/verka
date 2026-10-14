@@ -8,7 +8,7 @@
 //! end of the text, where typing continues.
 
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
@@ -73,8 +73,9 @@ pub fn height(text: &str, width: u16) -> u16 {
 ///
 /// As wide as the view allows up to a comfortable reading width, and as tall
 /// as the wrapped text. Only a value taller than the whole view scrolls, and
-/// then it keeps the end — where the cursor is — in sight.
-pub fn render(frame: &mut Frame, prompt: &TextPrompt<'_>, area: Rect) {
+/// then it keeps the end — where the cursor is — in sight. Returns the box,
+/// for whatever is drawn against it.
+pub fn render(frame: &mut Frame, prompt: &TextPrompt<'_>, area: Rect) -> Rect {
     let width = area.width.saturating_sub(4).min(72);
     let (lines, row, column) = layout(prompt.text, width.saturating_sub(2));
     let height = (lines.len() as u16 + 2).min(area.height);
@@ -101,6 +102,75 @@ pub fn render(frame: &mut Frame, prompt: &TextPrompt<'_>, area: Rect) {
             y: inner.y + row.saturating_sub(scroll),
         });
     }
+    rect
+}
+
+/// Rows of choices the list under a prompt shows at once.
+const CHOICE_ROWS: u16 = 10;
+
+/// Draw `choices` in a list under `prompt`, the box [`render`] drew, with
+/// `selected` highlighted and scrolled into view. Above the box instead when
+/// there is more room there.
+pub fn render_choices(
+    frame: &mut Frame,
+    prompt: Rect,
+    area: Rect,
+    choices: &[String],
+    selected: Option<usize>,
+) {
+    if choices.is_empty() {
+        return;
+    }
+    let below = (area.y + area.height).saturating_sub(prompt.y + prompt.height);
+    let above = prompt.y.saturating_sub(area.y);
+    let room = below.max(above);
+    let height = (choices.len() as u16)
+        .min(CHOICE_ROWS)
+        .saturating_add(2)
+        .min(room);
+    if height < 3 {
+        return;
+    }
+    let y = if below >= above {
+        prompt.y + prompt.height
+    } else {
+        prompt.y - height
+    };
+    let rect = Rect {
+        y,
+        height,
+        ..prompt
+    };
+    let visible = usize::from(height - 2);
+    let first = selected.map_or(0, |index| (index + 1).saturating_sub(visible));
+    let lines: Vec<Line> = choices
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(visible)
+        .map(|(index, choice)| {
+            let style = if Some(index) == selected {
+                Style::default()
+                    .fg(theme::TEXT)
+                    .bg(theme::SELECTION_BACKGROUND)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT)
+            };
+            Line::styled(format!(" {choice}"), style)
+        })
+        .collect();
+    let position = match selected {
+        Some(index) => format!(" {}/{} ", index + 1, choices.len()),
+        None => format!(" {} ", choices.len()),
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::MUTED_TEXT))
+        .title(" Tab next · Shift-Tab previous · Enter accept · Esc close ")
+        .title_bottom(Line::from(position).right_aligned());
+    frame.render_widget(Clear, rect);
+    frame.render_widget(Paragraph::new(lines).block(block), rect);
 }
 
 #[cfg(test)]
@@ -117,7 +187,7 @@ mod tests {
                     frame,
                     &TextPrompt::new(" path ", text).bottom(" for this interaction "),
                     frame.area(),
-                )
+                );
             })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();

@@ -154,9 +154,27 @@ pub fn handle_diff_focus_key(app: &mut App, key: KeyEvent) -> bool {
 /// loop routes keys here ahead of the keybind reference and every view and
 /// global binding.
 pub fn handle_mount_prompt_key(app: &mut App, key: KeyEvent) {
+    // Any key other than the ones that move through the list settles on the
+    // path it left in the prompt.
+    if !matches!(
+        key.code,
+        KeyCode::Tab | KeyCode::BackTab | KeyCode::Esc | KeyCode::Enter
+    ) {
+        app.launch.completion = None;
+    }
     match key.code {
-        KeyCode::Esc => launch::cancel_prompt(app),
-        KeyCode::Enter => launch::confirm_prompt(app),
+        KeyCode::Tab => launch::complete_prompt(app, true),
+        KeyCode::BackTab => launch::complete_prompt(app, false),
+        KeyCode::Esc => {
+            if !launch::abandon_completion(app) {
+                launch::cancel_prompt(app);
+            }
+        }
+        KeyCode::Enter => {
+            if !launch::accept_completion(app) {
+                launch::confirm_prompt(app);
+            }
+        }
         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Some(text) = app.launch.prompt.as_mut() {
                 delete_path_part(text);
@@ -1463,6 +1481,94 @@ mod tests {
             KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
         );
         assert_eq!(app.launch.prompt.as_deref(), Some("/"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Tab and Shift-Tab step down and up through the paths under the typed
+    /// one; Esc backs out of the list to what was typed, a second Esc closes
+    /// the prompt, and any other key keeps the path the list left behind.
+    #[test]
+    fn tab_steps_through_paths_under_the_mount_prompt() {
+        let root = tree("mount-path-complete");
+        std::fs::create_dir_all(root.join("alpha")).unwrap();
+        std::fs::create_dir_all(root.join("beta")).unwrap();
+        let base = root.display().to_string();
+        let mut app = app(&root);
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let prompt = |app: &App| app.launch.prompt.clone().unwrap();
+
+        app.launch.prompt = Some(format!("{base}/"));
+        let paths: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+            .map(|entry| format!("{base}/{}", entry.file_name().to_string_lossy()))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        assert!(paths.len() >= 2, "{paths:?}");
+
+        handle_mount_prompt_key(&mut app, key(KeyCode::Tab));
+        assert_eq!(prompt(&app), paths[0]);
+        handle_mount_prompt_key(&mut app, key(KeyCode::Tab));
+        assert_eq!(prompt(&app), paths[1]);
+        handle_mount_prompt_key(&mut app, key(KeyCode::BackTab));
+        assert_eq!(prompt(&app), paths[0]);
+        handle_mount_prompt_key(&mut app, key(KeyCode::BackTab));
+        assert_eq!(prompt(&app), *paths.last().unwrap());
+
+        handle_mount_prompt_key(&mut app, key(KeyCode::Esc));
+        assert_eq!(prompt(&app), format!("{base}/"));
+        assert!(app.launch.completion.is_none());
+
+        handle_mount_prompt_key(&mut app, key(KeyCode::Tab));
+        handle_mount_prompt_key(&mut app, key(KeyCode::Char('/')));
+        assert_eq!(prompt(&app), format!("{}/", paths[0]));
+        assert!(app.launch.completion.is_none());
+
+        handle_mount_prompt_key(&mut app, key(KeyCode::Esc));
+        assert!(app.launch.prompt.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Enter with a directory highlighted keeps it and lists what is under
+    /// it, so Tab goes on completing one level down; Esc then closes the
+    /// list, leaving the accepted directory, and only then does Enter add it.
+    #[test]
+    fn enter_accepts_a_completion_and_lists_under_it() {
+        let root = tree("mount-path-accept");
+        std::fs::create_dir_all(root.join("alpha/inner")).unwrap();
+        let alpha = root.join("alpha").display().to_string();
+        let mut app = app(&root);
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+        app.launch.prompt = Some(format!("{}/al", root.display()));
+        handle_mount_prompt_key(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.launch.prompt.as_deref(), Some(alpha.as_str()));
+
+        handle_mount_prompt_key(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.launch.prompt.as_deref(), Some(alpha.as_str()));
+        let completion = app.launch.completion.as_ref().unwrap();
+        assert_eq!(completion.labels, ["inner/"]);
+        assert_eq!(completion.selected, None);
+
+        handle_mount_prompt_key(&mut app, key(KeyCode::Tab));
+        assert_eq!(
+            app.launch.prompt.as_deref(),
+            Some(format!("{alpha}/inner").as_str())
+        );
+        // An empty directory has nothing to list, so accepting it closes.
+        handle_mount_prompt_key(&mut app, key(KeyCode::Enter));
+        assert!(app.launch.completion.is_none());
+        assert!(app.launch.prompt.is_some());
+
+        handle_mount_prompt_key(&mut app, key(KeyCode::Tab));
+        assert!(app.launch.completion.is_none());
+        app.launch.prompt = Some(alpha.clone());
+        handle_mount_prompt_key(&mut app, key(KeyCode::Tab));
+        handle_mount_prompt_key(&mut app, key(KeyCode::Esc));
+        assert!(app.launch.completion.is_none());
+        assert_eq!(app.launch.prompt.as_deref(), Some(alpha.as_str()));
         let _ = std::fs::remove_dir_all(root);
     }
 

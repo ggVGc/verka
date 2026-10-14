@@ -85,6 +85,9 @@ pub struct Launch {
     selected: (usize, usize),
     /// The open "add a mount" prompt, while the operator is typing one.
     pub prompt: Option<String>,
+    /// The paths `Tab` is stepping through in that prompt, until another key
+    /// settles on one.
+    pub completion: Option<mount::Completion>,
     /// The Driva policy of the live session, or — before one has launched — the
     /// policy the next interaction would be launched under. `None` until either
     /// is known, as on a replayed journal, which has no sandbox to describe and
@@ -530,6 +533,7 @@ pub fn open_prompt(app: &mut App) {
     }
     // Mounts are normally adjacent to the Workspace already on screen. Start
     // there so adding one only needs the part of the path that differs.
+    app.launch.completion = None;
     app.launch.prompt = Some(
         app.workspace
             .root_or_current_directory()
@@ -540,6 +544,57 @@ pub fn open_prompt(app: &mut App) {
 
 pub fn cancel_prompt(app: &mut App) {
     app.launch.prompt = None;
+    app.launch.completion = None;
+}
+
+/// Put the next (or previous) path under what is typed into the prompt,
+/// listing the candidates on the first press.
+pub fn complete_prompt(app: &mut App, forward: bool) {
+    let Some(text) = app.launch.prompt.as_mut() else {
+        return;
+    };
+    let completion = app
+        .launch
+        .completion
+        .get_or_insert_with(|| mount::complete(text));
+    match completion.step(forward) {
+        Some(candidate) => *text = candidate.to_owned(),
+        None => {
+            app.launch.completion = None;
+            app.show_warning("no paths to complete");
+        }
+    }
+}
+
+/// Settle on the highlighted path. A directory opens straight onto a list of
+/// what is under it, so `Enter` walks down a tree the way `Tab` walks across
+/// one level; a file, or nothing highlighted, just closes the list. Returns
+/// whether there was a list to act on.
+pub fn accept_completion(app: &mut App) -> bool {
+    let Some(completion) = app.launch.completion.take() else {
+        return false;
+    };
+    let Some(index) = completion.selected else {
+        return true;
+    };
+    if !completion.labels[index].ends_with('/') {
+        return true;
+    }
+    let next = mount::complete(&completion.candidates[index]);
+    if !next.candidates.is_empty() {
+        app.launch.completion = Some(next);
+    }
+    true
+}
+
+/// Leave the completion list, putting back what was typed before it opened.
+/// Returns whether there was a list to leave.
+pub fn abandon_completion(app: &mut App) -> bool {
+    let Some(completion) = app.launch.completion.take() else {
+        return false;
+    };
+    app.launch.prompt = Some(completion.typed);
+    true
 }
 
 /// Accept what the prompt holds as an extra mount, or explain why it is not one

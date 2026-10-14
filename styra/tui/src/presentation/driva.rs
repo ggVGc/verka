@@ -60,6 +60,11 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
             workspace_cursor: app.launch.cursor(LaunchScope::Workspace),
             interaction_cursor: app.launch.cursor(LaunchScope::Interaction),
             prompt: app.launch.prompt.as_deref(),
+            completion: app
+                .launch
+                .completion
+                .as_ref()
+                .map(|completion| (completion.labels.as_slice(), completion.selected)),
             driva: app.launch.driva.as_ref(),
             planned: app.launch.planned,
             requested_scroll: app.launch.scroll.offset,
