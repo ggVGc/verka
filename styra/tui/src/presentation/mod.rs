@@ -198,6 +198,9 @@ pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
     if app.action_menu.is_some() {
         return Window::ActionMenu;
     }
+    if app.workspace_jump.is_some() {
+        return Window::WorkspaceJump;
+    }
     if app.launcher.is_some() {
         return Window::Launcher;
     }
@@ -658,6 +661,12 @@ fn draw_main(
                     rows: menu.rows(),
                     list: &menu.list,
                 }),
+            workspace_jump: app.workspace_jump.as_ref().map(|jump| {
+                styra_ui::overlays::WorkspaceJumpView {
+                    rows: jump.rows(),
+                    list: &jump.list,
+                }
+            }),
             tags,
             busy: app
                 .busy

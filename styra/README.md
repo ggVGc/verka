@@ -356,7 +356,9 @@ Two focuses, like vim modes: list focus navigates and folds the event list,
 input focus types into the message box. `i` or `Tab` enters input focus; `Esc`
 or `Tab` returns to list focus.
 
-`V` first chooses a Workspace, then a Session within it. `a` goes directly to
+`Ctrl+V` first chooses a Workspace, then a Session within it. `V` chooses
+among the Workspaces with live Interactions and opens the live list at the
+first Interaction of the chosen one. `a` goes directly to
 the Session picker for the current Workspace. These only change what the client
 views; they never stop an outgoing Interaction. `A` lists all live
 Interactions with their Workspace and Session identities; in that list `d`

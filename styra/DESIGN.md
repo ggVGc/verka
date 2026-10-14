@@ -871,7 +871,8 @@ current focus is shown in the status line and by which region draws the cursor.
 | `A`             | Browse Sessions in the current Workspace with a preview     |
 | `/`             | In the Session picker, filter by Session name or first prompt (`Esc` abandons) |
 | `S`             | Stop the Interaction and return to a blank Session screen   |
-| `V`             | Choose a Workspace, then browse its Sessions                |
+| `Ctrl+V`        | Choose a Workspace, then browse its Sessions                |
+| `V`             | Jump the live list to a Workspace with live Interactions    |
 | `w`             | Choose a Session by the worktree it works in (not in details) |
 | `q`             | Quit (prompts if the session is still running)              |
 
@@ -923,7 +924,7 @@ temporary worktree, but the first form only summarizes the paths.
 
 ### Workspace and Session navigation
 
-`V` opens the Workspace picker. The list is ordered once on entry — Workspaces
+`Ctrl+V` opens the Workspace picker. The list is ordered once on entry — Workspaces
 holding an Interaction the server still accepts input for first, then the rest
 by recent access — and each such row is marked with a green dot and a count
 (`2 live`), so where work is in flight is legible directly rather than only
@@ -938,14 +939,15 @@ picker's conversation preview does) and the pane says `loading…` until it
 lands: a Workspace with no Sessions and an unread one must not read the same.
 
 Choosing a Workspace that holds live Interactions skips the Session picker
-entirely: the first live one — one waiting on the operator outranking one mid-turn,
-the newest winning a tie — becomes current, and the
-client lands on the main Interaction view with the live Interactions list open.
+entirely and takes the same path as `V`: the live Interactions list opens with
+its cursor on that Workspace's first entry, which loads as a j/k step would.
 The green dot the row carried is what `Enter` then acts on, and the rest of that
 Workspace's live work is on screen rather than a second picker away.
 
-Entering a Workspace at startup works the same way, whether it was picked from
-that list or found by the current directory: an ordinary `styra` in a directory
+Entering a Workspace at startup lands on live work too, whether it was picked
+from that list or found by the current directory: the first live Interaction —
+one waiting on the operator outranking one mid-turn, the newest winning a tie —
+becomes current, and an ordinary `styra` in a directory
 whose Workspace has live work opens on that work with the navigator up, rather
 than on the blank pending screen. A trailing prompt overrides this — that is
 input the operator has already given, so it starts an Interaction of its own —
@@ -1178,7 +1180,7 @@ request before Styra releases the next user message; its effort remains fixed
 because Claude's streaming control protocol exposes no corresponding setter.
 Changing provider still requires a new Session. A running turn cannot be
 changed in place.
-Opening another Session (`V`) adopts that Session's recorded launch selection.
+Opening another Session (`Ctrl+V`) adopts that Session's recorded launch selection.
 
 ### Workspace, interaction, and sandbox details
 

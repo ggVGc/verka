@@ -49,6 +49,7 @@ mod tail;
 mod terminal;
 mod timeline;
 mod workspace;
+mod workspace_jump;
 mod worktree_picker;
 
 use app::{App, LaunchPolicy};

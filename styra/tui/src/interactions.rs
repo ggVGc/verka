@@ -629,6 +629,29 @@ impl LiveInteractions {
         }
     }
 
+    /// Move the cursor to the first entry of `target`'s Workspace group, for
+    /// the Workspace jump. A Workspace scope that leaves `target` out is
+    /// widened to All first. Reports whether `target` had an entry to land on.
+    pub fn cursor_to_workspace(
+        &mut self,
+        target: &str,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> bool {
+        if workspace_id != Some(target) {
+            self.only_current_workspace = false;
+        }
+        let Some(index) = self
+            .display_indices(workspace_id)
+            .into_iter()
+            .find(|index| self.items[*index].workspace_id == target)
+        else {
+            return false;
+        };
+        self.move_cursor_to(self.items[index].id.clone(), current);
+        true
+    }
+
     /// A cursor that lands back on the Interaction already on screen — by
     /// walking off the end of the list, or straight back to where it started —
     /// has nothing to load, so it cancels the move rather than timing one out.
@@ -2635,6 +2658,33 @@ pub(crate) mod tests {
         live.cursor_previous_workspace("pending", workspace);
         assert_eq!(live.cursor("pending"), "pending");
         assert!(live.pending("pending").is_none());
+    }
+
+    /// The Workspace jump lands on the chosen Workspace's first entry, and
+    /// widens a Workspace scope that would have hidden it.
+    #[test]
+    fn the_workspace_jump_lands_on_the_workspaces_first_entry() {
+        let mut first = interaction("first", InteractionActivity::Running);
+        first.workspace_id = "other-workspace".into();
+        let mut second = interaction("second", InteractionActivity::Pending);
+        second.workspace_id = "other-workspace".into();
+        let mut live = LiveInteractions {
+            only_current_workspace: true,
+            ..Default::default()
+        };
+        live.open(
+            vec![
+                interaction("current", InteractionActivity::Pending),
+                first,
+                second,
+            ],
+            vec![],
+        );
+
+        assert!(live.cursor_to_workspace("other-workspace", "current", Some("workspace")));
+        assert!(!live.only_current_workspace);
+        assert_eq!(live.cursor("current"), "first");
+        assert!(!live.cursor_to_workspace("missing", "current", Some("workspace")));
     }
 
     /// A stopped Interaction stays in its own Workspace's group, in item

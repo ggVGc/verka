@@ -31,7 +31,8 @@ bindings! { GLOBAL = "Global";
     GLOBAL_INTERACTIONS: [Key::ch('a')] => Action::GlobalInteractions;
     GLOBAL_OVERVIEW: [Key::ch('v')] ("not in raw") => Action::GlobalOverview;
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
-    GLOBAL_WORKSPACES: [Key::ch('V')] => Action::GlobalWorkspaces;
+    GLOBAL_WORKSPACES: [Key::ctrl('v')] => Action::GlobalWorkspaces;
+    GLOBAL_WORKSPACE_JUMP: [Key::ch('V')] => Action::GlobalWorkspaceJump;
     GLOBAL_WORKTREES: [Key::ch('w')] ("not in details") => Action::GlobalWorktrees;
     GLOBAL_SESSION_WORKTREE: [Key::ch('W')] ("existing session")
         => Action::GlobalSessionWorktree;
@@ -395,6 +396,18 @@ bindings! { ACTION_MENU = "Actions";
     ACTION_MENU_CANCEL: [Key::code(KeyCode::Esc)] => Action::ActionsCancel;
 }
 
+bindings! { WORKSPACE_JUMP = "Jump to a Workspace";
+    // Typed at, as the action menu is.
+    WORKSPACE_JUMP_FILTER: [] as "any letter" => Action::WorkspaceJumpFilter;
+    WORKSPACE_JUMP_NEXT: [Key::code(KeyCode::Down), Key::ctrl('j'), Key::ctrl('n')]
+        => Action::WorkspaceJumpNext;
+    WORKSPACE_JUMP_PREV: [Key::code(KeyCode::Up), Key::ctrl('k'), Key::ctrl('p')]
+        => Action::WorkspaceJumpPrev;
+    WORKSPACE_JUMP_DELETE_WORD: [Key::ctrl('w')] => Action::WorkspaceJumpDeleteWord;
+    WORKSPACE_JUMP_OPEN: [Key::code(KeyCode::Enter)] => Action::WorkspaceJumpOpen;
+    WORKSPACE_JUMP_CANCEL: [Key::code(KeyCode::Esc)] => Action::WorkspaceJumpCancel;
+}
+
 // Bindings that belong to no window's reference: the prefix of a chord, and
 // the keys of the reference overlay itself, which says how to leave in its own
 // footer rather than in a list of rows.
@@ -436,6 +449,7 @@ pub(crate) enum Window {
     Launcher,
     TemplatePicker,
     ActionMenu,
+    WorkspaceJump,
 }
 
 impl Window {
@@ -466,6 +480,7 @@ impl Window {
             Self::Launcher => "launch",
             Self::TemplatePicker => "Driva templates",
             Self::ActionMenu => "actions",
+            Self::WorkspaceJump => "jump to a Workspace",
         }
     }
 
@@ -494,6 +509,7 @@ impl Window {
             Self::Launcher => &[LAUNCHER],
             Self::TemplatePicker => &[TEMPLATE_PICKER],
             Self::ActionMenu => &[ACTION_MENU],
+            Self::WorkspaceJump => &[WORKSPACE_JUMP],
         }
     }
 
@@ -589,7 +605,7 @@ mod reference_tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
 
-    const WINDOWS: [Window; 22] = [
+    const WINDOWS: [Window; 23] = [
         Window::Events,
         Window::Raw,
         Window::Messages,
@@ -612,6 +628,7 @@ mod reference_tests {
         Window::Launcher,
         Window::TemplatePicker,
         Window::ActionMenu,
+        Window::WorkspaceJump,
     ];
 
     /// Every window answers `?` with something, and with its own commands

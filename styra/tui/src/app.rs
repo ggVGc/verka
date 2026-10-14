@@ -302,6 +302,8 @@ pub struct App {
     pub link_menu: Option<LinkMenu>,
     /// The current window's actions, searchable, while Space has them open.
     pub action_menu: Option<crate::action_menu::ActionMenu>,
+    /// The Workspaces with live work, searchable, while `V` has them open.
+    pub workspace_jump: Option<crate::workspace_jump::WorkspaceJump>,
     /// The modal choice of how the selected entry seeds a new Session.
     pub branch_prompt: Option<BranchPrompt>,
     /// The linked Session's log, while the preview is on a `branch` marker;
@@ -352,6 +354,12 @@ pub enum Request {
     JumpBack,
     /// Open the server's live interactions above the main event timeline.
     Interactions,
+    /// Choose among the Workspaces with live work, to open the live
+    /// interactions at the first of that Workspace's.
+    WorkspaceJump,
+    /// Open the live interactions with the cursor on the first of this
+    /// Workspace's.
+    InteractionsInWorkspace(String),
     /// Show every running and idle interaction as a grid, with a fresh
     /// listing behind it.
     Overview,
@@ -535,6 +543,7 @@ impl App {
             link_highlight: None,
             link_menu: None,
             action_menu: None,
+            workspace_jump: None,
             branch_prompt: None,
             branch_log: None,
             recording: None,

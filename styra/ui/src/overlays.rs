@@ -166,9 +166,47 @@ pub struct ActionMenuView<'a> {
 const ACTION_MENU_ROWS: u16 = 16;
 
 pub fn render_action_menu(frame: &mut Frame, menu: ActionMenuView<'_>, frame_area: Rect) {
-    // Sized to every action rather than the matches, so the box does not
-    // jump about as the query narrows it.
-    let height = (menu.rows.len() as u16)
+    render_centered_fuzzy_list(
+        frame,
+        &FuzzyListView {
+            title: &format!(" {} actions ", menu.window),
+            rows: menu.rows,
+            list: menu.list,
+            focused: true,
+            empty_note: "no actions here",
+            hint: " type to narrow · Enter runs · Esc closes ",
+        },
+        frame_area,
+    );
+}
+
+#[derive(Clone, Copy)]
+pub struct WorkspaceJumpView<'a> {
+    /// Each Workspace with live work, with how many of its Interactions are.
+    pub rows: &'a [String],
+    pub list: &'a FuzzyList,
+}
+
+pub fn render_workspace_jump(frame: &mut Frame, jump: WorkspaceJumpView<'_>, frame_area: Rect) {
+    render_centered_fuzzy_list(
+        frame,
+        &FuzzyListView {
+            title: " Jump to a Workspace ",
+            rows: jump.rows,
+            list: jump.list,
+            focused: true,
+            empty_note: "no Workspace has live interactions",
+            hint: " type to narrow · Enter opens · Esc closes ",
+        },
+        frame_area,
+    );
+}
+
+/// A narrowing list in a box at the middle of the frame.
+fn render_centered_fuzzy_list(frame: &mut Frame, view: &FuzzyListView<'_>, frame_area: Rect) {
+    // Sized to every row rather than the matches, so the box does not jump
+    // about as the query narrows it.
+    let height = (view.rows.len() as u16)
         .min(ACTION_MENU_ROWS)
         .saturating_add(2)
         .max(4)
@@ -181,18 +219,7 @@ pub fn render_action_menu(frame: &mut Frame, menu: ActionMenuView<'_>, frame_are
         height,
     };
     frame.render_widget(Clear, area);
-    render_fuzzy_list(
-        frame,
-        &FuzzyListView {
-            title: &format!(" {} actions ", menu.window),
-            rows: menu.rows,
-            list: menu.list,
-            focused: true,
-            empty_note: "no actions here",
-            hint: " type to narrow · Enter runs · Esc closes ",
-        },
-        area,
-    );
+    render_fuzzy_list(frame, view, area);
 }
 
 #[derive(Clone, Copy)]

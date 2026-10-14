@@ -140,7 +140,8 @@ where `Space` keeps its own link menu.
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
-| `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
+| `a` / `A` / `Ctrl+V` | live interactions / sessions in this Workspace / Workspaces |
+| `V` | choose a Workspace with live interactions (typed at) and open the live list at its first |
 | `v` | overview: every running and idle interaction as a grid of tiles |
 | `w` (not in details) | worktrees and the sessions in each; `Enter` opens the selected session |
 | `Ctrl+L` | choose provider, model, and effort (one list, typed at) |
@@ -257,7 +258,7 @@ selected Session completed and `Z` marks it abandoned — given up on rather tha
 finished; each key, pressed on a Session already marked that way, unmarks it.
 Neither touches a sealed Session. `n` leaves the list
 without resuming anything and starts a new Session in the Workspace whose list
-you were reading. `V` opens the Workspace list, which is typed at: every
+you were reading. `Ctrl+V` opens the Workspace list, which is typed at: every
 printable key filters it over the Workspace name and host path, `Ctrl+W` drops the last
 word, and `Esc` clears the filter before a second `Esc` backs out. The arrows
 (or `Ctrl+J`/`Ctrl+K`) move and `Enter` opens. `Ctrl+N` enters the selected

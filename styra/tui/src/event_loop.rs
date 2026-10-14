@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::action_menu::{self, ActionMenu};
+use crate::workspace_jump::{self, WorkspaceJump};
 use crate::activity::Status;
 use crate::app::{App, Focus, LaunchPolicy, Request, View};
 use crate::audio::AudioInput;
@@ -62,6 +63,7 @@ fn message_paste_active(app: &App) -> bool {
         && app.branch_prompt.is_none()
         && app.link_menu.is_none()
         && app.action_menu.is_none()
+        && app.workspace_jump.is_none()
         && app.insert.is_none()
         && app.git_repository_prompt.is_none()
         && app.launch.prompt.is_none()
@@ -81,6 +83,7 @@ fn action_menu_available(app: &App) -> bool {
         && app.branch_prompt.is_none()
         && app.link_menu.is_none()
         && app.link_highlight.is_none()
+        && app.workspace_jump.is_none()
         && app.insert.is_none()
         && app.git_repository_prompt.is_none()
         && app.launch.prompt.is_none()
@@ -1156,6 +1159,18 @@ fn run_rounds(
             }
             continue;
         }
+        // Typed at too, so it owns the keys the same way.
+        if let Some(jump) = app.workspace_jump.as_mut() {
+            match jump.handle_key(key) {
+                workspace_jump::Outcome::Stay => {}
+                workspace_jump::Outcome::Cancel => app.workspace_jump = None,
+                workspace_jump::Outcome::Open(id) => {
+                    app.workspace_jump = None;
+                    app.ask(Request::InteractionsInWorkspace(id));
+                }
+            }
+            continue;
+        }
         if keys::GLOBAL_ACTION_MENU.matches(key) && action_menu_available(app) {
             // A `z` pressed before Space would otherwise swallow the first key
             // the menu runs.
@@ -1647,16 +1662,14 @@ fn run_rounds(
             Some(Request::Integrate(_) | Request::GenerateIntegrationMessage) => {}
             Some(Request::Workspace) => {
                 let mut workspaces = client.list_workspaces()?;
+                // Backing out never leaves Styra, even with no Workspace (or a
+                // deleted one) behind the list: it lands on the interaction
+                // view, where `q` is still the way out.
                 let Some(choice) =
                     picker::run_workspace_picker(terminal, client, &mut workspaces, None)?
                 else {
-                    if !client
-                        .list_workspaces()?
-                        .iter()
-                        .any(|workspace| workspace.id == workspace_id)
-                    {
-                        return Ok(RunOutcome::Quit);
-                    }
+                    app.view = crate::app::View::Events;
+                    app.focus = Focus::List;
                     continue;
                 };
                 let workspace = match choice {
@@ -1683,19 +1696,15 @@ fn run_rounds(
                         session::create_workspace(client, host_path, None)?
                     }
                 };
-                // A Workspace with work in flight is entered at that work: the
-                // first live Interaction becomes current and its navigator
-                // opens, so the operator sees the rest of the live list without
-                // being asked which Session they meant.
-                let live_interaction = client.list_interactions().ok().and_then(|interactions| {
-                    crate::interactions::first_live_in_workspace(&interactions, &workspace.id)
-                });
-                if let Some(interaction) = live_interaction {
-                    return Ok(RunOutcome::OpenWorkspace {
-                        workspace: Box::new(workspace),
-                        session_id: Some(interaction.id),
-                        open_interactions: true,
-                    });
+                // A Workspace with work in flight is entered at that work, the
+                // way `V` enters it: the live list opens with the cursor on the
+                // Workspace's first Interaction, so the operator sees the rest
+                // of the live list without being asked which Session they meant.
+                if client.list_interactions().is_ok_and(|interactions| {
+                    workspace_jump::has_live_work(&interactions, &workspace.id)
+                }) {
+                    app.ask(Request::InteractionsInWorkspace(workspace.id));
+                    continue;
                 }
                 let mut sessions = client.list_sessions(&workspace.id)?;
                 if sessions.is_empty() {
@@ -1810,6 +1819,37 @@ fn run_rounds(
                 app.focus = Focus::List;
                 app.interactions.open(interactions, workspaces);
                 interactions_refreshed = Instant::now();
+            }
+            // A fresh listing, as `a` takes, so the choice offered is of the
+            // work running now rather than at the last refresh.
+            Some(Request::WorkspaceJump) => {
+                let interactions = client.list_interactions()?;
+                let workspaces = client.list_workspaces()?;
+                let jump = WorkspaceJump::new(&workspaces, &interactions);
+                if jump.is_empty() {
+                    app.show_warning("no Workspace has live interactions");
+                    continue;
+                }
+                app.interactions.refresh(interactions);
+                app.interactions.workspaces = workspaces;
+                interactions_refreshed = Instant::now();
+                app.workspace_jump = Some(jump);
+            }
+            Some(Request::InteractionsInWorkspace(target)) => {
+                let interactions = client.list_interactions()?;
+                let workspaces = client.list_workspaces()?;
+                app.view = crate::app::View::Events;
+                app.focus = Focus::List;
+                app.interactions.open(interactions, workspaces);
+                interactions_refreshed = Instant::now();
+                let session_id = app.session_id.clone();
+                if !app.interactions.cursor_to_workspace(
+                    &target,
+                    &session_id,
+                    app.workspace.id.as_deref(),
+                ) {
+                    app.show_warning("the list's filters hide that Workspace's interactions");
+                }
             }
             // The overview reads the same snapshot the loop refreshes on its
             // timer, but the tiles name their Workspaces, and that list is

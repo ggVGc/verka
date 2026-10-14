@@ -115,6 +115,8 @@ pub struct ApplicationOverlays<'a> {
     pub link_menu: Option<overlays::LinkMenuView<'a>>,
     /// The current window's actions, searchable, opened with Space.
     pub action_menu: Option<overlays::ActionMenuView<'a>>,
+    /// The Workspaces with live work, searchable, opened with `V`.
+    pub workspace_jump: Option<overlays::WorkspaceJumpView<'a>>,
     pub tags: Option<overlays::TagPickerView<'a>>,
     /// A synchronous call the operator started, still running. It takes the
     /// message box's place and covers everything else: no key is read until
@@ -258,6 +260,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     }
     if let Some(menu) = view.overlays.action_menu {
         overlays::render_action_menu(frame, menu, frame.area());
+    }
+    if let Some(jump) = view.overlays.workspace_jump {
+        overlays::render_workspace_jump(frame, jump, frame.area());
     }
     if let Some(launcher) = view.overlays.launcher {
         launcher::render_launcher(frame, launcher, frame.area());
