@@ -18,7 +18,10 @@ pub(crate) fn view(app: &App) -> OverviewView<'_> {
     OverviewView {
         tiles,
         running_only: app.overview.running_only,
-        only_current_workspace: app.interactions.only_current_workspace,
+        workspace_scope: app
+            .interactions
+            .only_current_workspace
+            .then(|| workspace_scope(app)),
         selected: app.overview.selected(
             &app.interactions,
             &app.session_id,
@@ -27,6 +30,25 @@ pub(crate) fn view(app: &App) -> OverviewView<'_> {
         links: super::list::ui_link_display(app.link_display),
         search: app.search.view(),
     }
+}
+
+/// The name of the Workspace a Workspace scope shows: the one the Workspace
+/// jump previews, else the one on screen.
+fn workspace_scope(app: &App) -> Cow<'_, str> {
+    let Some(id) = app.overview.scope(app.workspace.id.as_deref()) else {
+        return Cow::Borrowed("current Workspace");
+    };
+    workspace_name(app, id)
+}
+
+fn workspace_name<'a>(app: &'a App, id: &'a str) -> Cow<'a, str> {
+    app.interactions
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == id)
+        .map(crate::workspace::display_name)
+        .map(Cow::Owned)
+        .unwrap_or(Cow::Borrowed(id))
 }
 
 fn tile<'a>(app: &'a App, interaction: &'a InteractionSummary, now_ms: u64) -> OverviewTile<'a> {
@@ -41,14 +63,7 @@ fn tile<'a>(app: &'a App, interaction: &'a InteractionSummary, now_ms: u64) -> O
             .name(&interaction.id)
             .map(Cow::Borrowed)
             .unwrap_or_else(|| Cow::Borrowed(styra_ui::picker::short_id(&interaction.id))),
-        workspace: app
-            .interactions
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.id == interaction.workspace_id)
-            .map(crate::workspace::display_name)
-            .map(Cow::Owned)
-            .unwrap_or(Cow::Borrowed(interaction.workspace_id.as_str())),
+        workspace: workspace_name(app, &interaction.workspace_id),
         selection: Cow::Owned(crate::launcher::label(&interaction.selection)),
         branch: interaction
             .checkout

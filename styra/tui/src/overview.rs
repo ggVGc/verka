@@ -113,7 +113,7 @@ impl Overview {
 
     /// The Workspace a Workspace scope shows: the previewed one, if any, else
     /// `workspace_id`, the one on screen.
-    fn scope<'a>(&'a self, workspace_id: Option<&'a str>) -> Option<&'a str> {
+    pub(crate) fn scope<'a>(&'a self, workspace_id: Option<&'a str>) -> Option<&'a str> {
         self.workspace.as_deref().or(workspace_id)
     }
 

@@ -62,7 +62,9 @@ pub struct OverviewMessage<'a> {
 pub struct OverviewView<'a> {
     pub tiles: Vec<OverviewTile<'a>>,
     pub running_only: bool,
-    pub only_current_workspace: bool,
+    /// The name of the one Workspace the grid is narrowed to, or `None` when
+    /// it shows every Workspace.
+    pub workspace_scope: Option<Cow<'a, str>>,
     /// The tile under the cursor, an index into [`Self::tiles`].
     pub selected: usize,
     /// How links in the messages are drawn, as in the event list.
@@ -151,19 +153,43 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
             )
         })
         .count();
-    let scope = if view.only_current_workspace {
-        "current Workspace"
-    } else {
-        "All"
+    let counts = format!(
+        " · {running} running · {} idle · r running only: {} · ? keys ",
+        view.tiles.len() - running,
+        if view.running_only { "on" } else { "off" }
+    );
+    // A narrowed grid names its Workspace up front, on a band of the
+    // Workspace hue, and takes that hue for its whole frame.
+    let (title, frame_color) = match &view.workspace_scope {
+        Some(name) => (
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!(" Workspace: {name} "),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(theme::OVERVIEW_WORKSPACE_FRAME)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" overview · w scope: this Workspace"),
+                Span::raw(counts),
+            ]),
+            theme::OVERVIEW_WORKSPACE_FRAME,
+        ),
+        None => (
+            Line::from(format!(" overview · w scope: All{counts}")),
+            theme::ACCENT,
+        ),
     };
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::ACCENT))
-        .title(format!(
-            " overview · w scope: {scope} · {running} running · {} idle · r running only: {} · ? keys ",
-            view.tiles.len() - running,
-            if view.running_only { "on" } else { "off" }
-        ));
+        .border_type(if view.workspace_scope.is_some() {
+            BorderType::Double
+        } else {
+            BorderType::Plain
+        })
+        .border_style(Style::default().fg(frame_color))
+        .title(title);
     if let Some(prompt) = search::prompt(&view.search) {
         block = block.title_bottom(prompt);
     }
@@ -556,7 +582,7 @@ mod tests {
     fn tiles_off_the_cursor_are_faded() {
         let view = OverviewView {
             running_only: false,
-            only_current_workspace: false,
+            workspace_scope: None,
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
@@ -606,7 +632,7 @@ mod tests {
         waiting.newly_idle = true;
         let view = OverviewView {
             running_only: false,
-            only_current_workspace: false,
+            workspace_scope: None,
             tiles: vec![working, waiting],
             selected: 0,
             links: LinkDisplay::Compact,
@@ -641,7 +667,7 @@ mod tests {
             .collect();
         let view = OverviewView {
             running_only: false,
-            only_current_workspace: false,
+            workspace_scope: None,
             tiles: vec![talking],
             selected: 0,
             links: LinkDisplay::Compact,
@@ -678,7 +704,7 @@ mod tests {
         ];
         let view = OverviewView {
             running_only: false,
-            only_current_workspace: false,
+            workspace_scope: None,
             tiles: vec![talking],
             selected: 0,
             links: LinkDisplay::Compact,
@@ -701,7 +727,7 @@ mod tests {
     fn a_narrow_screen_stacks_the_tiles_in_one_column() {
         let view = OverviewView {
             running_only: false,
-            only_current_workspace: false,
+            workspace_scope: None,
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
@@ -723,7 +749,7 @@ mod tests {
     fn the_tiles_fill_the_whole_frame() {
         let mut view = OverviewView {
             running_only: false,
-            only_current_workspace: false,
+            workspace_scope: None,
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
@@ -789,7 +815,7 @@ mod tests {
         let names = ["one", "two", "three", "four", "five", "six", "seven"];
         let view = OverviewView {
             running_only: false,
-            only_current_workspace: false,
+            workspace_scope: None,
             tiles: names
                 .iter()
                 .map(|name| tile(name, InteractionStatus::Idle))
@@ -829,7 +855,7 @@ mod tests {
         let names = ["one", "two", "three", "four", "five", "six"];
         let view = OverviewView {
             running_only: false,
-            only_current_workspace: false,
+            workspace_scope: None,
             tiles: names
                 .iter()
                 .map(|name| tile(name, InteractionStatus::Idle))
@@ -865,7 +891,7 @@ mod tests {
                 query: Some("retry"),
                 typing: true,
             },
-            only_current_workspace: false,
+            workspace_scope: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
         terminal
@@ -906,7 +932,7 @@ mod tests {
     fn an_empty_fleet_says_so() {
         let view = OverviewView {
             running_only: false,
-            only_current_workspace: false,
+            workspace_scope: None,
             tiles: Vec::new(),
             selected: 0,
             links: LinkDisplay::Compact,
@@ -923,24 +949,28 @@ mod tests {
     fn the_grid_shows_the_shared_workspace_scope() {
         let mut view = OverviewView {
             running_only: false,
-            only_current_workspace: true,
+            workspace_scope: Some("Payments".into()),
             tiles: Vec::new(),
             selected: 0,
             links: LinkDisplay::Compact,
             search: SearchView::default(),
         };
         let (screen, _) = draw(&view, 120, 5);
-        assert!(screen.contains("w scope: current Workspace"), "{screen}");
-        view.only_current_workspace = false;
+        assert!(screen.contains("Workspace: Payments"), "{screen}");
+        assert!(screen.contains("w scope: this Workspace"), "{screen}");
+        assert!(screen.starts_with('╔'), "{screen}");
+        view.workspace_scope = None;
         let (screen, _) = draw(&view, 120, 5);
         assert!(screen.contains("w scope: All"), "{screen}");
+        assert!(!screen.contains("Workspace:"), "{screen}");
+        assert!(screen.starts_with('┌'), "{screen}");
     }
 
     #[test]
     fn an_empty_running_filter_shows_its_state() {
         let view = OverviewView {
             running_only: true,
-            only_current_workspace: false,
+            workspace_scope: None,
             tiles: Vec::new(),
             selected: 0,
             links: LinkDisplay::Compact,
