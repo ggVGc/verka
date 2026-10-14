@@ -1832,9 +1832,16 @@ pub fn summary_line(
         }
         let mut summary = file_action_summary(entry.event)
             .unwrap_or_else(|| protocol.presented_summary(entry.event, PresentationMode::Pretty));
+        if matches!(entry.event, AgentEvent::AgentMessage { text } if crate::answer::sections(text).next().is_some())
+        {
+            if let Some(DetailBlock::Text(text)) =
+                crate::answer::presented_detail(entry.event, protocol).first()
+            {
+                summary = text.lines().next().unwrap_or_default().to_owned();
+            }
+        }
         if expanded && summary.ends_with('…') {
-            if let Some(first_line) = protocol
-                .presented_detail(entry.event, PresentationMode::Pretty)
+            if let Some(first_line) = crate::answer::presented_detail(entry.event, protocol)
                 .first()
                 .and_then(|block| match block {
                     DetailBlock::Text(text) | DetailBlock::Code { text, .. } => text.lines().next(),
@@ -2018,7 +2025,7 @@ pub fn detail_lines_with_links(
     let mut entries_before = 0;
     for block in with_live_branch_name(
         event,
-        protocol.presented_detail(event, PresentationMode::Pretty),
+        crate::answer::presented_detail(event, protocol),
         branch_name,
     ) {
         match block {

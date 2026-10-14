@@ -9,6 +9,49 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use styra_protocol::{Answer, AnswerValue, FileLocation};
 
+/// Internal links name a section in the original agent message.
+pub const LINK_PREFIX: &str = "styra:answer:";
+
+pub fn link_section(destination: &str) -> Option<usize> {
+    destination.strip_prefix(LINK_PREFIX)?.parse().ok()
+}
+
+/// Complete sections only: unfinished streamed content stays readable.
+pub fn sections(message: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
+    use styra_protocol::contract::{CLOSE, OPEN};
+    let mut offset = 0;
+    std::iter::from_fn(move || {
+        let start = offset + message[offset..].find(OPEN)?;
+        let body = start + OPEN.len();
+        let end = body + message[body..].find(CLOSE)? + CLOSE.len();
+        offset = end;
+        Some((start, end))
+    })
+}
+
+/// Use the same replacement for rendering and link navigation. The original
+/// event remains available for parsing, copying and the raw view.
+pub fn presented_detail(
+    event: &styra_protocol::event::AgentEvent,
+    protocol: styra_protocol::event::Protocol,
+) -> Vec<styra_protocol::event::DetailBlock> {
+    use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode};
+    if let AgentEvent::AgentMessage { text } = event {
+        let mut output = String::new();
+        let mut offset = 0;
+        for (index, (start, end)) in sections(text).enumerate() {
+            output.push_str(&text[offset..start]);
+            output.push_str(&format!("[answer]({LINK_PREFIX}{index})"));
+            offset = end;
+        }
+        if offset > 0 {
+            output.push_str(&text[offset..]);
+            return vec![DetailBlock::Text(output)];
+        }
+    }
+    protocol.presented_detail(event, PresentationMode::Pretty)
+}
+
 pub struct AnswerView<'a> {
     pub chrome: PanelChrome,
     pub answer: Option<&'a Answer>,
@@ -206,6 +249,41 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn answer_sections_render_as_links_and_leave_surrounding_prose() {
+        use styra_protocol::event::{AgentEvent, DetailBlock, Protocol};
+        let text = "Before\n<styra:answer>\nsecret.rs\n</styra:answer>\nAfter";
+        let event = AgentEvent::AgentMessage { text: text.into() };
+        let blocks = presented_detail(&event, Protocol::CodexJsonl);
+        let DetailBlock::Text(output) = &blocks[0] else {
+            panic!("expected text")
+        };
+        assert_eq!(output, "Before\n[answer](styra:answer:0)\nAfter");
+        assert_eq!(crate::markdown::markdown_link_count(output), 1);
+        assert_eq!(
+            crate::markdown::markdown_link_destination(output, 0).as_deref(),
+            Some("styra:answer:0")
+        );
+        let lines = crate::event_list::message_rows(
+            &event,
+            None,
+            80,
+            Protocol::CodexJsonl,
+            crate::markdown::LinkDisplay::Compact,
+        );
+        let screen = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!screen.contains("secret.rs"), "{screen}");
+        assert!(screen.contains("answer"), "{screen}");
+        assert!(
+            screen.contains("Before") && screen.contains("After"),
+            "{screen}"
+        );
     }
 
     #[test]

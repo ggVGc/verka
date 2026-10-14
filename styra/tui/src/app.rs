@@ -1327,6 +1327,10 @@ impl App {
         let Some(destination) = self.highlighted_link_destination() else {
             return self.show_warning("selected link no longer exists");
         };
+        if styra_ui::answer::link_section(&destination).is_some() {
+            self.open_highlighted_link();
+            return;
+        }
         let web = is_web_address(&destination);
         self.link_menu = Some(LinkMenu::new(destination, web));
     }
@@ -1339,7 +1343,27 @@ impl App {
         let Some(destination) = self.highlighted_link_destination() else {
             return self.show_warning("selected link no longer exists");
         };
-        if is_web_address(&destination) {
+        if let Some(section) = styra_ui::answer::link_section(&destination) {
+            let highlight = self.link_highlight.unwrap();
+            let AgentEvent::AgentMessage { text } = self.timeline.entries[highlight.entry].event()
+            else {
+                return self.show_warning("selected answer no longer exists");
+            };
+            let Some((start, end)) = styra_ui::answer::sections(text).nth(section) else {
+                return self.show_warning("selected answer no longer exists");
+            };
+            let contract = self.timeline.entries[..highlight.entry]
+                .iter()
+                .rev()
+                .find(|entry| matches!(entry.event(), AgentEvent::UserMessage { .. }))
+                .and_then(|entry| entry.contract)
+                .unwrap_or(Contract::Text);
+            self.answer.set(Ok(styra_protocol::contract::read(
+                &text[start..end],
+                contract,
+            )));
+            self.view = View::Answer;
+        } else if is_web_address(&destination) {
             self.ask(Request::OpenUrl(destination));
         } else if let Some((_, path, _)) = self.highlighted_link_target() {
             match path {
@@ -1360,7 +1384,7 @@ impl App {
         &self,
     ) -> Option<(String, Result<PathBuf, String>, Option<u32>)> {
         let destination = self.highlighted_link_destination()?;
-        if is_web_address(&destination) {
+        if is_web_address(&destination) || styra_ui::answer::link_section(&destination).is_some() {
             return None;
         }
         let (path, line) = split_link_location(&destination);
@@ -1387,32 +1411,28 @@ impl App {
     /// The active link's destination, exactly as the reply wrote it.
     fn highlighted_link_destination(&self) -> Option<String> {
         let highlight = self.link_highlight?;
-        self.selection
-            .provider
-            .protocol()
-            .presented_detail(
-                self.timeline.entries.get(highlight.entry)?.event(),
-                styra_protocol::event::PresentationMode::Pretty,
-            )
-            .into_iter()
-            .filter_map(|block| match block {
-                DetailBlock::Text(text) => Some(text),
-                DetailBlock::Code { .. } => None,
-            })
-            .scan(highlight.link, |remaining, text| {
-                let count = styra_ui::markdown::markdown_link_count(&text);
-                if *remaining < count {
-                    let destination =
-                        styra_ui::markdown::markdown_link_destination(&text, *remaining);
-                    *remaining = 0;
-                    Some(destination)
-                } else {
-                    *remaining -= count;
-                    Some(None)
-                }
-            })
-            .flatten()
-            .next()
+        styra_ui::answer::presented_detail(
+            self.timeline.entries.get(highlight.entry)?.event(),
+            self.selection.provider.protocol(),
+        )
+        .into_iter()
+        .filter_map(|block| match block {
+            DetailBlock::Text(text) => Some(text),
+            DetailBlock::Code { .. } => None,
+        })
+        .scan(highlight.link, |remaining, text| {
+            let count = styra_ui::markdown::markdown_link_count(&text);
+            if *remaining < count {
+                let destination = styra_ui::markdown::markdown_link_destination(&text, *remaining);
+                *remaining = 0;
+                Some(destination)
+            } else {
+                *remaining -= count;
+                Some(None)
+            }
+        })
+        .flatten()
+        .next()
     }
 
     fn find_link_from(&self, start: usize, first_link: usize) -> Option<LinkHighlight> {
@@ -1449,19 +1469,16 @@ impl App {
     }
 
     fn entry_link_count(&self, index: usize) -> usize {
-        self.selection
-            .provider
-            .protocol()
-            .presented_detail(
-                self.timeline.entries[index].event(),
-                styra_protocol::event::PresentationMode::Pretty,
-            )
-            .into_iter()
-            .map(|block| match block {
-                DetailBlock::Text(text) => styra_ui::markdown::markdown_link_count(&text),
-                DetailBlock::Code { .. } => 0,
-            })
-            .sum()
+        styra_ui::answer::presented_detail(
+            self.timeline.entries[index].event(),
+            self.selection.provider.protocol(),
+        )
+        .into_iter()
+        .map(|block| match block {
+            DetailBlock::Text(text) => styra_ui::markdown::markdown_link_count(&text),
+            DetailBlock::Code { .. } => 0,
+        })
+        .sum()
     }
 
     fn reveal_highlighted_link(&mut self) {
@@ -3529,6 +3546,40 @@ mod tests {
 
     /// Opening the view asks for the answer; it cannot render one it never
     /// fetched, and the operator should not have to press a second key.
+    #[test]
+    fn answer_links_open_the_selected_messages_contract_and_section() {
+        for contract in styra_protocol::contract::CONTRACTS {
+            let mut app = app();
+            app.push_event(AgentEvent::UserMessage {
+                text: styra_protocol::contract::frame("show me", contract),
+            });
+            let source = "Before\n<styra:answer>\nfirst\n</styra:answer>\nBetween\n<styra:answer>\nsecond\n</styra:answer>\nAfter";
+            app.push_event(AgentEvent::AgentMessage {
+                text: source.into(),
+            });
+            app.push_event(AgentEvent::UserMessage {
+                text: "another turn".into(),
+            });
+            app.push_event(AgentEvent::AgentMessage {
+                text: "newer reply".into(),
+            });
+            app.timeline.selected = 1;
+            app.highlight_first_link();
+            assert_eq!(app.entry_link_count(1), 2);
+            app.highlight_next_link();
+            assert!(app.highlighted_link_target().is_none());
+            app.open_highlighted_link();
+            assert_eq!(app.view, View::Answer);
+            assert_eq!(app.answer.answer().unwrap().contract, contract);
+            assert_eq!(
+                app.answer.answer().unwrap().source,
+                "<styra:answer>\nsecond\n</styra:answer>"
+            );
+            assert!(app.link_highlight.is_none());
+            assert_eq!(app.take_request(), None);
+        }
+    }
+
     #[test]
     fn opening_the_answer_view_requests_the_answer() {
         let mut app = app();

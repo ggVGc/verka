@@ -13,7 +13,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
-use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
+use styra_protocol::event::{AgentEvent, DetailBlock, Protocol};
 
 const DETAIL_INDENT: &str = "    ";
 
@@ -304,8 +304,7 @@ fn detail_lines(
     let mut entries_before = 0;
     let blocks = crate::event_list::with_live_branch_name(
         event,
-        view.protocol
-            .presented_detail(event, PresentationMode::Pretty),
+        crate::answer::presented_detail(event, view.protocol),
         branch_name,
     );
     for (index, block) in blocks.into_iter().enumerate() {
