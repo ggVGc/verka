@@ -29,10 +29,10 @@ bindings! { GLOBAL = "Global";
     GLOBAL_DIFF: [Key::ch('d')] ("checkout with a branch point") => Action::GlobalDiff;
     GLOBAL_DIFF_FULLSCREEN: [Key::ch('D')] ("not in details") => Action::GlobalDiffFullscreen;
     GLOBAL_INTERACTIONS: [Key::ch('a')] => Action::GlobalInteractions;
-    GLOBAL_OVERVIEW: [Key::ch('v')] ("not in raw") => Action::GlobalOverview;
+    GLOBAL_OVERVIEW: [Key::ch('o')] => Action::GlobalOverview;
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
     GLOBAL_WORKSPACES: [Key::ctrl('v')] => Action::GlobalWorkspaces;
-    GLOBAL_WORKSPACE_JUMP: [Key::ch('V')] => Action::GlobalWorkspaceJump;
+    GLOBAL_WORKSPACE_JUMP: [Key::ch('v')] ("not in raw") => Action::GlobalWorkspaceJump;
     GLOBAL_WORKTREES: [Key::ch('w')] ("not in details") => Action::GlobalWorktrees;
     GLOBAL_SESSION_WORKTREE: [Key::ch('W')] ("existing session")
         => Action::GlobalSessionWorktree;
@@ -72,7 +72,7 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_FIRST: [Key::ch('g')] => Action::EventsFirst;
     EVENTS_LAST: [Key::ch('G')] => Action::EventsLast;
     EVENTS_LINK_MENU: [Key::ch(' ')] ("link highlighted") => Action::EventsLinkMenu;
-    EVENTS_TOGGLE_EXPAND: [Key::code(KeyCode::Enter), Key::ch('o')]
+    EVENTS_TOGGLE_EXPAND: [Key::code(KeyCode::Enter)]
         => Action::EventsToggleExpand;
     EVENTS_EXPAND_ONLY: [Key::ch('O')] => Action::EventsExpandOnly;
     EVENTS_EXPAND_ALL: [Key::ch('R')] as "z R" => Action::EventsExpandAll;
@@ -260,7 +260,7 @@ bindings! { OVERVIEW = "Overview";
     OVERVIEW_SCOPE: [Key::ch('w')] => Action::InteractionsScope;
     OVERVIEW_RUNNING_ONLY: [Key::ch('r')] => Action::OverviewRunningOnly;
     OVERVIEW_SEARCH: [Key::ch('/')] => Action::OverviewSearch;
-    OVERVIEW_CLOSE: [Key::ch('v'), Key::code(KeyCode::Esc)] => Action::OverviewClose;
+    OVERVIEW_CLOSE: [Key::ch('o'), Key::code(KeyCode::Esc)] => Action::OverviewClose;
 }
 
 bindings! { BRANCH = "Branch from selected entry";
@@ -711,7 +711,7 @@ mod reference_tests {
         assert_eq!(GLOBAL_FILES_ALIAS.action(), Action::GlobalFiles);
         assert_eq!(EVENTS_SCROLL_DOWN.label(), "J");
         assert_eq!(EVENTS_NEXT_ENTRY.label(), "↓");
-        assert_eq!(EVENTS_TOGGLE_EXPAND.label(), "Enter/o");
+        assert_eq!(OVERVIEW_CLOSE.label(), "o/Esc");
         assert_eq!(EDITOR_NEWLINE.label(), "alt-Enter");
         assert_eq!(
             GLOBAL_SESSION_WORKTREE.label(),

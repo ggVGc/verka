@@ -511,6 +511,54 @@ fn interaction_navigator_passthrough(key: crossterm::event::KeyEvent) -> bool {
         || keys::GLOBAL_NEW_SESSION.matches(key)
 }
 
+/// Open the live interactions with the cursor on the first of `target`'s, the
+/// way `v` lands. Run where the Workspace is chosen rather than asked for: a
+/// request is only taken once a key reaches the dispatch, so the cursor would
+/// not settle and load until the operator pressed another.
+fn open_interactions_in_workspace(app: &mut App, client: &Client, target: &str) -> Result<()> {
+    let interactions = client.list_interactions()?;
+    let workspaces = client.list_workspaces()?;
+    app.view = crate::app::View::Events;
+    app.focus = Focus::List;
+    app.interactions.open(interactions, workspaces);
+    let session_id = app.session_id.clone();
+    if !app
+        .interactions
+        .cursor_to_workspace(target, &session_id, app.workspace.id.as_deref())
+    {
+        app.show_warning("the list's filters hide that Workspace's interactions");
+    }
+    Ok(())
+}
+
+/// Over the grid, show the Workspace highlighted in the jump by moving the
+/// grid's cursor onto its first tile. Only the grid's own cursor moves, so
+/// nothing loads until the choice is made, and Esc has nothing to undo but
+/// the cursor and scope the jump remembered.
+fn preview_workspace_jump(app: &mut App) {
+    let Some(target) = app
+        .workspace_jump
+        .as_ref()
+        .filter(|jump| jump.grid.is_some())
+        .and_then(|jump| jump.selected())
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    select_workspace_in_grid(app, &target);
+}
+
+/// Narrow the grid to `target` and move its cursor to `target`'s first tile.
+/// The grid shows `target` in place of the Workspace on screen until a tile of
+/// it has loaded.
+fn select_workspace_in_grid(app: &mut App, target: &str) -> bool {
+    app.interactions.only_current_workspace = true;
+    app.overview.workspace =
+        (app.workspace.id.as_deref() != Some(target)).then(|| target.to_owned());
+    app.overview
+        .select_workspace(&app.interactions, target, app.workspace.id.as_deref())
+}
+
 /// Load the interaction the list or grid cursor has moved onto, if it is not
 /// the one already on screen. Called when the cursor settles, and ahead of any
 /// key that acts on the row under it, so an outstanding move never leaves a
@@ -529,6 +577,10 @@ fn load_cursored_interaction(
     if let Some(overview) = overview {
         app.overview = overview;
         app.view = crate::app::View::Overview;
+        // The Workspace the jump chose is now the one on screen.
+        if app.overview.workspace.as_deref() == app.workspace.id.as_deref() {
+            app.overview.workspace = None;
+        }
     }
 }
 
@@ -1161,13 +1213,32 @@ fn run_rounds(
         }
         // Typed at too, so it owns the keys the same way.
         if let Some(jump) = app.workspace_jump.as_mut() {
-            match jump.handle_key(key) {
-                workspace_jump::Outcome::Stay => {}
-                workspace_jump::Outcome::Cancel => app.workspace_jump = None,
-                workspace_jump::Outcome::Open(id) => {
-                    app.workspace_jump = None;
-                    app.ask(Request::InteractionsInWorkspace(id));
+            let outcome = jump.handle_key(key);
+            let grid = match outcome {
+                workspace_jump::Outcome::Stay => {
+                    preview_workspace_jump(app);
+                    continue;
                 }
+                _ => app.workspace_jump.take().and_then(|jump| jump.grid),
+            };
+            match (outcome, grid) {
+                (workspace_jump::Outcome::Cancel, Some((overview, only_current_workspace))) => {
+                    app.overview = overview;
+                    app.interactions.only_current_workspace = only_current_workspace;
+                }
+                // Over the grid the choice stays on the grid: its cursor is
+                // already on the Workspace, and loads the tile as a step would.
+                (workspace_jump::Outcome::Open(id), Some(_)) => {
+                    if !select_workspace_in_grid(app, &id) {
+                        app.show_warning("the grid's filters hide that Workspace's interactions");
+                    }
+                    input::follow_overview_cursor(app);
+                }
+                (workspace_jump::Outcome::Open(id), None) => {
+                    open_interactions_in_workspace(app, client, &id)?;
+                    interactions_refreshed = Instant::now();
+                }
+                _ => {}
             }
             continue;
         }
@@ -1700,13 +1771,14 @@ fn run_rounds(
                     }
                 };
                 // A Workspace with work in flight is entered at that work, the
-                // way `V` enters it: the live list opens with the cursor on the
+                // way `v` enters it: the live list opens with the cursor on the
                 // Workspace's first Interaction, so the operator sees the rest
                 // of the live list without being asked which Session they meant.
                 if client.list_interactions().is_ok_and(|interactions| {
                     workspace_jump::has_live_work(&interactions, &workspace.id)
                 }) {
-                    app.ask(Request::InteractionsInWorkspace(workspace.id));
+                    open_interactions_in_workspace(app, client, &workspace.id)?;
+                    interactions_refreshed = Instant::now();
                     continue;
                 }
                 let mut sessions = client.list_sessions(&workspace.id)?;
@@ -1828,31 +1900,22 @@ fn run_rounds(
             Some(Request::WorkspaceJump) => {
                 let interactions = client.list_interactions()?;
                 let workspaces = client.list_workspaces()?;
-                let jump = WorkspaceJump::new(&workspaces, &interactions);
+                let mut jump = WorkspaceJump::new(&workspaces, &interactions);
                 if jump.is_empty() {
                     app.show_warning("no Workspace has live interactions");
                     continue;
+                }
+                if app.view == crate::app::View::Overview {
+                    jump.grid = Some((
+                        app.overview.clone(),
+                        app.interactions.only_current_workspace,
+                    ));
                 }
                 app.interactions.refresh(interactions);
                 app.interactions.workspaces = workspaces;
                 interactions_refreshed = Instant::now();
                 app.workspace_jump = Some(jump);
-            }
-            Some(Request::InteractionsInWorkspace(target)) => {
-                let interactions = client.list_interactions()?;
-                let workspaces = client.list_workspaces()?;
-                app.view = crate::app::View::Events;
-                app.focus = Focus::List;
-                app.interactions.open(interactions, workspaces);
-                interactions_refreshed = Instant::now();
-                let session_id = app.session_id.clone();
-                if !app.interactions.cursor_to_workspace(
-                    &target,
-                    &session_id,
-                    app.workspace.id.as_deref(),
-                ) {
-                    app.show_warning("the list's filters hide that Workspace's interactions");
-                }
+                preview_workspace_jump(app);
             }
             // The overview reads the same snapshot the loop refreshes on its
             // timer, but the tiles name their Workspaces, and that list is
@@ -2282,6 +2345,63 @@ mod tests {
             crossterm::event::KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL,)
         ));
         assert!(!interaction_navigator_passthrough(press('l')));
+    }
+
+    /// Over the grid, the jump narrows the grid to its highlighted Workspace
+    /// and moves only the grid's cursor; nothing is scheduled to load.
+    #[test]
+    fn the_workspace_jump_previews_its_highlight_on_the_grid() {
+        use styra_protocol::{InteractionActivity, WorkspaceSummary};
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+            "one",
+        );
+        app.workspace.id = Some("workspace".into());
+        let mut other = crate::interactions::tests::interaction("two", InteractionActivity::Running);
+        other.workspace_id = "other".into();
+        let interactions = vec![
+            crate::interactions::tests::interaction("one", InteractionActivity::Running),
+            other,
+        ];
+        let workspaces: Vec<WorkspaceSummary> = ["workspace", "other"]
+            .into_iter()
+            .map(|id| WorkspaceSummary {
+                id: id.into(),
+                name: Some(id.into()),
+                host_path: id.into(),
+                git_repository: None,
+                path: id.into(),
+                session_count: 0,
+                age: String::new(),
+                created_at_ms: 0,
+                last_accessed_at_ms: 0,
+                launch: Default::default(),
+            })
+            .collect();
+        let mut jump = WorkspaceJump::new(&workspaces, &interactions);
+        app.interactions.open(interactions, workspaces);
+        app.view = View::Overview;
+        jump.grid = Some((app.overview.clone(), false));
+        app.workspace_jump = Some(jump);
+
+        app.workspace_jump
+            .as_mut()
+            .unwrap()
+            .handle_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Down));
+        preview_workspace_jump(&mut app);
+
+        assert!(app.interactions.only_current_workspace);
+        assert_eq!(
+            app.overview.indices(&app.interactions, Some("workspace")).len(),
+            1,
+            "only the highlighted Workspace's tiles are shown"
+        );
+        assert_eq!(
+            app.overview
+                .selected_id(&app.interactions, "one", Some("workspace")),
+            Some("two")
+        );
+        assert!(app.interactions.pending("one").is_none());
     }
 
     #[test]

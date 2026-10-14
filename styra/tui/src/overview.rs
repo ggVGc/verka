@@ -16,6 +16,9 @@ pub struct Overview {
     /// to bottom, which is what moving up or down steps between. The renderer
     /// decides it from the terminal's size, so it is learned from the draw.
     rows: Vec<usize>,
+    /// The Workspace a Workspace scope shows in place of the one on screen,
+    /// while the Workspace jump previews one and until its choice has loaded.
+    pub workspace: Option<String>,
 }
 
 impl Overview {
@@ -23,6 +26,7 @@ impl Overview {
     pub fn open(&mut self) {
         self.cursor = None;
         self.rows.clear();
+        self.workspace = None;
     }
 
     pub fn toggle_running_only(&mut self) {
@@ -37,7 +41,7 @@ impl Overview {
         workspace_id: Option<&str>,
     ) -> Vec<usize> {
         interactions
-            .overview_indices(workspace_id)
+            .overview_indices(self.scope(workspace_id))
             .into_iter()
             .filter(|index| {
                 !self.running_only
@@ -101,7 +105,16 @@ impl Overview {
             .selected_id(interactions, current, workspace_id)
             .unwrap_or(current);
         interactions
-            .next_attention_or_live_in_order(&interactions.overview_indices(workspace_id), from)
+            .next_attention_or_live_in_order(
+                &interactions.overview_indices(self.scope(workspace_id)),
+                from,
+            )
+    }
+
+    /// The Workspace a Workspace scope shows: the previewed one, if any, else
+    /// `workspace_id`, the one on screen.
+    fn scope<'a>(&'a self, workspace_id: Option<&'a str>) -> Option<&'a str> {
+        self.workspace.as_deref().or(workspace_id)
     }
 
     pub fn left(
@@ -203,6 +216,25 @@ impl Overview {
 
     pub fn last(&mut self, interactions: &LiveInteractions, workspace_id: Option<&str>) {
         self.select(interactions, usize::MAX, workspace_id);
+    }
+
+    /// Put the cursor on the first of `target`'s tiles, for the Workspace
+    /// jump. Reports whether `target` has a tile to land on.
+    pub fn select_workspace(
+        &mut self,
+        interactions: &LiveInteractions,
+        target: &str,
+        workspace_id: Option<&str>,
+    ) -> bool {
+        let Some(index) = self
+            .indices(interactions, workspace_id)
+            .into_iter()
+            .find(|index| interactions.items[*index].workspace_id == target)
+        else {
+            return false;
+        };
+        self.cursor = Some(interactions.items[index].id.clone());
+        true
     }
 
     /// Put the cursor on tile `position`, or on the last tile past the end.

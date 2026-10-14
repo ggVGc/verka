@@ -852,7 +852,6 @@ current focus is shown in the status line and by which region draws the cursor.
 | `k` / `↑`       | Select previous entry                                       |
 | `J` / `K`       | Scroll 10 lines down / up without changing selection       |
 | `Space`/`Enter` | Toggle expand/collapse of the selected entry                |
-| `o` / `c`       | Expand / collapse the selected entry explicitly             |
 | `C`             | Show only expanded conversation lines                       |
 | `zR` / `zM`     | Expand all / collapse all                                   |
 | `g` / `G`       | Jump to first / last entry (`G` re-enables tail-follow)     |
@@ -872,7 +871,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `/`             | In the Session picker, filter by Session name or first prompt (`Esc` abandons) |
 | `S`             | Stop the Interaction and return to a blank Session screen   |
 | `Ctrl+V`        | Choose a Workspace, then browse its Sessions                |
-| `V`             | Jump the live list to a Workspace with live Interactions    |
+| `v`             | Jump the live list to a Workspace with live Interactions    |
 | `w`             | Choose a Session by the worktree it works in (not in details) |
 | `q`             | Quit (prompts if the session is still running)              |
 
@@ -939,7 +938,7 @@ picker's conversation preview does) and the pane says `loading…` until it
 lands: a Workspace with no Sessions and an unread one must not read the same.
 
 Choosing a Workspace that holds live Interactions skips the Session picker
-entirely and takes the same path as `V`: the live Interactions list opens with
+entirely and takes the same path as `v`: the live Interactions list opens with
 its cursor on that Workspace's first entry, which loads as a j/k step would.
 The green dot the row carried is what `Enter` then acts on, and the rest of that
 Workspace's live work is on screen rather than a second picker away.
@@ -1070,7 +1069,7 @@ returns Styra to its blank default state.
 
 #### The overview
 
-The navigator is a list, and a list is read one row at a time. `v` replaces
+The navigator is a list, and a list is read one row at a time. `o` replaces
 the main region with an **overview** instead: every Interaction whose agent
 still takes turns — running, in the background, or idle — laid out as a grid
 of tiles across every Workspace. It answers a different question from the

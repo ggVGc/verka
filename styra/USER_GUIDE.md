@@ -141,8 +141,8 @@ where `Space` keeps its own link menu.
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `a` / `A` / `Ctrl+V` | live interactions / sessions in this Workspace / Workspaces |
-| `V` | choose a Workspace with live interactions (typed at) and open the live list at its first |
-| `v` | overview: every running and idle interaction as a grid of tiles |
+| `v` | choose a Workspace with live interactions (typed at) and open the live list at its first; over the grid, the grid narrows to the highlighted Workspace, Enter keeps it and Esc restores the grid |
+| `o` | overview: every running and idle interaction as a grid of tiles |
 | `w` (not in details) | worktrees and the sessions in each; `Enter` opens the selected session |
 | `Ctrl+L` | choose provider, model, and effort (one list, typed at) |
 | `Ctrl+G` | turn auto-commit on/off for this interaction (also in the message editor) |
@@ -199,7 +199,7 @@ event list's bottom border counts those rows, beside the `running/idle/stopped`
 tally, until they are focused. Finishing a turn while a client
 is showing it is not one of them — you watched it happen.
 
-`v` opens the overview, which lays out every interaction that is running or
+`o` opens the overview, which lays out every interaction that is running or
 idle — in every Workspace, whatever the `a` list's scope or filter — as a grid
 of tiles, so the whole fleet can be watched at once. Running and background
 work comes before idle interactions. `r` toggles viewing only currently running
@@ -222,7 +222,7 @@ branches, tags and messages. `Esc` clears a standing search before it leaves
 the grid.
 `i` opens the message box for the selected
 interaction, as it does on the event list, while the grid stays up behind it;
-after sending or `Esc` you are back on the grid. `v` or `Esc` goes back without switching.
+after sending or `Esc` you are back on the grid. `o` or `Esc` goes back without switching.
 Stopped and completed interactions are left out; `a` still lists them.
 
 An interaction that stops with uncommitted changes in its Git checkout — edits
@@ -328,7 +328,7 @@ interaction ten text lines without changing the selection.
 At the bottom, at least the final five interaction lines remain visible (or
 all of them when the interaction is shorter).
 `g`/`G` jumps first/last, and `Enter` on a `branch` marker opens the linked
-interaction (from either side of a branch). Otherwise, `Enter`/`o`
+interaction (from either side of a branch). Otherwise, `Enter`
 folds the selected event; `O` expands only it, `z R` expands all, `z M`
 collapses all, and `m` hides/shows minor events. With a preview open, side or
 full-screen, `↑`/`↓` scroll it ten lines and `PgUp`/`PgDn` half its height;

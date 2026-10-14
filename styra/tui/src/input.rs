@@ -432,10 +432,12 @@ pub fn handle_list_key(
         k if GLOBAL_INTERACTIONS.matches(k) && app.view != View::Files => {
             return app.ask(Request::Interactions)
         }
-        // The raw view keeps `v` for switching to the provider's own record.
-        k if GLOBAL_OVERVIEW.matches(k) && app.view != View::Raw => return app.toggle_overview(),
+        k if GLOBAL_OVERVIEW.matches(k) => return app.toggle_overview(),
         k if GLOBAL_WORKSPACES.matches(k) => return app.ask(Request::Workspace),
-        k if GLOBAL_WORKSPACE_JUMP.matches(k) => return app.ask(Request::WorkspaceJump),
+        // The raw view keeps `v` for switching to the provider's own record.
+        k if GLOBAL_WORKSPACE_JUMP.matches(k) && app.view != View::Raw => {
+            return app.ask(Request::WorkspaceJump)
+        }
         // Details keeps `w` for the network toggle it already meant there.
         k if GLOBAL_WORKTREES.matches(k) && app.view != View::Driva => {
             return app.ask(Request::Worktrees)
@@ -879,15 +881,22 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
         _ => return false,
     }
     if overview_navigation_key(key) {
-        if let Some(id) =
-            app.overview
-                .selected_id(&app.interactions, &current, app.workspace.id.as_deref())
-        {
-            let id = id.to_owned();
-            app.interactions.move_cursor_to(id, &current);
-        }
+        follow_overview_cursor(app);
     }
     true
+}
+
+/// Schedule the load of the tile under the grid's cursor, on the live list's
+/// settle-and-load path.
+pub(crate) fn follow_overview_cursor(app: &mut App) {
+    let current = app.session_id.clone();
+    if let Some(id) =
+        app.overview
+            .selected_id(&app.interactions, &current, app.workspace.id.as_deref())
+    {
+        let id = id.to_owned();
+        app.interactions.move_cursor_to(id, &current);
+    }
 }
 
 /// Open the tag editor for the Interaction currently on screen. The
@@ -1482,7 +1491,7 @@ mod tests {
 
     /// The grid takes `l` from the launcher to move right, Tab and Shift-Tab
     /// cycle the tiles, `Enter` asks for the tile's interaction, `i` for its
-    /// message box, and `v` toggles the overview from both sides.
+    /// message box, and `o` toggles the overview from both sides.
     #[test]
     fn the_overview_walks_its_grid_and_opens_the_chosen_tile() {
         use styra_protocol::InteractionActivity;
@@ -1507,7 +1516,7 @@ mod tests {
             );
         };
 
-        press(&mut app, KeyCode::Char('v'));
+        press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.take_request(), Some(Request::Overview));
 
         app.view = View::Overview;
@@ -1563,7 +1572,7 @@ mod tests {
         assert_eq!(app.search.query(), None);
         assert_eq!(app.view, View::Overview);
 
-        press(&mut app, KeyCode::Char('v'));
+        press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.view, View::Events);
         let _ = std::fs::remove_dir_all(root);
     }

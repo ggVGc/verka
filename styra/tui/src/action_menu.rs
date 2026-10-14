@@ -113,7 +113,7 @@ mod tests {
         assert!(menu.rows().contains(&"quit (q)".to_owned()));
         assert!(menu
             .rows()
-            .contains(&"toggle selected entry (Enter/o)".to_owned()));
+            .contains(&"toggle selected entry (Enter)".to_owned()));
         assert!(menu.rows().contains(&"expand all (z R)".to_owned()));
         assert!(
             menu.rows()

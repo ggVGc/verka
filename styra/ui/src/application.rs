@@ -115,7 +115,7 @@ pub struct ApplicationOverlays<'a> {
     pub link_menu: Option<overlays::LinkMenuView<'a>>,
     /// The current window's actions, searchable, opened with Space.
     pub action_menu: Option<overlays::ActionMenuView<'a>>,
-    /// The Workspaces with live work, searchable, opened with `V`.
+    /// The Workspaces with live work, searchable, opened with `v`.
     pub workspace_jump: Option<overlays::WorkspaceJumpView<'a>>,
     pub tags: Option<overlays::TagPickerView<'a>>,
     /// A synchronous call the operator started, still running. It takes the

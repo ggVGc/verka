@@ -28,6 +28,10 @@ pub struct WorkspaceJump {
     /// Each Workspace's name, with how many of its Interactions are live.
     rows: Vec<String>,
     pub list: FuzzyList,
+    /// The grid as it stood when the jump opened over it, with the list's
+    /// Workspace scope: the highlighted Workspace is previewed on the grid,
+    /// and backing out puts this back.
+    pub grid: Option<(crate::overview::Overview, bool)>,
 }
 
 impl WorkspaceJump {
@@ -55,6 +59,7 @@ impl WorkspaceJump {
             ids,
             rows,
             list: FuzzyList::default(),
+            grid: None,
         }
     }
 
@@ -64,6 +69,13 @@ impl WorkspaceJump {
 
     pub fn rows(&self) -> &[String] {
         &self.rows
+    }
+
+    /// The Workspace the highlighted row stands for, if the query leaves one.
+    pub fn selected(&self) -> Option<&str> {
+        self.list
+            .selected_row(&self.rows)
+            .map(|index| self.ids[index].as_str())
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Outcome {
@@ -97,7 +109,7 @@ impl WorkspaceJump {
 
 /// Whether `workspace_id` has an Interaction the jump would land on: one whose
 /// agent still takes messages, as the overview tiles. The Workspace picker
-/// asks the same question, so choosing a Workspace there lands where `V`
+/// asks the same question, so choosing a Workspace there lands where `v`
 /// would.
 pub fn has_live_work(interactions: &[InteractionSummary], workspace_id: &str) -> bool {
     interactions
