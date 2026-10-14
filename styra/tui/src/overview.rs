@@ -318,6 +318,21 @@ mod tests {
     }
 
     #[test]
+    fn newly_idle_tiles_follow_working_tiles() {
+        let mut interactions = fleet(&[
+            InteractionActivity::Pending,
+            InteractionActivity::Running,
+            InteractionActivity::Pending,
+            InteractionActivity::Pending,
+        ]);
+        interactions.items[2].idle_unseen = true;
+        assert_eq!(
+            ids(&interactions),
+            ["99-tile", "98-tile", "100-tile", "97-tile"]
+        );
+    }
+
+    #[test]
     fn next_live_prioritizes_newly_idle_from_the_selected_tile() {
         let mut interactions = fleet(&[
             InteractionActivity::Running,
