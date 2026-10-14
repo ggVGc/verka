@@ -1263,6 +1263,24 @@ fn run_rounds(
                     open_interactions_in_workspace(app, client, &id)?;
                     interactions_refreshed = Instant::now();
                 }
+                // A fresh interaction is asked for outright, as the Workspace
+                // picker's Ctrl-N asks for one. The summary the jump was built
+                // from stands in if the server cannot answer.
+                (workspace_jump::Outcome::New(id), _) => {
+                    let workspace = client.workspace(&id).or_else(|error| {
+                        app.interactions
+                            .workspaces
+                            .iter()
+                            .find(|workspace| workspace.id == id)
+                            .cloned()
+                            .ok_or(error)
+                    })?;
+                    return Ok(RunOutcome::OpenWorkspace {
+                        workspace: Box::new(workspace),
+                        session_id: None,
+                        open_interactions: false,
+                    });
+                }
                 _ => {}
             }
             continue;
@@ -1922,15 +1940,28 @@ fn run_rounds(
             }
             // A fresh listing, as `a` takes, so the choice offered is of the
             // work running now rather than at the last refresh.
-            Some(Request::WorkspaceJump) => {
+            // `V` offers what the navigator would list rather than only live
+            // work, so it opens on the list itself: the grid tiles live work
+            // alone and could not show most of what it offers.
+            Some(Request::WorkspaceJump { listed }) => {
                 let interactions = client.list_interactions()?;
                 let workspaces = client.list_workspaces()?;
-                let mut jump = WorkspaceJump::new(&workspaces, &interactions);
+                let mut jump = if listed {
+                    WorkspaceJump::listed(&workspaces, &interactions, |interaction| {
+                        app.interactions.lists(interaction)
+                    })
+                } else {
+                    WorkspaceJump::new(&workspaces, &interactions)
+                };
                 if jump.is_empty() {
-                    app.show_warning("no Workspace has live interactions");
+                    app.show_warning(if listed {
+                        "no Workspace has interactions the list shows"
+                    } else {
+                        "no Workspace has live interactions"
+                    });
                     continue;
                 }
-                if app.view == crate::app::View::Overview {
+                if !listed && app.view == crate::app::View::Overview {
                     jump.grid = Some((
                         app.overview.clone(),
                         app.interactions.only_current_workspace,

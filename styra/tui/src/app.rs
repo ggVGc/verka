@@ -366,9 +366,10 @@ pub enum Request {
     JumpBack,
     /// Open the server's live interactions above the main event timeline.
     Interactions,
-    /// Choose among the Workspaces with live work, to open the live
-    /// interactions at the first of that Workspace's.
-    WorkspaceJump,
+    /// Choose among the Workspaces with live work — or, when `listed`, with
+    /// any Interaction the navigator lists — to open the live interactions at
+    /// the first of that Workspace's.
+    WorkspaceJump { listed: bool },
     /// Show every running and idle interaction as a grid, with a fresh
     /// listing behind it.
     Overview,

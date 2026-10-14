@@ -360,7 +360,11 @@ or `Tab` returns to list focus.
 among the Workspaces with live Interactions and opens the live list at the
 first Interaction of the chosen one. Over the grid it stays on the grid: the
 grid narrows to the highlighted Workspace with its cursor on that Workspace's
-first tile, Enter keeps it there, and Esc puts the grid back as it was. `a` goes directly to
+first tile, Enter keeps it there, and Esc puts the grid back as it was. `V` is
+the same list, but of every Workspace with an Interaction the live list would
+show under its completion, stopped and tag filters; it always opens the live
+list. In either, `Ctrl+N` starts a new Interaction in the highlighted
+Workspace. `a` goes directly to
 the Session picker for the current Workspace. These only change what the client
 views; they never stop an outgoing Interaction. `A` lists all live
 Interactions with their Workspace and Session identities; in that list `d`

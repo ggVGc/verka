@@ -33,6 +33,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
     GLOBAL_WORKSPACES: [Key::ctrl('v')] => Action::GlobalWorkspaces;
     GLOBAL_WORKSPACE_JUMP: [Key::ch('v')] ("not in raw") => Action::GlobalWorkspaceJump;
+    GLOBAL_WORKSPACE_JUMP_LISTED: [Key::ch('V')] => Action::GlobalWorkspaceJumpListed;
     GLOBAL_WORKTREES: [Key::ch('w')] ("not in details") => Action::GlobalWorktrees;
     GLOBAL_SESSION_WORKTREE: [Key::ch('W')] ("existing session")
         => Action::GlobalSessionWorktree;
@@ -405,12 +406,13 @@ bindings! { ACTION_MENU = "Actions";
 bindings! { WORKSPACE_JUMP = "Jump to a Workspace";
     // Typed at, as the action menu is.
     WORKSPACE_JUMP_FILTER: [] as "any letter" => Action::WorkspaceJumpFilter;
-    WORKSPACE_JUMP_NEXT: [Key::code(KeyCode::Down), Key::ctrl('j'), Key::ctrl('n')]
+    WORKSPACE_JUMP_NEXT: [Key::code(KeyCode::Down), Key::ctrl('j')]
         => Action::WorkspaceJumpNext;
     WORKSPACE_JUMP_PREV: [Key::code(KeyCode::Up), Key::ctrl('k'), Key::ctrl('p')]
         => Action::WorkspaceJumpPrev;
     WORKSPACE_JUMP_DELETE_WORD: [Key::ctrl('w')] => Action::WorkspaceJumpDeleteWord;
     WORKSPACE_JUMP_OPEN: [Key::code(KeyCode::Enter)] => Action::WorkspaceJumpOpen;
+    WORKSPACE_JUMP_NEW: [Key::ctrl('n')] => Action::WorkspaceJumpNew;
     WORKSPACE_JUMP_CANCEL: [Key::code(KeyCode::Esc)] => Action::WorkspaceJumpCancel;
 }
 

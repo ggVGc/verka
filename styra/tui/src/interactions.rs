@@ -307,12 +307,20 @@ impl LiveInteractions {
             .enumerate()
             .filter_map(|(index, interaction)| {
                 (self.in_workspace_scope(interaction, workspace_id)
-                    && (self.show_completed || !interaction.completed.is_done())
-                    && (!self.hide_stopped || interaction.activity.accepting())
-                    && self.matches_filter(interaction))
+                    && self.lists(interaction)
+                    && self.matches_typed_filter(interaction))
                 .then_some(index)
             })
             .collect()
+    }
+
+    /// Whether the navigator lists `interaction` once it is opened afresh in
+    /// All scope: the completion, stopped and tag filters stand, while the
+    /// typed filter is one that opening clears.
+    pub fn lists(&self, interaction: &InteractionSummary) -> bool {
+        (self.show_completed || !interaction.completed.is_done())
+            && (!self.hide_stopped || interaction.activity.accepting())
+            && self.matches_tag_filter(interaction)
     }
 
     /// The Interactions the overview tiles, in the order it lays them out:
@@ -845,13 +853,17 @@ impl LiveInteractions {
     /// message is left out — it changes as the agent talks, and rows would
     /// come and go under the cursor with it.
     fn matches_filter(&self, interaction: &InteractionSummary) -> bool {
+        self.matches_tag_filter(interaction) && self.matches_typed_filter(interaction)
+    }
+
+    fn matches_tag_filter(&self, interaction: &InteractionSummary) -> bool {
         self.tag_filter.iter().all(|filter| {
             if let Some(tag) = filter.strip_prefix('-') {
                 !interaction.tags.iter().any(|candidate| candidate == tag)
             } else {
                 interaction.tags.contains(filter)
             }
-        }) && self.matches_typed_filter(interaction)
+        })
     }
 
     fn matches_typed_filter(&self, interaction: &InteractionSummary) -> bool {

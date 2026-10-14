@@ -446,7 +446,10 @@ pub fn handle_list_key(
         k if GLOBAL_WORKSPACES.matches(k) => return app.ask(Request::Workspace),
         // The raw view keeps `v` for switching to the provider's own record.
         k if GLOBAL_WORKSPACE_JUMP.matches(k) && app.view != View::Raw => {
-            return app.ask(Request::WorkspaceJump)
+            return app.ask(Request::WorkspaceJump { listed: false })
+        }
+        k if GLOBAL_WORKSPACE_JUMP_LISTED.matches(k) => {
+            return app.ask(Request::WorkspaceJump { listed: true })
         }
         // Details keeps `w` for the network toggle it already meant there.
         k if GLOBAL_WORKTREES.matches(k) && app.view != View::Driva => {

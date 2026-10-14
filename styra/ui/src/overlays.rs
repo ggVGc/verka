@@ -196,7 +196,7 @@ pub fn render_workspace_jump(frame: &mut Frame, jump: WorkspaceJumpView<'_>, fra
             list: jump.list,
             focused: true,
             empty_note: "no Workspace has live interactions",
-            hint: " type to narrow · Enter opens · Esc closes ",
+            hint: " type to narrow · Enter opens · ^N new · Esc closes ",
         },
         frame_area,
     );

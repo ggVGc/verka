@@ -29,6 +29,7 @@ pub(crate) enum Action {
     GlobalSessions,
     GlobalWorkspaces,
     GlobalWorkspaceJump,
+    GlobalWorkspaceJumpListed,
     GlobalWorktrees,
     GlobalSessionWorktree,
     GlobalRebase,
@@ -285,6 +286,7 @@ pub(crate) enum Action {
     WorkspaceJumpPrev,
     WorkspaceJumpDeleteWord,
     WorkspaceJumpOpen,
+    WorkspaceJumpNew,
     WorkspaceJumpCancel,
     EventsFoldPrefix,
     CloseReference,
@@ -324,6 +326,9 @@ impl Action {
             Self::GlobalWorkspaces => "Workspaces",
             Self::GlobalWorkspaceJump => {
                 "jump the live interactions to a Workspace with live work"
+            }
+            Self::GlobalWorkspaceJumpListed => {
+                "jump the live interactions to any Workspace the list shows"
             }
             Self::GlobalWorktrees => "worktrees and the sessions in each",
             Self::GlobalSessionWorktree => "create and associate a Git branch and workspace",
@@ -613,6 +618,7 @@ impl Action {
             Self::WorkspaceJumpPrev => "move selection up",
             Self::WorkspaceJumpDeleteWord => "delete the last word of the query",
             Self::WorkspaceJumpOpen => "open the live interactions at this Workspace's first",
+            Self::WorkspaceJumpNew => "new interaction in this Workspace",
             Self::WorkspaceJumpCancel => "cancel",
             Self::EventsFoldPrefix => "fold prefix: z R expands all, z M collapses all",
             Self::CloseReference => "close the reference",

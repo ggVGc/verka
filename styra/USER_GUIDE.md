@@ -141,7 +141,8 @@ where `Space` keeps its own link menu.
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `a` / `A` / `Ctrl+V` | live interactions / sessions in this Workspace / Workspaces |
-| `v` | choose a Workspace with live interactions (typed at) and open the live list at its first; over the grid, the grid narrows to the highlighted Workspace, Enter keeps it and Esc restores the grid |
+| `v` | choose a Workspace with live interactions (typed at) and open the live list at its first; over the grid, the grid narrows to the highlighted Workspace, Enter keeps it and Esc restores the grid; `Ctrl-N` starts a new interaction in the highlighted Workspace |
+| `V` | as `v`, but every Workspace with an interaction the live list shows under its completion, stopped and tag filters; always opens the live list |
 | `o` | overview: every running and idle interaction as a grid of tiles |
 | `w` (not in details) | worktrees and the sessions in each; `Enter` opens the selected session |
 | `Ctrl+L` | choose provider, model, and effort (one list, typed at) |
