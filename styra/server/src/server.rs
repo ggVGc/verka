@@ -812,6 +812,11 @@ impl ManagedInteraction {
         self.interrupt_requested.store(true, Ordering::Release);
     }
 
+    /// Take back a note whose interrupt never reached the agent.
+    fn withdraw_interrupt_request(&self) {
+        self.interrupt_requested.store(false, Ordering::Release);
+    }
+
     fn mark_idle_seen(&self) {
         self.idle.mark_seen();
     }
@@ -4054,10 +4059,16 @@ impl ServerState {
             }
             Request::InterruptInteraction { id } => {
                 let interaction = self.interaction(&id)?;
-                interaction.interaction.interrupt()?;
-                // Only once the interrupt has actually gone out: a turn that
-                // ends after a refused request ended on its own.
+                // Noted before the interrupt goes out: the agent can end the
+                // turn, usually with an error about having been cut short,
+                // before this thread gets to say it asked. A refused request
+                // takes the note back, since a turn that ends after it ended
+                // on its own.
                 interaction.note_interrupt_requested();
+                if let Err(error) = interaction.interaction.interrupt() {
+                    interaction.withdraw_interrupt_request();
+                    return Err(error);
+                }
                 Ok(Response::Accepted)
             }
             Request::StopInteraction { id } => {
