@@ -257,6 +257,10 @@ bindings! { OVERVIEW = "Overview";
     OVERVIEW_PREV: [Key::code(KeyCode::BackTab)] => Action::OverviewPrev;
     OVERVIEW_FIRST: [Key::ch('g')] => Action::OverviewFirst;
     OVERVIEW_LAST: [Key::ch('G')] => Action::OverviewLast;
+    OVERVIEW_NTH: [
+        Key::ch('1'), Key::ch('2'), Key::ch('3'), Key::ch('4'), Key::ch('5'),
+        Key::ch('6'), Key::ch('7'), Key::ch('8'), Key::ch('9'),
+    ] as "1-9" => Action::OverviewNth;
     OVERVIEW_OPEN: [Key::code(KeyCode::Enter)] => Action::OverviewOpen;
     OVERVIEW_MESSAGE: [Key::ch('i')] => Action::OverviewMessage;
     OVERVIEW_SCOPE: [Key::ch('w')] => Action::InteractionsScope;

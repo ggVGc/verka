@@ -212,7 +212,8 @@ the agent said. The grid takes as many columns as the terminal's width allows
 and scrolls by rows when there are more tiles than fit. `h`/`j`/`k`/`l` or the
 arrows move between tiles (in the overview `l` moves rather than opening the
 launcher), `Tab`/`Shift-Tab` step to the next and previous tile, wrapping at
-the ends, `g`/`G` jump to the first and last, and `Enter` opens the selected
+the ends, `g`/`G` jump to the first and last, `1`–`9` jump to the tile at that
+place in reading order (`1` the first, `2` the second), and `Enter` opens the selected
 interaction in the event list. `n` makes the next newly idle interaction current,
 or the next live interaction when none is newly idle, while staying in the grid.
 It starts from the selected tile and reveals idle work hidden by `r`.

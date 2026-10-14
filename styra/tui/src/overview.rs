@@ -218,6 +218,20 @@ impl Overview {
         self.select(interactions, usize::MAX, workspace_id);
     }
 
+    /// Onto tile `position` in reading order, counted from zero. A position
+    /// past the last tile leaves the cursor where it is, so a count that
+    /// misses does not land somewhere unasked for.
+    pub fn nth(
+        &mut self,
+        interactions: &LiveInteractions,
+        position: usize,
+        workspace_id: Option<&str>,
+    ) {
+        if position < self.indices(interactions, workspace_id).len() {
+            self.select(interactions, position, workspace_id);
+        }
+    }
+
     /// Put the cursor on the first of `target`'s tiles, for the Workspace
     /// jump. Reports whether `target` has a tile to land on.
     pub fn select_workspace(

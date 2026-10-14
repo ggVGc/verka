@@ -812,6 +812,7 @@ pub(crate) fn overview_navigation_key(key: KeyEvent) -> bool {
         OVERVIEW_PREV,
         OVERVIEW_FIRST,
         OVERVIEW_LAST,
+        OVERVIEW_NTH,
     ]
     .iter()
     .any(|binding| binding.matches(key))
@@ -852,6 +853,13 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
         k if OVERVIEW_LAST.matches(k) => app
             .overview
             .last(&app.interactions, app.workspace.id.as_deref()),
+        k if OVERVIEW_NTH.matches(k) => {
+            if let KeyCode::Char(digit @ '1'..='9') = k.code {
+                let position = digit as usize - '1' as usize;
+                app.overview
+                    .nth(&app.interactions, position, app.workspace.id.as_deref())
+            }
+        }
         // Loading another interaction is a server round-trip the event loop
         // makes, as it does for the navigator.
         k if OVERVIEW_OPEN.matches(k) => {
@@ -1622,6 +1630,10 @@ mod tests {
             (KeyCode::Tab, None),
             (KeyCode::BackTab, Some("four")),
             (KeyCode::Char('g'), None),
+            (KeyCode::Char('3'), Some("three")),
+            (KeyCode::Char('9'), Some("three")),
+            (KeyCode::Char('2'), Some("two")),
+            (KeyCode::Char('1'), None),
         ] {
             assert!(handle_overview_key(&mut app, KeyEvent::from(key)));
             assert_eq!(
