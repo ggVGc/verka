@@ -1523,9 +1523,11 @@ fn resized_row(line: &Line<'static>, widths: &[usize]) -> Option<Vec<Line<'stati
     let prefix = line.spans[..first_border].to_vec();
     let border_style = line.spans[first_border].style;
     let mut cells = Vec::new();
+    let mut padding_styles = Vec::new();
     let mut cell = Vec::new();
     for span in &line.spans[first_border + 1..] {
         if span.content.as_ref() == "│" {
+            padding_styles.push(cell_padding_style(&cell));
             cells.push(trim_cell(std::mem::take(&mut cell)));
         } else {
             cell.push(span.clone());
@@ -1548,16 +1550,7 @@ fn resized_row(line: &Line<'static>, widths: &[usize]) -> Option<Vec<Line<'stati
         for (column, &width) in widths.iter().enumerate() {
             let content = wrapped_cells[column].get(row_index);
             let content_width = content.map(Line::width).unwrap_or(0);
-            let padding_style = content
-                .and_then(|line| line.spans.first())
-                .map(|span| span.style)
-                .or_else(|| {
-                    wrapped_cells[column][0]
-                        .spans
-                        .first()
-                        .map(|span| span.style)
-                })
-                .unwrap_or_default();
+            let padding_style = padding_styles[column];
             spans.push(Span::styled(" ", padding_style));
             if let Some(content) = content {
                 spans.extend(content.spans.clone());
@@ -1571,6 +1564,17 @@ fn resized_row(line: &Line<'static>, widths: &[usize]) -> Option<Vec<Line<'stati
         rows.push(Line::from(spans).style(line.style));
     }
     Some(rows)
+}
+
+/// The style a resized cell's padding is drawn in: that of the whitespace
+/// `tui-markdown` padded the cell with. Borrowing the content's style instead
+/// would spread a code or entry background from the cell's first word across
+/// its padding and every blank row beneath it.
+fn cell_padding_style(cell: &[Span<'static>]) -> Style {
+    cell.iter()
+        .find(|span| !span.content.is_empty() && span.content.trim().is_empty())
+        .map(|span| span.style)
+        .unwrap_or_default()
 }
 
 fn trim_cell(mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
@@ -2656,6 +2660,40 @@ mod tests {
             1
         );
         assert!(body.iter().skip(1).any(|line| line.contains("inside")));
+    }
+
+    #[test]
+    fn a_wrapped_table_keeps_code_backgrounds_off_the_cell_padding() {
+        let markdown = "| State | Explanation |\n\
+                        |---|---|\n\
+                        | `stable` | This long explanation has `some code` that wraps inside its cell |";
+        let lines = markdown_block_lines(markdown, Style::default(), "    ");
+        let wrapped = wrap_log_lines(lines, 36, 0);
+        assert!(wrapped.len() > 6, "the long cell should add table rows");
+
+        for line in &wrapped {
+            for (index, span) in line.spans.iter().enumerate() {
+                let beside_border = [index.wrapping_sub(1), index + 1]
+                    .iter()
+                    .any(|&neighbour| {
+                        line.spans
+                            .get(neighbour)
+                            .is_some_and(|span| span.content.as_ref() == "│")
+                    });
+                if beside_border && span.content.trim().is_empty() {
+                    assert_eq!(span.style.bg, None, "padding in {line:?}");
+                }
+            }
+        }
+        let code_background = |text: &str| {
+            wrapped
+                .iter()
+                .flat_map(|line| &line.spans)
+                .find(|span| span.content.as_ref() == text)
+                .and_then(|span| span.style.bg)
+        };
+        assert!(code_background("stable").is_some());
+        assert!(code_background("code").is_some());
     }
 
     /// A live row can change height without the selection moving: streamed
