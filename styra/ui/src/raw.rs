@@ -13,6 +13,7 @@ use styra_protocol::{Direction as WireDirection, RawLine};
 
 pub enum RawSource<'a> {
     Styra(&'a [RawLine]),
+    Received(&'a [RawLine]),
     Provider(&'a [String]),
 }
 
@@ -31,7 +32,7 @@ pub struct RawFeedback {
 
 pub fn render(frame: &mut Frame, view: &RawView<'_>, area: Rect) -> RawFeedback {
     let (len, provider) = match &view.source {
-        RawSource::Styra(lines) => (lines.len(), false),
+        RawSource::Styra(lines) | RawSource::Received(lines) => (lines.len(), false),
         RawSource::Provider(lines) => (lines.len(), true),
     };
     let selected = view.selected.min(len.saturating_sub(1));
@@ -45,12 +46,17 @@ pub fn render(frame: &mut Frame, view: &RawView<'_>, area: Rect) -> RawFeedback 
         (panes[0], Some(panes[1]))
     };
     let mut chrome = view.chrome.clone();
-    chrome.suffix = Some(if provider {
+    let received = matches!(view.source, RawSource::Received(_));
+    chrome.suffix = Some(if received {
+        "messages".into()
+    } else if provider {
         "raw · provider".into()
     } else {
         "raw".into()
     });
-    let bottom = if provider {
+    let bottom = if received {
+        " received messages · j/k: select · g/G: first/last · y: copy "
+    } else if provider {
         " provider native · v: Styra wire "
     } else {
         " Styra wire · v: provider native "
@@ -60,7 +66,9 @@ pub fn render(frame: &mut Frame, view: &RawView<'_>, area: Rect) -> RawFeedback 
         Style::default().fg(theme::MUTED_TEXT),
     )));
     if len == 0 {
-        let empty = if provider {
+        let empty = if received {
+            "  no received messages yet"
+        } else if provider {
             "  provider session contains no records"
         } else {
             "  no wire traffic yet"
@@ -69,7 +77,7 @@ pub fn render(frame: &mut Frame, view: &RawView<'_>, area: Rect) -> RawFeedback 
         return RawFeedback::default();
     }
     let items = match &view.source {
-        RawSource::Styra(lines) => lines
+        RawSource::Styra(lines) | RawSource::Received(lines) => lines
             .iter()
             .enumerate()
             .map(|(index, line)| ListItem::new(wire_line(line, index == selected)))
@@ -88,7 +96,9 @@ pub fn render(frame: &mut Frame, view: &RawView<'_>, area: Rect) -> RawFeedback 
     frame.render_stateful_widget(list, list_area, &mut state);
 
     let selected_text = match &view.source {
-        RawSource::Styra(lines) => lines.get(selected).map(|line| line.text.as_str()),
+        RawSource::Styra(lines) | RawSource::Received(lines) => {
+            lines.get(selected).map(|line| line.text.as_str())
+        }
         RawSource::Provider(lines) => lines.get(selected).map(String::as_str),
     };
     let lines = preview_lines(selected_text);
@@ -387,6 +397,19 @@ mod tests {
             .join("\n");
         (output, feedback)
     }
+    #[test]
+    fn received_messages_have_their_own_title_and_empty_state() {
+        let (output, _) = screen(RawView {
+            chrome: chrome(),
+            source: RawSource::Received(&[]),
+            selected: 0,
+            requested_preview_scroll: 0,
+        });
+        assert!(output.contains("messages"));
+        assert!(output.contains("no received messages yet"));
+        assert!(!output.contains("v: provider native"));
+    }
+
     #[test]
     fn styra_wire_has_direction_tags_and_pretty_preview() {
         let lines = vec![

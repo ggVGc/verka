@@ -219,6 +219,7 @@ pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
     match app.view {
         View::Events => Window::Events,
         View::Raw => Window::Raw,
+        View::Messages => Window::Messages,
         View::Log => Window::Log,
         View::Quota => Window::Quota,
         View::Transcript => Window::Transcript,
@@ -378,6 +379,15 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
         View::Raw => {
             let raw = raw::view(app);
             draw_main(ui, app, MainView::Raw(&raw))
+        }
+        View::Messages => {
+            let messages = styra_ui::raw::RawView {
+                chrome: panel_chrome(app, None),
+                source: styra_ui::raw::RawSource::Received(app.messages.as_slice()),
+                selected: app.messages.selected_index(),
+                requested_preview_scroll: app.messages.preview.offset,
+            };
+            draw_main(ui, app, MainView::Raw(&messages))
         }
         View::Log => {
             let chrome = panel_chrome(app, Some("log"));
@@ -682,6 +692,13 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
             styra_ui::PanelId::Transcript { .. } => {
                 app.transcript.offset = scroll.effective_offset;
                 app.transcript.note_limit(scroll.limit);
+            }
+            styra_ui::PanelId::Preview {
+                target: styra_ui::PreviewPanel::Messages,
+                ..
+            } => {
+                app.messages.preview.offset = scroll.effective_offset;
+                app.messages.preview.note_limit(scroll.limit);
             }
             styra_ui::PanelId::Preview {
                 target: styra_ui::PreviewPanel::StyraWire,

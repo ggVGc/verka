@@ -672,7 +672,7 @@ fn replay_into(
     for event in events {
         if is_wire_backed(&event) {
             if let Some(line) = lines.next() {
-                app.raw.push(line);
+                app.push_wire(line);
             }
         }
         // Skip carried-but-viewless traffic (e.g. app-server control lines),
@@ -1066,7 +1066,7 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
         InteractionUpdate::Event(event) => app.push_event(event),
         InteractionUpdate::Raw(line) => {
             let user_wire = line.direction == styra_protocol::Direction::ToAgent;
-            app.raw.push(line);
+            app.push_wire(line);
             // Live interactions announce the operator's decoded event before
             // the provider adapter announces its outgoing wire line. Join the
             // pair once that line arrives, matching stored-journal replay.
@@ -1244,6 +1244,41 @@ mod tests {
                 "newer-child"
             ]
         );
+    }
+
+    #[test]
+    fn messages_include_all_incoming_traffic_in_live_and_saved_sessions() {
+        let outgoing = RawLine {
+            direction: Direction::ToAgent,
+            text: "question".into(),
+            at_ms: 1,
+        };
+        let incoming = RawLine {
+            direction: Direction::FromAgent,
+            text: r#"{"method":"control"}"#.into(),
+            at_ms: 2,
+        };
+        let events = vec![
+            styra_protocol::event::AgentEvent::UserMessage {
+                text: "question".into(),
+            },
+            styra_protocol::event::AgentEvent::Unknown {
+                wire_type: "control".into(),
+            },
+        ];
+        let mut live = App::new(Selection::new(Provider::Codex), "live");
+        for line in [outgoing.clone(), incoming.clone()] {
+            apply_update(&mut live, InteractionUpdate::Raw(line));
+        }
+        let mut saved = App::new(Selection::new(Provider::Codex), "saved");
+        replay_into(&mut saved, events, vec![outgoing, incoming.clone()]);
+        for app in [&live, &saved] {
+            assert_eq!(app.messages.as_slice(), &[incoming.clone()]);
+            assert_eq!(app.raw.as_slice().len(), 2);
+        }
+        assert!(App::new(Selection::new(Provider::Codex), "other")
+            .messages
+            .is_empty());
     }
 
     #[test]

@@ -38,6 +38,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_TAGS: [Key::ch('T')] => Action::GlobalTags;
     GLOBAL_REBASE: [Key::ctrl('b')] => Action::GlobalRebase;
     GLOBAL_INTEGRATE: [Key::ch('I')] => Action::GlobalIntegrate;
+    GLOBAL_MESSAGES: [Key::ch('M')] => Action::GlobalMessages;
     GLOBAL_RAW: [Key::ch('r')] => Action::GlobalRaw;
     GLOBAL_LOG: [Key::ctrl('l')] => Action::GlobalLog;
     GLOBAL_TRANSCRIPT: [Key::ch('t')] => Action::GlobalTranscript;
@@ -92,7 +93,7 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_COPY: [Key::ch('y')] => Action::EventsCopy;
 }
 
-bindings! { READING = "Raw, log, quota, and transcript";
+bindings! { READING = "Raw, messages, log, quota, and transcript";
     READING_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::ReadingDown;
     READING_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::ReadingUp;
     READING_FIRST: [Key::ch('g')] => Action::ReadingFirst;
@@ -107,7 +108,7 @@ bindings! { READING = "Raw, log, quota, and transcript";
     READING_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::ReadingPageUp;
     READING_PROVIDER_RAW: [Key::ch('v')] ("raw")
         => Action::ReadingProviderRaw;
-    READING_COPY: [Key::ch('y')] ("raw") => Action::ReadingCopy;
+    READING_COPY: [Key::ch('y')] ("raw, messages") => Action::ReadingCopy;
 }
 
 bindings! { PREVIEW = "Full-screen preview";
@@ -415,6 +416,7 @@ bindings! { REFERENCE_OVERLAY = "Reference";
 pub(crate) enum Window {
     Events,
     Raw,
+    Messages,
     Log,
     Quota,
     Transcript,
@@ -444,6 +446,7 @@ impl Window {
         match self {
             Self::Events => "events",
             Self::Raw => "raw",
+            Self::Messages => "messages",
             Self::Log => "log",
             Self::Quota => "quota",
             Self::Transcript => "transcript",
@@ -473,7 +476,7 @@ impl Window {
             Self::Events => &[EVENTS, MESSAGE_EDITOR, GLOBAL],
             // Its one section is `styra-diff`'s table; see `reference`.
             Self::CheckoutDiff => &[],
-            Self::Raw | Self::Log | Self::Quota | Self::Transcript => {
+            Self::Raw | Self::Messages | Self::Log | Self::Quota | Self::Transcript => {
                 &[READING, MESSAGE_EDITOR, GLOBAL]
             }
             Self::Preview => &[PREVIEW, MESSAGE_EDITOR, GLOBAL],
@@ -503,6 +506,7 @@ impl Window {
             self,
             Self::Events
                 | Self::Raw
+                | Self::Messages
                 | Self::Log
                 | Self::Quota
                 | Self::Transcript
@@ -585,9 +589,10 @@ mod reference_tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
 
-    const WINDOWS: [Window; 21] = [
+    const WINDOWS: [Window; 22] = [
         Window::Events,
         Window::Raw,
+        Window::Messages,
         Window::Log,
         Window::Quota,
         Window::Transcript,

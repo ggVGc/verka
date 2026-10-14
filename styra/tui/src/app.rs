@@ -90,6 +90,7 @@ impl LinkDisplay {
 pub enum View {
     Events,
     Raw,
+    Messages,
     Log,
     /// The plan-quota readings the server has seen, newest last.
     Quota,
@@ -250,6 +251,8 @@ pub struct App {
     pub launch: Launch,
     /// The verbatim wire interaction and the place in it; see [`RawView`].
     pub raw: RawView,
+    /// Incoming wire messages, retained in arrival order for this interaction.
+    pub messages: RawView,
     /// The provider's own persisted session JSONL, loaded on demand from the
     /// raw view. `true` selects it instead of Styra's wire capture.
     pub provider_raw: Option<ProviderRawView>,
@@ -516,6 +519,7 @@ impl App {
             checkout_from: None,
             launch: Launch::default(),
             raw: RawView::default(),
+            messages: RawView::default(),
             provider_raw: None,
             provider_raw_open: false,
             log: Tail::default(),
@@ -815,6 +819,14 @@ impl App {
         // The view is otherwise filled wholesale by asking the server; an
         // announced reading is appended so it shows without a round trip.
         self.quota.push(reading);
+    }
+
+    /// Keep incoming traffic independently of the decoded conversation.
+    pub fn push_wire(&mut self, line: styra_protocol::RawLine) {
+        if line.direction == styra_protocol::Direction::FromAgent {
+            self.messages.push(line.clone());
+        }
+        self.raw.push(line);
     }
 
     /// Toggle the raw wire view on, or back to the event list. Entering it
@@ -1580,6 +1592,7 @@ impl App {
                 .as_ref()
                 .and_then(|raw| raw.selected().map(str::to_owned)),
             View::Raw => self.raw.selected().map(|line| line.text.clone()),
+            View::Messages => self.messages.selected().map(|line| line.text.clone()),
             View::Files => self
                 .selected_file_path()
                 .map(|path| path.display().to_string()),

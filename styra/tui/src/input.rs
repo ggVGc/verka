@@ -362,6 +362,7 @@ pub fn handle_list_key(
         // Global, unlike `y`: what it copies is the session's exchange, which
         // does not change with the view the operator happens to be in.
         k if GLOBAL_COPY_CONVERSATION.matches(k) => return copy_conversation(app),
+        k if GLOBAL_MESSAGES.matches(k) => return app.toggle_view(View::Messages),
         k if GLOBAL_RAW.matches(k) => return app.toggle_raw(),
         k if GLOBAL_LOG.matches(k) => return app.toggle_view(View::Log),
         k if GLOBAL_LAUNCHER.matches(k) => return app.open_launcher(),
@@ -546,6 +547,16 @@ pub fn handle_list_key(
             k if READING_UP.matches(k) => app.raw.select_prev(),
             k if READING_FIRST.matches(k) => app.raw.select_first(),
             k if READING_LAST.matches(k) => app.raw.select_last(),
+            k if READING_COPY.matches(k) => copy_selection(app),
+            _ => {}
+        },
+        View::Messages => match key {
+            k if READING_PAGE_DOWN.matches(k) => app.messages.preview.page_down(),
+            k if READING_PAGE_UP.matches(k) => app.messages.preview.page_up(),
+            k if READING_DOWN.matches(k) => app.messages.select_next(),
+            k if READING_UP.matches(k) => app.messages.select_prev(),
+            k if READING_FIRST.matches(k) => app.messages.select_first(),
+            k if READING_LAST.matches(k) => app.messages.select_last(),
             k if READING_COPY.matches(k) => copy_selection(app),
             _ => {}
         },
@@ -1533,6 +1544,28 @@ mod tests {
     }
 
     #[test]
+    fn messages_shortcut_opens_and_closes_the_interactions_log() {
+        let root = tree("messages-shortcut");
+        let mut app = app(&root);
+        app.enter_list();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+        for expected in [View::Messages, View::Events] {
+            handle_list_key(
+                &mut app,
+                &client,
+                &mut live,
+                KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT),
+                &mut pending_fold,
+                &root.join("preferences.toml"),
+            );
+            assert_eq!(app.view, expected);
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn control_l_toggles_the_log_view() {
         let root = tree("log-shortcut");
         let mut app = app(&root);
@@ -1565,6 +1598,7 @@ mod tests {
 
         for view in [
             View::Raw,
+            View::Messages,
             View::Log,
             View::Quota,
             View::Transcript,

@@ -305,6 +305,7 @@ resumed.
 | Key | View or action |
 | --- | --- |
 | `r`, `l`, `t`, `d` | raw wire records, client/server log, transcript, Workspace/interaction details; press again for events |
+| `M` | received protocol messages for the current interaction; press again for events |
 | `Q` | quota readings observed by the server (`R` there: keep at it after a rate limit) |
 | `F` | files associated with the selected event (or the whole session) |
 | `f` | highlight links in the conversation (`j`/`k` moves between them) |
@@ -313,6 +314,12 @@ resumed.
 | `C` | preview the newest command |
 | `y` | copy the selected item to the clipboard |
 | `c` | show all events instead of the conversation only (events and transcript); the border then says `all events · minor shown` or `minor hidden` |
+
+The messages view keeps every incoming agent wire message in arrival order,
+including control messages that do not appear in the conversation. Select a
+message with `j`/`k`, jump with `g`/`G`, scroll its payload with Page Up/Down,
+and copy it with `y`. New messages follow the tail until you move away from it.
+Saved sessions show the received messages from their journal.
 
 In the event list: `j`/`k` moves the selection by line, the arrows (while no
 preview is open) move it between events with details, and `J`/`K` scroll the
@@ -335,7 +342,7 @@ Diffs mark additions and removals with a green `+` and a red `-` and highlight
 the code in the language of each file's extension, with each line's number in
 the file beside it; only the changed lines are shown. Claude's edits carry no line numbers, so they are found in
 the file as it is now: an edit that has since been changed again is shown
-unnumbered. Raw, log, quota, and transcript
+unnumbered. Raw, messages, log, quota, and transcript
 use `j`/`k` plus `g`/`G` to navigate. In the raw view, `v` switches between
 Styra's captured app-server wire traffic and the provider's native persisted
 session JSONL (when the provider still has it).

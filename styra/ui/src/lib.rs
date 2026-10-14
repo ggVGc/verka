@@ -76,6 +76,7 @@ pub enum PreviewPanel {
     Selection,
     Command,
     StyraWire,
+    Messages,
     ProviderRaw,
 }
 

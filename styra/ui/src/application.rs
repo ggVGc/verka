@@ -169,6 +169,7 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
                 PanelId::Preview {
                     session: view.session_id.into(),
                     target: match raw_view.source {
+                        raw::RawSource::Received(_) => crate::PreviewPanel::Messages,
                         raw::RawSource::Styra(_) => crate::PreviewPanel::StyraWire,
                         raw::RawSource::Provider(_) => crate::PreviewPanel::ProviderRaw,
                     },
