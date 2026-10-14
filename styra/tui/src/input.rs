@@ -737,9 +737,24 @@ pub fn handle_list_key(
     }
 }
 
-/// The overview's own keys. They are offered before the global ones, because
-/// walking a grid needs `l`, which is the launcher everywhere else; anything
-/// else falls through to them. Reports whether `key` was one of its own.
+/// Cursor moves that share the live navigator's settle-and-load path.
+pub(crate) fn overview_navigation_key(key: KeyEvent) -> bool {
+    [
+        OVERVIEW_LEFT,
+        OVERVIEW_RIGHT,
+        OVERVIEW_DOWN,
+        OVERVIEW_UP,
+        OVERVIEW_NEXT,
+        OVERVIEW_PREV,
+        OVERVIEW_FIRST,
+        OVERVIEW_LAST,
+    ]
+    .iter()
+    .any(|binding| binding.matches(key))
+}
+
+/// The overview's keys are offered before global keys because the grid uses
+/// `l` to move right. Reports whether `key` was one of its own.
 fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
     let current = app.session_id.clone();
     match key {
@@ -821,6 +836,15 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
         k if k.code == KeyCode::Esc && app.search.query().is_some() => app.search.cancel(),
         k if OVERVIEW_CLOSE.matches(k) => app.view = View::Events,
         _ => return false,
+    }
+    if overview_navigation_key(key) {
+        if let Some(id) =
+            app.overview
+                .selected_id(&app.interactions, &current, app.workspace.id.as_deref())
+        {
+            let id = id.to_owned();
+            app.interactions.move_cursor_to(id, &current);
+        }
     }
     true
 }
@@ -1501,6 +1525,46 @@ mod tests {
         press(&mut app, KeyCode::Char('v'));
         assert_eq!(app.view, View::Events);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn grid_navigation_uses_the_live_list_pending_selection() {
+        use styra_protocol::InteractionActivity;
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+            "one",
+        );
+        app.interactions.refresh(
+            ["one", "two", "three", "four"]
+                .into_iter()
+                .map(|id| crate::interactions::tests::interaction(id, InteractionActivity::Running))
+                .collect(),
+        );
+        app.view = View::Overview;
+        app.overview.note_rows(&[2, 2]);
+        for (key, target) in [
+            (KeyCode::Right, Some("two")),
+            (KeyCode::Down, Some("four")),
+            (KeyCode::Left, Some("three")),
+            (KeyCode::Up, None),
+            (KeyCode::Char('G'), Some("four")),
+            (KeyCode::Tab, None),
+            (KeyCode::BackTab, Some("four")),
+            (KeyCode::Char('g'), None),
+        ] {
+            assert!(handle_overview_key(&mut app, KeyEvent::from(key)));
+            assert_eq!(
+                app.interactions.pending("one").map(|item| item.id.as_str()),
+                target,
+                "{key:?} must schedule the same load as the live list"
+            );
+            assert_eq!(
+                app.session_id, "one",
+                "loading waits for the cursor to settle"
+            );
+            assert_eq!(app.view, View::Overview);
+            assert!(app.take_request().is_none());
+        }
     }
 
     #[test]

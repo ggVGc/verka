@@ -508,7 +508,7 @@ fn interaction_navigator_passthrough(key: crossterm::event::KeyEvent) -> bool {
         || keys::GLOBAL_NEW_SESSION.matches(key)
 }
 
-/// Load the interaction the navigator's cursor has moved onto, if it is not
+/// Load the interaction the list or grid cursor has moved onto, if it is not
 /// the one already on screen. Called when the cursor settles, and ahead of any
 /// key that acts on the row under it, so an outstanding move never leaves a
 /// command addressing the interaction the operator has already moved off.
@@ -521,7 +521,12 @@ fn load_cursored_interaction(
     let Some(interaction) = app.interactions.pending(&app.session_id).cloned() else {
         return;
     };
+    let overview = (app.view == crate::app::View::Overview).then(|| app.overview.clone());
     make_interaction_current(app, live, client, standing_launch, interaction);
+    if let Some(overview) = overview {
+        app.overview = overview;
+        app.view = crate::app::View::Overview;
+    }
 }
 
 fn cursored_interaction_is_loadable(app: &App) -> bool {
@@ -1570,6 +1575,14 @@ fn run_rounds(
             if keys::GLOBAL_LAUNCHER.matches(key) || keys::EDITOR_LAUNCHER.matches(key) {
                 app.recent_models = preferences::load_recent_models(preferences_path);
             }
+            // Grid navigation shares the navigator's pending cursor. Finish
+            // its move before a command can act on the previous interaction.
+            if app.focus == Focus::List
+                && app.view == crate::app::View::Overview
+                && !input::overview_navigation_key(key)
+            {
+                load_cursored_interaction(app, live, client, standing_launch);
+            }
             match app.focus {
                 Focus::List => input::handle_list_key(
                     app,
@@ -2220,6 +2233,45 @@ mod tests {
             crossterm::event::KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL,)
         ));
         assert!(!interaction_navigator_passthrough(press('l')));
+    }
+
+    #[test]
+    fn a_failed_grid_selection_load_rests_the_shared_cursor_and_keeps_the_grid() {
+        let root = tempfile::tempdir().unwrap();
+        let client = Client::new(root.path().join("missing.sock"));
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+            "one",
+        );
+        app.interactions.refresh(
+            ["one", "two"]
+                .into_iter()
+                .map(|id| {
+                    crate::interactions::tests::interaction(
+                        id,
+                        styra_protocol::InteractionActivity::Running,
+                    )
+                })
+                .collect(),
+        );
+        app.view = View::Overview;
+        app.overview.running_only = true;
+        app.overview.note_rows(&[2]);
+        app.overview.right(&app.interactions, "one", None);
+        app.interactions.move_cursor_to("two".into(), "one");
+        let mut live = Attachment::Detached;
+
+        load_cursored_interaction(&mut app, &mut live, &client, &LaunchPolicy::default());
+
+        assert_eq!(app.session_id, "one");
+        assert_eq!(app.view, View::Overview);
+        assert!(app.overview.running_only);
+        assert_eq!(
+            app.overview.selected_id(&app.interactions, "one", None),
+            Some("two")
+        );
+        assert!(app.interactions.pending("one").is_none());
+        assert!(!cursored_interaction_is_loadable(&app));
     }
 
     #[test]

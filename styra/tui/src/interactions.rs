@@ -632,7 +632,7 @@ impl LiveInteractions {
     /// A cursor that lands back on the Interaction already on screen — by
     /// walking off the end of the list, or straight back to where it started —
     /// has nothing to load, so it cancels the move rather than timing one out.
-    fn move_cursor_to(&mut self, id: String, current: &str) {
+    pub(crate) fn move_cursor_to(&mut self, id: String, current: &str) {
         if id == current {
             self.rest();
             return;
