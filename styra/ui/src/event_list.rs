@@ -1,7 +1,7 @@
 //! The main event list: each entry a summary line that grows inline when
 //! expanded, plus the empty-list start screen and the trailing status tail.
 
-use crate::chrome::{all_events_title, panel_block, PanelChrome, StopTone};
+use crate::chrome::{all_events_title, focused_panel_block, PanelChrome, StopTone};
 use crate::code::{code_block_lines, is_error_diagnostic};
 use crate::footer::{message_text_color, tag_color};
 use crate::markdown::{
@@ -290,7 +290,8 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
             )
         })
         .unwrap_or_default();
-    let mut block = panel_block(&view.chrome).title_bottom(Line::from(usage).right_aligned());
+    let mut block =
+        focused_panel_block(&view.chrome).title_bottom(Line::from(usage).right_aligned());
     let activity = activity_spans(view.activity);
     if !activity.is_empty() {
         block = block.title_bottom(Line::from(activity));

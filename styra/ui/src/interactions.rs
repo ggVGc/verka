@@ -6,7 +6,7 @@ use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, BorderType, Borders};
 use ratatui::Frame;
 use std::borrow::Cow;
 use styra_protocol::CompletionState;
@@ -161,6 +161,7 @@ pub fn height(view: &InteractionNavigator<'_>, available: u16) -> u16 {
 pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) -> usize {
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Thick)
         .border_style(
             Style::default()
                 .fg(theme::ACCENT)
@@ -755,9 +756,9 @@ mod tests {
             ..many_rows(0)
         };
         let screen = rendered(&view);
-        assert!(screen.contains("│ ■  source · codex"), "{screen}");
-        assert!(screen.contains("│  └─  ■  branch · codex"), "{screen}");
-        assert!(screen.contains("│         « forked"), "{screen}");
+        assert!(screen.contains("┃ ■  source · codex"), "{screen}");
+        assert!(screen.contains("┃  └─  ■  branch · codex"), "{screen}");
+        assert!(screen.contains("┃         « forked"), "{screen}");
     }
 
     #[test]
@@ -876,26 +877,26 @@ mod tests {
             ..many_rows(0)
         };
         let screen = lines(&all);
-        assert!(screen[1].starts_with("│Payments"), "{screen:#?}");
+        assert!(screen[1].starts_with("┃Payments"), "{screen:#?}");
         assert!(
-            screen[2].starts_with("│  ●  alone · feature · claude"),
+            screen[2].starts_with("┃  ●  alone · feature · claude"),
             "{screen:#?}"
         );
-        assert!(screen[3].starts_with("│ [checkout]"), "{screen:#?}");
+        assert!(screen[3].starts_with("┃ [checkout]"), "{screen:#?}");
         assert!(
-            screen[4].starts_with("│ ├─  ●  first · claude "),
+            screen[4].starts_with("┃ ├─  ●  first · claude "),
             "{screen:#?}"
         );
         assert!(
-            screen[6].starts_with("│ └─  ●  second · claude "),
+            screen[6].starts_with("┃ └─  ●  second · claude "),
             "{screen:#?}"
         );
 
-        assert!(screen[5].starts_with("│ │      « preview"), "{screen:#?}");
-        assert!(screen[7].starts_with("│        « preview"), "{screen:#?}");
-        assert!(screen[8].starts_with("│ [other]"), "{screen:#?}");
+        assert!(screen[5].starts_with("┃ │      « preview"), "{screen:#?}");
+        assert!(screen[7].starts_with("┃        « preview"), "{screen:#?}");
+        assert!(screen[8].starts_with("┃ [other]"), "{screen:#?}");
         assert!(
-            screen[9].starts_with("│ └─  ●  third · claude"),
+            screen[9].starts_with("┃ └─  ●  third · claude"),
             "{screen:#?}"
         );
 
@@ -911,17 +912,17 @@ mod tests {
         };
         let screen = lines(&one);
         assert!(
-            screen[1].starts_with("│ ●  alone · feature · claude"),
+            screen[1].starts_with("┃ ●  alone · feature · claude"),
             "{screen:#?}"
         );
-        assert!(screen[2].starts_with("│[checkout]"), "{screen:#?}");
+        assert!(screen[2].starts_with("┃[checkout]"), "{screen:#?}");
         assert!(
-            screen[3].starts_with("│└─  ●  first · claude "),
+            screen[3].starts_with("┃└─  ●  first · claude "),
             "{screen:#?}"
         );
-        assert!(screen[4].starts_with("│       « preview"), "{screen:#?}");
+        assert!(screen[4].starts_with("┃       « preview"), "{screen:#?}");
         assert!(
-            screen[5].starts_with("│ ●  outside · feature · claude"),
+            screen[5].starts_with("┃ ●  outside · feature · claude"),
             "{screen:#?}"
         );
     }
@@ -962,14 +963,14 @@ mod tests {
         };
         let screen = lines(&view);
         let expected = [
-            "│[auth-rework]  → main",
-            "│├─  ●  rework ⑂1 · claude",
-            "││    └─  ●  try jwt · claude",
-            "│├─  ●  review · claude",
-            "│├─ [token-tests]  → styra/auth-rework",
-            "││  └─  ●  tests · claude",
-            "│└─ [jwt-spike]  → styra/auth-rework",
-            "│   └─  ●  spike ⑂ rework · claude",
+            "┃[auth-rework]  → main",
+            "┃├─  ●  rework ⑂1 · claude",
+            "┃│    └─  ●  try jwt · claude",
+            "┃├─  ●  review · claude",
+            "┃├─ [token-tests]  → styra/auth-rework",
+            "┃│  └─  ●  tests · claude",
+            "┃└─ [jwt-spike]  → styra/auth-rework",
+            "┃   └─  ●  spike ⑂ rework · claude",
         ];
         for (line, expected) in screen[1..].iter().zip(expected) {
             assert!(line.starts_with(expected), "{screen:#?}");
@@ -1254,7 +1255,7 @@ mod tests {
     }
 
     /// The cursor's row, message line and all, is marked by a bar over the
-    /// left border; every other row keeps the plain border.
+    /// left border in the selection color; the dropdown has a thick frame.
     #[test]
     fn the_cursor_row_is_marked_on_the_left_border() {
         let lines = rendered(&many_rows(1))
@@ -1272,7 +1273,7 @@ mod tests {
             "{lines:#?}"
         );
         for line in [1, 2, 5, 6] {
-            assert!(lines[line].starts_with("│"), "{lines:#?}");
+            assert!(lines[line].starts_with("┃"), "{lines:#?}");
         }
     }
 

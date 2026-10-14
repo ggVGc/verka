@@ -155,7 +155,9 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         .and_then(|name| name.to_str())
         .map(str::to_owned);
     styra_ui::chrome::PanelChrome {
-        focused: if suffix == Some("diff") {
+        focused: if app.interactions.open {
+            false
+        } else if suffix == Some("diff") {
             app.diff_focused()
         } else {
             app.focus == Focus::List && !app.diff_focused()
@@ -910,7 +912,7 @@ mod tests {
         // to say the title no longer opens with the program's name — but the
         // footer renders the host's working directory, so it also failed in
         // any checkout whose path happened to contain the word.
-        assert!(title.starts_with("┌ codex · "), "{title}");
+        assert!(title.starts_with("┏ codex · "), "{title}");
         assert!(title.contains("running"), "{title}");
     }
 
@@ -925,7 +927,7 @@ mod tests {
         // agent, and a bare `(x, y)` says that only by arithmetic over the
         // border and the title's leading pad.
         assert!(
-            screen.title().starts_with("┌ payments · codex · "),
+            screen.title().starts_with("┏ payments · codex · "),
             "{}",
             screen.title()
         );
@@ -937,7 +939,7 @@ mod tests {
         app.workspace.name = Some("payments".into());
         app.interactions.note_name("s1", Some("Fix retries".into()));
         let title = test_support::screen(&app).title();
-        assert!(title.starts_with("┌ payments · Fix retries · "), "{title}");
+        assert!(title.starts_with("┏ payments · Fix retries · "), "{title}");
     }
 
     fn interaction_with_checkout(id: &str, checkout: Option<CheckoutState>) -> InteractionSummary {
@@ -1250,7 +1252,7 @@ mod tests {
             assert!(!panel_chrome(&app, None).focused);
             let screen = test_support::screen_sized(&app, 160, 40);
             assert!(screen.locate("DIFF FOCUSED").is_none());
-            assert!(screen.all().contains('╔'));
+            assert!(screen.find("┏").0 >= 80, "the diff owns the thick border");
             let (x, _) = screen.find("+new");
             assert!(
                 x >= 80,
@@ -1261,13 +1263,27 @@ mod tests {
             assert!(panel_chrome(&app, None).focused);
             let screen = test_support::screen_sized(&app, 160, 40);
             assert!(screen.all().contains("+new"));
-            assert!(screen.locate("╔").is_none());
+            assert!(
+                screen.find("┏").0 < 80,
+                "the interaction owns the thick border"
+            );
+            if view == View::Events {
+                app.interactions.open = true;
+                assert!(!panel_chrome(&app, None).focused);
+                assert!(!panel_chrome(&app, Some("diff")).focused);
+                let screen = test_support::screen_sized(&app, 160, 40);
+                assert!(
+                    screen.title().starts_with('┏'),
+                    "the dropdown owns the thick border"
+                );
+                app.interactions.open = false;
+            }
             app.diff_interaction_focus = false;
             app.enter_input();
             assert!(!panel_chrome(&app, Some("diff")).focused);
             let screen = test_support::screen_sized(&app, 160, 40);
             assert!(screen.all().contains("+new"));
-            assert!(screen.locate("╔").is_none());
+            assert!(screen.locate("┏").is_none());
             app.enter_list();
         }
     }

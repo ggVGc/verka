@@ -109,19 +109,17 @@ pub fn uncommitted_title(block: Block<'static>) -> Block<'static> {
     )))
 }
 
-/// Mark the panel that owns the keyboard with a double border.
+/// Mark the panel that owns the keyboard with the grid's thick selection border.
 pub fn focused_panel_block(chrome: &PanelChrome) -> Block<'static> {
     let block = panel_block(chrome);
     if !chrome.focused {
         return block;
     }
-    block
-        .border_type(BorderType::Double)
-        .border_style(
-            Style::default()
-                .fg(theme::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )
+    block.border_type(BorderType::Thick).border_style(
+        Style::default()
+            .fg(theme::ACCENT)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
