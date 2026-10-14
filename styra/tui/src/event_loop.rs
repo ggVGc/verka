@@ -310,6 +310,63 @@ impl Drop for LaunchEffects {
     }
 }
 
+/// The interactions snapshot is polled off the terminal thread.
+///
+/// The server answers `list_interactions` by reading every live Session's
+/// record and the Workspace directory, which takes on the order of 100ms. Asked
+/// from the loop on every [`INTERACTIONS_REFRESH`], that was a tenth of a
+/// second in every four during which no key was read, so typing landed in
+/// stutters. Here the loop only asks; the answer is applied on whichever round
+/// it arrives in.
+struct InteractionsPoll {
+    send: Sender<()>,
+    /// `None` for a poll the server could not answer: the snapshot on screen
+    /// stays as it was, as it did when the loop polled for itself.
+    receive: Receiver<Option<Vec<InteractionSummary>>>,
+    /// A request has been made and not yet answered. One at a time: a server
+    /// slower than the refresh period would otherwise have a queue of them.
+    in_flight: bool,
+}
+
+impl InteractionsPoll {
+    fn new(client: Client) -> Self {
+        let (send, requests) = mpsc::channel::<()>();
+        let (results, receive) = mpsc::channel();
+        // Not joined: the loop leaving drops `send`, and the worker finishes
+        // the request it is in, if any, and stops.
+        thread::Builder::new()
+            .name("styra-interactions-poll".into())
+            .spawn(move || {
+                while requests.recv().is_ok() {
+                    if results.send(client.list_interactions().ok()).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawning interactions poller");
+        Self {
+            send,
+            receive,
+            in_flight: false,
+        }
+    }
+
+    /// Ask for a fresh snapshot, unless one is already on its way.
+    fn request(&mut self) {
+        if !self.in_flight && self.send.send(()).is_ok() {
+            self.in_flight = true;
+        }
+    }
+
+    /// The answer to the outstanding request, if it has arrived and the server
+    /// could give one.
+    fn ready(&mut self) -> Option<Vec<InteractionSummary>> {
+        let answer = self.receive.try_recv().ok()?;
+        self.in_flight = false;
+        answer
+    }
+}
+
 fn submit_workspace_launch(
     effects: &LaunchEffects,
     app: &mut App,
@@ -690,6 +747,7 @@ fn run_rounds(
     // before the picker can be opened.
     app.recent_models = preferences::load_recent_models(preferences_path);
     let launch_effects = LaunchEffects::new(client.clone());
+    let mut interactions_poll = InteractionsPoll::new(client.clone());
     let mut audio = AudioInput::new();
     let mut pending_fold = false;
     // Keys the action menu chose, still to be handled as if they were typed.
@@ -804,10 +862,11 @@ fn run_rounds(
                     Ok(None) => {}
                 }
             }
-            if let Ok(interactions) = client.list_interactions() {
-                dirty |= app.interactions.refresh(interactions);
-                dirty |= app.adopt_integration();
-            }
+            interactions_poll.request();
+        }
+        if let Some(interactions) = interactions_poll.ready() {
+            dirty |= app.interactions.refresh(interactions);
+            dirty |= app.adopt_integration();
         }
         // An editor started work in the Workspace on screen and asked for it
         // to be watched. A blank screen is left alone: it is the operator
