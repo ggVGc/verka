@@ -45,7 +45,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
         .collect();
     styra_ui::event_list::EntryLogView {
         entries,
-        focused: app.entry_log.focused(),
+        focused: app.entry_log.focused() && !app.diff_visible(),
         requested_scroll: app.entry_log.scroll.offset,
         protocol: app.selection.provider.protocol(),
         links: ui_link_display(app.link_display),

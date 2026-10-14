@@ -68,7 +68,7 @@ fn message_paste_active(app: &App) -> bool {
         && app.git_repository_prompt.is_none()
         && app.launch.prompt.is_none()
         && app.tag_picker.is_none()
-        && !app.diff_visible()
+        && !app.diff_focused()
         && !app.search.typing()
 }
 
@@ -88,7 +88,7 @@ fn action_menu_available(app: &App) -> bool {
         && app.git_repository_prompt.is_none()
         && app.launch.prompt.is_none()
         && app.tag_picker.is_none()
-        && !app.diff_visible()
+        && !app.diff_focused()
         && !app.search.typing()
         && !app.interactions.typing_filter()
         && presentation::current_window(app).has_action_menu()
@@ -1134,7 +1134,7 @@ fn run_rounds(
             && app.launch.prompt.is_none()
             && !app.search.typing()
             // The diff owns the keyboard; `?` is not one of its keys.
-            && !app.diff_visible()
+            && !app.diff_focused()
             && app
                 .tag_picker
                 .as_ref()
@@ -1372,7 +1372,10 @@ fn run_rounds(
         }
         // The diff owns reading keys in either layout, including its modal
         // file filter, before the event list and navigator handle them.
-        if app.diff_visible() {
+        if input::handle_diff_focus_key(app, key) {
+            continue;
+        }
+        if app.diff_focused() {
             input::handle_diff_key(app, key);
             continue;
         }
@@ -2180,7 +2183,7 @@ fn run_rounds(
                 app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
                 diff_refreshed = Instant::now();
                 app.diff_preview = true;
-                app.preview.show();
+                app.diff_interaction_focus = false;
                 if !matches!(app.view, View::Events | View::Files) {
                     app.view = View::Events;
                 }
@@ -2189,6 +2192,7 @@ fn run_rounds(
                 app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
                 diff_refreshed = Instant::now();
                 app.diff_preview = false;
+                app.diff_interaction_focus = false;
                 app.view = View::CheckoutDiff;
             }
             Some(Request::OpenShell) => {
@@ -2240,6 +2244,11 @@ mod tests {
         app.composer.add_part();
         app.composer.start_choosing();
         assert!(message_paste_active(&app));
+        app.diff_preview = true;
+        assert!(app.diff_visible());
+        assert!(message_paste_active(&app));
+        app.enter_list();
+        assert!(!message_paste_active(&app));
     }
 
     /// Space is a letter wherever something is being typed and a link's own

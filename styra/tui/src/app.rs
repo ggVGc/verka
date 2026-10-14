@@ -284,7 +284,11 @@ pub struct App {
     /// The diff [`View::CheckoutDiff`] shows. Kept after the view is left, but
     /// read afresh each time it is opened.
     pub checkout_diff: Option<styra_diff::CheckoutDiff>,
+    /// Temporarily use the preview pane for the diff without changing the
+    /// operator's preview choice.
     pub diff_preview: bool,
+    /// While a side diff is open, whether navigation belongs to the interaction.
+    pub diff_interaction_focus: bool,
     /// The entry-log pane below the event list: whether it is open, which of
     /// the two windows has the navigation keys, and where it is; see
     /// [`EntryLog`]. It is deliberately a pane state, not a [`View`]: it and
@@ -537,6 +541,7 @@ impl App {
             transcript: Scroll::default(),
             checkout_diff: None,
             diff_preview: false,
+            diff_interaction_focus: false,
             entry_log: EntryLog::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
@@ -1439,12 +1444,18 @@ impl App {
         self.entry_log_follow_selection();
     }
 
-    /// Whether the checkout diff is taking the reading keys on screen.
+    /// Whether the checkout diff is on screen, including while composing.
     pub fn diff_visible(&self) -> bool {
         self.view == View::CheckoutDiff
             || (self.diff_preview
-                && self.preview.open
                 && matches!(self.view, View::Events | View::Files))
+    }
+
+    /// Whether the diff, rather than the interaction or message box, owns keys.
+    pub fn diff_focused(&self) -> bool {
+        self.diff_visible()
+            && self.focus == Focus::List
+            && (self.view == View::CheckoutDiff || !self.diff_interaction_focus)
     }
 
     /// The entry the preview panel and the `y` shortcut act on: the one the

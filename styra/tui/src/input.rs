@@ -83,16 +83,29 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
 
 /// Keys for the checkout diff. The diff owns the keyboard while it is open:
 /// `styra-diff` answers every key, the same way its own program does, and
-/// none of the global bindings or the other views' keys act from it. What it
-/// hands back is what only Styra can do.
+/// `i` focuses the message box and `q` quits Styra unless the diff's filter
+/// is being typed.
+/// Tab hands navigation to the interaction when the diff is in a side pane.
+/// Other global bindings and the other views' keys do not act from it.
 pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
-    if key.code == KeyCode::Char('D')
-        && !app
-            .checkout_diff
-            .as_ref()
-            .is_some_and(|diff| diff.search.typing())
-    {
+    if handle_diff_focus_key(app, key) {
+        return;
+    }
+    let typing_filter = app
+        .checkout_diff
+        .as_ref()
+        .is_some_and(|diff| diff.search.typing());
+    if GLOBAL_QUIT.matches(key) && !typing_filter {
+        app.ask(Request::Quit);
+        return;
+    }
+    if GLOBAL_FOCUS_MESSAGE.matches(key) && !typing_filter {
+        app.enter_input();
+        return;
+    }
+    if key.code == KeyCode::Char('D') && !typing_filter {
         app.diff_preview = false;
+        app.diff_interaction_focus = false;
         app.view = View::CheckoutDiff;
         return;
     }
@@ -108,10 +121,32 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
                 app.view = View::Events;
             } else {
                 app.diff_preview = false;
+                app.diff_interaction_focus = false;
             }
         }
         Outcome::OpenFile => open_diff_file(app),
     }
+}
+
+/// Tab exchanges the side diff's reading keys with the interaction pane.
+/// Prompts retain their keys, and fullscreen diffs keep their own Tab action.
+pub fn handle_diff_focus_key(app: &mut App, key: KeyEvent) -> bool {
+    if !matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+        || app.focus != crate::app::Focus::List
+        || !app.diff_preview
+        || !matches!(app.view, View::Events | View::Files)
+        || app.search.typing()
+        || app.interactions.typing_filter()
+        || app
+            .checkout_diff
+            .as_ref()
+            .is_some_and(|diff| diff.search.typing())
+    {
+        return false;
+    }
+    app.diff_interaction_focus = !app.diff_interaction_focus;
+    app.entry_log.unfocus();
+    true
 }
 
 /// Keys for the driva view's "add a mount" prompt. It is modal — every
@@ -295,7 +330,10 @@ pub fn handle_list_key(
     pending_fold: &mut bool,
     preferences_path: &Path,
 ) {
-    if app.diff_visible() {
+    if handle_diff_focus_key(app, key) {
+        return;
+    }
+    if app.diff_focused() {
         return handle_diff_key(app, key);
     }
     if std::mem::take(pending_fold) {
@@ -467,16 +505,18 @@ pub fn handle_list_key(
                 app.entry_log_page_down()
             }
             k if EVENTS_PAGE_UP.matches(k) && app.entry_log.focused() => app.entry_log_page_up(),
-            k if EVENTS_PAGE_DOWN.matches(k) && app.preview.open => {
+            k if EVENTS_PAGE_DOWN.matches(k) && app.preview.open && !app.diff_visible() => {
                 app.preview.scroll.half_page_down()
             }
-            k if EVENTS_PAGE_UP.matches(k) && app.preview.open => app.preview.scroll.half_page_up(),
+            k if EVENTS_PAGE_UP.matches(k) && app.preview.open && !app.diff_visible() => {
+                app.preview.scroll.half_page_up()
+            }
             // With the preview open the arrows read it, the way `j`/`k` do the
             // full-screen one; `J`/`K` still step between entries.
-            k if EVENTS_PREVIEW_SCROLL_DOWN.matches(k) && app.preview.open => {
+            k if EVENTS_PREVIEW_SCROLL_DOWN.matches(k) && app.preview.open && !app.diff_visible() => {
                 app.preview.scroll.page_down()
             }
-            k if EVENTS_PREVIEW_SCROLL_UP.matches(k) && app.preview.open => {
+            k if EVENTS_PREVIEW_SCROLL_UP.matches(k) && app.preview.open && !app.diff_visible() => {
                 app.preview.scroll.page_up()
             }
             k if EVENTS_PAGE_DOWN.matches(k) && app.entry_log.open => {
@@ -2129,7 +2169,6 @@ mod tests {
         let mut app = app_with_diffable_interaction(&root);
         app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
         app.diff_preview = true;
-        app.preview.show();
         app.checkout_diff.as_mut().unwrap().scroll.note_limit(100);
 
         press_list_key(
@@ -2146,8 +2185,19 @@ mod tests {
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         );
         assert!(!app.diff_visible());
-        assert!(app.preview.open);
+        assert!(!app.preview.open);
         assert_eq!(app.view, View::Events);
+
+        // A preview that was already open remains open after the diff closes.
+        app.preview.show();
+        app.diff_preview = true;
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert!(!app.diff_visible());
+        assert!(app.preview.open);
 
         app.diff_preview = true;
         press_list_key(
@@ -2158,6 +2208,30 @@ mod tests {
         assert_eq!(app.view, View::CheckoutDiff);
         assert!(!app.diff_preview);
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert!(!app.diff_visible());
+        assert!(app.preview.open);
+
+        // Promoting a temporary diff also preserves a closed preview.
+        app.preview.toggle();
+        app.diff_preview = true;
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
+        );
+        assert_eq!(app.view, View::CheckoutDiff);
+        press_list_key(
+            &mut app,
+            &root,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert!(!app.diff_visible());
+        assert!(!app.preview.open);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2324,6 +2398,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn tab_switches_navigation_between_the_side_diff_and_interaction() {
+        let root = tree("diff-tab-focus");
+        for preview_open in [false, true] {
+            let mut app = app_with_diffable_interaction(&root);
+            for index in 0..3 {
+                app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
+                    text: format!("message {index}\n\nwith more below"),
+                });
+            }
+            app.select_first();
+            app.preview.open = preview_open;
+            app.preview.scroll.note_limit(100);
+            app.diff_preview = true;
+            app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
+            app.checkout_diff.as_mut().unwrap().scroll.note_limit(100);
+
+            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Down));
+            assert_eq!(app.timeline.selected, 0);
+            assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
+
+            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Tab));
+            assert!(app.diff_visible());
+            assert!(!app.diff_focused());
+            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Down));
+            assert_eq!(app.timeline.selected, 1);
+            assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
+            assert_eq!(app.preview.scroll.offset, 0);
+
+            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::BackTab));
+            assert!(app.diff_focused());
+            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Down));
+            assert_eq!(app.timeline.selected, 1);
+            assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 20);
+            assert_eq!(app.preview.open, preview_open);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// `v` asks for the file at the top of the diff, at the line there, and
     /// says why when that file is gone rather than asking for it.
     #[test]
@@ -2356,15 +2469,82 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// The diff owns the keyboard: global keys do nothing there, and Esc is
-    /// the one way back to events.
+    #[test]
+    fn i_from_the_diff_focuses_the_message_and_esc_returns_to_the_diff() {
+        let root = tree("diff-message-focus");
+        for view in [View::Events, View::Files, View::CheckoutDiff] {
+            let mut app = app_with_diffable_interaction(&root);
+            app.view = view;
+            app.diff_preview = view != View::CheckoutDiff;
+            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('i')));
+            assert_eq!(app.focus, crate::app::Focus::Input);
+            assert!(app.diff_visible());
+            assert!(!app.diff_focused());
+            assert!(!app.preview.open);
+
+            let client = Client::new(root.join("missing.sock"));
+            let mut live = Attachment::Detached;
+            handle_input_key(
+                &mut app,
+                &client,
+                "workspace",
+                &mut live,
+                KeyEvent::from(KeyCode::Char('i')),
+            );
+            assert_eq!(app.composer.text(), "i");
+            handle_input_key(
+                &mut app,
+                &client,
+                "workspace",
+                &mut live,
+                KeyEvent::from(KeyCode::Esc),
+            );
+            assert!(app.diff_focused());
+            assert_eq!(app.view, view);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn i_and_q_are_still_text_while_typing_the_diff_filter() {
+        let root = tree("diff-filter-i");
+        let mut app = app_with_diffable_interaction(&root);
+        app.diff_preview = true;
+        let mut diff = styra_diff::CheckoutDiff::read(diffable_target());
+        diff.search.open();
+        app.checkout_diff = Some(diff);
+        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('i')));
+        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('q')));
+        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Tab));
+        assert!(app.diff_focused());
+        assert_eq!(app.checkout_diff.as_ref().unwrap().search.query(), Some("iq"));
+        assert_eq!(app.take_request(), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn q_from_the_diff_quits_styra_in_either_layout() {
+        let root = tree("diff-quit");
+        for view in [View::Events, View::Files, View::CheckoutDiff] {
+            let mut app = app_with_diffable_interaction(&root);
+            app.view = view;
+            app.diff_preview = view != View::CheckoutDiff;
+            app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
+            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('q')));
+            assert_eq!(app.take_request(), Some(Request::Quit));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Apart from the message and quit shortcuts, global keys do nothing in the diff,
+    /// and Esc is the one way back to events.
     #[test]
     fn only_esc_leaves_the_diff_view() {
         let root = tree("diff-exclusive");
         let mut app = app_with_diffable_interaction(&root);
         app.view = View::CheckoutDiff;
 
-        for character in "dDqilawnAQPXe".chars() {
+        for character in "dDlawnAQPXe".chars() {
             press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char(character)));
             assert_eq!(app.view, View::CheckoutDiff, "{character} left the diff");
             assert_eq!(app.take_request(), None, "{character} asked for something");

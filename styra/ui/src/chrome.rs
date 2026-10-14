@@ -3,7 +3,7 @@
 use crate::theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, BorderType, Borders};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatusTone {
@@ -107,6 +107,21 @@ pub fn uncommitted_title(block: Block<'static>) -> Block<'static> {
             .fg(theme::UNCOMMITTED)
             .add_modifier(Modifier::BOLD),
     )))
+}
+
+/// Mark the panel that owns the keyboard with a double border.
+pub fn focused_panel_block(chrome: &PanelChrome) -> Block<'static> {
+    let block = panel_block(chrome);
+    if !chrome.focused {
+        return block;
+    }
+    block
+        .border_type(BorderType::Double)
+        .border_style(
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )
 }
 
 pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {

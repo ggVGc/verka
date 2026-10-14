@@ -155,7 +155,11 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         .and_then(|name| name.to_str())
         .map(str::to_owned);
     styra_ui::chrome::PanelChrome {
-        focused: app.focus == Focus::List,
+        focused: if suffix == Some("diff") {
+            app.diff_focused()
+        } else {
+            app.focus == Focus::List && !app.diff_focused()
+        },
         workspace: app.workspace.name.clone(),
         worktree,
         source_branch: app.session_id.is_empty().then(|| {
@@ -354,7 +358,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
             let entry_log = app.entry_log.open.then(|| entry_log::view(app));
             let preview = app.preview.open.then(|| preview::view(app, false));
             let diff = app.checkout_diff.as_ref().map(|diff| {
-                diff.view(styra_ui::chrome::panel_block(&panel_chrome(
+                diff.view(styra_ui::chrome::focused_panel_block(&panel_chrome(
                     app,
                     Some("diff"),
                 )))
@@ -441,7 +445,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
             draw_main(ui, app, MainView::Transcript(&transcript))
         }
         View::CheckoutDiff => {
-            let block = styra_ui::chrome::panel_block(&panel_chrome(app, Some("diff")));
+            let block = styra_ui::chrome::focused_panel_block(&panel_chrome(app, Some("diff")));
             let diff = match &app.checkout_diff {
                 Some(diff) => diff.view(block),
                 None => styra_diff::CheckoutDiffView::unread(block),
@@ -473,7 +477,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
             let list = list::view(app);
             let preview = app.preview.open.then(|| preview::view(app, false));
             let diff = app.checkout_diff.as_ref().map(|diff| {
-                diff.view(styra_ui::chrome::panel_block(&panel_chrome(
+                diff.view(styra_ui::chrome::focused_panel_block(&panel_chrome(
                     app,
                     Some("diff"),
                 )))
@@ -1221,13 +1225,30 @@ mod tests {
         for view in [View::Events, View::Files] {
             app.view = view;
             app.diff_preview = true;
-            app.preview.show();
+            assert!(!app.preview.open);
+            assert!(panel_chrome(&app, Some("diff")).focused);
+            assert!(!panel_chrome(&app, None).focused);
             let screen = test_support::screen_sized(&app, 160, 40);
+            assert!(screen.locate("DIFF FOCUSED").is_none());
+            assert!(screen.all().contains('╔'));
             let (x, _) = screen.find("+new");
             assert!(
                 x >= 80,
                 "the checkout diff is in the preview pane: {view:?}"
             );
+            app.diff_interaction_focus = true;
+            assert!(!panel_chrome(&app, Some("diff")).focused);
+            assert!(panel_chrome(&app, None).focused);
+            let screen = test_support::screen_sized(&app, 160, 40);
+            assert!(screen.all().contains("+new"));
+            assert!(screen.locate("╔").is_none());
+            app.diff_interaction_focus = false;
+            app.enter_input();
+            assert!(!panel_chrome(&app, Some("diff")).focused);
+            let screen = test_support::screen_sized(&app, 160, 40);
+            assert!(screen.all().contains("+new"));
+            assert!(screen.locate("╔").is_none());
+            app.enter_list();
         }
     }
 }
