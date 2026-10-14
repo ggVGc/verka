@@ -31,6 +31,10 @@ pub struct LiveInteractions {
     /// the listing's own business: the server keeps completion as the reason
     /// an interaction is stopped, and says so about every row.
     pub show_completed: bool,
+    /// Lists only interactions whose agent still takes messages. Stopped rows
+    /// include every completed one, so this hides those whatever
+    /// `show_completed` says.
+    pub hide_stopped: bool,
     pub items: Vec<InteractionSummary>,
     pub workspaces: Vec<WorkspaceSummary>,
     /// The one client-side index of operator-facing Session names. Interaction
@@ -304,6 +308,7 @@ impl LiveInteractions {
             .filter_map(|(index, interaction)| {
                 (self.in_workspace_scope(interaction, workspace_id)
                     && (self.show_completed || !interaction.completed.is_done())
+                    && (!self.hide_stopped || interaction.activity.accepting())
                     && self.matches_filter(interaction))
                 .then_some(index)
             })
@@ -860,6 +865,10 @@ impl LiveInteractions {
         self.show_completed = !self.show_completed;
     }
 
+    pub fn toggle_stopped(&mut self) {
+        self.hide_stopped = !self.hide_stopped;
+    }
+
     /// Select the entry to move to after completing or abandoning an interaction.
     /// The finished row stays listed; the completion filter controls its visibility.
     ///
@@ -898,6 +907,7 @@ impl LiveInteractions {
                 *index != hidden
                     && interaction.workspace_id == *own_workspace
                     && !interaction.completed.is_done()
+                    && (!self.hide_stopped || interaction.activity.accepting())
             })
             .collect::<Vec<_>>();
         let live_alongside = alongside
@@ -924,7 +934,9 @@ impl LiveInteractions {
             self.rest();
             return self.items.get(index).cloned();
         }
-        if self.show_completed {
+        // The finished row is stopped, so it stays in view only while
+        // neither filter hides it.
+        if self.show_completed && !self.hide_stopped {
             self.rest();
             return self.items.get(hidden).cloned();
         }
@@ -1446,6 +1458,46 @@ pub(crate) mod tests {
         );
         live.toggle_completed();
         assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn stopped_rows_can_be_hidden() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("stopped", InteractionActivity::Stopped),
+                interaction("idle", InteractionActivity::Pending),
+                completed("completed"),
+            ],
+            vec![],
+        );
+        live.show_completed = true;
+        assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
+
+        live.toggle_stopped();
+
+        assert_eq!(
+            live.visible_indices(Some("workspace")),
+            vec![1],
+            "stopped rows, completed ones included, are hidden"
+        );
+    }
+
+    #[test]
+    fn finishing_with_stopped_rows_hidden_skips_a_stopped_sibling() {
+        let mut stopped = interaction("stopped", InteractionActivity::Stopped);
+        stopped.workspace_id = "workspace".into();
+        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
+        elsewhere.workspace_id = "other".into();
+        let mut live = LiveInteractions::default();
+        live.open(vec![completed("finished"), stopped, elsewhere], vec![]);
+        live.show_completed = true;
+        live.hide_stopped = true;
+
+        assert_eq!(
+            live.select_past_hidden("finished", None).unwrap().id,
+            "elsewhere"
+        );
     }
 
     /// Completion is a property of the Session, cleared by the server when it

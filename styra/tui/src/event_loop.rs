@@ -1498,6 +1498,10 @@ fn run_rounds(
                     app.interactions.toggle_completed();
                     continue;
                 }
+                k if keys::INTERACTIONS_STOPPED.matches(k) => {
+                    app.interactions.toggle_stopped();
+                    continue;
+                }
                 k if keys::INTERACTIONS_COMPLETE.matches(k)
                     || keys::INTERACTIONS_ABANDON.matches(k) =>
                 {

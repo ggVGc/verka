@@ -165,7 +165,9 @@ current/all-Workspace scope, `j`/`k` selects, `g`/`G` jumps to the first/last
 visible interaction, `T` edits the selected
 interaction's tags, `C` / `Z` marks it completed / abandoned and stops it (also
 available directly in the event view), and `c` shows or hides those rows
-again. Completing or abandoning an interaction in the list moves to another
+again. `s` hides or shows every stopped interaction, completed ones included,
+leaving only those still taking messages; the list's title says
+`stopped hidden` while it is on. Completing or abandoning an interaction in the list moves to another
 live interaction in the same worktree first, then in the same Workspace, then
 to a stopped one in the same Workspace — the nearest row in the list each time.
 It leaves the Workspace only when nothing unfinished is left in it.

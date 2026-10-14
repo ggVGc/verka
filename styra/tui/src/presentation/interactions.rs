@@ -25,7 +25,10 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
                 .unwrap_or("Current Workspace"),
         )
     };
-    let completion_filter = if app.interactions.show_completed {
+    // Every completed row is stopped, so hiding stopped rows hides those too.
+    let completion_filter = if app.interactions.hide_stopped {
+        "stopped hidden"
+    } else if app.interactions.show_completed {
         "completed shown"
     } else {
         "completed hidden"
