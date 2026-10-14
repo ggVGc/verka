@@ -117,6 +117,9 @@ pub const SELECTED_ROW_BACKGROUND: Color = palette::FAINT_ORANGE;
 /// of the event list's selected entry: apart from the colors around them.
 pub const SELECTED_LIVE_INTERACTION_TEXT: Color = palette::RED_FG;
 pub const SELECTED_INTERACTION_TEXT: Color = palette::YELLOW_WHITE;
+/// The name of the file selected in a diff's file tree: white with a slight
+/// pink tint, set apart from the other names without shouting.
+pub const SELECTED_FILE_NAME: Color = palette::PALE_PINK;
 /// The bar drawn over the navigator's left border beside the cursor's row:
 /// the cursor name's own color, so the two read as one mark.
 pub const SELECTED_ROW_EDGE: Color = SELECTED_LIVE_INTERACTION_TEXT;

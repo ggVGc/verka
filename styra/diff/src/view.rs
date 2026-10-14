@@ -279,7 +279,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         .unwrap_or_default();
     let mut file_list_offset = view.file_list_offset;
     let body = if view.per_file {
-        let rows = file_tree_rows(&files, view.compact_dirs);
+        let mut rows = file_tree_rows(&files, view.compact_dirs);
         let [left, right] = Layout::horizontal([
             Constraint::Length(file_tree_width(&rows, body.width)),
             Constraint::Min(0),
@@ -288,6 +288,10 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         let selected = rows
             .iter()
             .position(|(index, _)| *index == Some(view.selected_file));
+        // Only the name: its change marker keeps its own color.
+        if let Some(name) = selected.and_then(|row| rows[row].1.spans.first_mut()) {
+            name.style = name.style.fg(theme::SELECTED_FILE_NAME);
+        }
         let items = rows.into_iter().map(|(_, line)| ListItem::new(line));
         let list = List::new(items)
             .scroll_padding(5)
@@ -296,9 +300,11 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                     .borders(Borders::RIGHT)
                     .border_style(Style::default().fg(theme::INACTIVE)),
             )
+            // A soft band rather than a color of its own, so the selected
+            // row keeps its change marker's color and stands out by its bar.
             .highlight_style(
                 Style::default()
-                    .fg(theme::ACCENT)
+                    .bg(theme::SELECTION_BACKGROUND)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(SELECTION_MARKER);
@@ -907,6 +913,47 @@ index 1111111..2222222 100644
         assert!(output.contains("›     file29"), "{output}");
         assert!(output.contains("new29"), "{output}");
         assert!(!output.contains("new0"), "{output}");
+    }
+
+    #[test]
+    fn the_selected_file_sits_on_a_soft_band_and_keeps_its_markers_color() {
+        let text = "diff --git a/a b/a\nnew file mode 100644\n\
+            diff --git a/b b/b\ndeleted file mode 100644\n";
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &CheckoutDiffView {
+                        per_file: true,
+                        diff: Ok(text),
+                        selected_file: 1,
+                        ..CheckoutDiffView::unread(Block::bordered())
+                    },
+                    frame.area(),
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |name: &str| {
+            (0..12)
+                .find(|&y| {
+                    (0..40)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                        .contains(name)
+                })
+                .unwrap()
+        };
+        let (selected, other) = (row("b [D]"), row("a [A]"));
+        // The marker, the name, and the change marker's bracket.
+        for x in [1, 3, 5] {
+            assert_eq!(buffer[(x, selected)].bg, theme::SELECTION_BACKGROUND);
+            assert_ne!(buffer[(x, other)].bg, theme::SELECTION_BACKGROUND);
+        }
+        assert_eq!(buffer[(3, selected)].fg, theme::SELECTED_FILE_NAME);
+        assert_ne!(buffer[(3, other)].fg, theme::SELECTED_FILE_NAME);
+        assert_eq!(buffer[(6, selected)].fg, theme::ERROR);
     }
 
     #[test]
