@@ -678,10 +678,18 @@ impl BwrapIsolation {
     }
 }
 
-fn wait_for_child(mut child: Child, control: Option<&ExecutionControl>) -> Result<ExitStatus> {
+fn wait_for_child(child: Child, control: Option<&ExecutionControl>) -> Result<ExitStatus> {
     let Some(control) = control else {
+        let mut child = child;
         return child.wait().context("waiting for Bubblewrap");
     };
+    control.set_process_id(Some(child.id()));
+    let status = wait_for_controlled_child(child, control);
+    control.set_process_id(None);
+    status
+}
+
+fn wait_for_controlled_child(mut child: Child, control: &ExecutionControl) -> Result<ExitStatus> {
     loop {
         if let Some(status) = child.try_wait().context("checking Bubblewrap status")? {
             return Ok(status);
@@ -727,5 +735,27 @@ mod tests {
 
         assert!(!status.success());
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn controlled_wait_publishes_the_child_process_id_while_it_runs() {
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        let control = Arc::new(ExecutionControl::default());
+        let observer = Arc::clone(&control);
+        let watcher = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while observer.process_id().is_none() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let seen = observer.process_id();
+            observer.terminate();
+            seen
+        });
+
+        wait_for_child(child, Some(&control)).unwrap();
+
+        assert_eq!(watcher.join().unwrap(), Some(pid));
+        assert_eq!(control.process_id(), None);
     }
 }

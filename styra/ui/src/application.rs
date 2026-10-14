@@ -49,6 +49,9 @@ pub struct EventView<'a> {
     pub list: &'a event_list::EventListView<'a>,
     pub navigator: Option<&'a interactions::InteractionNavigator<'a>>,
     pub entry_log: Option<&'a event_list::EntryLogView<'a>>,
+    /// The sandbox's processes, in the bottom half below the event list.
+    /// Takes the place of the entry log, which the client closes for it.
+    pub processes: Option<&'a crate::processes::ProcessesView<'a>>,
     pub preview: Option<SidePreview<'a>>,
     /// Whether link navigation is on, which washes out everything in the
     /// event list but the links and file references it walks.
@@ -74,6 +77,7 @@ pub enum MainView<'a> {
         scroll_back: usize,
     },
     Quota(&'a quota::QuotaView<'a>),
+    Processes(&'a crate::processes::ProcessesView<'a>),
     Transcript(&'a transcript::TranscriptView<'a>),
     /// The checkout diff, which `styra-diff` draws: it is built on this
     /// crate so that it can also run as a program of its own.
@@ -192,6 +196,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             chunks[0],
         ),
         MainView::Quota(quota_view) => quota::render(frame, quota_view, chunks[0]),
+        MainView::Processes(processes_view) => {
+            crate::processes::render(frame, processes_view, chunks[0])
+        }
         MainView::Transcript(transcript_view) => {
             let limit = transcript::render(frame, transcript_view, chunks[0]);
             note_scroll(
@@ -281,7 +288,8 @@ fn render_events(
     feedback: &mut RenderFeedback,
 ) {
     let mut tint_area = area;
-    let interaction_area = if let (Some(preview), Some(_)) = (view.preview, view.entry_log) {
+    let bottom_pane = view.entry_log.is_some() || view.processes.is_some();
+    let interaction_area = if let (Some(preview), true) = (view.preview, bottom_pane) {
         let panes = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -320,6 +328,19 @@ fn render_events(
             measured.limit,
             measured.effective_scroll,
         );
+        if view.navigator.is_some() {
+            fade_log_border(frame, panes[0]);
+            fade_log_border(frame, panes[1]);
+        }
+    } else if let Some(processes) = view.processes {
+        let panes = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(event_area);
+        let list = event_list::render(frame, view.list, panes[0]);
+        feedback.list_offset = Some(list.effective_offset);
+        feedback.list_row_offset = Some(list.effective_row_offset);
+        crate::processes::render(frame, processes, panes[1]);
         if view.navigator.is_some() {
             fade_log_border(frame, panes[0]);
             fade_log_border(frame, panes[1]);

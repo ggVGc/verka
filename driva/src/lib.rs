@@ -23,7 +23,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::SystemTime;
 
 /// Conventional executable search path used when an isolated request does not
@@ -290,6 +290,8 @@ pub trait Isolation {
 #[derive(Default)]
 pub struct ExecutionControl {
     terminate: AtomicBool,
+    /// Host process id of the running backend process; zero while none runs.
+    process: AtomicU32,
 }
 
 impl ExecutionControl {
@@ -299,6 +301,22 @@ impl ExecutionControl {
 
     pub fn termination_requested(&self) -> bool {
         self.terminate.load(Ordering::Acquire)
+    }
+
+    /// Record (or, with `None`, forget) the backend process now running.
+    pub fn set_process_id(&self, pid: Option<u32>) {
+        self.process.store(pid.unwrap_or(0), Ordering::Release);
+    }
+
+    /// Host process id of the backend process while it runs: for Bubblewrap,
+    /// the `bwrap` supervisor whose child is the sandbox's PID 1. Owners use it
+    /// to observe what runs inside; it is gone once the process has been reaped,
+    /// so a stale id is never handed out for reuse by an unrelated process.
+    pub fn process_id(&self) -> Option<u32> {
+        match self.process.load(Ordering::Acquire) {
+            0 => None,
+            pid => Some(pid),
+        }
     }
 }
 

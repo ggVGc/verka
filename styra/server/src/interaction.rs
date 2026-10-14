@@ -729,6 +729,12 @@ impl Interaction {
             });
     }
 
+    /// Host pid of the Bubblewrap process supervising this interaction's
+    /// sandbox, while it runs; see [`crate::processes`].
+    pub fn sandbox_supervisor(&self) -> Option<u32> {
+        self.execution_control.process_id()
+    }
+
     /// End the agent now: close its stdin and terminate its sandbox, with
     /// everything running in it, without first asking it to leave. Waits for
     /// it to be gone and reports whether it is.

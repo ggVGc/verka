@@ -410,6 +410,16 @@ pub fn handle_list_key(
             app.toggle_view(View::Quota);
             return app.ask(Request::Quota);
         }
+        // Only the server can see the sandbox, so opening asks it; the event
+        // loop then asks again each second while the view stays open.
+        k if GLOBAL_PROCESSES.matches(k) => {
+            app.toggle_view(View::Processes);
+            return app.ask(Request::Processes);
+        }
+        k if GLOBAL_PROCESSES_PANE.matches(k) => {
+            app.toggle_processes_pane();
+            return app.ask(Request::Processes);
+        }
         k if GLOBAL_TRANSCRIPT.matches(k) => return app.toggle_view(View::Transcript),
         // `e` toggles the pane below the event list. The files and answer
         // views keep the key for opening the editor, which is the one thing
@@ -515,7 +525,10 @@ pub fn handle_list_key(
             }
             // With the preview open the arrows read it, the way `j`/`k` do the
             // full-screen one; `J`/`K` still step between entries.
-            k if EVENTS_PREVIEW_SCROLL_DOWN.matches(k) && app.preview.open && !app.diff_visible() => {
+            k if EVENTS_PREVIEW_SCROLL_DOWN.matches(k)
+                && app.preview.open
+                && !app.diff_visible() =>
+            {
                 app.preview.scroll.page_down()
             }
             k if EVENTS_PREVIEW_SCROLL_UP.matches(k) && app.preview.open && !app.diff_visible() => {
@@ -619,6 +632,14 @@ pub fn handle_list_key(
             k if READING_RETRY.matches(k) => app.ask(Request::SetAutoRetry(!app.auto_retry)),
             k if READING_DOWN.matches(k) => app.quota.scroll_down(),
             k if READING_UP.matches(k) => app.quota.scroll_up(),
+            _ => {}
+        },
+        View::Processes => match key {
+            k if READING_DOWN.matches(k) => app.processes.select_next(),
+            k if READING_UP.matches(k) => app.processes.select_prev(),
+            k if READING_FIRST.matches(k) => app.processes.select_first(),
+            k if READING_LAST.matches(k) => app.processes.select_last(),
+            k if READING_COPY.matches(k) => copy_selection(app),
             _ => {}
         },
         // Every key was taken by `handle_diff_key`.
@@ -1680,6 +1701,66 @@ mod tests {
     }
 
     #[test]
+    fn processes_shortcut_opens_the_view_and_asks_the_server() {
+        let root = tree("processes-shortcut");
+        let mut app = app(&root);
+        app.enter_list();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+        for expected in [View::Processes, View::Events] {
+            handle_list_key(
+                &mut app,
+                &client,
+                &mut live,
+                KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT),
+                &mut pending_fold,
+                &root.join("preferences.toml"),
+            );
+            assert_eq!(app.view, expected);
+            assert!(matches!(app.take_request(), Some(Request::Processes)));
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn lowercase_h_opens_the_processes_pane_in_the_entry_logs_place() {
+        let root = tree("processes-pane-shortcut");
+        let mut app = app(&root);
+        app.enter_list();
+        app.view = View::Quota;
+        app.toggle_entry_log();
+        assert!(app.entry_log.open);
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+        let mut press = |app: &mut App| {
+            handle_list_key(
+                app,
+                &client,
+                &mut live,
+                KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+                &mut pending_fold,
+                &root.join("preferences.toml"),
+            )
+        };
+        app.view = View::Quota;
+        press(&mut app);
+        assert_eq!(app.view, View::Events);
+        assert!(app.processes_pane && app.processes_visible());
+        assert!(!app.entry_log.open);
+        assert!(matches!(app.take_request(), Some(Request::Processes)));
+
+        press(&mut app);
+        assert!(!app.processes_pane && !app.processes_visible());
+
+        press(&mut app);
+        app.toggle_entry_log();
+        assert!(app.entry_log.open && !app.processes_pane);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn control_l_toggles_the_log_view() {
         let root = tree("log-shortcut");
         let mut app = app(&root);
@@ -1715,6 +1796,7 @@ mod tests {
             View::Messages,
             View::Log,
             View::Quota,
+            View::Processes,
             View::Transcript,
             View::Driva,
             View::Files,
@@ -2526,7 +2608,10 @@ mod tests {
         press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('q')));
         press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Tab));
         assert!(app.diff_focused());
-        assert_eq!(app.checkout_diff.as_ref().unwrap().search.query(), Some("iq"));
+        assert_eq!(
+            app.checkout_diff.as_ref().unwrap().search.query(),
+            Some("iq")
+        );
         assert_eq!(app.take_request(), None);
         let _ = std::fs::remove_dir_all(&root);
     }

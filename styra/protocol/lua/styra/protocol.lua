@@ -385,6 +385,13 @@ M.types.Request = {
         { name = "id", required = true, type = { kind = "string" } },
       },
     } },
+    { name = "interaction_processes", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "shutdown", payload = { kind = "unit" } },
   },
 }
@@ -441,6 +448,7 @@ M.types.Response = {
     { name = "answer", payload = { kind = "newtype", type = { kind = "ref", name = "Answer" } } },
     { name = "quota_log", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "QuotaEvent" } } } },
     { name = "interaction_actions", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "ActionRecord" } } } },
+    { name = "interaction_processes", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "list", item = { kind = "ref", name = "SandboxProcess" } } } } },
   },
 }
 
@@ -878,6 +886,7 @@ M.types.SessionSummary = {
     { name = "origin", required = false, type = { kind = "optional", inner = { kind = "ref", name = "SessionOrigin" } } },
     { name = "branched_from", required = false, type = { kind = "optional", inner = { kind = "ref", name = "BranchPoint" } } },
     { name = "completed", required = false, type = { kind = "ref", name = "CompletionState" } },
+    { name = "integration", required = false, type = { kind = "optional", inner = { kind = "ref", name = "Integration" } } },
   },
 }
 
@@ -941,6 +950,7 @@ M.types.InteractionSummary = {
     { name = "auto_commit", required = false, type = { kind = "boolean" } },
     { name = "events", required = false, type = { kind = "number", integer = true } },
     { name = "completed", required = false, type = { kind = "ref", name = "CompletionState" } },
+    { name = "integration", required = false, type = { kind = "optional", inner = { kind = "ref", name = "Integration" } } },
     { name = "focus_requested", required = false, type = { kind = "boolean" } },
     { name = "origin", required = false, type = { kind = "optional", inner = { kind = "ref", name = "SessionOrigin" } } },
     { name = "restored", required = false, type = { kind = "boolean" } },
@@ -1025,6 +1035,21 @@ M.types.ActionRecord = {
     { name = "origin", required = true, type = { kind = "ref", name = "ActionOrigin" } },
     { name = "status", required = true, type = { kind = "ref", name = "ActionStatus" } },
     { name = "detail", required = true, type = { kind = "optional", inner = { kind = "string" } } },
+  },
+}
+
+--- One process running inside a live interaction's sandbox, as the host's
+--- `/proc` describes it at the moment of asking.
+M.types.SandboxProcess = {
+  kind = "struct",
+  fields = {
+    { name = "pid", required = true, type = { kind = "number", integer = true } },
+    { name = "sandbox_pid", required = true, type = { kind = "number", integer = true } },
+    { name = "parent_pid", required = true, type = { kind = "number", integer = true } },
+    { name = "state", required = true, type = { kind = "string" } },
+    { name = "command", required = true, type = { kind = "string" } },
+    { name = "threads", required = true, type = { kind = "number", integer = true } },
+    { name = "rss_kib", required = true, type = { kind = "number", integer = true } },
   },
 }
 
@@ -1190,6 +1215,17 @@ M.types.SessionOrigin = {
 --- origin points to now: an origin branch moves on, and what the Session's
 --- branch has that it did not is measured from here.
 M.types.BranchPoint = {
+  kind = "struct",
+  fields = {
+    { name = "branch", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "commit", required = true, type = { kind = "string" } },
+  },
+}
+
+--- Where integration landed a Session's work: the squash commit it made on
+--- the branch the Session's own branch was made from — see
+--- `crate::protocol::Request::IntegrateSession`.
+M.types.Integration = {
   kind = "struct",
   fields = {
     { name = "branch", required = false, type = { kind = "optional", inner = { kind = "string" } } },
@@ -1809,7 +1845,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "integrate_session", "generate_integration_message", "session_integration_result", "rebase_session", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "shutdown" }
+M.enums.Request = { "integrate_session", "generate_integration_message", "session_integration_result", "rebase_session", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   INTEGRATE_SESSION = "integrate_session",
@@ -1872,10 +1908,11 @@ M.Request = {
   TURN_ANSWER = "turn_answer",
   QUOTA_LOG = "quota_log",
   INTERACTION_ACTIONS = "interaction_actions",
+  INTERACTION_PROCESSES = "interaction_processes",
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "rebase_started", "session_rebase_status", "integration_started", "integration_message", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions" }
+M.enums.Response = { "rebase_started", "session_rebase_status", "integration_started", "integration_message", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions", "interaction_processes" }
 --- Wire spellings of `Response`.
 M.Response = {
   REBASE_STARTED = "rebase_started",
@@ -1924,6 +1961,7 @@ M.Response = {
   ANSWER = "answer",
   QUOTA_LOG = "quota_log",
   INTERACTION_ACTIONS = "interaction_actions",
+  INTERACTION_PROCESSES = "interaction_processes",
 }
 
 M.enums.WireResponse = { "ok", "error" }
@@ -3102,6 +3140,17 @@ end
 ---   id  string
 function M.request.interaction_actions(data)
   return M.build("interaction_actions", data)
+end
+
+--- List the processes running in this interaction's sandbox right now:
+--- every process in the sandbox's PID namespace, the agent and whatever it
+--- started, including daemons that left their parent. A snapshot, not a
+--- stream; clients showing it ask again to keep it current.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.interaction_processes(data)
+  return M.build("interaction_processes", data)
 end
 
 --- Ask the server to remove its socket and exit. Any live interactions it owns die

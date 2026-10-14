@@ -8,7 +8,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::action_menu::{self, ActionMenu};
-use crate::workspace_jump::{self, WorkspaceJump};
 use crate::activity::Status;
 use crate::app::{App, Focus, LaunchPolicy, Request, View};
 use crate::audio::AudioInput;
@@ -21,6 +20,7 @@ use crate::picker;
 use crate::preferences;
 use crate::presentation;
 use crate::session::{self, Attachment};
+use crate::workspace_jump::{self, WorkspaceJump};
 use styra_protocol::{
     CompletionState, InteractionSummary, LogEntry, TemplateSummary, WorkspaceLaunchChange,
     WorkspaceSummary,
@@ -116,6 +116,8 @@ const REDRAW_TICK: Duration = Duration::from_secs(1);
 /// so this is slow enough to cost the server nothing and quick enough that the
 /// footer's warning is never meaningfully behind the account.
 const QUOTA_REFRESH: Duration = Duration::from_secs(5);
+/// How often the open processes view lists the sandbox again.
+const PROCESSES_REFRESH: Duration = Duration::from_secs(1);
 
 /// How often the in-window diff is read again while the agent is working on
 /// the checkout it shows.
@@ -690,6 +692,23 @@ pub fn refresh_quota(app: &mut App, client: &Client) {
     }
 }
 
+/// List the processes in the current interaction's sandbox, for the
+/// processes view. Reports whether the listing on screen changed.
+///
+/// A blank screen has no interaction to ask about; a failure is shown in the
+/// view itself rather than logged, since the view asks every second.
+pub fn refresh_processes(app: &mut App, client: &Client) -> bool {
+    let answer = if app.session_id.is_empty() {
+        Ok(None)
+    } else {
+        client
+            .interaction_processes(&app.session_id)
+            .map_err(|error| format!("{error:#}"))
+    };
+    let session = app.session_id.clone();
+    app.processes.replace(&session, answer)
+}
+
 /// Take a fresh reading of the quota log on the loop's timer.
 ///
 /// The attached session's own readings arrive on its update stream, but
@@ -814,6 +833,7 @@ fn run_rounds(
     let mut replay: VecDeque<crossterm::event::KeyEvent> = VecDeque::new();
     let mut interactions_refreshed = Instant::now();
     let mut quota_refreshed = Instant::now();
+    let mut processes_refreshed = Instant::now();
     let mut diff_refreshed = Instant::now();
     let mut ticked = Instant::now();
     // What the clock read on the frame currently on screen, so that a reading
@@ -943,6 +963,11 @@ fn run_rounds(
         if quota_refreshed.elapsed() >= QUOTA_REFRESH {
             quota_refreshed = Instant::now();
             dirty |= poll_quota(app, client);
+        }
+
+        if app.processes_visible() && processes_refreshed.elapsed() >= PROCESSES_REFRESH {
+            processes_refreshed = Instant::now();
+            dirty |= refresh_processes(app, client);
         }
 
         // The diff on screen is a reading of a checkout the agent may still be
@@ -2180,6 +2205,9 @@ fn run_rounds(
                 app.answer.set(answer.map_err(|error| format!("{error:#}")));
             }
             Some(Request::Quota) => refresh_quota(app, client),
+            Some(Request::Processes) => {
+                refresh_processes(app, client);
+            }
             // The setting is the server's to keep — it is stored with the
             // Session and acted on long after this client has gone — so what
             // is shown is what the server accepted, not what was pressed.

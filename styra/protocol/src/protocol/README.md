@@ -196,3 +196,11 @@ record carries the original request (or an automatic commit), timestamp,
 affected Session ids, origin, and status. Match the record `id` to join
 `started` with `succeeded` or `failed`; a missing terminal record means the
 outcome is unknown. Reading action history does not append another action.
+
+`interaction_processes` takes a Session `id` and returns the processes running
+in its sandbox at that moment: everything in the sandbox's PID namespace,
+including processes that daemonized away from the agent. Each carries its host
+`pid`, its `sandbox_pid` inside the namespace (the sandbox's init is 1), its
+host `parent_pid`, the kernel `state` letter, `command`, `threads`, and
+`rss_kib`. The answer is `null` when no sandbox runs for the Session — it is
+stopped, or still starting. It is a snapshot; a client showing it polls.

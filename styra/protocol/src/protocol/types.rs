@@ -159,6 +159,28 @@ pub enum QuotaStatus {
     Exhausted,
 }
 
+/// One process running inside a live interaction's sandbox, as the host's
+/// `/proc` describes it at the moment of asking.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxProcess {
+    /// Process id on the host, where the server runs.
+    pub pid: u32,
+    /// Process id inside the sandbox's own PID namespace, where the sandbox's
+    /// init is 1. What the agent itself would call this process.
+    pub sandbox_pid: u32,
+    /// Host process id of the parent. The sandbox's init has a parent outside
+    /// the sandbox: the Bubblewrap process supervising it.
+    pub parent_pid: u32,
+    /// The kernel's one-letter state: `R` running, `S` sleeping, `Z` zombie, …
+    pub state: String,
+    /// The command line, arguments joined by spaces; a kernel thread or a
+    /// zombie has none, and is then named by its `[comm]` instead.
+    pub command: String,
+    pub threads: u32,
+    /// Resident memory, in KiB.
+    pub rss_kib: u64,
+}
+
 /// One reading of a plan quota window, as a provider reported it mid-session.
 ///
 /// Both interactive providers volunteer these unprompted, in different shapes

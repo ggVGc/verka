@@ -18,9 +18,9 @@ pub use types::{
     Direction, DrivaOptions, FileLocation, Integration, IntegrationResult, InteractionActivity,
     InteractionActivityReason, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
     LaunchPolicy, LogEntry, LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent,
-    QuotaStatus, RawLine, RebaseStatus, RecentMessage, SessionOrigin, SessionSummary,
-    TemplateSummary, VariableOrigin, WorkspaceSummary, WorktreeCleanup, WorktreeSession,
-    WorktreeSummary, WORKTREES_DIR,
+    QuotaStatus, RawLine, RebaseStatus, RecentMessage, SandboxProcess, SessionOrigin,
+    SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary, WorktreeCleanup,
+    WorktreeSession, WorktreeSummary, WORKTREES_DIR,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -652,6 +652,13 @@ pub enum Request {
     InteractionActions {
         id: String,
     },
+    /// List the processes running in this interaction's sandbox right now:
+    /// every process in the sandbox's PID namespace, the agent and whatever it
+    /// started, including daemons that left their parent. A snapshot, not a
+    /// stream; clients showing it ask again to keep it current.
+    InteractionProcesses {
+        id: String,
+    },
     /// Ask the server to remove its socket and exit. Any live interactions it owns die
     /// with it, so this is the deliberate counterpart to the daemon outliving
     /// its clients.
@@ -752,6 +759,9 @@ pub enum Response {
     Answer(Answer),
     QuotaLog(Vec<QuotaEvent>),
     InteractionActions(Vec<ActionRecord>),
+    /// `None` when no sandbox is running for the Session: it is stopped, or
+    /// its interaction is still starting.
+    InteractionProcesses(Option<Vec<SandboxProcess>>),
 }
 
 /// Response envelope returned for every syntactically valid connection.

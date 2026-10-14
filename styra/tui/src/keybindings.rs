@@ -50,6 +50,8 @@ bindings! { GLOBAL = "Global";
     GLOBAL_ENTRY_LOG_FOCUS: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]
         => Action::GlobalEntryLogFocus;
     GLOBAL_QUOTA: [Key::ch('Q')] => Action::GlobalQuota;
+    GLOBAL_PROCESSES_PANE: [Key::ch('h')] ("not in overview") => Action::GlobalProcessesPane;
+    GLOBAL_PROCESSES: [Key::ch('H')] => Action::GlobalProcesses;
     GLOBAL_FILES: [Key::ch('F')] => Action::GlobalFiles;
     GLOBAL_FILES_ALIAS: [Key::ch('f')] ("other views")
         => Action::GlobalFiles;
@@ -94,7 +96,7 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_COPY: [Key::ch('y')] => Action::EventsCopy;
 }
 
-bindings! { READING = "Raw, messages, log, quota, and transcript";
+bindings! { READING = "Raw, messages, log, quota, processes, and transcript";
     READING_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::ReadingDown;
     READING_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::ReadingUp;
     READING_FIRST: [Key::ch('g')] => Action::ReadingFirst;
@@ -109,7 +111,7 @@ bindings! { READING = "Raw, messages, log, quota, and transcript";
     READING_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::ReadingPageUp;
     READING_PROVIDER_RAW: [Key::ch('v')] ("raw")
         => Action::ReadingProviderRaw;
-    READING_COPY: [Key::ch('y')] ("raw, messages") => Action::ReadingCopy;
+    READING_COPY: [Key::ch('y')] ("raw, messages, processes") => Action::ReadingCopy;
 }
 
 bindings! { PREVIEW = "Full-screen preview";
@@ -432,6 +434,7 @@ pub(crate) enum Window {
     Messages,
     Log,
     Quota,
+    Processes,
     Transcript,
     CheckoutDiff,
     Driva,
@@ -463,6 +466,7 @@ impl Window {
             Self::Messages => "messages",
             Self::Log => "log",
             Self::Quota => "quota",
+            Self::Processes => "processes",
             Self::Transcript => "transcript",
             Self::CheckoutDiff => "diff",
             Self::Driva => "details",
@@ -491,9 +495,12 @@ impl Window {
             Self::Events => &[EVENTS, MESSAGE_EDITOR, GLOBAL],
             // Its one section is `styra-diff`'s table; see `reference`.
             Self::CheckoutDiff => &[],
-            Self::Raw | Self::Messages | Self::Log | Self::Quota | Self::Transcript => {
-                &[READING, MESSAGE_EDITOR, GLOBAL]
-            }
+            Self::Raw
+            | Self::Messages
+            | Self::Log
+            | Self::Quota
+            | Self::Processes
+            | Self::Transcript => &[READING, MESSAGE_EDITOR, GLOBAL],
             Self::Preview => &[PREVIEW, MESSAGE_EDITOR, GLOBAL],
             Self::Driva => &[DRIVA, GLOBAL],
             Self::Files => &[FILES, GLOBAL],
@@ -525,6 +532,7 @@ impl Window {
                 | Self::Messages
                 | Self::Log
                 | Self::Quota
+                | Self::Processes
                 | Self::Transcript
                 | Self::Driva
                 | Self::Files
@@ -605,12 +613,13 @@ mod reference_tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
 
-    const WINDOWS: [Window; 23] = [
+    const WINDOWS: [Window; 24] = [
         Window::Events,
         Window::Raw,
         Window::Messages,
         Window::Log,
         Window::Quota,
+        Window::Processes,
         Window::Transcript,
         Window::CheckoutDiff,
         Window::Driva,

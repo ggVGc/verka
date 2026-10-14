@@ -74,7 +74,8 @@ pub use protocol::{
     DrivaOptions, FileLocation, InteractionActivity, InteractionActivityReason, InteractionEnd,
     InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LoadedInteraction, LogEntry,
     LogLevel, MountOrigin, ProviderRaw, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
-    SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary,
+    SandboxProcess, SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin,
+    WorkspaceSummary,
 };
 pub use spawn::ensure_server;
 
@@ -90,6 +91,7 @@ pub mod errand;
 pub mod interaction;
 pub mod journal;
 pub mod naming;
+pub mod processes;
 pub mod quota;
 pub mod roster;
 pub mod server;

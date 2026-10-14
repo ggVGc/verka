@@ -229,6 +229,7 @@ pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
         View::Messages => Window::Messages,
         View::Log => Window::Log,
         View::Quota => Window::Quota,
+        View::Processes => Window::Processes,
         View::Transcript => Window::Transcript,
         View::CheckoutDiff => Window::CheckoutDiff,
         View::Driva => Window::Driva,
@@ -356,6 +357,16 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
             let list = list::view(app);
             let navigator = app.interactions.open.then(|| interactions::view(app));
             let entry_log = app.entry_log.open.then(|| entry_log::view(app));
+            let processes = app
+                .processes_pane
+                .then(|| styra_ui::processes::ProcessesView {
+                    chrome: styra_ui::chrome::PanelChrome {
+                        focused: false,
+                        ..panel_chrome(app, None)
+                    },
+                    listing: app.processes.listing(&app.session_id),
+                    selected: None,
+                });
             let preview = app.preview.open.then(|| preview::view(app, false));
             let diff = app.checkout_diff.as_ref().map(|diff| {
                 diff.view(styra_ui::chrome::focused_panel_block(&panel_chrome(
@@ -378,6 +389,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                     list: &list,
                     navigator: navigator.as_ref(),
                     entry_log: entry_log.as_ref(),
+                    processes: processes.as_ref(),
                     preview: side_preview,
                     link_mode: app.link_highlight.is_some(),
                 }),
@@ -430,6 +442,14 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 now_ms: quota::now_ms(),
             };
             draw_main(ui, app, MainView::Quota(&quota))
+        }
+        View::Processes => {
+            let processes = styra_ui::processes::ProcessesView {
+                chrome: panel_chrome(app, None),
+                listing: app.processes.listing(&app.session_id),
+                selected: Some(app.processes.selected_index()),
+            };
+            draw_main(ui, app, MainView::Processes(&processes))
         }
         View::Transcript => {
             let text = app.transcript_text();

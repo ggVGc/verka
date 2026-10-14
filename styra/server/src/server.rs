@@ -3717,7 +3717,8 @@ impl ServerState {
             | Request::GenerateIntegrationMessage { id }
             | Request::SessionRebaseStatus { id }
             | Request::SessionIntegrationResult { id }
-            | Request::InteractionActions { id } => Some(id.as_str()),
+            | Request::InteractionActions { id }
+            | Request::InteractionProcesses { id } => Some(id.as_str()),
             _ => match crate::actions::scope(&request) {
                 Scope::Session(id) => Some(id),
                 _ => None,
@@ -3738,6 +3739,19 @@ impl ServerState {
             }
         }
         match request {
+            Request::InteractionProcesses { id } => {
+                let live = self
+                    .inner
+                    .interactions
+                    .lock()
+                    .expect("server interaction lock poisoned")
+                    .get(&id)
+                    .cloned();
+                Ok(Response::InteractionProcesses(
+                    live.and_then(|live| live.interaction.sandbox_supervisor())
+                        .map(crate::processes::sandbox_processes),
+                ))
+            }
             Request::InteractionActions { id } => {
                 self.stored_summary(&id)?;
                 Ok(Response::InteractionActions(

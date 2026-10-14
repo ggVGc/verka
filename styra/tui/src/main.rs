@@ -41,6 +41,7 @@ mod picker;
 mod preferences;
 mod presentation;
 mod preview;
+mod processes;
 mod raw;
 mod session;
 mod snippet;

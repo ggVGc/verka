@@ -94,6 +94,9 @@ pub enum View {
     Log,
     /// The plan-quota readings the server has seen, newest last.
     Quota,
+    /// The processes running in the interaction's sandbox, refreshed while
+    /// the view is open.
+    Processes,
     Transcript,
     /// The interaction's checkout diffed against where its branch started,
     /// as last read into [`App::checkout_diff`].
@@ -263,6 +266,11 @@ pub struct App {
     /// holds the log — quota belongs to the account, so this is every
     /// interaction's readings, not just this session's.
     pub quota: Tail<QuotaEvent>,
+    /// The last listing of the current interaction's sandbox processes.
+    pub processes: crate::processes::ProcessView,
+    /// Whether that listing is open in the bottom half below the event list,
+    /// in the entry log's place.
+    pub processes_pane: bool,
     /// Whether the server will pick this interaction back up when the plan
     /// window that refused it turns over.
     ///
@@ -433,6 +441,9 @@ pub enum Request {
     /// Fetch the server's plan-quota log, which is server-wide and lives only
     /// in the daemon's memory, so there is nothing to read locally.
     Quota,
+    /// List the processes in the current interaction's sandbox, which only
+    /// the server, which launched it, can see.
+    Processes,
     /// Ask the server to keep this interaction at it after a rate limit, or to
     /// stop doing so. The waiting is the server's — it outlives this client
     /// and the interaction the limit stopped — so this only asks.
@@ -533,6 +544,8 @@ impl App {
             provider_raw_open: false,
             log: Tail::default(),
             quota: Tail::default(),
+            processes: Default::default(),
+            processes_pane: false,
             auto_retry: false,
             auto_commit: false,
             transcript: Scroll::default(),
@@ -883,9 +896,29 @@ impl App {
     /// is what the preview then shows.
     pub fn toggle_entry_log(&mut self) {
         self.view = View::Events;
+        self.processes_pane = false;
         let len = self.entry_log_len();
         self.entry_log.toggle(len);
         self.preview.scroll.reset();
+    }
+
+    /// Toggle the processes pane below the event list. It takes the entry
+    /// log's place, so opening it closes that, and it returns to the event
+    /// list, which keeps the navigation keys: the pane is for watching, and
+    /// the full-screen view is where its rows are selected.
+    pub fn toggle_processes_pane(&mut self) {
+        self.view = View::Events;
+        self.processes_pane = !self.processes_pane;
+        if self.processes_pane && self.entry_log.open {
+            let len = self.entry_log_len();
+            self.entry_log.toggle(len);
+        }
+    }
+
+    /// Whether a processes listing is on screen, full-screen or in the pane,
+    /// and so worth keeping current.
+    pub fn processes_visible(&self) -> bool {
+        self.view == View::Processes || (self.view == View::Events && self.processes_pane)
     }
 
     /// Move the navigation keys between the event list and the entry-log pane,
@@ -1444,8 +1477,7 @@ impl App {
     /// Whether the checkout diff is on screen, including while composing.
     pub fn diff_visible(&self) -> bool {
         self.view == View::CheckoutDiff
-            || (self.diff_preview
-                && matches!(self.view, View::Events | View::Files))
+            || (self.diff_preview && matches!(self.view, View::Events | View::Files))
     }
 
     /// Whether the diff, rather than the interaction or message box, owns keys.
@@ -1610,6 +1642,7 @@ impl App {
                 .and_then(|raw| raw.selected().map(str::to_owned)),
             View::Raw => self.raw.selected().map(|line| line.text.clone()),
             View::Messages => self.messages.selected().map(|line| line.text.clone()),
+            View::Processes => self.processes.selected_command(),
             View::Files => self
                 .selected_file_path()
                 .map(|path| path.display().to_string()),

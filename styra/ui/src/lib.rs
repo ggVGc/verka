@@ -39,6 +39,7 @@ pub mod palette;
 pub mod picker;
 pub mod placeholders;
 pub mod preview;
+pub mod processes;
 pub mod quota;
 pub mod raw;
 pub mod recording;

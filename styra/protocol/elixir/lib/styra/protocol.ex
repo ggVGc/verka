@@ -395,6 +395,13 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "interaction_processes", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "shutdown", payload: %{kind: :unit}}
       ]
     },
@@ -450,7 +457,8 @@ defmodule Styra.Protocol do
         %{name: "shell", payload: %{kind: :newtype, type: %{kind: :ref, name: "ShellInfo"}}},
         %{name: "answer", payload: %{kind: :newtype, type: %{kind: :ref, name: "Answer"}}},
         %{name: "quota_log", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "QuotaEvent"}}}},
-        %{name: "interaction_actions", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "ActionRecord"}}}}
+        %{name: "interaction_actions", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "ActionRecord"}}}},
+        %{name: "interaction_processes", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :list, item: %{kind: :ref, name: "SandboxProcess"}}}}}
       ]
     },
 
@@ -887,7 +895,8 @@ defmodule Styra.Protocol do
         %{name: "last_event_age", required: false, type: %{kind: :string}},
         %{name: "origin", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "SessionOrigin"}}},
         %{name: "branched_from", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "BranchPoint"}}},
-        %{name: "completed", required: false, type: %{kind: :ref, name: "CompletionState"}}
+        %{name: "completed", required: false, type: %{kind: :ref, name: "CompletionState"}},
+        %{name: "integration", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Integration"}}}
       ]
     },
 
@@ -951,6 +960,7 @@ defmodule Styra.Protocol do
         %{name: "auto_commit", required: false, type: %{kind: :boolean}},
         %{name: "events", required: false, type: %{kind: :number, integer: true}},
         %{name: "completed", required: false, type: %{kind: :ref, name: "CompletionState"}},
+        %{name: "integration", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Integration"}}},
         %{name: "focus_requested", required: false, type: %{kind: :boolean}},
         %{name: "origin", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "SessionOrigin"}}},
         %{name: "restored", required: false, type: %{kind: :boolean}}
@@ -1035,6 +1045,21 @@ defmodule Styra.Protocol do
         %{name: "origin", required: true, type: %{kind: :ref, name: "ActionOrigin"}},
         %{name: "status", required: true, type: %{kind: :ref, name: "ActionStatus"}},
         %{name: "detail", required: true, type: %{kind: :optional, inner: %{kind: :string}}}
+      ]
+    },
+
+    # One process running inside a live interaction's sandbox, as the host's
+    # `/proc` describes it at the moment of asking.
+    "SandboxProcess" => %{
+      kind: :struct,
+      fields: [
+        %{name: "pid", required: true, type: %{kind: :number, integer: true}},
+        %{name: "sandbox_pid", required: true, type: %{kind: :number, integer: true}},
+        %{name: "parent_pid", required: true, type: %{kind: :number, integer: true}},
+        %{name: "state", required: true, type: %{kind: :string}},
+        %{name: "command", required: true, type: %{kind: :string}},
+        %{name: "threads", required: true, type: %{kind: :number, integer: true}},
+        %{name: "rss_kib", required: true, type: %{kind: :number, integer: true}}
       ]
     },
 
@@ -1200,6 +1225,17 @@ defmodule Styra.Protocol do
     # origin points to now: an origin branch moves on, and what the Session's
     # branch has that it did not is measured from here.
     "BranchPoint" => %{
+      kind: :struct,
+      fields: [
+        %{name: "branch", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "commit", required: true, type: %{kind: :string}}
+      ]
+    },
+
+    # Where integration landed a Session's work: the squash commit it made on
+    # the branch the Session's own branch was made from — see
+    # `crate::protocol::Request::IntegrateSession`.
+    "Integration" => %{
       kind: :struct,
       fields: [
         %{name: "branch", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
@@ -1889,6 +1925,7 @@ defmodule Styra.Protocol do
     "turn_answer",
     "quota_log",
     "interaction_actions",
+    "interaction_processes",
     "shutdown"
   ]
 
@@ -3139,6 +3176,21 @@ defmodule Styra.Protocol do
     def interaction_actions!(data), do: Styra.Protocol.build!("interaction_actions", data)
 
     @doc ~S"""
+    List the processes running in this interaction's sandbox right now:
+    every process in the sandbox's PID namespace, the agent and whatever it
+    started, including daemons that left their parent. A snapshot, not a
+    stream; clients showing it ask again to keep it current.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def interaction_processes(data), do: Styra.Protocol.build("interaction_processes", data)
+
+    @doc "`interaction_processes/1`, raising on a request the server would refuse."
+    def interaction_processes!(data), do: Styra.Protocol.build!("interaction_processes", data)
+
+    @doc ~S"""
     Ask the server to remove its socket and exit. Any live interactions it owns die
     with it, so this is the deliberate counterpart to the daemon outliving
     its clients.
@@ -3204,7 +3256,8 @@ defmodule Styra.Protocol.Response do
     {:shell, "shell"},
     {:answer, "answer"},
     {:quota_log, "quota_log"},
-    {:interaction_actions, "interaction_actions"}
+    {:interaction_actions, "interaction_actions"},
+    {:interaction_processes, "interaction_processes"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -3323,6 +3376,12 @@ defmodule Styra.Protocol.Response do
   def quota_log, do: "quota_log"
 
   def interaction_actions, do: "interaction_actions"
+
+  @doc ~S"""
+  `None` when no sandbox is running for the Session: it is stopped, or
+  its interaction is still starting.
+  """
+  def interaction_processes, do: "interaction_processes"
 end
 
 defmodule Styra.Protocol.WireResponse do

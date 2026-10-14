@@ -669,6 +669,18 @@ impl Client {
         }
     }
 
+    /// The processes running in a live interaction's sandbox right now, or
+    /// `None` when no sandbox runs for the Session.
+    pub fn interaction_processes(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<crate::protocol::SandboxProcess>>> {
+        match self.request(Request::InteractionProcesses { id: id.to_owned() })? {
+            Response::InteractionProcesses(value) => Ok(value),
+            other => unexpected("interaction_processes", other),
+        }
+    }
+
     /// Durable action history for a live or stored interaction.
     pub fn interaction_actions(&self, id: &str) -> Result<Vec<crate::protocol::ActionRecord>> {
         match self.request(Request::InteractionActions { id: id.to_owned() })? {
@@ -875,6 +887,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::TurnAnswer { .. } => "turn_answer",
         Request::QuotaLog => "quota_log",
         Request::InteractionActions { .. } => "interaction_actions",
+        Request::InteractionProcesses { .. } => "interaction_processes",
         Request::Shutdown => "shutdown",
     }
 }
