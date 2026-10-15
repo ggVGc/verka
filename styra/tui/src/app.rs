@@ -13,7 +13,7 @@
 //! so the whole interaction model is unit-testable. [`crate::presentation`] renders it and
 //! `main` feeds it input and session updates.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use styra_protocol::agent::{Provider, Selection};
 use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode};
@@ -266,6 +266,9 @@ pub struct App {
     /// holds the log — quota belongs to the account, so this is every
     /// interaction's readings, not just this session's.
     pub quota: Tail<QuotaEvent>,
+    /// The quota readings this client has already raised a notice for; see
+    /// [`App::note_quota`].
+    pub quota_noticed: HashSet<QuotaNotice>,
     /// The last listing of the current interaction's sandbox processes.
     pub processes: crate::processes::ProcessView,
     /// Whether that listing is open in the bottom half below the event list,
@@ -498,6 +501,22 @@ pub struct OperatorState {
     /// of whichever screen this client switches to, and re-fetching them on
     /// every switch would only blank the footer's warning until it landed.
     quota: Tail<QuotaEvent>,
+    /// Which readings have had their notice, so an interaction re-entered —
+    /// which replays its updates, announcements included — does not raise
+    /// the same warning again.
+    quota_noticed: HashSet<QuotaNotice>,
+}
+
+/// One announced quota reading, as told apart from another: where it was
+/// seen, when, and about which window.
+pub type QuotaNotice = (String, u64, String);
+
+fn quota_notice(reading: &QuotaEvent) -> QuotaNotice {
+    (
+        reading.session_id.clone(),
+        reading.at_ms,
+        reading.window.clone(),
+    )
 }
 
 impl App {
@@ -545,6 +564,7 @@ impl App {
             provider_raw_open: false,
             log: Tail::default(),
             quota: Tail::default(),
+            quota_noticed: HashSet::new(),
             processes: Default::default(),
             processes_pane: false,
             auto_retry: false,
@@ -601,6 +621,7 @@ impl App {
             contract: self.outbox.take_contract(),
             file_show_all: self.files.shows_all(),
             quota: std::mem::take(&mut self.quota),
+            quota_noticed: std::mem::take(&mut self.quota_noticed),
         }
     }
 
@@ -621,6 +642,7 @@ impl App {
         self.outbox.set_contract(state.contract);
         self.files.set_scope(state.file_show_all);
         self.quota = state.quota;
+        self.quota_noticed.extend(state.quota_noticed);
     }
 
     pub fn open_integration_prompt(&mut self) {
@@ -826,14 +848,20 @@ impl App {
     /// there to look up; the log, so it stays on the record for the rest of the
     /// session; and a notice, so an operator watching the event list learns
     /// their window is filling without having gone looking for it.
+    ///
+    /// The notice is raised once per reading: entering an interaction replays
+    /// its announcements along with the rest of its history, and a warning
+    /// already given is not news the second time.
     pub fn note_quota(&mut self, reading: QuotaEvent) {
         self.push_log(match reading.status {
             QuotaStatus::Exhausted => LogEntry::error(reading.describe()),
             _ => LogEntry::warn(reading.describe()),
         });
-        match reading.status {
-            QuotaStatus::Exhausted => self.show_error(reading.describe()),
-            _ => self.show_warning(reading.describe()),
+        if self.quota_noticed.insert(quota_notice(&reading)) {
+            match reading.status {
+                QuotaStatus::Exhausted => self.show_error(reading.describe()),
+                _ => self.show_warning(reading.describe()),
+            }
         }
         // A spent window is not just news about the plan: it is why this
         // interaction is about to stop working, and the status that follows
@@ -2569,6 +2597,33 @@ mod tests {
                 resets_at_ms: Some(2_000),
             }))
         );
+    }
+
+    /// Entering an interaction replays its announcements; a warning this
+    /// client has already shown stays in the log but is not raised again.
+    #[test]
+    fn a_quota_warning_is_noticed_once_across_re_entering() {
+        let reading = QuotaEvent {
+            at_ms: 1,
+            session_id: "session-1".into(),
+            provider: Provider::Claude,
+            window: "five_hour".into(),
+            status: QuotaStatus::Warning,
+            utilization: Some(0.92),
+            resets_at_ms: None,
+            detail: None,
+        };
+        let mut first = app();
+        first.note_quota(reading.clone());
+        assert_eq!(first.notices.iter().count(), 1);
+
+        let mut entered = app();
+        entered.quota_noticed = first.quota_noticed.clone();
+        entered.note_quota(reading);
+        entered.adopt(first.take_operator_state());
+        assert!(entered.notices.is_empty());
+        assert_eq!(entered.log.iter().count(), 1);
+        assert_eq!(entered.quota_noticed.len(), 1);
     }
 
     #[test]

@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::activity::{Status, StopReason};
-use crate::app::{App, LaunchPolicy};
+use crate::app::{App, LaunchPolicy, QuotaNotice};
 use crate::launch;
 use styra_protocol::agent::Selection;
 use styra_protocol::protocol::{
@@ -499,7 +499,14 @@ pub fn launch_live_session(
 /// Attach to a live interaction: rebuild an `App` from its summary and replay the
 /// updates the server has accumulated for it, so the view matches what the interaction
 /// has done so far and the event loop can continue polling from the cursor.
-pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<(App, Attachment)> {
+///
+/// `quota_noticed` is what this client has already raised a quota notice for,
+/// so replaying an announcement it has shown before does not show it again.
+pub fn attach_live_interaction(
+    client: &Client,
+    interaction_id: &str,
+    quota_noticed: &HashSet<QuotaNotice>,
+) -> Result<(App, Attachment)> {
     let started = Instant::now();
     tracing::debug!(
         target: "styra_tui::interaction_load",
@@ -517,6 +524,7 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
     );
     let interaction = loaded.summary;
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
+    app.quota_noticed = quota_noticed.clone();
     app.interactions
         .note_name(interaction.id.clone(), interaction.name.clone());
     note_branch_origins(client, &mut app, &interaction.workspace_id);
@@ -715,11 +723,13 @@ fn is_wire_backed(event: &styra_protocol::event::AgentEvent) -> bool {
 /// `interactions` is the listing the caller already holds. A Session found
 /// there is attached without asking again; one missing from it is asked about,
 /// since it may have started since that listing was taken — or be a finished
-/// one the listing left out.
+/// one the listing left out. `quota_noticed` is passed on to
+/// [`attach_live_interaction`].
 pub fn open_session(
     client: &Client,
     session_id: &str,
     interactions: &[InteractionSummary],
+    quota_noticed: &HashSet<QuotaNotice>,
 ) -> Result<(App, Attachment)> {
     let listed = |interactions: &[InteractionSummary]| {
         interactions
@@ -731,7 +741,7 @@ pub fn open_session(
         ..InteractionQuery::default()
     };
     if listed(interactions) || listed(&client.list_interactions(&this_one)?) {
-        return attach_live_interaction(client, session_id);
+        return attach_live_interaction(client, session_id, quota_noticed);
     }
     open_stored(client, session_id)
 }

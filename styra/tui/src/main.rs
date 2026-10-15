@@ -458,7 +458,12 @@ fn main() -> Result<()> {
                 app = pending_app(selection, launch.clone(), &active_workspace);
                 live = Attachment::Detached;
                 if let Some(interaction) = startup_interaction {
-                    match session::open_session(&client, &interaction.id, &fleet) {
+                    match session::open_session(
+                        &client,
+                        &interaction.id,
+                        &fleet,
+                        &app.quota_noticed,
+                    ) {
                         Ok((mut next, next_live)) => {
                             next.launch.interaction = launch.clone();
                             app = next;
@@ -538,7 +543,12 @@ fn main() -> Result<()> {
             } => {
                 active_workspace = *workspace;
                 match session_id {
-                    Some(session_id) => match session::open_session(&client, &session_id, &fleet) {
+                    Some(session_id) => match session::open_session(
+                        &client,
+                        &session_id,
+                        &fleet,
+                        &app.quota_noticed,
+                    ) {
                         Ok((mut new_app, new_live)) => {
                             new_app.launch.interaction = launch.clone();
                             app = new_app;
@@ -642,7 +652,7 @@ fn open_session_view(
     live: &mut Attachment,
     session_id: &str,
 ) -> bool {
-    match session::open_session(client, session_id, interactions) {
+    match session::open_session(client, session_id, interactions, &app.quota_noticed) {
         Ok((mut new_app, new_live)) => {
             new_app.launch.interaction = launch.clone();
             *app = new_app;

@@ -608,7 +608,7 @@ fn make_interaction_current(
     }
     let id = interaction.id.clone();
     session::save_composer(app, client, true);
-    match session::attach_live_interaction(client, &id) {
+    match session::attach_live_interaction(client, &id, &app.quota_noticed) {
         Ok((mut next, next_live)) => {
             next.adopt(app.take_operator_state());
             next.launch.interaction = standing_launch.clone();
