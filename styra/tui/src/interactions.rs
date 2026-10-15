@@ -92,11 +92,15 @@ pub struct ActivityCounts {
 }
 
 impl LiveInteractions {
-    pub fn open(&mut self, mut items: Vec<InteractionSummary>, workspaces: Vec<WorkspaceSummary>) {
-        self.note_arrivals(&items);
-        self.take_names(&mut items);
-        sort_interactions(&mut items);
-        self.items = items;
+    pub fn open(&mut self, items: Vec<InteractionSummary>, workspaces: Vec<WorkspaceSummary>) {
+        self.refresh(items);
+        self.show(workspaces);
+    }
+
+    /// Open the navigator over the listing already held, which the event loop
+    /// keeps fresh on its timer: asking the server again would only repeat
+    /// the poll at the cost of a blocking round-trip.
+    pub fn show(&mut self, workspaces: Vec<WorkspaceSummary>) {
         self.workspaces = workspaces;
         self.open = true;
         // A filter is a search for something particular; opening the list
@@ -127,6 +131,25 @@ impl LiveInteractions {
             self.rest();
         }
         changed
+    }
+
+    /// Whether a listing has been taken yet, so the one held can stand in for
+    /// asking the server.
+    pub fn listed(&self) -> bool {
+        self.listed
+    }
+
+    /// The listing as the server gave it, names included, for handing to a
+    /// screen that does not share this one's state — a rebuilt App, a picker —
+    /// instead of having it ask the server for the same answer.
+    pub fn snapshot(&self) -> Vec<InteractionSummary> {
+        self.items
+            .iter()
+            .map(|interaction| InteractionSummary {
+                name: self.name(&interaction.id).map(str::to_owned),
+                ..interaction.clone()
+            })
+            .collect()
     }
 
     /// Hold on to an Interaction in `items` that was not in the last listing
@@ -1478,6 +1501,23 @@ pub(crate) mod tests {
 
         assert_eq!(live.name("one"), Some("Renamed"));
         assert_eq!(live.current("one").unwrap().name, None);
+    }
+
+    #[test]
+    fn a_snapshot_seeds_another_listing_with_its_names() {
+        let mut named = interaction("one", InteractionActivity::Pending);
+        named.name = Some("Named".into());
+        let mut live = LiveInteractions::default();
+        assert!(!live.listed());
+        live.refresh(vec![named, interaction("two", InteractionActivity::Running)]);
+        assert!(live.listed());
+
+        let mut seeded = LiveInteractions::default();
+        seeded.refresh(live.snapshot());
+
+        assert_eq!(seeded.name("one"), Some("Named"));
+        assert_eq!(seeded.name("two"), None);
+        assert_eq!(seeded.items, live.items);
     }
 
     #[test]

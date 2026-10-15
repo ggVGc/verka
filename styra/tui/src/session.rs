@@ -11,7 +11,8 @@ use styra_protocol::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SendMessage, SessionInfo,
 };
 use styra_protocol::{
-    CompletionState, Contract, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
+    CompletionState, Contract, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary,
+    WorkspaceSummary,
 };
 use styra_server::Client;
 
@@ -699,13 +700,24 @@ fn is_wire_backed(event: &styra_protocol::event::AgentEvent) -> bool {
     )
 }
 
-pub fn open_session(client: &Client, session_id: &str) -> Result<(App, Attachment)> {
-    if let Some(interaction) = client
-        .list_interactions()?
-        .into_iter()
-        .find(|interaction| interaction.id == session_id)
-    {
-        return attach_live_interaction(client, &interaction.id);
+/// Open `session_id`, attaching to its interaction when the server lists one
+/// and replaying its journal otherwise.
+///
+/// `interactions` is the listing the caller already holds. A Session found
+/// there is attached without asking again; one missing from it is asked about,
+/// since it may have started since that listing was taken.
+pub fn open_session(
+    client: &Client,
+    session_id: &str,
+    interactions: &[InteractionSummary],
+) -> Result<(App, Attachment)> {
+    let listed = |interactions: &[InteractionSummary]| {
+        interactions
+            .iter()
+            .any(|interaction| interaction.id == session_id)
+    };
+    if listed(interactions) || listed(&client.list_interactions()?) {
+        return attach_live_interaction(client, session_id);
     }
     open_stored(client, session_id)
 }

@@ -518,11 +518,10 @@ fn interaction_navigator_passthrough(key: crossterm::event::KeyEvent) -> bool {
 /// request is only taken once a key reaches the dispatch, so the cursor would
 /// not settle and load until the operator pressed another.
 fn open_interactions_in_workspace(app: &mut App, client: &Client, target: &str) -> Result<()> {
-    let interactions = client.list_interactions()?;
     let workspaces = client.list_workspaces()?;
     app.view = crate::app::View::Events;
     app.focus = Focus::List;
-    app.interactions.open(interactions, workspaces);
+    app.interactions.show(workspaces);
     let session_id = app.session_id.clone();
     if !app
         .interactions
@@ -655,14 +654,15 @@ fn make_interaction_current(
 /// Open the live Interactions navigator over the main Interaction view, as `a`
 /// does.
 ///
-/// Best-effort: a server that cannot answer, or has nothing live left to list,
-/// leaves the navigator closed rather than failing the transition that asked
-/// for it. The root loop uses this when entering a Workspace it already knows
-/// holds live work.
-pub fn open_interaction_navigator(app: &mut App, client: &Client) {
-    let Ok(interactions) = client.list_interactions() else {
-        return;
-    };
+/// Best-effort: nothing live to list leaves the navigator closed rather than
+/// failing the transition that asked for it. The root loop uses this when
+/// entering a Workspace it already knows holds live work, with the listing it
+/// found that out from.
+pub fn open_interaction_navigator(
+    app: &mut App,
+    client: &Client,
+    interactions: Vec<InteractionSummary>,
+) {
     if interactions.is_empty() {
         return;
     }
@@ -670,6 +670,18 @@ pub fn open_interaction_navigator(app: &mut App, client: &Client) {
     app.view = crate::app::View::Events;
     app.focus = Focus::List;
     app.interactions.open(interactions, workspaces);
+}
+
+/// Make sure the App holds an interactions listing, asking the server only
+/// when it has none yet — the startup listing and the loop's poll both having
+/// failed. Every request that reads the fleet goes through this rather than
+/// asking for itself: the poll keeps the listing at most a refresh old, and
+/// the server takes a long time to answer it.
+fn ensure_listed(app: &mut App, client: &Client) -> Result<()> {
+    if !app.interactions.listed() {
+        app.interactions.refresh(client.list_interactions()?);
+    }
+    Ok(())
 }
 
 /// Fill the quota view from the server's log, which is where the readings live:
@@ -1261,7 +1273,6 @@ fn run_rounds(
                 }
                 (workspace_jump::Outcome::Open(id), None) => {
                     open_interactions_in_workspace(app, client, &id)?;
-                    interactions_refreshed = Instant::now();
                 }
                 // A fresh interaction is asked for outright, as the Workspace
                 // picker's Ctrl-N asks for one. The summary the jump was built
@@ -1779,12 +1790,23 @@ fn run_rounds(
             Some(Request::Integrate(_) | Request::GenerateIntegrationMessage) => {}
             Some(Request::Workspace) => {
                 let mut workspaces = client.list_workspaces()?;
+                // The picker keeps the listing it is handed fresh while it is
+                // open, during which this loop is not polling, so what it
+                // ends on is the newest listing there is.
+                ensure_listed(app, client)?;
+                let mut interactions = app.interactions.snapshot();
+                let choice = picker::run_workspace_picker(
+                    terminal,
+                    client,
+                    &mut workspaces,
+                    &mut interactions,
+                    None,
+                );
+                app.interactions.refresh(interactions);
                 // Backing out never leaves Styra, even with no Workspace (or a
                 // deleted one) behind the list: it lands on the interaction
                 // view, where `q` is still the way out.
-                let Some(choice) =
-                    picker::run_workspace_picker(terminal, client, &mut workspaces, None)?
-                else {
+                let Some(choice) = choice? else {
                     app.view = crate::app::View::Events;
                     app.focus = Focus::List;
                     continue;
@@ -1817,11 +1839,8 @@ fn run_rounds(
                 // way `v` enters it: the live list opens with the cursor on the
                 // Workspace's first Interaction, so the operator sees the rest
                 // of the live list without being asked which Session they meant.
-                if client.list_interactions().is_ok_and(|interactions| {
-                    workspace_jump::has_live_work(&interactions, &workspace.id)
-                }) {
+                if workspace_jump::has_live_work(&app.interactions.items, &workspace.id) {
                     open_interactions_in_workspace(app, client, &workspace.id)?;
-                    interactions_refreshed = Instant::now();
                     continue;
                 }
                 let mut sessions = client.list_sessions(&workspace.id)?;
@@ -1840,6 +1859,7 @@ fn run_rounds(
                     client,
                     &crate::workspace::display_name(&workspace),
                     &mut sessions,
+                    &app.interactions.items,
                     None,
                     true,
                 )? {
@@ -1874,6 +1894,7 @@ fn run_rounds(
                     client,
                     app.workspace.name.as_deref().unwrap_or("styra"),
                     &mut sessions,
+                    &app.interactions.items,
                     Some(&app.session_id),
                     true,
                 )? {
@@ -1927,31 +1948,31 @@ fn run_rounds(
                 return Ok(RunOutcome::OpenSession(choice.session_id));
             }
             Some(Request::Interactions) => {
-                let interactions = client.list_interactions()?;
-                if interactions.is_empty() {
+                ensure_listed(app, client)?;
+                if app.interactions.items.is_empty() {
                     app.push_log(LogEntry::warn("no live interactions on the server"));
                     continue;
                 }
                 let workspaces = client.list_workspaces()?;
                 app.view = crate::app::View::Events;
                 app.focus = Focus::List;
-                app.interactions.open(interactions, workspaces);
-                interactions_refreshed = Instant::now();
+                app.interactions.show(workspaces);
             }
-            // A fresh listing, as `a` takes, so the choice offered is of the
-            // work running now rather than at the last refresh.
+            // The listing the loop keeps, as `a` takes, so the choice offered
+            // is of the work running at the last refresh.
             // `V` offers what the navigator would list rather than only live
             // work, so it opens on the list itself: the grid tiles live work
             // alone and could not show most of what it offers.
             Some(Request::WorkspaceJump { listed }) => {
-                let interactions = client.list_interactions()?;
+                ensure_listed(app, client)?;
                 let workspaces = client.list_workspaces()?;
+                let interactions = &app.interactions.items;
                 let mut jump = if listed {
-                    WorkspaceJump::listed(&workspaces, &interactions, |interaction| {
+                    WorkspaceJump::listed(&workspaces, interactions, |interaction| {
                         app.interactions.lists(interaction)
                     })
                 } else {
-                    WorkspaceJump::new(&workspaces, &interactions)
+                    WorkspaceJump::new(&workspaces, interactions)
                 };
                 if jump.is_empty() {
                     app.show_warning(if listed {
@@ -1967,21 +1988,15 @@ fn run_rounds(
                         app.interactions.only_current_workspace,
                     ));
                 }
-                app.interactions.refresh(interactions);
                 app.interactions.workspaces = workspaces;
-                interactions_refreshed = Instant::now();
                 app.workspace_jump = Some(jump);
                 preview_workspace_jump(app);
             }
             // The overview reads the same snapshot the loop refreshes on its
             // timer, but the tiles name their Workspaces, and that list is
-            // only fetched when asked for. Both are best-effort: a grid a
-            // moment stale is still the grid.
+            // only fetched when asked for. It is best-effort: a grid a moment
+            // stale is still the grid.
             Some(Request::Overview) => {
-                if let Ok(interactions) = client.list_interactions() {
-                    app.interactions.refresh(interactions);
-                    interactions_refreshed = Instant::now();
-                }
                 if let Ok(workspaces) = client.list_workspaces() {
                     app.interactions.workspaces = workspaces;
                 }
@@ -2026,12 +2041,8 @@ fn run_rounds(
             // navigator is left as it was: open or closed. Newly idle work
             // takes priority; otherwise this walks every live interaction.
             Some(Request::NextLiveInteraction) => {
-                // The client's snapshot is up to a refresh old, and an
-                // interaction that has since stopped is not one to step onto.
-                if let Ok(interactions) = client.list_interactions() {
-                    app.interactions.refresh(interactions);
-                    interactions_refreshed = Instant::now();
-                }
+                // The client's snapshot is at most a refresh old, which is
+                // fresh enough to step by: one stopped since then still loads.
                 let overview =
                     (app.view == crate::app::View::Overview).then(|| app.overview.clone());
                 let next = if let Some(overview) = &overview {
@@ -2067,10 +2078,6 @@ fn run_rounds(
                 }
             }
             Some(Request::NextWorkingInteraction) => {
-                if let Ok(interactions) = client.list_interactions() {
-                    app.interactions.refresh(interactions);
-                    interactions_refreshed = Instant::now();
-                }
                 let Some(next) = app
                     .interactions
                     .next_active(&app.session_id, app.workspace.id.as_deref())

@@ -73,6 +73,11 @@ pub enum SessionChoice {
 /// `scope` heads the title: the Workspace's name when the list is one
 /// Workspace's Sessions, so the operator can see whose history this is.
 ///
+/// `interactions` is the caller's listing of the server's interactions, which
+/// says whether the Session under the cursor is previewed live or from its
+/// journal. Asking the server on every cursor move instead made each one wait
+/// on the whole listing.
+///
 /// `?` shows the whole list of those keys. The picker's own title says only
 /// what the list cannot be read without — the filter, and the sort — because
 /// a strip of shortcuts along the top can never hold all of them anyway.
@@ -81,6 +86,7 @@ pub fn run_session_picker(
     client: &Client,
     scope: &str,
     sessions: &mut [styra_protocol::SessionSummary],
+    interactions: &[InteractionSummary],
     current_id: Option<&str>,
     can_start_new: bool,
 ) -> Result<Option<SessionChoice>> {
@@ -120,8 +126,7 @@ pub fn run_session_picker(
             }
             if settle_from.is_some_and(|since| since.elapsed() >= PREVIEW_SETTLE) {
                 settle_from = None;
-                preview_live =
-                    session_has_live_interaction(&preview_id, &client.list_interactions()?);
+                preview_live = session_has_live_interaction(&preview_id, interactions);
                 if !preview_live {
                     // The preview renders decoded events only, so the raw wire
                     // lines are left on the server rather than shipped here to
@@ -606,6 +611,10 @@ fn read_session_name(
 /// Filtering narrows that same ordering rather than re-deriving it, so a
 /// Workspace does not move relative to its neighbours as characters are typed.
 ///
+/// `interactions` is the caller's listing, which orders the Workspaces and is
+/// refreshed in place as the picker sits open, so the caller ends up with the
+/// newest one rather than having to ask again.
+///
 /// `offer` is a directory no Workspace covers — where Styra was started, when
 /// that is why the picker opened. The picker then first asks, in a popup over
 /// the list, whether to create a Workspace there: yes creates it, no leaves
@@ -614,13 +623,13 @@ pub fn run_workspace_picker(
     terminal: &mut dyn Ui,
     client: &Client,
     workspaces: &mut [WorkspaceSummary],
+    interactions: &mut Vec<InteractionSummary>,
     offer: Option<&Path>,
 ) -> Result<Option<WorkspaceChoice>> {
-    // A server that cannot answer still leaves a useful list: without live
+    // A server that could not answer still leaves a useful list: without live
     // interactions to consult, the ordering falls back to recent access alone.
-    let mut interactions = client.list_interactions().unwrap_or_default();
-    sort_workspaces(workspaces, &interactions);
-    label_recency(workspaces, &interactions, unix_now_ms());
+    sort_workspaces(workspaces, interactions);
+    label_recency(workspaces, interactions, unix_now_ms());
     let mut all_workspaces = workspaces.to_vec();
     let mut show_deleted = false;
     let mut filter = String::new();
@@ -652,14 +661,14 @@ pub fn run_workspace_picker(
         if refreshed.elapsed() >= LIVENESS_REFRESH {
             refreshed = Instant::now();
             if let Ok(current) = client.list_interactions() {
-                interactions = current;
+                *interactions = current;
             }
             // The recency column ages as the picker sits open, and a turn
             // ending in a Workspace resets it. Relabelling in place leaves the
             // ordering — and so the cursor — where the operator left it.
             let now = unix_now_ms();
-            label_recency(&mut all_workspaces, &interactions, now);
-            label_recency(&mut workspaces, &interactions, now);
+            label_recency(&mut all_workspaces, interactions, now);
+            label_recency(&mut workspaces, interactions, now);
         }
 
         // Until the settle timer fires and the load returns, the pane says so:
@@ -675,7 +684,7 @@ pub fn run_workspace_picker(
             terminal.render_workspace_picker(
                 &workspaces,
                 selected,
-                &interactions,
+                interactions,
                 preview,
                 Some(&filter),
                 asking,
@@ -752,8 +761,8 @@ pub fn run_workspace_picker(
                 } else {
                     client.list_workspaces()?
                 };
-                sort_workspaces(&mut all_workspaces, &interactions);
-                label_recency(&mut all_workspaces, &interactions, unix_now_ms());
+                sort_workspaces(&mut all_workspaces, interactions);
+                label_recency(&mut all_workspaces, interactions, unix_now_ms());
                 filter.clear();
                 workspaces = picker_workspaces(&all_workspaces, None);
                 selected = 0;
@@ -773,7 +782,9 @@ pub fn run_workspace_picker(
                 };
                 match result {
                     Ok(_) => {
-                        interactions = client.list_interactions().unwrap_or_default();
+                        if let Ok(current) = client.list_interactions() {
+                            *interactions = current;
+                        }
                         all_workspaces.retain(|workspace| workspace.id != id);
                         workspaces = picker_workspaces(&all_workspaces, Some(&filter));
                         selected = selected.min(workspaces.len().saturating_sub(1));
@@ -788,7 +799,7 @@ pub fn run_workspace_picker(
                             terminal,
                             &workspaces,
                             selected,
-                            &interactions,
+                            interactions,
                             presentation::SessionsPreview::Ready(&[]),
                             Some(&filter),
                             &title,
@@ -818,7 +829,7 @@ pub fn run_workspace_picker(
                     terminal,
                     &workspaces,
                     selected,
-                    &interactions,
+                    interactions,
                     preview,
                     Some(&filter),
                     "Workspace name",
@@ -852,7 +863,7 @@ pub fn run_workspace_picker(
                     terminal,
                     &workspaces,
                     selected,
-                    &interactions,
+                    interactions,
                     preview,
                     Some(&filter),
                     &title,

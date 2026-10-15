@@ -949,21 +949,24 @@ pub(crate) fn follow_overview_cursor(app: &mut App) {
     }
 }
 
-/// Open the tag editor for the Interaction currently on screen. The
-/// interaction snapshot is refreshed here because the log is useful even
-/// before the live-interactions navigator has ever been opened.
+/// Open the tag editor for the Interaction currently on screen, with the tags
+/// the loop's interactions snapshot holds for it. That snapshot is kept fresh
+/// whether or not the live-interactions navigator has ever been opened.
 fn edit_current_interaction_tags(app: &mut App, client: &Client) {
-    let session_id = app.session_id.clone();
-    let interactions = match client.list_interactions() {
-        Ok(interactions) => interactions,
-        Err(error) => {
-            app.show_error(format!("could not list interactions: {error:#}"));
-            return;
+    if !app.interactions.listed() {
+        match client.list_interactions() {
+            Ok(interactions) => {
+                app.interactions.refresh(interactions);
+            }
+            Err(error) => {
+                app.show_error(format!("could not list interactions: {error:#}"));
+                return;
+            }
         }
-    };
-    let Some(selected_tags) = interactions
-        .iter()
-        .find(|item| item.id == session_id)
+    }
+    let Some(selected_tags) = app
+        .interactions
+        .current(&app.session_id)
         .map(|item| item.tags.clone())
     else {
         app.show_warning("current interaction is no longer available");
@@ -976,7 +979,6 @@ fn edit_current_interaction_tags(app: &mut App, client: &Client) {
             return;
         }
     };
-    app.interactions.refresh(interactions);
     app.tag_picker = Some(crate::tag_picker::TagPicker::new(tags, selected_tags));
 }
 

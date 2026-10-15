@@ -58,7 +58,9 @@ use cli::{Cli, CliCommand};
 use config::Defaults;
 use event_loop::RunOutcome;
 use session::Attachment;
-use styra_protocol::{CompletionState, LogEntry, WorkspaceSummary, WorktreeCleanup};
+use styra_protocol::{
+    CompletionState, InteractionSummary, LogEntry, WorkspaceSummary, WorktreeCleanup,
+};
 use styra_server::Client;
 use styra_ui::{RatatuiUi, Ui};
 
@@ -295,6 +297,7 @@ fn main() -> Result<()> {
                 &client,
                 "styra",
                 &mut sessions,
+                &client.list_interactions().unwrap_or_default(),
                 None,
                 false,
             ) {
@@ -321,6 +324,17 @@ fn main() -> Result<()> {
     // current directory when one exists. Otherwise it starts with the durable
     // Workspace list. Explicit CLI targets retain their direct behavior.
     let ordinary_launch = cli.workspace.is_none() && cli.view.is_none() && cli.command.is_none();
+    // The server's interactions, asked for once and handed to everything
+    // startup decides with — the Workspace picker, where to land, the
+    // navigator — and then to the event loop, which keeps it fresh. The server
+    // takes long enough over this listing that asking at every step was most
+    // of the time before the first frame. A server that cannot answer leaves
+    // it empty, as each step used to treat a failed answer.
+    let mut fleet = if view_target.is_some() {
+        Vec::new()
+    } else {
+        client.list_interactions().unwrap_or_default()
+    };
     // Set when the operator picks a Workspace with `n`: they asked for a new
     // interaction, so its live work is not joined on the way in.
     let mut start_fresh = false;
@@ -330,7 +344,7 @@ fn main() -> Result<()> {
         if let Some(workspace) = session::find_workspace_for_host(&workspaces, &current_directory) {
             workspace
         } else if cli.skip_workspace_list {
-            workspace_without_list(&client, &workspaces, current_directory)?
+            workspace_without_list(&client, &workspaces, &fleet, current_directory)?
         } else {
             let mut term = match terminal.take() {
                 Some(term) => term,
@@ -340,6 +354,7 @@ fn main() -> Result<()> {
                 &mut term,
                 &client,
                 &mut workspaces,
+                &mut fleet,
                 Some(&current_directory),
             ) {
                 Ok(Some(choice)) => choice,
@@ -390,9 +405,7 @@ fn main() -> Result<()> {
     // operator has already given, so it starts an Interaction of its own rather
     // than joining one in flight.
     let startup_interaction = if ordinary_launch && !start_fresh {
-        client.list_interactions().ok().and_then(|interactions| {
-            interactions::first_live_in_workspace(&interactions, &active_workspace.id)
-        })
+        interactions::first_live_in_workspace(&fleet, &active_workspace.id)
     } else {
         None
     };
@@ -443,26 +456,26 @@ fn main() -> Result<()> {
                 app = pending_app(selection, launch.clone(), &active_workspace);
                 live = Attachment::Detached;
                 if let Some(interaction) = startup_interaction {
-                    match session::open_session(&client, &interaction.id) {
+                    match session::open_session(&client, &interaction.id, &fleet) {
                         Ok((mut next, next_live)) => {
                             next.launch.interaction = launch.clone();
                             app = next;
                             live = next_live;
-                            event_loop::open_interaction_navigator(&mut app, &client);
+                            event_loop::open_interaction_navigator(
+                                &mut app,
+                                &client,
+                                fleet.clone(),
+                            );
                         }
                         Err(error) => app.push_log(LogEntry::error(format!(
                             "could not open live interaction {}: {error:#}",
                             interaction.id
                         ))),
                     }
-                } else if cli.skip_workspace_list
-                    && client
-                        .list_interactions()
-                        .is_ok_and(|interactions| interactions::first_live(&interactions).is_some())
-                {
+                } else if cli.skip_workspace_list && interactions::first_live(&fleet).is_some() {
                     // Nothing live here, but there is elsewhere: the operator
                     // asked to see it rather than pick a Workspace first.
-                    event_loop::open_interaction_navigator(&mut app, &client);
+                    event_loop::open_interaction_navigator(&mut app, &client, fleet.clone());
                 }
             }
         }
@@ -487,6 +500,13 @@ fn main() -> Result<()> {
     // newest last, for Ctrl-O to return to.
     let mut jumps: Vec<String> = Vec::new();
     let result = loop {
+        // Every App this loop builds starts on the newest listing there is,
+        // so its first frame has the fleet and nothing has to ask for it. An
+        // empty one may be a server that could not answer, so it is left for
+        // the loop to ask about.
+        if !app.interactions.listed() && !fleet.is_empty() {
+            app.interactions.refresh(std::mem::take(&mut fleet));
+        }
         let outcome = match event_loop::run(
             &mut terminal,
             &mut app,
@@ -504,6 +524,9 @@ fn main() -> Result<()> {
         if event_loop::stops_current_interaction(&outcome, &live) {
             client.stop_interaction(&app.session_id).ok();
         }
+        // The screen about to be replaced holds the listing the loop kept
+        // fresh; it is what the next one opens with and starts from.
+        fleet = app.interactions.snapshot();
         match outcome {
             RunOutcome::Quit => break Ok(()),
             RunOutcome::OpenWorkspace {
@@ -513,13 +536,17 @@ fn main() -> Result<()> {
             } => {
                 active_workspace = *workspace;
                 match session_id {
-                    Some(session_id) => match session::open_session(&client, &session_id) {
+                    Some(session_id) => match session::open_session(&client, &session_id, &fleet) {
                         Ok((mut new_app, new_live)) => {
                             new_app.launch.interaction = launch.clone();
                             app = new_app;
                             live = new_live;
                             if open_interactions {
-                                event_loop::open_interaction_navigator(&mut app, &client);
+                                event_loop::open_interaction_navigator(
+                                    &mut app,
+                                    &client,
+                                    fleet.clone(),
+                                );
                             }
                         }
                         Err(error) => app.push_log(LogEntry::error(format!(
@@ -538,7 +565,7 @@ fn main() -> Result<()> {
             // interaction for the Session being left remains server-owned.
             RunOutcome::OpenSession(session_id) => {
                 let left = app.session_id.clone();
-                if open_session_view(&client, &launch, &mut app, &mut live, &session_id)
+                if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id)
                     && !left.is_empty()
                     && left != session_id
                 {
@@ -547,7 +574,7 @@ fn main() -> Result<()> {
             }
             RunOutcome::OpenBranch(session_id) => {
                 let left = app.session_id.clone();
-                if open_session_view(&client, &launch, &mut app, &mut live, &session_id) {
+                if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id) {
                     if !left.is_empty() && left != session_id {
                         jumps.push(left);
                     }
@@ -561,7 +588,14 @@ fn main() -> Result<()> {
                 let current = app.session_id.clone();
                 match std::iter::from_fn(|| jumps.pop()).find(|id| *id != current) {
                     Some(session_id) => {
-                        open_session_view(&client, &launch, &mut app, &mut live, &session_id);
+                        open_session_view(
+                            &client,
+                            &launch,
+                            &fleet,
+                            &mut app,
+                            &mut live,
+                            &session_id,
+                        );
                     }
                     None => app.show_warning("no previous interaction to go back to"),
                 }
@@ -601,11 +635,12 @@ fn main() -> Result<()> {
 fn open_session_view(
     client: &Client,
     launch: &LaunchPolicy,
+    interactions: &[InteractionSummary],
     app: &mut App,
     live: &mut Attachment,
     session_id: &str,
 ) -> bool {
-    match session::open_session(client, session_id) {
+    match session::open_session(client, session_id, interactions) {
         Ok((mut new_app, new_live)) => {
             new_app.launch.interaction = launch.clone();
             *app = new_app;
@@ -630,10 +665,10 @@ fn open_session_view(
 fn workspace_without_list(
     client: &Client,
     workspaces: &[WorkspaceSummary],
+    interactions: &[InteractionSummary],
     current_directory: PathBuf,
 ) -> Result<WorkspaceSummary> {
-    let interactions = client.list_interactions().unwrap_or_default();
-    let chosen = interactions::first_live(&interactions)
+    let chosen = interactions::first_live(interactions)
         .and_then(|interaction| {
             workspaces
                 .iter()
@@ -793,14 +828,14 @@ fn clean_worktrees(client: &Client, workspace: Option<&Path>, all: bool) -> Resu
 }
 
 fn browse_shells(client: &Client) -> Result<()> {
-    let live_ids = client
-        .list_interactions()?
-        .into_iter()
-        .map(|interaction| interaction.id)
+    let interactions = client.list_interactions()?;
+    let live_ids = interactions
+        .iter()
+        .map(|interaction| interaction.id.as_str())
         .collect::<std::collections::HashSet<_>>();
     let mut sessions = session::all_sessions(client)?
         .into_iter()
-        .filter(|session| live_ids.contains(&session.id))
+        .filter(|session| live_ids.contains(session.id.as_str()))
         .collect::<Vec<_>>();
     if sessions.is_empty() {
         println!("No live sessions found by the Styra server");
@@ -808,8 +843,15 @@ fn browse_shells(client: &Client) -> Result<()> {
     }
 
     let mut terminal = RatatuiUi::new()?;
-    let choice =
-        picker::run_session_picker(&mut terminal, client, "styra", &mut sessions, None, false);
+    let choice = picker::run_session_picker(
+        &mut terminal,
+        client,
+        "styra",
+        &mut sessions,
+        &interactions,
+        None,
+        false,
+    );
     terminal.close()?;
     match choice? {
         Some(picker::SessionChoice::Open(session)) => attach_shell(client, &session),
