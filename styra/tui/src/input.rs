@@ -85,8 +85,10 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
 /// `styra-diff` answers every key, the same way its own program does, and
 /// `i` focuses the message box and `q` quits Styra unless the diff's filter
 /// is being typed.
-/// Tab hands navigation to the interaction when the diff is in a side pane.
-/// Other global bindings and the other views' keys do not act from it.
+/// Tab hands navigation to the interaction when the diff is in a side pane,
+/// and fullscreen swaps the diff's header for the conversation's latest
+/// messages. Other global bindings and the other views' keys do not act from
+/// it.
 pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
     if handle_diff_focus_key(app, key) {
         return;
@@ -95,6 +97,10 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
         .checkout_diff
         .as_ref()
         .is_some_and(|diff| diff.search.typing());
+    if DIFF_CONVERSATION.matches(key) && app.view == View::CheckoutDiff && !typing_filter {
+        app.diff_conversation = !app.diff_conversation;
+        return;
+    }
     if GLOBAL_QUIT.matches(key) && !typing_filter {
         app.ask(Request::Quit);
         return;
@@ -2485,8 +2491,14 @@ mod tests {
         assert_eq!(app.view, View::CheckoutDiff, "r is the diff's here");
         press(&mut app, KeyCode::Char('r'));
         assert!(!app.checkout_diff.as_ref().unwrap().hide_removed);
+        // Tab swaps the header for the latest messages and back, and is
+        // nothing to the diff itself.
         press(&mut app, KeyCode::Tab);
+        assert!(app.diff_conversation);
         assert!(!app.checkout_diff.as_ref().unwrap().per_file);
+        assert_eq!(app.view, View::CheckoutDiff);
+        press(&mut app, KeyCode::BackTab);
+        assert!(!app.diff_conversation);
         press(&mut app, KeyCode::Char('f'));
         assert!(app.checkout_diff.as_ref().unwrap().per_file);
         // As drawing the per-file view would.

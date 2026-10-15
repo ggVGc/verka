@@ -115,6 +115,11 @@ bindings! { READING = "Raw, messages, log, quota, processes, and transcript";
     READING_COPY: [Key::ch('y')] ("raw, messages, processes") => Action::ReadingCopy;
 }
 
+bindings! { CHECKOUT_DIFF = "Fullscreen diff";
+    DIFF_CONVERSATION: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]
+        => Action::DiffConversation;
+}
+
 bindings! { PREVIEW = "Full-screen preview";
     PREVIEW_SCROLL_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::PreviewScrollDown;
     PREVIEW_SCROLL_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::PreviewScrollUp;
@@ -587,10 +592,12 @@ impl Window {
     /// This window's reference, in display order, with a blank line between
     /// sections.
     pub(crate) fn reference(self) -> Vec<ReferenceRow> {
-        // The diff owns the keyboard: nothing outside its own keys acts.
+        // The diff owns the keyboard: nothing outside its own keys, and the
+        // one Styra adds to them, acts.
         if self == Self::CheckoutDiff {
             return std::iter::once(ReferenceRow::Section("Checkout diff"))
                 .chain(styra_diff::keys::BINDINGS.iter().map(ReferenceRow::Diff))
+                .chain(CHECKOUT_DIFF.iter().skip(1).copied())
                 .collect();
         }
         let mut rows = Vec::new();

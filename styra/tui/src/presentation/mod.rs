@@ -242,6 +242,10 @@ pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
     }
 }
 
+/// How many of the conversation's messages the fullscreen diff shows in place
+/// of its header.
+const DIFF_MESSAGES: usize = 3;
+
 /// The reference rows for one window, in the UI's vocabulary.
 pub(crate) fn help_rows(
     window: crate::keybindings::Window,
@@ -468,10 +472,17 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
         }
         View::CheckoutDiff => {
             let block = styra_ui::chrome::focused_panel_block(&panel_chrome(app, Some("diff")));
-            let diff = match &app.checkout_diff {
+            let mut diff = match &app.checkout_diff {
                 Some(diff) => diff.view(block),
                 None => styra_diff::CheckoutDiffView::unread(block),
             };
+            if app.diff_conversation {
+                diff.conversation = Some(styra_ui::picker::latest_conversation(
+                    app.timeline.entries.iter().map(|entry| entry.event()),
+                    app.selection.provider.protocol(),
+                    DIFF_MESSAGES,
+                ));
+            }
             draw_main(ui, app, MainView::CheckoutDiff(&diff))
         }
         View::Driva => {

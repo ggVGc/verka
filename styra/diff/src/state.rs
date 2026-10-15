@@ -167,6 +167,7 @@ impl CheckoutDiff {
             selected_file: self.selected_file,
             file_list_offset: self.file_list_offset,
             search: self.search.view(),
+            conversation: None,
         }
     }
 

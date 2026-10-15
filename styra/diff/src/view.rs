@@ -52,6 +52,10 @@ pub struct CheckoutDiffView<'a> {
     /// First visible row in the file tree, retained between frames.
     pub file_list_offset: usize,
     pub search: SearchView<'a>,
+    /// Lines the host shows in place of the header, such as the latest
+    /// messages of the conversation the diff belongs to. `None` keeps the
+    /// header.
+    pub conversation: Option<Vec<Line<'a>>>,
 }
 
 impl<'a> CheckoutDiffView<'a> {
@@ -74,6 +78,7 @@ impl<'a> CheckoutDiffView<'a> {
             selected_file: 0,
             file_list_offset: 0,
             search: SearchView::default(),
+            conversation: None,
         }
     }
 }
@@ -257,7 +262,10 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
     let block = view.block.clone();
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let header = header_lines(view);
+    let header = view
+        .conversation
+        .clone()
+        .unwrap_or_else(|| header_lines(view));
     let [top, body] = Layout::vertical([
         // One more than the header for the rule beneath it.
         Constraint::Length(header.len() as u16 + 1),
@@ -760,6 +768,7 @@ index 1111111..2222222 100644
                         selected_file,
                         file_list_offset: 0,
                         search,
+                        conversation: None,
                     },
                     frame.area(),
                 );
@@ -997,6 +1006,7 @@ index 1111111..2222222 100644
                             selected_file,
                             file_list_offset: offset,
                             search: Default::default(),
+                            conversation: None,
                         },
                         frame.area(),
                     );
@@ -1128,6 +1138,37 @@ index 1111111..2222222 100644
         assert!(output.contains("fn c() {}"), "{output}");
     }
 
+    /// A host's conversation takes the header's place; the diff stays.
+    #[test]
+    fn a_conversation_replaces_the_header() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
+        let frame = terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &CheckoutDiffView {
+                        branch: Some("styra/rename"),
+                        base_commit: "4bf5c35d0123456789abcdef",
+                        diff: Ok(DIFF),
+                        conversation: Some(vec![Line::from("» rename b to c")]),
+                        ..CheckoutDiffView::unread(Block::bordered())
+                    },
+                    frame.area(),
+                );
+            })
+            .unwrap();
+        let output = frame
+            .buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(output.contains("» rename b to c"), "{output}");
+        assert!(!output.contains("against"), "{output}");
+        assert!(!output.contains("file changed"), "{output}");
+        assert!(output.contains("fn c() {}"), "{output}");
+    }
+
     /// The hint fills the row out to the panel's edge, not just the text.
     #[test]
     fn a_changed_row_is_tinted_across_the_panel() {
@@ -1153,6 +1194,7 @@ index 1111111..2222222 100644
                         selected_file: 0,
                         file_list_offset: 0,
                         search: Default::default(),
+                        conversation: None,
                     },
                     frame.area(),
                 );

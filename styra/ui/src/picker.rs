@@ -263,6 +263,28 @@ fn render_session_log_preview(
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// The last `count` messages of a conversation, oldest first, one line each,
+/// or a line saying there are none yet.
+pub fn latest_conversation<'e>(
+    events: impl DoubleEndedIterator<Item = &'e styra_protocol::event::AgentEvent>,
+    protocol: styra_protocol::event::Protocol,
+    count: usize,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<_> = events
+        .rev()
+        .filter_map(|event| conversation_line(event, Some(protocol)))
+        .take(count)
+        .collect();
+    if lines.is_empty() {
+        return vec![Line::from(Span::styled(
+            "  no messages yet",
+            Style::default().fg(theme::MUTED_TEXT),
+        ))];
+    }
+    lines.reverse();
+    lines
+}
+
 /// One message of another Session's conversation, as a single line: who
 /// spoke, and the gist of what they said. `None` for anything that is not a
 /// message — a conversation previewed from outside is read by its exchange.

@@ -300,6 +300,9 @@ pub struct App {
     pub diff_preview: bool,
     /// While a side diff is open, whether navigation belongs to the interaction.
     pub diff_interaction_focus: bool,
+    /// Whether the fullscreen diff shows the conversation's latest messages
+    /// where its header would be. Kept as the diff is left and opened again.
+    pub diff_conversation: bool,
     /// The entry-log pane below the event list: whether it is open, which of
     /// the two windows has the navigation keys, and where it is; see
     /// [`EntryLog`]. It is deliberately a pane state, not a [`View`]: it and
@@ -573,6 +576,7 @@ impl App {
             checkout_diff: None,
             diff_preview: false,
             diff_interaction_focus: false,
+            diff_conversation: false,
             entry_log: EntryLog::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
