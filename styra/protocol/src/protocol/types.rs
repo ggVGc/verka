@@ -999,8 +999,10 @@ pub struct InteractionSummary {
     /// The host directory bound as the agent's workspace, so a reattaching
     /// client can resolve changed-file previews.
     pub workspace: PathBuf,
-    /// The Driva policy the interaction was launched under, for the driva view.
-    pub driva: DrivaOptions,
+    // The Driva policy the interaction was launched under is not carried
+    // here: it is several kilobytes a row, every list carries every row, and
+    // only the driva view of the one on screen reads it. That view asks for it
+    // with `Request::InteractionDriva`.
     /// Where the interaction is in its life: working, waiting for input, or
     /// taking no more messages. Whether its agent is still there to be sent
     /// one is [`InteractionActivity::accepting`].
@@ -1439,13 +1441,6 @@ mod tests {
                 "workspace_id": "w1",
                 "selection": {"provider": "claude", "model": "sonnet", "effort": "medium"},
                 "workspace": "/srv/work",
-                "driva": {
-                    "isolation_backend": "none",
-                    "command": [],
-                    "working_directory": "/srv/work",
-                    "network": false,
-                    "mounts": []
-                },
                 "activity": "pending"
             }"#,
         )

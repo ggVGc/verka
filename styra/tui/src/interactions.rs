@@ -1410,7 +1410,7 @@ fn is_idle(interaction: &InteractionSummary) -> bool {
 pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
-    use styra_protocol::{CompletionState, DrivaOptions, InteractionActivity};
+    use styra_protocol::{CompletionState, InteractionActivity};
 
     pub(crate) fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
@@ -1422,15 +1422,6 @@ pub(crate) mod tests {
             workspace_id: "workspace".into(),
             selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
             workspace: PathBuf::from("/workspace"),
-            driva: DrivaOptions {
-                isolation_backend: "none".into(),
-                command: vec![],
-                working_directory: PathBuf::from("/workspace"),
-                network: false,
-                base: Vec::new(),
-                mounts: vec![],
-                ..Default::default()
-            },
             activity,
             activity_reason: None,
             activity_since_ms: 0,

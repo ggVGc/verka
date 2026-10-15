@@ -23,14 +23,17 @@
 //! mirrored row at all.
 //!
 //! The mirrored row is the summary itself rather than a key to rebuild one
-//! from. Most of a summary could be re-derived from the Session's stored
-//! metadata, but the Driva policy could not: it is what the launch actually
-//! resolved against this host, and re-deriving it would answer a different
-//! question — what a launch *now* would get — while claiming to describe the
-//! run that happened.
+//! from, with the Driva policy beside it. Most of a summary could be
+//! re-derived from the Session's stored metadata, but the Driva policy could
+//! not: it is what the launch actually resolved against this host, and
+//! re-deriving it would answer a different question — what a launch *now*
+//! would get — while claiming to describe the run that happened. It is kept
+//! beside the summary rather than in it because a summary is what every list
+//! carries, and the policy is only read for the one row a client shows.
 
 use crate::protocol::{
-    CompletionState, InteractionActivity, InteractionActivityReason, InteractionSummary,
+    CompletionState, DrivaOptions, InteractionActivity, InteractionActivityReason,
+    InteractionSummary,
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -40,8 +43,8 @@ use std::sync::Mutex;
 
 const ROSTER_FILE: &str = "roster.jsonl";
 
-/// One mirrored row: the summary a client is shown, and the Session directory
-/// behind it. The path is kept beside the summary because it is what makes a
+/// One mirrored row: the summary a client is shown, the Driva policy its run
+/// was launched under, and the Session directory behind it. The path is kept beside the summary because it is what makes a
 /// restored row readable — its history is replayed straight out of that
 /// directory — and because a row whose Session has since been deleted can then
 /// be dropped on the way in with a stat, rather than by scanning every
@@ -50,7 +53,14 @@ const ROSTER_FILE: &str = "roster.jsonl";
 struct Entry {
     session_path: PathBuf,
     summary: InteractionSummary,
+    /// Absent from a row mirrored while the summary still carried it; [`read`]
+    /// lifts it out of the summary for those.
+    #[serde(default)]
+    driva: DrivaOptions,
 }
+
+/// One row as this run hands it to [`Roster::publish`].
+pub type Row = (PathBuf, InteractionSummary, DrivaOptions);
 
 /// The open-Interaction list as the store holds it.
 #[derive(Default)]
@@ -150,11 +160,21 @@ impl Roster {
         self.lock().values().map(current_summary).collect()
     }
 
-    /// The restored row for `id`, and the Session directory its history is in.
-    pub fn restored_session(&self, id: &str) -> Option<(InteractionSummary, PathBuf)> {
-        self.lock()
-            .get(id)
-            .map(|entry| (current_summary(entry), entry.session_path.clone()))
+    /// The restored row for `id`, the Driva policy its run was launched
+    /// under, and the Session directory its history is in.
+    pub fn restored_session(&self, id: &str) -> Option<Row> {
+        self.lock().get(id).map(|entry| {
+            (
+                entry.session_path.clone(),
+                current_summary(entry),
+                entry.driva.clone(),
+            )
+        })
+    }
+
+    /// The Driva policy the restored row for `id` was launched under.
+    pub fn driva(&self, id: &str) -> Option<DrivaOptions> {
+        self.lock().get(id).map(|entry| entry.driva.clone())
     }
 
     pub fn holds(&self, id: &str) -> bool {
@@ -193,12 +213,13 @@ impl Roster {
     /// a Session just branched off another, stopped until the operator
     /// resumes it. It is mirrored with the rest, so a branch left unstarted
     /// is still beside its source after a restart.
-    pub fn adopt(&self, session_path: PathBuf, summary: InteractionSummary) {
+    pub fn adopt(&self, session_path: PathBuf, summary: InteractionSummary, driva: DrivaOptions) {
         self.lock().insert(
             summary.id.clone(),
             Entry {
                 session_path,
                 summary,
+                driva,
             },
         );
     }
@@ -215,13 +236,13 @@ impl Roster {
     /// Called when the list changes and again as the server goes down, so a
     /// graceful shutdown mirrors each row as it finally stood rather than as
     /// it stood when it was opened.
-    pub fn publish(&self, live: Vec<(PathBuf, InteractionSummary)>) {
+    pub fn publish(&self, live: Vec<Row>) {
         let Some(path) = &self.path else {
             return;
         };
         let mut entries: Vec<Entry> = live
             .into_iter()
-            .map(|(session_path, mut summary)| {
+            .map(|(session_path, mut summary, driva)| {
                 // The Session metadata is the sole owner of its mutable name.
                 // The roster records only the Interaction snapshot and joins
                 // the current name when a client asks for the row.
@@ -229,6 +250,7 @@ impl Roster {
                 Entry {
                     session_path,
                     summary,
+                    driva,
                 }
             })
             .collect();
@@ -288,6 +310,20 @@ fn read(path: &Path) -> Result<Vec<Entry>> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| serde_json::from_str(line).ok())
+        .filter_map(|mut row: serde_json::Value| {
+            // A row mirrored while the summary still carried the policy has
+            // it there; it is the only record of what that run launched under.
+            if row.get("driva").is_none() {
+                if let Some(driva) = row
+                    .get_mut("summary")
+                    .and_then(serde_json::Value::as_object_mut)
+                    .and_then(|summary| summary.remove("driva"))
+                {
+                    row["driva"] = driva;
+                }
+            }
+            serde_json::from_value(row).ok()
+        })
         .collect())
 }
 
@@ -344,7 +380,6 @@ mod tests {
                 effort: Effort::Medium,
             },
             workspace: PathBuf::from("/tmp/project"),
-            driva: Default::default(),
             activity: InteractionActivity::Running,
             activity_reason: None,
             activity_since_ms: 7,
@@ -381,7 +416,7 @@ mod tests {
         let session = root.join("session-a");
         std::fs::create_dir_all(&session).unwrap();
 
-        Roster::open(&root).publish(vec![(session, summary("session-a"))]);
+        Roster::open(&root).publish(vec![(session, summary("session-a"), Default::default())]);
 
         let restored = Roster::open(&root).restored();
         assert_eq!(restored.len(), 1);
@@ -413,7 +448,7 @@ mod tests {
         let root = store("forget");
         let session = root.join("session-b");
         std::fs::create_dir_all(&session).unwrap();
-        Roster::open(&root).publish(vec![(session, summary("session-b"))]);
+        Roster::open(&root).publish(vec![(session, summary("session-b"), Default::default())]);
 
         let roster = Roster::open(&root);
         assert!(roster.holds("session-b"));
@@ -456,7 +491,7 @@ mod tests {
         let session = crate::workspace::sessions_dir(&root, &workspace.id).join(&id);
         let mut row = summary(&id);
         row.workspace_id = workspace.id.clone();
-        Roster::open(&root).publish(vec![(session.clone(), row)]);
+        Roster::open(&root).publish(vec![(session.clone(), row, Default::default())]);
 
         // The roster's copy is an interaction snapshot, not another owner of
         // mutable Session metadata. A later rename is resolved directly from
@@ -497,7 +532,11 @@ mod tests {
         let root = store("pause");
         let session = root.join("session-pause");
         std::fs::create_dir_all(&session).unwrap();
-        Roster::open(&root).publish(vec![(session, summary("session-pause"))]);
+        Roster::open(&root).publish(vec![(
+            session,
+            summary("session-pause"),
+            Default::default(),
+        )]);
 
         let roster = Roster::open(&root);
         assert!(roster.pause("session-pause"));
@@ -520,14 +559,14 @@ mod tests {
         std::fs::create_dir_all(&first).unwrap();
         std::fs::create_dir_all(&second).unwrap();
         Roster::open(&root).publish(vec![
-            (first.clone(), summary("session-c")),
-            (second, summary("session-d")),
+            (first.clone(), summary("session-c"), Default::default()),
+            (second, summary("session-d"), Default::default()),
         ]);
 
         // This run revived only one of the two.
         let roster = Roster::open(&root);
         roster.forget("session-c");
-        roster.publish(vec![(first, summary("session-c"))]);
+        roster.publish(vec![(first, summary("session-c"), Default::default())]);
 
         let mut ids: Vec<String> = Roster::open(&root)
             .restored()
@@ -547,7 +586,7 @@ mod tests {
         let mut row = summary("session-stopped");
         row.activity = InteractionActivity::Stopped;
         row.activity_reason = Some(InteractionActivityReason::Interrupted);
-        Roster::open(&root).publish(vec![(session, row)]);
+        Roster::open(&root).publish(vec![(session, row, Default::default())]);
 
         let restored = Roster::open(&root).restored();
         assert_eq!(restored[0].activity, InteractionActivity::Stopped);
@@ -566,10 +605,48 @@ mod tests {
         let root = store("stale");
         let session = root.join("session-e");
         std::fs::create_dir_all(&session).unwrap();
-        Roster::open(&root).publish(vec![(session.clone(), summary("session-e"))]);
+        Roster::open(&root).publish(vec![(
+            session.clone(),
+            summary("session-e"),
+            Default::default(),
+        )]);
         std::fs::remove_dir_all(&session).unwrap();
 
         assert!(Roster::open(&root).restored().is_empty());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// A roster mirrored while the summary still carried the policy is the
+    /// only record of what those runs launched under, so the policy is read
+    /// out of the summary rather than lost with the field.
+    #[test]
+    fn a_row_mirrored_with_the_policy_in_its_summary_keeps_it() {
+        let root = store("policy-in-summary");
+        let session = root.join("session-f");
+        std::fs::create_dir_all(&session).unwrap();
+        let mut summary = serde_json::to_value(summary("session-f")).unwrap();
+        summary["driva"] = serde_json::json!({
+            "isolation_backend": "bwrap",
+            "command": ["claude"],
+            "working_directory": "/tmp/styra/workspace",
+            "network": true,
+            "mounts": []
+        });
+        let row = serde_json::json!({ "session_path": session, "summary": summary });
+        std::fs::write(root.join(ROSTER_FILE), format!("{row}\n")).unwrap();
+
+        let roster = Roster::open(&root);
+        let driva = roster.driva("session-f").expect("the row is restored");
+        assert_eq!(driva.isolation_backend, "bwrap");
+        assert_eq!(driva.command, vec!["claude".to_owned()]);
+        assert!(driva.network);
+
+        // And it is written back beside the summary from then on.
+        roster.publish(Vec::new());
+        let text = std::fs::read_to_string(root.join(ROSTER_FILE)).unwrap();
+        let row: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(row["driva"]["isolation_backend"], "bwrap");
+        assert!(row["summary"].get("driva").is_none());
         std::fs::remove_dir_all(root).ok();
     }
 }

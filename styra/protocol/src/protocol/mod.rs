@@ -659,6 +659,12 @@ pub enum Request {
     InteractionProcesses {
         id: String,
     },
+    /// Read the Driva policy a listed interaction was launched under: what its
+    /// agent runs, and what it can see and write. Asked of one interaction
+    /// when a client shows it, rather than carried on every listed row.
+    InteractionDriva {
+        id: String,
+    },
     /// Ask the server to remove its socket and exit. Any live interactions it owns die
     /// with it, so this is the deliberate counterpart to the daemon outliving
     /// its clients.
@@ -762,6 +768,7 @@ pub enum Response {
     /// `None` when no sandbox is running for the Session: it is stopped, or
     /// its interaction is still starting.
     InteractionProcesses(Option<Vec<SandboxProcess>>),
+    InteractionDriva(DrivaOptions),
 }
 
 /// Response envelope returned for every syntactically valid connection.

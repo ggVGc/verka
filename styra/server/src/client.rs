@@ -669,6 +669,14 @@ impl Client {
         }
     }
 
+    /// The Driva policy a listed interaction was launched under.
+    pub fn interaction_driva(&self, id: &str) -> Result<DrivaOptions> {
+        match self.request(Request::InteractionDriva { id: id.to_owned() })? {
+            Response::InteractionDriva(value) => Ok(value),
+            other => unexpected("interaction_driva", other),
+        }
+    }
+
     /// The processes running in a live interaction's sandbox right now, or
     /// `None` when no sandbox runs for the Session.
     pub fn interaction_processes(
@@ -888,6 +896,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::QuotaLog => "quota_log",
         Request::InteractionActions { .. } => "interaction_actions",
         Request::InteractionProcesses { .. } => "interaction_processes",
+        Request::InteractionDriva { .. } => "interaction_driva",
         Request::Shutdown => "shutdown",
     }
 }

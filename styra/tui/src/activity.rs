@@ -896,7 +896,6 @@ mod tests {
             workspace_id: "w1".into(),
             selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
             workspace: std::path::PathBuf::from("/workspace"),
-            driva: Default::default(),
             activity,
             activity_reason: reason,
             activity_since_ms: 0,

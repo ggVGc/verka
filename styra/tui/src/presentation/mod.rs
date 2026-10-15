@@ -952,15 +952,6 @@ mod tests {
             workspace_id: "workspace".into(),
             selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
             workspace: std::path::PathBuf::from("/workspace"),
-            driva: styra_protocol::DrivaOptions {
-                isolation_backend: "none".into(),
-                command: vec![],
-                working_directory: std::path::PathBuf::from("/workspace"),
-                network: false,
-                base: Vec::new(),
-                mounts: vec![],
-                ..Default::default()
-            },
             activity: styra_protocol::InteractionActivity::Running,
             activity_reason: None,
             activity_since_ms: 0,

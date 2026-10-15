@@ -49,7 +49,8 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
         | Request::SessionRebaseStatus { .. }
         | Request::SessionIntegrationResult { .. }
         | Request::InteractionActions { .. }
-        | Request::InteractionProcesses { .. } => Scope::Read,
+        | Request::InteractionProcesses { .. }
+        | Request::InteractionDriva { .. } => Scope::Read,
         Request::CreateSession(request) => match request.checkout_from.as_deref() {
             Some(id) => Scope::Session(id),
             None => Scope::Store,

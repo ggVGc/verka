@@ -522,7 +522,16 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
     note_branch_origins(client, &mut app, &interaction.workspace_id);
     app.workspace.id = Some(interaction.workspace_id.clone());
     app.workspace.enter(interaction.workspace.clone());
-    app.launch.record(interaction.driva.clone());
+    // Not carried on the summary, which every list repeats for every row.
+    // Without it the driva view says no policy is recorded; the interaction
+    // itself is no less usable, so it still opens.
+    match client.interaction_driva(&interaction.id) {
+        Ok(driva) => app.launch.record(driva),
+        Err(error) => app.push_log(LogEntry::error(format!(
+            "could not read the sandbox policy of {}: {error:#}",
+            interaction.id
+        ))),
+    }
     // Whether a rate limit will be waited out is the server's answer, kept
     // with the Session, so it is adopted from the interaction rather than
     // carried over from whatever this client was last showing.

@@ -392,6 +392,13 @@ M.types.Request = {
         { name = "id", required = true, type = { kind = "string" } },
       },
     } },
+    { name = "interaction_driva", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "shutdown", payload = { kind = "unit" } },
   },
 }
@@ -449,6 +456,7 @@ M.types.Response = {
     { name = "quota_log", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "QuotaEvent" } } } },
     { name = "interaction_actions", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "ActionRecord" } } } },
     { name = "interaction_processes", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "list", item = { kind = "ref", name = "SandboxProcess" } } } } },
+    { name = "interaction_driva", payload = { kind = "newtype", type = { kind = "ref", name = "DrivaOptions" } } },
   },
 }
 
@@ -936,7 +944,6 @@ M.types.InteractionSummary = {
     { name = "workspace_id", required = true, type = { kind = "string" } },
     { name = "selection", required = true, type = { kind = "ref", name = "Selection" } },
     { name = "workspace", required = true, type = { kind = "string", path = true } },
-    { name = "driva", required = true, type = { kind = "ref", name = "DrivaOptions" } },
     { name = "activity", required = false, type = { kind = "ref", name = "InteractionActivity" } },
     { name = "activity_reason", required = false, type = { kind = "optional", inner = { kind = "ref", name = "InteractionActivityReason" } } },
     { name = "activity_since_ms", required = false, type = { kind = "number", integer = true } },
@@ -1845,7 +1852,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "integrate_session", "generate_integration_message", "session_integration_result", "rebase_session", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "shutdown" }
+M.enums.Request = { "integrate_session", "generate_integration_message", "session_integration_result", "rebase_session", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   INTEGRATE_SESSION = "integrate_session",
@@ -1909,10 +1916,11 @@ M.Request = {
   QUOTA_LOG = "quota_log",
   INTERACTION_ACTIONS = "interaction_actions",
   INTERACTION_PROCESSES = "interaction_processes",
+  INTERACTION_DRIVA = "interaction_driva",
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "rebase_started", "session_rebase_status", "integration_started", "integration_message", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions", "interaction_processes" }
+M.enums.Response = { "rebase_started", "session_rebase_status", "integration_started", "integration_message", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva" }
 --- Wire spellings of `Response`.
 M.Response = {
   REBASE_STARTED = "rebase_started",
@@ -1962,6 +1970,7 @@ M.Response = {
   QUOTA_LOG = "quota_log",
   INTERACTION_ACTIONS = "interaction_actions",
   INTERACTION_PROCESSES = "interaction_processes",
+  INTERACTION_DRIVA = "interaction_driva",
 }
 
 M.enums.WireResponse = { "ok", "error" }
@@ -3151,6 +3160,16 @@ end
 ---   id  string
 function M.request.interaction_processes(data)
   return M.build("interaction_processes", data)
+end
+
+--- Read the Driva policy a listed interaction was launched under: what its
+--- agent runs, and what it can see and write. Asked of one interaction
+--- when a client shows it, rather than carried on every listed row.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.interaction_driva(data)
+  return M.build("interaction_driva", data)
 end
 
 --- Ask the server to remove its socket and exit. Any live interactions it owns die

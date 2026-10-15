@@ -6,7 +6,7 @@ mod tests {
     use super::super::test_support::rendered;
 
     use std::path::PathBuf;
-    use styra_protocol::{CompletionState, DrivaOptions, InteractionActivity, InteractionSummary};
+    use styra_protocol::{CompletionState, InteractionActivity, InteractionSummary};
 
     fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
@@ -18,15 +18,6 @@ mod tests {
             workspace_id: "workspace".into(),
             selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
             workspace: PathBuf::from("/workspace"),
-            driva: DrivaOptions {
-                isolation_backend: "none".into(),
-                command: vec![],
-                working_directory: PathBuf::from("/workspace"),
-                network: false,
-                base: vec![],
-                mounts: vec![],
-                ..Default::default()
-            },
             activity,
             activity_reason: None,
             activity_since_ms: 0,

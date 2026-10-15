@@ -1241,15 +1241,6 @@ mod tests {
             workspace_id: "w-1".into(),
             selection: styra_protocol::agent::Selection::parse(selection).unwrap(),
             workspace: std::path::PathBuf::from("/home/op/project"),
-            driva: styra_protocol::DrivaOptions {
-                isolation_backend: "bwrap".into(),
-                command: vec![selection.into()],
-                working_directory: std::path::PathBuf::from("/tmp/styra/workspace"),
-                network: false,
-                base: Vec::new(),
-                mounts: Vec::new(),
-                ..Default::default()
-            },
             activity,
             activity_reason: None,
             activity_since_ms: 0,

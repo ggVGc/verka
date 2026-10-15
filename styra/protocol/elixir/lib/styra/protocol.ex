@@ -402,6 +402,13 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "interaction_driva", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "shutdown", payload: %{kind: :unit}}
       ]
     },
@@ -458,7 +465,8 @@ defmodule Styra.Protocol do
         %{name: "answer", payload: %{kind: :newtype, type: %{kind: :ref, name: "Answer"}}},
         %{name: "quota_log", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "QuotaEvent"}}}},
         %{name: "interaction_actions", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "ActionRecord"}}}},
-        %{name: "interaction_processes", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :list, item: %{kind: :ref, name: "SandboxProcess"}}}}}
+        %{name: "interaction_processes", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :list, item: %{kind: :ref, name: "SandboxProcess"}}}}},
+        %{name: "interaction_driva", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}}
       ]
     },
 
@@ -946,7 +954,6 @@ defmodule Styra.Protocol do
         %{name: "workspace_id", required: true, type: %{kind: :string}},
         %{name: "selection", required: true, type: %{kind: :ref, name: "Selection"}},
         %{name: "workspace", required: true, type: %{kind: :string, path: true}},
-        %{name: "driva", required: true, type: %{kind: :ref, name: "DrivaOptions"}},
         %{name: "activity", required: false, type: %{kind: :ref, name: "InteractionActivity"}},
         %{name: "activity_reason", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "InteractionActivityReason"}}},
         %{name: "activity_since_ms", required: false, type: %{kind: :number, integer: true}},
@@ -1926,6 +1933,7 @@ defmodule Styra.Protocol do
     "quota_log",
     "interaction_actions",
     "interaction_processes",
+    "interaction_driva",
     "shutdown"
   ]
 
@@ -3191,6 +3199,20 @@ defmodule Styra.Protocol do
     def interaction_processes!(data), do: Styra.Protocol.build!("interaction_processes", data)
 
     @doc ~S"""
+    Read the Driva policy a listed interaction was launched under: what its
+    agent runs, and what it can see and write. Asked of one interaction
+    when a client shows it, rather than carried on every listed row.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def interaction_driva(data), do: Styra.Protocol.build("interaction_driva", data)
+
+    @doc "`interaction_driva/1`, raising on a request the server would refuse."
+    def interaction_driva!(data), do: Styra.Protocol.build!("interaction_driva", data)
+
+    @doc ~S"""
     Ask the server to remove its socket and exit. Any live interactions it owns die
     with it, so this is the deliberate counterpart to the daemon outliving
     its clients.
@@ -3257,7 +3279,8 @@ defmodule Styra.Protocol.Response do
     {:answer, "answer"},
     {:quota_log, "quota_log"},
     {:interaction_actions, "interaction_actions"},
-    {:interaction_processes, "interaction_processes"}
+    {:interaction_processes, "interaction_processes"},
+    {:interaction_driva, "interaction_driva"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -3382,6 +3405,8 @@ defmodule Styra.Protocol.Response do
   its interaction is still starting.
   """
   def interaction_processes, do: "interaction_processes"
+
+  def interaction_driva, do: "interaction_driva"
 end
 
 defmodule Styra.Protocol.WireResponse do

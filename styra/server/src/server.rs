@@ -123,7 +123,7 @@ impl Drop for ServerInner {
         self.roster.publish(
             interactions
                 .values()
-                .map(|managed| (managed.session_path.clone(), managed.summary()))
+                .map(|managed| managed.roster_row())
                 .collect(),
         );
         for interaction in interactions.values() {
@@ -774,7 +774,6 @@ impl ManagedInteraction {
             workspace_id: self.workspace_id.clone(),
             selection: self.selection(),
             workspace: self.workspace.clone(),
-            driva: self.driva.clone(),
             idle_unseen: activity == InteractionActivity::Pending && self.idle.unseen(),
             // Only reported where it was read: an interaction that is working
             // again has an answer from before the turn it is running, and an
@@ -804,6 +803,15 @@ impl ManagedInteraction {
             origin: stored.and_then(|summary| summary.origin),
             restored: false,
         }
+    }
+
+    /// This interaction as the roster mirrors it.
+    fn roster_row(&self) -> crate::roster::Row {
+        (
+            self.session_path.clone(),
+            self.summary(),
+            self.driva.clone(),
+        )
     }
 
     /// Note that the operator has asked the running turn to stop, for the
@@ -3070,12 +3078,7 @@ impl ServerState {
             .expect("server interaction lock poisoned")
             .get(&source.id)
             .map(|managed| managed.driva.clone())
-            .or_else(|| {
-                self.inner
-                    .roster
-                    .restored_session(&source.id)
-                    .map(|(row, _)| row.driva)
-            });
+            .or_else(|| self.inner.roster.driva(&source.id));
         let (host, sandbox) = self.stored_workspace_mount(branched)?;
         let mut driva = source_driva.unwrap_or_default();
         driva.working_directory = sandbox;
@@ -3095,7 +3098,6 @@ impl ServerState {
             checkout,
             branched_from: branched.branched_from.clone(),
             workspace: host,
-            driva,
             activity: InteractionActivity::Stopped,
             activity_reason: Some(InteractionActivityReason::Branched),
             activity_since_ms: journal::now_ms(),
@@ -3112,7 +3114,7 @@ impl ServerState {
             origin: branched.origin.clone(),
             restored: false,
         };
-        self.inner.roster.adopt(branched.path.clone(), row);
+        self.inner.roster.adopt(branched.path.clone(), row, driva);
         self.publish_roster();
         Ok(())
     }
@@ -3206,7 +3208,8 @@ impl ServerState {
     /// conversation, readable, marked stopped; sending to it takes a resume,
     /// which is the request that actually starts an agent.
     fn load_restored(&self, id: &str) -> Result<Option<LoadedInteraction>> {
-        let Some((mut summary, session_path)) = self.inner.roster.restored_session(id) else {
+        let Some((session_path, mut summary, driva)) = self.inner.roster.restored_session(id)
+        else {
             return Ok(None);
         };
         let meta = journal::read_session_meta(&session_path)?;
@@ -3219,7 +3222,7 @@ impl ServerState {
             meta.protocol,
             WorkspaceMount {
                 host: &summary.workspace,
-                sandbox: &summary.driva.working_directory,
+                sandbox: &driva.working_directory,
             },
         )?;
         let next = replayed
@@ -3270,7 +3273,7 @@ impl ServerState {
                 .expect("server interaction lock poisoned");
             interactions
                 .values()
-                .map(|managed| (managed.session_path.clone(), managed.summary()))
+                .map(|managed| managed.roster_row())
                 .collect()
         };
         self.inner.roster.publish(rows);
@@ -3723,7 +3726,8 @@ impl ServerState {
             | Request::SessionRebaseStatus { id }
             | Request::SessionIntegrationResult { id }
             | Request::InteractionActions { id }
-            | Request::InteractionProcesses { id } => Some(id.as_str()),
+            | Request::InteractionProcesses { id }
+            | Request::InteractionDriva { id } => Some(id.as_str()),
             _ => match crate::actions::scope(&request) {
                 Scope::Session(id) => Some(id),
                 _ => None,
@@ -3756,6 +3760,19 @@ impl ServerState {
                     live.and_then(|live| live.interaction.sandbox_supervisor())
                         .map(crate::processes::sandbox_processes),
                 ))
+            }
+            Request::InteractionDriva { id } => {
+                let live = self
+                    .inner
+                    .interactions
+                    .lock()
+                    .expect("server interaction lock poisoned")
+                    .get(&id)
+                    .map(|managed| managed.driva.clone());
+                let driva = live
+                    .or_else(|| self.inner.roster.driva(&id))
+                    .with_context(|| format!("no interaction {id} is listed"))?;
+                Ok(Response::InteractionDriva(driva))
             }
             Request::InteractionActions { id } => {
                 self.stored_summary(&id)?;
@@ -6175,7 +6192,6 @@ mod tests {
                 workspace_id: workspace.id.clone(),
                 selection,
                 workspace: worktree.clone(),
-                driva,
                 activity: InteractionActivity::Running,
                 activity_reason: None,
                 activity_since_ms: 1,
@@ -6194,6 +6210,7 @@ mod tests {
                 integration: None,
                 restored: false,
             },
+            driva,
         )]);
 
         let state = ServerState::with_git(git, store.clone());
@@ -7612,11 +7629,18 @@ mod tests {
         std::fs::remove_dir_all(host).ok();
     }
 
+    /// The policy is kilobytes a row and every list repeats every row, so the
+    /// list leaves it out and the one row a client shows is asked for it.
     #[test]
-    fn deleted_workspace_api_blocks_sessions_and_restores_after_reopening() {
-        let (store, host, state, workspace, id, session_path) =
-            stored_session("deleted-workspace-api");
+    fn a_listed_rows_driva_policy_is_asked_for_rather_than_listed() {
+        let (store, host, state, workspace, id, session_path) = stored_session("listed-driva");
         drop(state);
+        let driva = DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into()],
+            working_directory: host.clone(),
+            ..Default::default()
+        };
         crate::roster::Roster::open(&store).publish(vec![(
             session_path.clone(),
             InteractionSummary {
@@ -7626,7 +7650,6 @@ mod tests {
                 workspace_id: workspace.id.clone(),
                 selection: Selection::new(crate::agent::Provider::Codex),
                 workspace: host.clone(),
-                driva: DrivaOptions::default(),
                 activity: InteractionActivity::Stopped,
                 activity_reason: None,
                 activity_since_ms: 1,
@@ -7645,6 +7668,65 @@ mod tests {
                 integration: None,
                 restored: false,
             },
+            driva.clone(),
+        )]);
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+
+        let listed =
+            serde_json::to_value(state.handle(Request::ListInteractions).unwrap()).unwrap();
+        let rows = listed["data"].as_array().expect("a list of rows");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].get("driva").is_none());
+
+        assert_eq!(
+            state
+                .handle(Request::InteractionDriva { id: id.clone() })
+                .unwrap(),
+            Response::InteractionDriva(driva)
+        );
+        assert!(state
+            .handle(Request::InteractionDriva {
+                id: "no-such-session".into()
+            })
+            .is_err());
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn deleted_workspace_api_blocks_sessions_and_restores_after_reopening() {
+        let (store, host, state, workspace, id, session_path) =
+            stored_session("deleted-workspace-api");
+        drop(state);
+        crate::roster::Roster::open(&store).publish(vec![(
+            session_path.clone(),
+            InteractionSummary {
+                id: id.clone(),
+                name: None,
+                tags: Vec::new(),
+                workspace_id: workspace.id.clone(),
+                selection: Selection::new(crate::agent::Provider::Codex),
+                workspace: host.clone(),
+                activity: InteractionActivity::Stopped,
+                activity_reason: None,
+                activity_since_ms: 1,
+                idle_unseen: false,
+                uncommitted_changes: false,
+                checkout: None,
+                branched_from: None,
+                last_message: None,
+                recent_messages: Vec::new(),
+                auto_retry: false,
+                auto_commit: false,
+                events: 0,
+                completed: CompletionState::Active,
+                focus_requested: false,
+                origin: None,
+                integration: None,
+                restored: false,
+            },
+            DrivaOptions::default(),
         )]);
         let state = ServerState::new(store.clone(), store.with_extension("sock"));
         assert!(matches!(state.handle(Request::ListInteractions).unwrap(),

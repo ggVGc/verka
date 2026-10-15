@@ -1179,7 +1179,7 @@ fn session_has_live_interaction(id: &str, interactions: &[InteractionSummary]) -
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use styra_protocol::{agent::Selection, DrivaOptions, InteractionActivity, SessionSummary};
+    use styra_protocol::{agent::Selection, InteractionActivity, SessionSummary};
 
     fn session(id: &str) -> SessionSummary {
         SessionSummary {
@@ -1211,15 +1211,6 @@ mod tests {
             workspace_id: "workspace".into(),
             selection: Selection::parse("codex").unwrap(),
             workspace: PathBuf::from("/workspace"),
-            driva: DrivaOptions {
-                isolation_backend: "none".into(),
-                command: vec![],
-                working_directory: PathBuf::from("/workspace"),
-                network: false,
-                base: Vec::new(),
-                mounts: vec![],
-                ..Default::default()
-            },
             activity,
             activity_reason: None,
             activity_since_ms: 0,
