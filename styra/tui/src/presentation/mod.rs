@@ -672,6 +672,11 @@ fn draw_main(
         overlays: styra_ui::application::ApplicationOverlays {
             rebase_status: app.rebase_status.as_ref(),
             integration_message: app.integration_prompt.as_deref(),
+            integration_target: app
+                .interactions
+                .current(&app.session_id)
+                .and_then(|interaction| interaction.branched_from.as_ref())
+                .and_then(|point| point.branch.as_deref()),
             launcher: launcher.as_ref(),
             input: input.as_ref(),
             recording: capture.as_ref(),
@@ -1073,6 +1078,30 @@ mod tests {
             !app.adopt_integration(),
             "the second reading changes nothing"
         );
+    }
+
+    /// The integration prompt says which branch the commit will land on, in
+    /// its top-right corner.
+    #[test]
+    fn integration_prompt_names_the_target_branch_top_right() {
+        let mut app = test_support::app("s1");
+        let mut interaction = interaction_with_checkout("s1", None);
+        interaction.branched_from = Some(styra_protocol::BranchPoint {
+            branch: Some("release".into()),
+            commit: "0123456".into(),
+        });
+        app.interactions.items.push(interaction);
+        app.integration_prompt = Some("Ship it".into());
+
+        let screen = test_support::screen(&app);
+        let top = (0..20)
+            .map(|y| screen.row(y))
+            .find(|row| row.contains("integration commit message"))
+            .expect("the prompt is drawn");
+        let title = top.find("integration commit message").unwrap();
+        let target = top.find("into release").expect(&top);
+        assert!(target > title, "{top}");
+        assert!(top[target..].starts_with("into release ┐"), "{top}");
     }
 
     #[test]

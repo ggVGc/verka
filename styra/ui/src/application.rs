@@ -107,6 +107,9 @@ pub struct PanelFeedback {
 pub struct ApplicationOverlays<'a> {
     pub rebase_status: Option<&'a styra_protocol::RebaseStatus>,
     pub integration_message: Option<&'a str>,
+    /// The branch the integration commit will land on, named in the
+    /// message prompt's corner.
+    pub integration_target: Option<&'a str>,
     pub launcher: Option<&'a crate::launcher::LauncherView>,
     pub input: Option<&'a modal_input::ModalInput<'a>>,
     /// A microphone capture in progress, which takes the message box's place:
@@ -467,7 +470,7 @@ fn render_reading_overlays(frame: &mut Frame, view: &ApplicationOverlays<'_>) {
         overlays::render_rebase_status(frame, status);
     }
     if let Some(message) = view.integration_message {
-        overlays::render_integration_message(frame, message);
+        overlays::render_integration_message(frame, message, view.integration_target);
     }
     if let Some(references) = view.references {
         overlays::render_references(frame, references, frame.area());

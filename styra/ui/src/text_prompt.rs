@@ -20,6 +20,9 @@ use crate::theme;
 pub struct TextPrompt<'a> {
     /// The top border: what is being asked for and the keys that answer it.
     pub title: Line<'a>,
+    /// The top border's right end, for where the answer goes — the branch an
+    /// integration lands on.
+    pub top_right: Option<Line<'a>>,
     /// The bottom border, for whatever qualifies the answer — which layer a
     /// mount lands in, or that adding one restarts the interaction.
     pub bottom: Option<Line<'a>>,
@@ -34,10 +37,16 @@ impl<'a> TextPrompt<'a> {
     pub fn new(title: impl Into<Line<'a>>, text: &'a str) -> Self {
         Self {
             title: title.into(),
+            top_right: None,
             bottom: None,
             text,
             border: theme::ACCENT,
         }
+    }
+
+    pub fn top_right(mut self, top_right: impl Into<Line<'a>>) -> Self {
+        self.top_right = Some(top_right.into().right_aligned());
+        self
     }
 
     pub fn bottom(mut self, bottom: impl Into<Line<'a>>) -> Self {
@@ -89,6 +98,9 @@ pub fn render(frame: &mut Frame, prompt: &TextPrompt<'_>, area: Rect) -> Rect {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(prompt.border))
         .title(prompt.title.clone());
+    if let Some(top_right) = &prompt.top_right {
+        block = block.title(top_right.clone());
+    }
     if let Some(bottom) = &prompt.bottom {
         block = block.title_bottom(bottom.clone());
     }

@@ -71,13 +71,23 @@ pub fn render_rebase_status(frame: &mut Frame, status: &styra_protocol::RebaseSt
     }
 }
 
-pub fn render_integration_message(frame: &mut Frame, message: &str) {
-    text_prompt::render(
-        frame,
-        &TextPrompt::new(" integration commit message ", message)
-            .bottom(" Enter integrate · Ctrl-G generate · Ctrl-W delete word · Alt-Enter newline · Esc cancel "),
-        frame.area(),
-    );
+/// The integration commit message being written, with the branch it will be
+/// committed to in the top-right corner when the interaction recorded one.
+pub fn render_integration_message(frame: &mut Frame, message: &str, target: Option<&str>) {
+    let mut prompt = TextPrompt::new(" integration commit message ", message)
+        .bottom(" Enter integrate · Ctrl-G generate · Ctrl-W delete word · Alt-Enter newline · Esc cancel ");
+    if let Some(target) = target {
+        prompt = prompt.top_right(Line::from(vec![
+            Span::styled(" into ", Style::default().fg(theme::TEXT)),
+            Span::styled(
+                format!("{target} "),
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+    text_prompt::render(frame, &prompt, frame.area());
 }
 
 #[derive(Clone, Copy)]
