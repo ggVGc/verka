@@ -11,10 +11,10 @@ use crate::protocol::WorkspaceSummary;
 use crate::protocol::{Action, ActionOrigin, ActionStatus};
 use crate::protocol::{
     Answer, CheckoutState, CleanedWorktree, CompletionState, Contract, DrivaOptions,
-    InteractionActivity, InteractionActivityReason, InteractionSummary, InteractionUpdate,
-    LaunchMount, LaunchPolicy, LogEntry, ModelSummary, QueuedMessage, RecentMessage, SendMessage,
-    SessionOrigin, SessionSummary, TemplateSummary, WorktreeCleanup, WorktreeSession,
-    WorktreeSummary,
+    InteractionActivity, InteractionActivityReason, InteractionQuery, InteractionSummary,
+    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, ModelSummary, QueuedMessage,
+    RecentMessage, SendMessage, SessionOrigin, SessionSummary, TemplateSummary, WorktreeCleanup,
+    WorktreeSession, WorktreeSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
@@ -756,6 +756,18 @@ impl ManagedInteraction {
             // interaction's resolved selection from a connected client.
             let _ = journal::store_session_selection(&self.session_path, &selection);
         }
+    }
+
+    /// Whether `query` lists this interaction, decided from what is held in
+    /// memory: [`Self::summary`] reads the Session's record, which is not
+    /// worth doing for a row the client did not ask for.
+    fn listed_by(&self, query: &InteractionQuery) -> bool {
+        query.admits(
+            self.interaction.session_id(),
+            &self.workspace_id,
+            self.activity.get().activity,
+            *self.completed.lock().expect("completion lock poisoned"),
+        )
     }
 
     fn summary(&self) -> InteractionSummary {
@@ -4192,7 +4204,8 @@ impl ServerState {
                 let next = all.last().map(|update| update.sequence).unwrap_or(after);
                 Ok(Response::Updates(Updates { updates, next }))
             }
-            Request::ListInteractions => {
+            Request::ListInteractions(query) => {
+                let query = query.unwrap_or_default();
                 let interactions = self
                     .inner
                     .interactions
@@ -4200,6 +4213,7 @@ impl ServerState {
                     .expect("server interaction lock poisoned");
                 let mut summaries: Vec<InteractionSummary> = interactions
                     .values()
+                    .filter(|managed| managed.listed_by(&query))
                     .map(|managed| managed.summary())
                     .collect();
                 drop(interactions);
@@ -4207,7 +4221,7 @@ impl ServerState {
                 // closed. They are listed beside this run's own, stopped: the
                 // conversation is still theirs to go back to, and only the
                 // agent is gone. See [`crate::roster`].
-                summaries.extend(self.inner.roster.restored());
+                summaries.extend(self.inner.roster.restored(&query));
                 let active: std::collections::HashSet<_> =
                     crate::workspace::list(self.store_root())?
                         .into_iter()
@@ -7673,7 +7687,7 @@ mod tests {
         let state = ServerState::new(store.clone(), store.with_extension("sock"));
 
         let listed =
-            serde_json::to_value(state.handle(Request::ListInteractions).unwrap()).unwrap();
+            serde_json::to_value(state.handle(Request::ListInteractions(None)).unwrap()).unwrap();
         let rows = listed["data"].as_array().expect("a list of rows");
         assert_eq!(rows.len(), 1);
         assert!(rows[0].get("driva").is_none());
@@ -7729,8 +7743,10 @@ mod tests {
             DrivaOptions::default(),
         )]);
         let state = ServerState::new(store.clone(), store.with_extension("sock"));
-        assert!(matches!(state.handle(Request::ListInteractions).unwrap(),
-            Response::Interactions(items) if items.len() == 1));
+        assert!(
+            matches!(state.handle(Request::ListInteractions(None)).unwrap(),
+            Response::Interactions(items) if items.len() == 1)
+        );
         state
             .handle(Request::DeleteWorkspace {
                 id: workspace.id.clone(),
@@ -7772,8 +7788,10 @@ mod tests {
             );
         }
         assert!(session_path.is_dir());
-        assert!(matches!(state.handle(Request::ListInteractions).unwrap(),
-            Response::Interactions(items) if items.is_empty()));
+        assert!(
+            matches!(state.handle(Request::ListInteractions(None)).unwrap(),
+            Response::Interactions(items) if items.is_empty())
+        );
         assert!(state
             .handle(Request::Updates {
                 id: id.clone(),
@@ -7790,8 +7808,10 @@ mod tests {
                 id: workspace.id.clone(),
             })
             .unwrap();
-        assert!(matches!(state.handle(Request::ListInteractions).unwrap(),
-            Response::Interactions(items) if items.len() == 1 && items[0].activity == InteractionActivity::Stopped));
+        assert!(
+            matches!(state.handle(Request::ListInteractions(None)).unwrap(),
+            Response::Interactions(items) if items.len() == 1 && items[0].activity == InteractionActivity::Stopped)
+        );
         assert!(
             matches!(state.handle(Request::ListSessions { workspace_id: workspace.id }).unwrap(),
             Response::StoredSessions(items) if items.len() == 1 && items[0].id == id)

@@ -22,8 +22,8 @@ use crate::presentation;
 use crate::session::{self, Attachment};
 use crate::workspace_jump::{self, WorkspaceJump};
 use styra_protocol::{
-    CompletionState, InteractionSummary, LogEntry, TemplateSummary, WorkspaceLaunchChange,
-    WorkspaceSummary,
+    CompletionState, InteractionQuery, InteractionSummary, LogEntry, TemplateSummary,
+    WorkspaceLaunchChange, WorkspaceSummary,
 };
 use styra_server::Client;
 use styra_ui::Ui;
@@ -324,7 +324,10 @@ impl Drop for LaunchEffects {
 /// stutters. Here the loop only asks; the answer is applied on whichever round
 /// it arrives in.
 struct InteractionsPoll {
-    send: Sender<()>,
+    /// Each request carries its own query, since what the navigator shows —
+    /// the Interaction on screen, whether finished rows are listed — changes
+    /// between polls.
+    send: Sender<InteractionQuery>,
     /// `None` for a poll the server could not answer: the snapshot on screen
     /// stays as it was, as it did when the loop polled for itself.
     receive: Receiver<Option<Vec<InteractionSummary>>>,
@@ -335,15 +338,15 @@ struct InteractionsPoll {
 
 impl InteractionsPoll {
     fn new(client: Client) -> Self {
-        let (send, requests) = mpsc::channel::<()>();
+        let (send, requests) = mpsc::channel::<InteractionQuery>();
         let (results, receive) = mpsc::channel();
         // Not joined: the loop leaving drops `send`, and the worker finishes
         // the request it is in, if any, and stops.
         thread::Builder::new()
             .name("styra-interactions-poll".into())
             .spawn(move || {
-                while requests.recv().is_ok() {
-                    if results.send(client.list_interactions().ok()).is_err() {
+                while let Ok(query) = requests.recv() {
+                    if results.send(client.list_interactions(&query).ok()).is_err() {
                         break;
                     }
                 }
@@ -357,8 +360,8 @@ impl InteractionsPoll {
     }
 
     /// Ask for a fresh snapshot, unless one is already on its way.
-    fn request(&mut self) {
-        if !self.in_flight && self.send.send(()).is_ok() {
+    fn request(&mut self, query: InteractionQuery) {
+        if !self.in_flight && self.send.send(query).is_ok() {
             self.in_flight = true;
         }
     }
@@ -679,7 +682,8 @@ pub fn open_interaction_navigator(
 /// the server takes a long time to answer it.
 fn ensure_listed(app: &mut App, client: &Client) -> Result<()> {
     if !app.interactions.listed() {
-        app.interactions.refresh(client.list_interactions()?);
+        let query = app.interactions.query(&app.session_id);
+        app.interactions.refresh(client.list_interactions(&query)?);
     }
     Ok(())
 }
@@ -955,7 +959,7 @@ fn run_rounds(
                     Ok(None) => {}
                 }
             }
-            interactions_poll.request();
+            interactions_poll.request(app.interactions.query(&app.session_id));
         }
         if let Some(interactions) = interactions_poll.ready() {
             dirty |= app.interactions.refresh(interactions);
@@ -1673,7 +1677,9 @@ fn run_rounds(
                     // Completion is a Session property the server owns, so the
                     // row is still listed and the server is what says so: take
                     // its word for the new state rather than writing one here.
-                    if let Ok(interactions) = client.list_interactions() {
+                    if let Ok(interactions) =
+                        client.list_interactions(&app.interactions.query(&app.session_id))
+                    {
                         app.interactions.refresh(interactions);
                     }
                     let workspace_id = app.workspace.id.clone();
@@ -1796,11 +1802,13 @@ fn run_rounds(
                 // ends on is the newest listing there is.
                 ensure_listed(app, client)?;
                 let mut interactions = app.interactions.snapshot();
+                let query = app.interactions.query(&app.session_id);
                 let choice = picker::run_workspace_picker(
                     terminal,
                     client,
                     &mut workspaces,
                     &mut interactions,
+                    &query,
                     None,
                 );
                 app.interactions.refresh(interactions);

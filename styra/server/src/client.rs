@@ -9,7 +9,8 @@ use crate::protocol::{
     StoredSession, TemplateSummary, Updates, WireResponse, WorkspaceLaunchChange,
 };
 use crate::protocol::{
-    CompletionState, ComposerState, InteractionSummary, SessionSummary, WorkspaceSummary,
+    CompletionState, ComposerState, InteractionQuery, InteractionSummary, SessionSummary,
+    WorkspaceSummary,
 };
 use anyhow::{bail, Context, Result};
 use std::io::BufReader;
@@ -662,8 +663,11 @@ impl Client {
         }
     }
 
-    pub fn list_interactions(&self) -> Result<Vec<InteractionSummary>> {
-        match self.request(Request::ListInteractions)? {
+    /// The interactions `query` admits, newest first.
+    /// [`InteractionQuery::default`] lists every one, finished rows a previous
+    /// run left included, so a caller polling for what it shows narrows it.
+    pub fn list_interactions(&self, query: &InteractionQuery) -> Result<Vec<InteractionSummary>> {
+        match self.request(Request::ListInteractions(Some(query.clone())))? {
             Response::Interactions(value) => Ok(value),
             other => unexpected("interactions", other),
         }
@@ -887,7 +891,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::CloseInteraction { .. } => "close_interaction",
         Request::LoadInteraction { .. } => "load_interaction",
         Request::Updates { .. } => "updates",
-        Request::ListInteractions => "list_interactions",
+        Request::ListInteractions(_) => "list_interactions",
         Request::ListSessions { .. } => "list_sessions",
         Request::StoredSession { .. } => "stored_session",
         Request::ProviderRaw { .. } => "provider_raw",

@@ -25,6 +25,16 @@ local health = protocol.request.health()
 ok(health.operation == "health", "health names its operation")
 ok(health.data == nil, "health carries no data")
 
+-- An optional payload may be left out, which the server reads as none.
+local everything = protocol.request.list_interactions()
+ok(everything.operation == "list_interactions", "list_interactions names its operation")
+ok(everything.data == nil, "an omitted optional payload is left out")
+local narrowed = protocol.request.list_interactions({ workspace_id = "w-1", skip_done = true })
+ok(narrowed.data.skip_done == true, "a given optional payload is carried")
+refuses(function()
+  protocol.request.list_interactions({ skip_finished = true })
+end, "skip_finished")
+
 -- A request with data checks it on the way out.
 local created = protocol.request.create_session({
   workspace_id = "w-1",

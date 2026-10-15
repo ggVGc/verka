@@ -192,7 +192,7 @@ fn branching_a_session_forks_the_checkout_it_works_in() {
     // stopped, working in its own checkout and naming the Session it came
     // from so a listing can nest it there.
     let row = client
-        .list_interactions()
+        .list_interactions(&styra_server::protocol::InteractionQuery::default())
         .unwrap()
         .into_iter()
         .find(|interaction| interaction.id == branched.id)

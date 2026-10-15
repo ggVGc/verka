@@ -11,7 +11,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
-use styra_protocol::{Request, Response, WireResponse};
+use styra_protocol::{InteractionQuery, Request, Response, WireResponse};
 
 #[derive(Parser)]
 #[command(name = "styractl", about = "Control a running styra-server", version)]
@@ -28,7 +28,21 @@ enum Command {
     /// Check that the server is reachable.
     Health,
     /// List live interactions as JSON.
-    Interactions,
+    Interactions {
+        /// Only the interaction serving this Session.
+        #[arg(long)]
+        id: Option<String>,
+        /// Only interactions in this Workspace.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Leave out interactions whose Session is completed, abandoned or
+        /// sealed.
+        #[arg(long)]
+        skip_done: bool,
+        /// Leave out interactions whose agent takes no more messages.
+        #[arg(long)]
+        skip_stopped: bool,
+    },
     /// Print the Workspace covering a directory as JSON, or `null` if none
     /// does. The directory may be anywhere beneath the Workspace's own, and
     /// defaults to the current one.
@@ -90,7 +104,21 @@ fn main() -> Result<()> {
     };
     match cli.command {
         Command::Health => print_response(exchange(&socket, Request::Health)?)?,
-        Command::Interactions => print_response(exchange(&socket, Request::ListInteractions)?)?,
+        Command::Interactions {
+            id,
+            workspace,
+            skip_done,
+            skip_stopped,
+        } => print_response(exchange(
+            &socket,
+            Request::ListInteractions(Some(InteractionQuery {
+                id,
+                workspace_id: workspace,
+                skip_done,
+                skip_stopped,
+                keep: Vec::new(),
+            })),
+        )?)?,
         // Resolved here rather than sent as typed: the server resolves what it
         // is given in its own process, where a relative path means something
         // else entirely.

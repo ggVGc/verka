@@ -93,6 +93,13 @@ function check_fields(fields, value, path, deny_unknown, reserved)
   return true
 end
 
+--- Whether a payload is one `Option` value, which may be left out entirely:
+--- the operation then reads as if it carried `null`. A Lua `nil` cannot be
+--- told apart from a missing argument, so that is how one is sent.
+local function optional_newtype(payload)
+  return payload.kind == "newtype" and payload.type.kind == "optional"
+end
+
 function check_payload(variant, content, path, deny_unknown)
   local payload = variant.payload
   if payload.kind == "unit" then
@@ -102,6 +109,10 @@ function check_payload(variant, content, path, deny_unknown)
     return true
   end
   if content == nil then
+    -- serde reads a missing newtype payload as its `None`.
+    if optional_newtype(payload) then
+      return true
+    end
     return fail(path, "%q needs its data", variant.name)
   end
   if payload.kind == "newtype" then
@@ -300,6 +311,9 @@ function M.build(operation, data)
     return { operation = operation }
   end
   if data == nil then
+    if optional_newtype(payload) then
+      return { operation = operation }
+    end
     error(string.format("%s needs its data", operation), 2)
   end
   local ok, err = check_payload(variant, data, "data", M.types.Request.deny_unknown_fields)

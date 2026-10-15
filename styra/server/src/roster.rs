@@ -33,7 +33,7 @@
 
 use crate::protocol::{
     CompletionState, DrivaOptions, InteractionActivity, InteractionActivityReason,
-    InteractionSummary,
+    InteractionQuery, InteractionSummary,
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -154,10 +154,18 @@ impl Roster {
         Self::default()
     }
 
-    /// The rows a previous run left, in no particular order; the caller sorts
-    /// them together with its live ones.
-    pub fn restored(&self) -> Vec<InteractionSummary> {
-        self.lock().values().map(current_summary).collect()
+    /// The rows a previous run left that `query` admits, in no particular
+    /// order; the caller sorts them together with its live ones.
+    ///
+    /// The query is applied to the mirrored row before its summary is
+    /// refreshed from the Session, since that refresh reads several files per
+    /// row and most rows are finished ones a polling client did not ask for.
+    pub fn restored(&self, query: &InteractionQuery) -> Vec<InteractionSummary> {
+        self.lock()
+            .values()
+            .filter(|entry| query.admits_summary(&entry.summary))
+            .map(current_summary)
+            .collect()
     }
 
     /// The restored row for `id`, the Driva policy its run was launched
@@ -418,7 +426,7 @@ mod tests {
 
         Roster::open(&root).publish(vec![(session, summary("session-a"), Default::default())]);
 
-        let restored = Roster::open(&root).restored();
+        let restored = Roster::open(&root).restored(&InteractionQuery::default());
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].id, "session-a");
         assert_eq!(restored[0].activity, InteractionActivity::Stopped);
@@ -455,7 +463,9 @@ mod tests {
         roster.forget("session-b");
         roster.publish(Vec::new());
 
-        assert!(Roster::open(&root).restored().is_empty());
+        assert!(Roster::open(&root)
+            .restored(&InteractionQuery::default())
+            .is_empty());
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -498,7 +508,9 @@ mod tests {
         // the Session even though the mirrored row predates it.
         crate::journal::store_session_name(&session, Some("Renamed after restart")).unwrap();
         assert_eq!(
-            Roster::open(&root).restored()[0].name.as_deref(),
+            Roster::open(&root).restored(&InteractionQuery::default())[0]
+                .name
+                .as_deref(),
             Some("Renamed after restart")
         );
 
@@ -506,7 +518,10 @@ mod tests {
         // is already open, not only after the next restart.
         let roster = Roster::open(&root);
         crate::journal::store_session_tags(&session, &["bug".into()]).unwrap();
-        assert_eq!(roster.restored()[0].tags, vec!["bug".to_owned()]);
+        assert_eq!(
+            roster.restored(&InteractionQuery::default())[0].tags,
+            vec!["bug".to_owned()]
+        );
 
         // Set from a live interaction, as `set_completed` does: written to the
         // Session's own metadata first, then mirrored onto the roster row.
@@ -517,7 +532,7 @@ mod tests {
 
         // Read back fresh, the way the next run does — the mirrored row is
         // never itself the record of it.
-        let restored = Roster::open(&root).restored();
+        let restored = Roster::open(&root).restored(&InteractionQuery::default());
         assert_eq!(restored[0].completed, CompletionState::Completed);
         assert_eq!(
             restored[0].activity_reason,
@@ -540,12 +555,58 @@ mod tests {
 
         let roster = Roster::open(&root);
         assert!(roster.pause("session-pause"));
-        let restored = roster.restored();
+        let restored = roster.restored(&InteractionQuery::default());
         assert_eq!(restored[0].activity, InteractionActivity::Stopped);
         assert_eq!(
             restored[0].activity_reason,
             Some(InteractionActivityReason::Paused)
         );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// Finished rows are most of a long-lived roster, and a client polling
+    /// for the ones it shows asks to be spared them.
+    #[test]
+    fn a_query_leaves_out_the_rows_it_does_not_admit() {
+        let root = store("query");
+        let done = root.join("session-done");
+        let open = root.join("session-open");
+        std::fs::create_dir_all(&done).unwrap();
+        std::fs::create_dir_all(&open).unwrap();
+        Roster::open(&root).publish(vec![
+            (done, summary("session-done"), Default::default()),
+            (open, summary("session-open"), Default::default()),
+        ]);
+        let roster = Roster::open(&root);
+        assert!(roster.set_completed("session-done", CompletionState::Sealed));
+
+        let ids = |query: InteractionQuery| {
+            let mut ids: Vec<String> = roster
+                .restored(&query)
+                .into_iter()
+                .map(|summary| summary.id)
+                .collect();
+            ids.sort();
+            ids
+        };
+        let unfinished = InteractionQuery {
+            skip_done: true,
+            ..InteractionQuery::default()
+        };
+        assert_eq!(ids(unfinished.clone()), vec!["session-open"]);
+        assert_eq!(
+            ids(InteractionQuery {
+                keep: vec!["session-done".into()],
+                ..unfinished
+            }),
+            vec!["session-done", "session-open"]
+        );
+        // Every restored row is stopped.
+        assert!(ids(InteractionQuery {
+            skip_stopped: true,
+            ..InteractionQuery::default()
+        })
+        .is_empty());
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -569,7 +630,7 @@ mod tests {
         roster.publish(vec![(first, summary("session-c"), Default::default())]);
 
         let mut ids: Vec<String> = Roster::open(&root)
-            .restored()
+            .restored(&InteractionQuery::default())
             .into_iter()
             .map(|summary| summary.id)
             .collect();
@@ -588,7 +649,7 @@ mod tests {
         row.activity_reason = Some(InteractionActivityReason::Interrupted);
         Roster::open(&root).publish(vec![(session, row, Default::default())]);
 
-        let restored = Roster::open(&root).restored();
+        let restored = Roster::open(&root).restored(&InteractionQuery::default());
         assert_eq!(restored[0].activity, InteractionActivity::Stopped);
         assert_eq!(
             restored[0].activity_reason,
@@ -612,7 +673,9 @@ mod tests {
         )]);
         std::fs::remove_dir_all(&session).unwrap();
 
-        assert!(Roster::open(&root).restored().is_empty());
+        assert!(Roster::open(&root)
+            .restored(&InteractionQuery::default())
+            .is_empty());
         std::fs::remove_dir_all(root).ok();
     }
 

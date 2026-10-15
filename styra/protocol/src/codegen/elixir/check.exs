@@ -27,6 +27,15 @@ end
 {:ok, health} = Request.health()
 Check.ok(health == %{"operation" => "health"}, "health names its operation and carries no data")
 
+# An optional payload may be left out, which the server reads as none.
+{:ok, everything} = Request.list_interactions()
+Check.ok(everything == %{"operation" => "list_interactions"}, "an omitted optional payload is left out")
+{:ok, nothing} = Request.list_interactions(nil)
+Check.ok(nothing["data"] == nil, "nil is an optional payload's none")
+{:ok, narrowed} = Request.list_interactions(%{workspace_id: "w-1", skip_done: true})
+Check.ok(narrowed["data"].skip_done == true, "a given optional payload is carried")
+Check.refuses(Request.list_interactions(%{skip_finished: true}), "skip_finished")
+
 # A request with data checks it on the way out. Atom keys are what writing
 # Elixir by hand gives you, and they are taken as they are.
 {:ok, created} =

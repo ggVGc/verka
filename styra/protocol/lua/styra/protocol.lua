@@ -339,7 +339,7 @@ M.types.Request = {
         { name = "raw", required = false, type = { kind = "boolean" } },
       },
     } },
-    { name = "list_interactions", payload = { kind = "unit" } },
+    { name = "list_interactions", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "ref", name = "InteractionQuery" } } } },
     { name = "list_sessions", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -675,6 +675,27 @@ M.types.CompletionState = {
     { name = "completed", payload = { kind = "unit" } },
     { name = "abandoned", payload = { kind = "unit" } },
     { name = "sealed", payload = { kind = "unit" } },
+  },
+}
+
+--- Which interactions a `crate::protocol::Request::ListInteractions` answers
+--- with. Every field narrows the listing, so the default — and a request that
+--- carries no query at all — lists every row, as the request did before it
+--- took one.
+---
+--- The roster keeps every interaction a previous server run left open until
+--- the operator closes it, finished ones included, so an unnarrowed listing
+--- grows with everything ever started. A client polling for the rows it shows
+--- asks only for those.
+M.types.InteractionQuery = {
+  kind = "struct",
+  deny_unknown_fields = true,
+  fields = {
+    { name = "id", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "workspace_id", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "skip_done", required = false, type = { kind = "boolean" } },
+    { name = "skip_stopped", required = false, type = { kind = "boolean" } },
+    { name = "keep", required = false, type = { kind = "list", item = { kind = "string" } } },
   },
 }
 
@@ -2334,6 +2355,13 @@ function check_fields(fields, value, path, deny_unknown, reserved)
   return true
 end
 
+--- Whether a payload is one `Option` value, which may be left out entirely:
+--- the operation then reads as if it carried `null`. A Lua `nil` cannot be
+--- told apart from a missing argument, so that is how one is sent.
+local function optional_newtype(payload)
+  return payload.kind == "newtype" and payload.type.kind == "optional"
+end
+
 function check_payload(variant, content, path, deny_unknown)
   local payload = variant.payload
   if payload.kind == "unit" then
@@ -2343,6 +2371,10 @@ function check_payload(variant, content, path, deny_unknown)
     return true
   end
   if content == nil then
+    -- serde reads a missing newtype payload as its `None`.
+    if optional_newtype(payload) then
+      return true
+    end
     return fail(path, "%q needs its data", variant.name)
   end
   if payload.kind == "newtype" then
@@ -2541,6 +2573,9 @@ function M.build(operation, data)
     return { operation = operation }
   end
   if data == nil then
+    if optional_newtype(payload) then
+      return { operation = operation }
+    end
     error(string.format("%s needs its data", operation), 2)
   end
   local ok, err = check_payload(variant, data, "data", M.types.Request.deny_unknown_fields)
@@ -3087,8 +3122,14 @@ function M.request.updates(data)
   return M.build("updates", data)
 end
 
-function M.request.list_interactions()
-  return M.build("list_interactions")
+--- The interactions the server lists — its own and those a previous run
+--- left open — that the query admits, newest first. A newtype over an
+--- `Option` rather than a struct variant so that a request with no `data`
+--- at all, which is what this was before it took a query, still parses,
+--- and lists everything.
+--- Takes one InteractionQuery|null value, or none at all.
+function M.request.list_interactions(value)
+  return M.build("list_interactions", value)
 end
 
 --- Fields of `data`:

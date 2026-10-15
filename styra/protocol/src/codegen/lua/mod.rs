@@ -298,6 +298,18 @@ fn requests(out: &mut String, model: &Model) -> Result<()> {
                 writeln!(out, "  return M.build({name:?}, data)")?;
                 writeln!(out, "end")?;
             }
+            // `M.build` leaves out an `Option` payload given as nil, which
+            // serde reads as `None`.
+            Payload::Newtype(shape @ Shape::Optional(_)) => {
+                writeln!(
+                    out,
+                    "--- Takes one {} value, or none at all.",
+                    shape.label()
+                )?;
+                writeln!(out, "function M.request.{name}(value)")?;
+                writeln!(out, "  return M.build({name:?}, value)")?;
+                writeln!(out, "end")?;
+            }
             Payload::Newtype(shape) => {
                 writeln!(out, "--- Takes one {} value.", shape.label())?;
                 writeln!(out, "function M.request.{name}(value)")?;

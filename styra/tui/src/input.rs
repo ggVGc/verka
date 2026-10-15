@@ -954,7 +954,7 @@ pub(crate) fn follow_overview_cursor(app: &mut App) {
 /// whether or not the live-interactions navigator has ever been opened.
 fn edit_current_interaction_tags(app: &mut App, client: &Client) {
     if !app.interactions.listed() {
-        match client.list_interactions() {
+        match client.list_interactions(&app.interactions.query(&app.session_id)) {
             Ok(interactions) => {
                 app.interactions.refresh(interactions);
             }

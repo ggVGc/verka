@@ -4,7 +4,8 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use styra_protocol::{
-    CompletionState, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary,
+    CompletionState, InteractionQuery, InteractionSummary, InteractionUpdate, LogEntry,
+    WorkspaceSummary,
 };
 use styra_server::Client;
 
@@ -613,7 +614,8 @@ fn read_session_name(
 ///
 /// `interactions` is the caller's listing, which orders the Workspaces and is
 /// refreshed in place as the picker sits open, so the caller ends up with the
-/// newest one rather than having to ask again.
+/// newest one rather than having to ask again. `query` is what that listing
+/// was asked for with, so the refreshes keep answering the same question.
 ///
 /// `offer` is a directory no Workspace covers — where Styra was started, when
 /// that is why the picker opened. The picker then first asks, in a popup over
@@ -624,6 +626,7 @@ pub fn run_workspace_picker(
     client: &Client,
     workspaces: &mut [WorkspaceSummary],
     interactions: &mut Vec<InteractionSummary>,
+    query: &InteractionQuery,
     offer: Option<&Path>,
 ) -> Result<Option<WorkspaceChoice>> {
     // A server that could not answer still leaves a useful list: without live
@@ -660,7 +663,7 @@ pub fn run_workspace_picker(
         }
         if refreshed.elapsed() >= LIVENESS_REFRESH {
             refreshed = Instant::now();
-            if let Ok(current) = client.list_interactions() {
+            if let Ok(current) = client.list_interactions(query) {
                 *interactions = current;
             }
             // The recency column ages as the picker sits open, and a turn
@@ -782,7 +785,7 @@ pub fn run_workspace_picker(
                 };
                 match result {
                     Ok(_) => {
-                        if let Ok(current) = client.list_interactions() {
+                        if let Ok(current) = client.list_interactions(query) {
                             *interactions = current;
                         }
                         all_workspaces.retain(|workspace| workspace.id != id);

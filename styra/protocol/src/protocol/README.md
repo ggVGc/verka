@@ -42,6 +42,29 @@ A resumed interaction seeds its update stream from stored history. The resume
 response's `updates_after` cursor lets the resuming client skip history it has
 already rendered; a newly attaching client starts from zero.
 
+## Listing interactions
+
+`list_interactions` takes an optional query. Without one, it lists every
+interaction, including all the finished ones a previous server run left in the
+roster, which on a long-lived server is most of them. Every query field narrows
+the listing:
+
+- `id`: only the interaction serving this Session
+- `workspace_id`: only interactions in this Workspace
+- `skip_done`: leave out Sessions that are completed, abandoned or sealed
+- `skip_stopped`: leave out interactions whose agent takes no more messages
+  (every restored row is one)
+- `keep`: Session ids listed even when `skip_done` or `skip_stopped` would
+  drop them, such as the one on a client's screen
+
+```json
+{"operation":"list_interactions","data":{"skip_done":true,"keep":["styra-1"]}}
+```
+
+The server applies the query before it builds each summary, so rows left out
+cost it nothing to read. A client that polls should ask only for what it
+shows.
+
 ## Typed turn answers
 
 A turn may name a `contract` — `text`, `lines`, `files`, or `json` — on its

@@ -34,7 +34,7 @@ fn spawns_reuses_and_outlives_the_caller() {
     // The live-interactions listing round-trips over the socket; a fresh daemon has
     // none running yet.
     let interactions = client
-        .list_interactions()
+        .list_interactions(&styra_server::protocol::InteractionQuery::default())
         .expect("listing live interactions should succeed");
     assert!(
         interactions.is_empty(),

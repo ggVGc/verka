@@ -1116,6 +1116,73 @@ pub struct InteractionSummary {
     pub restored: bool,
 }
 
+/// Which interactions a [`crate::protocol::Request::ListInteractions`] answers
+/// with. Every field narrows the listing, so the default — and a request that
+/// carries no query at all — lists every row, as the request did before it
+/// took one.
+///
+/// The roster keeps every interaction a previous server run left open until
+/// the operator closes it, finished ones included, so an unnarrowed listing
+/// grows with everything ever started. A client polling for the rows it shows
+/// asks only for those.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InteractionQuery {
+    /// Only the interaction serving this Session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Only interactions in this Workspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// Leave out interactions whose Session the operator has finished with,
+    /// whichever way — see [`CompletionState::is_done`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub skip_done: bool,
+    /// Leave out interactions whose agent takes no more messages — see
+    /// [`InteractionActivity::accepting`]. Every restored row is one.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub skip_stopped: bool,
+    /// Sessions listed even when [`Self::skip_done`] or
+    /// [`Self::skip_stopped`] would leave them out — the one on a client's
+    /// screen, say, which it still describes once finished. [`Self::id`] and
+    /// [`Self::workspace_id`] still apply to them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keep: Vec<String>,
+}
+
+impl InteractionQuery {
+    /// Whether the interaction serving Session `id` in `workspace_id`, doing
+    /// `activity` with its Session at `completed`, is one this query lists.
+    /// Takes the fields rather than a summary so the server can decide before
+    /// it builds one.
+    pub fn admits(
+        &self,
+        id: &str,
+        workspace_id: &str,
+        activity: InteractionActivity,
+        completed: CompletionState,
+    ) -> bool {
+        self.id.as_deref().is_none_or(|wanted| wanted == id)
+            && self
+                .workspace_id
+                .as_deref()
+                .is_none_or(|wanted| wanted == workspace_id)
+            && (self.keep.iter().any(|kept| kept == id)
+                || (!self.skip_done || !completed.is_done())
+                    && (!self.skip_stopped || activity.accepting()))
+    }
+
+    /// [`Self::admits`], for a summary already built.
+    pub fn admits_summary(&self, summary: &InteractionSummary) -> bool {
+        self.admits(
+            &summary.id,
+            &summary.workspace_id,
+            summary.activity,
+            summary.completed,
+        )
+    }
+}
+
 /// Where a Session came from, when it was not launched fresh but branched
 /// from another one — see [`crate::server::ServerState::branch_session`].
 /// Recorded once, at branch time; it never updates as the source Session

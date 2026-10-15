@@ -332,22 +332,33 @@ fn requests(out: &mut String, model: &Model) -> Result<()> {
             field_docs(&mut documentation, structure);
         }
         written.push(match &variant.payload {
-            Payload::Unit => one_request(name, None, &documentation),
+            Payload::Unit => one_request(name, None, None, &documentation),
             Payload::Newtype(Shape::Ref(_)) | Payload::Struct(_) => {
-                one_request(name, Some("data"), &documentation)
+                one_request(name, Some("data"), None, &documentation)
+            }
+            // An `Option` payload may be left out, as serde reads a missing
+            // one as `None`; the argument defaults to leaving it out.
+            Payload::Newtype(shape @ Shape::Optional(_)) => {
+                let mut documentation = documentation.clone();
+                documentation.push(String::new());
+                documentation.push(format!(
+                    "Takes one {} value, or none at all.",
+                    shape.label()
+                ));
+                one_request(name, Some("value"), Some(":none"), &documentation)
             }
             Payload::Newtype(shape) => {
                 let mut documentation = documentation.clone();
                 documentation.push(String::new());
                 documentation.push(format!("Takes one {} value.", shape.label()));
-                one_request(name, Some("value"), &documentation)
+                one_request(name, Some("value"), None, &documentation)
             }
             Payload::Tuple(shapes) => {
                 let labels: Vec<String> = shapes.iter().map(Shape::label).collect();
                 let mut documentation = documentation.clone();
                 documentation.push(String::new());
                 documentation.push(format!("Takes a list of {}.", labels.join(", then ")));
-                one_request(name, Some("values"), &documentation)
+                one_request(name, Some("values"), None, &documentation)
             }
         }?);
     }
@@ -368,8 +379,14 @@ fn data_struct<'model>(model: &'model Model, variant: &'model Variant) -> Option
     }
 }
 
-/// The pair of functions for one operation.
-fn one_request(name: &str, argument: Option<&str>, documentation: &[String]) -> Result<String> {
+/// The pair of functions for one operation. `default` is what the argument
+/// is when a caller leaves it out, for an operation whose payload may be.
+fn one_request(
+    name: &str,
+    argument: Option<&str>,
+    default: Option<&str>,
+    documentation: &[String],
+) -> Result<String> {
     let mut out = String::new();
     doc(&mut out, documentation, "    ")?;
     match argument {
@@ -382,9 +399,13 @@ fn one_request(name: &str, argument: Option<&str>, documentation: &[String]) -> 
             writeln!(out, "    def {name}!, do: {MODULE}.build!({name:?})")?;
         }
         Some(argument) => {
+            let parameter = match default {
+                Some(default) => format!("{argument} \\\\ {default}"),
+                None => argument.to_owned(),
+            };
             writeln!(
                 out,
-                "    def {name}({argument}), do: {MODULE}.build({name:?}, {argument})"
+                "    def {name}({parameter}), do: {MODULE}.build({name:?}, {argument})"
             )?;
             writeln!(
                 out,
@@ -392,7 +413,7 @@ fn one_request(name: &str, argument: Option<&str>, documentation: &[String]) -> 
             )?;
             writeln!(
                 out,
-                "    def {name}!({argument}), do: {MODULE}.build!({name:?}, {argument})"
+                "    def {name}!({parameter}), do: {MODULE}.build!({name:?}, {argument})"
             )?;
         }
     }

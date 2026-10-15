@@ -349,7 +349,7 @@ defmodule Styra.Protocol do
             %{name: "raw", required: false, type: %{kind: :boolean}}
           ]
         }},
-        %{name: "list_interactions", payload: %{kind: :unit}},
+        %{name: "list_interactions", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "InteractionQuery"}}}},
         %{name: "list_sessions", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -685,6 +685,27 @@ defmodule Styra.Protocol do
         %{name: "completed", payload: %{kind: :unit}},
         %{name: "abandoned", payload: %{kind: :unit}},
         %{name: "sealed", payload: %{kind: :unit}}
+      ]
+    },
+
+    # Which interactions a `crate::protocol::Request::ListInteractions` answers
+    # with. Every field narrows the listing, so the default — and a request that
+    # carries no query at all — lists every row, as the request did before it
+    # took one.
+    #
+    # The roster keeps every interaction a previous server run left open until
+    # the operator closes it, finished ones included, so an unnarrowed listing
+    # grows with everything ever started. A client polling for the rows it shows
+    # asks only for those.
+    "InteractionQuery" => %{
+      kind: :struct,
+      deny_unknown_fields: true,
+      fields: [
+        %{name: "id", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "workspace_id", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "skip_done", required: false, type: %{kind: :boolean}},
+        %{name: "skip_stopped", required: false, type: %{kind: :boolean}},
+        %{name: "keep", required: false, type: %{kind: :list, item: %{kind: :string}}}
       ]
     },
 
@@ -2005,6 +2026,9 @@ defmodule Styra.Protocol do
 
       variant ->
         cond do
+          data == :none and optional_newtype?(variant) ->
+            {:ok, %{"operation" => operation}}
+
           data == :none ->
             {:error, "#{operation} needs its data"}
 
@@ -2197,9 +2221,17 @@ defmodule Styra.Protocol do
     if content == :absent, do: :ok, else: fail(path, ~s("#{variant.name}" carries no data))
   end
 
+  # serde reads a missing newtype payload as its `None`.
   defp check_payload(variant, :absent, path, _deny_unknown) do
-    fail(path, ~s("#{variant.name}" needs its data))
+    if optional_newtype?(variant),
+      do: :ok,
+      else: fail(path, ~s("#{variant.name}" needs its data))
   end
+
+  # A payload that is one `Option` value may be left out entirely; the
+  # operation then reads as if it carried `nil`.
+  defp optional_newtype?(%{payload: %{kind: :newtype, type: %{kind: :optional}}}), do: true
+  defp optional_newtype?(_variant), do: false
 
   defp check_payload(%{payload: %{kind: :newtype, type: type}}, {:given, content}, path, _deny) do
     check_value(type, content, path)
@@ -3091,10 +3123,19 @@ defmodule Styra.Protocol do
     @doc "`updates/1`, raising on a request the server would refuse."
     def updates!(data), do: Styra.Protocol.build!("updates", data)
 
-    def list_interactions, do: Styra.Protocol.build("list_interactions")
+    @doc ~S"""
+    The interactions the server lists — its own and those a previous run
+    left open — that the query admits, newest first. A newtype over an
+    `Option` rather than a struct variant so that a request with no `data`
+    at all, which is what this was before it took a query, still parses,
+    and lists everything.
 
-    @doc "`list_interactions/0`, raising on a request the server would refuse."
-    def list_interactions!, do: Styra.Protocol.build!("list_interactions")
+    Takes one InteractionQuery|null value, or none at all.
+    """
+    def list_interactions(value \\ :none), do: Styra.Protocol.build("list_interactions", value)
+
+    @doc "`list_interactions/1`, raising on a request the server would refuse."
+    def list_interactions!(value \\ :none), do: Styra.Protocol.build!("list_interactions", value)
 
     @doc ~S"""
     Fields of `data`:

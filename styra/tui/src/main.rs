@@ -59,7 +59,8 @@ use config::Defaults;
 use event_loop::RunOutcome;
 use session::Attachment;
 use styra_protocol::{
-    CompletionState, InteractionSummary, LogEntry, WorkspaceSummary, WorktreeCleanup,
+    CompletionState, InteractionQuery, InteractionSummary, LogEntry, WorkspaceSummary,
+    WorktreeCleanup,
 };
 use styra_server::Client;
 use styra_ui::{RatatuiUi, Ui};
@@ -297,7 +298,7 @@ fn main() -> Result<()> {
                 &client,
                 "styra",
                 &mut sessions,
-                &client.list_interactions().unwrap_or_default(),
+                &client.list_interactions(&fleet_query()).unwrap_or_default(),
                 None,
                 false,
             ) {
@@ -333,7 +334,7 @@ fn main() -> Result<()> {
     let mut fleet = if view_target.is_some() {
         Vec::new()
     } else {
-        client.list_interactions().unwrap_or_default()
+        client.list_interactions(&fleet_query()).unwrap_or_default()
     };
     // Set when the operator picks a Workspace with `n`: they asked for a new
     // interaction, so its live work is not joined on the way in.
@@ -355,6 +356,7 @@ fn main() -> Result<()> {
                 &client,
                 &mut workspaces,
                 &mut fleet,
+                &fleet_query(),
                 Some(&current_directory),
             ) {
                 Ok(Some(choice)) => choice,
@@ -827,8 +829,25 @@ fn clean_worktrees(client: &Client, workspace: Option<&Path>, all: bool) -> Resu
     Ok(())
 }
 
+/// What startup asks for the listing it shares: what a fresh navigator lists,
+/// with nothing yet on screen to keep. It seeds the first App, so it has to
+/// answer the same question the event loop's poll goes on asking.
+fn fleet_query() -> InteractionQuery {
+    interactions::LiveInteractions::default().query("")
+}
+
+/// Every interaction whose agent still takes messages, which is a small part
+/// of what a long-lived server lists.
+fn live_only() -> InteractionQuery {
+    InteractionQuery {
+        skip_stopped: true,
+        ..InteractionQuery::default()
+    }
+}
+
 fn browse_shells(client: &Client) -> Result<()> {
-    let interactions = client.list_interactions()?;
+    // A stopped interaction's sandbox shell has gone with it.
+    let interactions = client.list_interactions(&live_only())?;
     let live_ids = interactions
         .iter()
         .map(|interaction| interaction.id.as_str())

@@ -39,7 +39,7 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
         | Request::ListTags
         | Request::SessionComposer { .. }
         | Request::Updates { .. }
-        | Request::ListInteractions
+        | Request::ListInteractions(_)
         | Request::ListSessions { .. }
         | Request::StoredSession { .. }
         | Request::ProviderRaw { .. }

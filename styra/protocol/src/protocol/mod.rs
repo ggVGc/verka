@@ -16,11 +16,11 @@ pub use types::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
     BranchHistory, BranchPoint, CheckoutState, CleanedWorktree, CompletionState, Contract,
     Direction, DrivaOptions, FileLocation, Integration, IntegrationResult, InteractionActivity,
-    InteractionActivityReason, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
-    LaunchPolicy, LogEntry, LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent,
-    QuotaStatus, RawLine, RebaseStatus, RecentMessage, SandboxProcess, SessionOrigin,
-    SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary, WorktreeCleanup,
-    WorktreeSession, WorktreeSummary, WORKTREES_DIR,
+    InteractionActivityReason, InteractionEnd, InteractionQuery, InteractionSummary,
+    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, ModelSummary, MountOrigin,
+    QueuedMessage, QuotaEvent, QuotaStatus, RawLine, RebaseStatus, RecentMessage, SandboxProcess,
+    SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary,
+    WorktreeCleanup, WorktreeSession, WorktreeSummary, WORKTREES_DIR,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -607,7 +607,12 @@ pub enum Request {
         #[serde(default = "yes")]
         raw: bool,
     },
-    ListInteractions,
+    /// The interactions the server lists — its own and those a previous run
+    /// left open — that the query admits, newest first. A newtype over an
+    /// `Option` rather than a struct variant so that a request with no `data`
+    /// at all, which is what this was before it took a query, still parses,
+    /// and lists everything.
+    ListInteractions(Option<InteractionQuery>),
     ListSessions {
         workspace_id: String,
     },
@@ -827,6 +832,73 @@ mod tests {
             serde_json::from_str::<Request>(r#"{"api_version":"v3","operation":"health"}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn listing_interactions_without_a_query_still_parses_and_lists_everything() {
+        for json in [
+            r#"{"operation":"list_interactions"}"#,
+            r#"{"operation":"list_interactions","data":null}"#,
+        ] {
+            assert_eq!(
+                serde_json::from_str::<Request>(json).unwrap(),
+                Request::ListInteractions(None)
+            );
+        }
+        let request = Request::ListInteractions(Some(InteractionQuery {
+            workspace_id: Some("w-1".into()),
+            skip_done: true,
+            ..InteractionQuery::default()
+        }));
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            json["data"],
+            serde_json::json!({"workspace_id": "w-1", "skip_done": true})
+        );
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+        assert!(serde_json::from_str::<Request>(
+            r#"{"operation":"list_interactions","data":{"skip_finished":true}}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn an_interaction_query_narrows_and_keep_overrides_only_the_skips() {
+        use InteractionActivity::{Pending, Stopped};
+        let all = InteractionQuery::default();
+        assert!(all.admits("s-1", "w-1", Stopped, CompletionState::Sealed));
+
+        let unfinished = InteractionQuery {
+            skip_done: true,
+            ..InteractionQuery::default()
+        };
+        assert!(unfinished.admits("s-1", "w-1", Stopped, CompletionState::Active));
+        assert!(!unfinished.admits("s-1", "w-1", Stopped, CompletionState::Completed));
+
+        let live = InteractionQuery {
+            skip_stopped: true,
+            ..InteractionQuery::default()
+        };
+        assert!(live.admits("s-1", "w-1", Pending, CompletionState::Active));
+        assert!(!live.admits("s-1", "w-1", Stopped, CompletionState::Active));
+
+        let on_screen = InteractionQuery {
+            workspace_id: Some("w-1".into()),
+            skip_done: true,
+            skip_stopped: true,
+            keep: vec!["s-1".into()],
+            ..InteractionQuery::default()
+        };
+        assert!(on_screen.admits("s-1", "w-1", Stopped, CompletionState::Sealed));
+        assert!(!on_screen.admits("s-2", "w-1", Stopped, CompletionState::Sealed));
+        assert!(!on_screen.admits("s-1", "w-2", Pending, CompletionState::Active));
+
+        let one = InteractionQuery {
+            id: Some("s-1".into()),
+            ..InteractionQuery::default()
+        };
+        assert!(one.admits("s-1", "w-1", Stopped, CompletionState::Active));
+        assert!(!one.admits("s-2", "w-1", Pending, CompletionState::Active));
     }
 
     #[test]

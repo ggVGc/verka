@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use styra_protocol::{InteractionActivity, InteractionSummary, WorkspaceSummary};
+use styra_protocol::{InteractionActivity, InteractionQuery, InteractionSummary, WorkspaceSummary};
 
 /// How long the cursor must rest on an entry before that Interaction is
 /// loaded, matching the Session and Workspace pickers' settle: short enough to
@@ -100,6 +100,24 @@ pub struct ActivityCounts {
 }
 
 impl LiveInteractions {
+    /// What to ask the server for to fill this navigator with `current` on
+    /// screen. Finished rows are left on the server unless the operator asked
+    /// to see them: they are most of what a long-lived server lists and none
+    /// of what the navigator shows. `current` is kept whatever its state,
+    /// since the screen still describes it — its checkout, its tags — once it
+    /// is finished. Stopped rows are still fetched, so `hide_stopped` stays a
+    /// filter over a listing already held.
+    pub fn query(&self, current: &str) -> InteractionQuery {
+        InteractionQuery {
+            skip_done: !self.show_completed,
+            keep: (!current.is_empty())
+                .then(|| current.to_owned())
+                .into_iter()
+                .collect(),
+            ..InteractionQuery::default()
+        }
+    }
+
     pub fn open(&mut self, items: Vec<InteractionSummary>, workspaces: Vec<WorkspaceSummary>) {
         self.refresh(items);
         self.show(workspaces);
@@ -1578,6 +1596,27 @@ pub(crate) mod tests {
         );
         live.toggle_completed();
         assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
+    }
+
+    /// Finished rows are left on the server until the operator asks to see
+    /// them, except the one on screen, which the screen still describes.
+    #[test]
+    fn the_listing_asks_for_finished_rows_only_when_they_are_shown() {
+        let mut live = LiveInteractions::default();
+        let query = live.query("current");
+        assert!(query.skip_done);
+        assert!(!query.skip_stopped, "hiding stopped rows is a local filter");
+        assert_eq!(query.keep, vec!["current".to_owned()]);
+        assert!(query.admits_summary(&completed("current")));
+        assert!(!query.admits_summary(&completed("other")));
+
+        assert!(
+            live.query("").keep.is_empty(),
+            "a blank screen keeps nothing"
+        );
+
+        live.toggle_completed();
+        assert!(!live.query("current").skip_done);
     }
 
     #[test]

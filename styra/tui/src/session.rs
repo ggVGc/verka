@@ -11,8 +11,8 @@ use styra_protocol::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SendMessage, SessionInfo,
 };
 use styra_protocol::{
-    CompletionState, Contract, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary,
-    WorkspaceSummary,
+    CompletionState, Contract, InteractionQuery, InteractionSummary, InteractionUpdate, LogEntry,
+    SessionSummary, WorkspaceSummary,
 };
 use styra_server::Client;
 
@@ -714,7 +714,8 @@ fn is_wire_backed(event: &styra_protocol::event::AgentEvent) -> bool {
 ///
 /// `interactions` is the listing the caller already holds. A Session found
 /// there is attached without asking again; one missing from it is asked about,
-/// since it may have started since that listing was taken.
+/// since it may have started since that listing was taken — or be a finished
+/// one the listing left out.
 pub fn open_session(
     client: &Client,
     session_id: &str,
@@ -725,7 +726,11 @@ pub fn open_session(
             .iter()
             .any(|interaction| interaction.id == session_id)
     };
-    if listed(interactions) || listed(&client.list_interactions()?) {
+    let this_one = InteractionQuery {
+        id: Some(session_id.to_owned()),
+        ..InteractionQuery::default()
+    };
+    if listed(interactions) || listed(&client.list_interactions(&this_one)?) {
         return attach_live_interaction(client, session_id);
     }
     open_stored(client, session_id)
@@ -909,11 +914,18 @@ pub enum MountRestartError {
 
 /// Whether the server has an interaction for `session_id` still taking input.
 fn accepting(client: &Client, session_id: &str) -> bool {
-    client.list_interactions().is_ok_and(|interactions| {
-        interactions
-            .iter()
-            .any(|interaction| interaction.id == session_id && interaction.activity.accepting())
-    })
+    let this_one = InteractionQuery {
+        id: Some(session_id.to_owned()),
+        skip_stopped: true,
+        ..InteractionQuery::default()
+    };
+    client
+        .list_interactions(&this_one)
+        .is_ok_and(|interactions| {
+            interactions
+                .iter()
+                .any(|interaction| interaction.id == session_id && interaction.activity.accepting())
+        })
 }
 
 pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) {

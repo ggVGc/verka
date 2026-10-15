@@ -59,6 +59,9 @@
 
       variant ->
         cond do
+          data == :none and optional_newtype?(variant) ->
+            {:ok, %{"operation" => operation}}
+
           data == :none ->
             {:error, "#{operation} needs its data"}
 
@@ -251,9 +254,17 @@
     if content == :absent, do: :ok, else: fail(path, ~s("#{variant.name}" carries no data))
   end
 
+  # serde reads a missing newtype payload as its `None`.
   defp check_payload(variant, :absent, path, _deny_unknown) do
-    fail(path, ~s("#{variant.name}" needs its data))
+    if optional_newtype?(variant),
+      do: :ok,
+      else: fail(path, ~s("#{variant.name}" needs its data))
   end
+
+  # A payload that is one `Option` value may be left out entirely; the
+  # operation then reads as if it carried `nil`.
+  defp optional_newtype?(%{payload: %{kind: :newtype, type: %{kind: :optional}}}), do: true
+  defp optional_newtype?(_variant), do: false
 
   defp check_payload(%{payload: %{kind: :newtype, type: type}}, {:given, content}, path, _deny) do
     check_value(type, content, path)
