@@ -867,6 +867,7 @@ fn run_rounds(
         session::save_composer(app, client, false);
         let workspace_id = app.workspace.id.clone().unwrap_or_default();
         dirty |= app.notices.expire();
+        dirty |= app.interactions.expire_flashes();
         dirty |= launch_effects.apply_ready(app, &workspace_id);
         dirty |= audio.apply_ready(app, client);
         // Workspace launch policy is a server-owned read model. Refresh it

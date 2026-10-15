@@ -15,6 +15,11 @@ use styra_protocol::{InteractionActivity, InteractionSummary, WorkspaceSummary};
 /// costs no loads at all.
 const LOAD_SETTLE: Duration = Duration::from_millis(120);
 
+/// How long a row stays lit after something new happens on it: long enough
+/// to catch the eye at the edge of vision, short enough that a busy fleet
+/// does not leave the whole list lit.
+const FLASH: Duration = Duration::from_millis(400);
+
 /// The live interactions navigator embedded above the main event list.
 ///
 /// It is deliberately only navigation state: the selected interaction's full
@@ -76,6 +81,9 @@ pub struct LiveInteractions {
     /// An Interaction that arrived asking to be focused — see
     /// [`InteractionSummary::focus_requested`] — and has not been acted on.
     focus_claim: Option<InteractionSummary>,
+    /// When each row last had something new happen on it — see
+    /// [`has_news`] — for as long as it is drawn lit.
+    flashed: HashMap<String, Instant>,
     /// The first line the navigator showed when last drawn. The cursor moves
     /// freely within the view and only scrolls it near an edge, so where the
     /// view sits has to be remembered between frames.
@@ -116,6 +124,7 @@ impl LiveInteractions {
     /// fleet is listed several times a second and is usually exactly as it
     /// was, so this is what keeps the poll from counting as news.
     pub fn refresh(&mut self, mut items: Vec<InteractionSummary>) -> bool {
+        self.note_news(&items);
         self.note_arrivals(&items);
         let names_changed = self.take_names(&mut items);
         sort_interactions(&mut items);
@@ -166,6 +175,35 @@ impl LiveInteractions {
             }
         }
         self.listed = true;
+    }
+
+    /// Light the rows in `items` that have something new to show since the
+    /// last listing. The first listing is the fleet as this client found it,
+    /// so nothing in it is news.
+    fn note_news(&mut self, items: &[InteractionSummary]) {
+        if !self.listed {
+            return;
+        }
+        let now = Instant::now();
+        for interaction in items {
+            let previous = self.items.iter().find(|listed| listed.id == interaction.id);
+            if previous.is_none_or(|previous| has_news(previous, interaction)) {
+                self.flashed.insert(interaction.id.clone(), now);
+            }
+        }
+    }
+
+    /// Whether the row for `id` is still lit by something new on it.
+    pub fn flashing(&self, id: &str) -> bool {
+        self.flashed.get(id).is_some_and(|at| at.elapsed() < FLASH)
+    }
+
+    /// Put out the rows whose flash has run its course, reporting whether any
+    /// did, so the frame that draws them unlit gets painted.
+    pub fn expire_flashes(&mut self) -> bool {
+        let before = self.flashed.len();
+        self.flashed.retain(|_, at| at.elapsed() < FLASH);
+        self.flashed.len() != before
     }
 
     /// The Interaction that most recently arrived asking to be focused, once.
@@ -1328,6 +1366,14 @@ pub fn in_main_checkout(interaction: &InteractionSummary, workspaces: &[Workspac
 /// Newest first, by creation time alone. What an Interaction is doing changes
 /// several times a turn, and a list re-sorted by it moves rows out from under
 /// the cursor.
+/// Whether `now` has something to show that `before`, the same row's last
+/// listing, did not: it changed what it is doing, or its agent said something
+/// new. Every event is not news — a working row's indicator already steps with
+/// those, and lighting on each would keep a busy row lit throughout.
+fn has_news(before: &InteractionSummary, now: &InteractionSummary) -> bool {
+    before.activity != now.activity || before.last_message != now.last_message
+}
+
 fn sort_interactions(interactions: &mut [InteractionSummary]) {
     interactions.sort_by_key(|interaction| std::cmp::Reverse(created_at_ms(interaction)));
 }
@@ -3018,5 +3064,41 @@ pub(crate) mod tests {
             ]),
             "another interaction joined the fleet"
         );
+    }
+
+    #[test]
+    fn a_row_flashes_when_something_new_happens_on_it() {
+        let mut live = LiveInteractions::default();
+        let mut talking = interaction("talking", InteractionActivity::Running);
+        live.refresh(vec![
+            talking.clone(),
+            interaction("quiet", InteractionActivity::Running),
+        ]);
+        assert!(
+            !live.flashing("talking") && !live.flashing("quiet"),
+            "the fleet as this client found it is not news"
+        );
+
+        talking.last_message = Some("done".into());
+        talking.events = 5;
+        let mut busy = interaction("quiet", InteractionActivity::Running);
+        busy.events = 9;
+        live.refresh(vec![
+            talking.clone(),
+            busy,
+            interaction("arrived", InteractionActivity::Running),
+        ]);
+        assert!(live.flashing("talking"), "its agent said something new");
+        assert!(!live.flashing("quiet"), "events alone are not news");
+        assert!(live.flashing("arrived"), "a new row is news");
+
+        live.flashed.values_mut().for_each(|at| *at -= FLASH);
+        assert!(live.expire_flashes());
+        assert!(!live.flashing("talking"));
+        assert!(!live.expire_flashes(), "nothing left to put out");
+
+        talking.activity = InteractionActivity::Pending;
+        live.refresh(vec![talking]);
+        assert!(live.flashing("talking"), "it changed what it is doing");
     }
 }

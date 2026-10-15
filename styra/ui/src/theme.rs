@@ -113,6 +113,9 @@ pub const ALTERNATE_ROW_BACKGROUND: Color = palette::FAINT_GRAY;
 /// Behind the navigator's cursor row: a faint warm orange, a step above
 /// [`ALTERNATE_ROW_BACKGROUND`].
 pub const SELECTED_ROW_BACKGROUND: Color = palette::FAINT_ORANGE;
+/// Behind a navigator row for a moment after something new happens on it:
+/// bright enough over either of the backgrounds above to catch the eye.
+pub const FLASHED_ROW_BACKGROUND: Color = palette::RULE_GRAY;
 /// The name on the navigator's cursor row, whatever its status, and the text
 /// of the event list's selected entry: apart from the colors around them.
 pub const SELECTED_LIVE_INTERACTION_TEXT: Color = palette::RED_FG;

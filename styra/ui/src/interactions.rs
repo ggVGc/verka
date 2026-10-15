@@ -81,6 +81,9 @@ pub enum InteractionRow<'a> {
         selected: bool,
         loading: bool,
         newly_idle: bool,
+        /// Something new just happened on it, so the row is drawn lit for a
+        /// moment to catch the eye.
+        flashing: bool,
         /// Why a stopped interaction stopped. Unlike the reasons the other
         /// statuses carry, this one is rendered on the row: the stopped
         /// entries sit at the foot of the list precisely so they can be read
@@ -210,8 +213,12 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
             let mut item = row_item(row, view.all_workspaces, &columns);
             match row {
                 InteractionRow::Workspace(_) | InteractionRow::Directory { .. } => striped = false,
-                InteractionRow::Interaction { selected, .. } => {
-                    let background = if *selected {
+                InteractionRow::Interaction {
+                    selected, flashing, ..
+                } => {
+                    let background = if *flashing {
+                        Some(theme::FLASHED_ROW_BACKGROUND)
+                    } else if *selected {
                         Some(theme::SELECTED_ROW_BACKGROUND)
                     } else {
                         striped.then_some(theme::ALTERNATE_ROW_BACKGROUND)
@@ -738,6 +745,7 @@ mod tests {
             selected: false,
             loading: false,
             newly_idle: false,
+            flashing: false,
             stop_reason: None,
             rate_limited: None,
             uncommitted: false,
@@ -788,6 +796,7 @@ mod tests {
                     selected: true,
                     loading: false,
                     newly_idle: true,
+                    flashing: false,
                     stop_reason: None,
                     rate_limited: None,
                     uncommitted: false,
@@ -828,6 +837,7 @@ mod tests {
             selected: false,
             loading: false,
             newly_idle: false,
+            flashing: false,
             stop_reason: None,
             rate_limited: None,
             uncommitted: false,
@@ -1003,6 +1013,7 @@ mod tests {
                 selected: false,
                 loading: false,
                 newly_idle: false,
+                flashing: false,
                 stop_reason: Some("paused".into()),
                 rate_limited: None,
                 uncommitted: false,
@@ -1040,6 +1051,7 @@ mod tests {
                 selected: false,
                 loading: false,
                 newly_idle: false,
+                flashing: false,
                 stop_reason: None,
                 rate_limited: None,
                 uncommitted: false,
@@ -1079,6 +1091,7 @@ mod tests {
                 selected: false,
                 loading: false,
                 newly_idle: false,
+                flashing: false,
                 stop_reason: None,
                 rate_limited: Some("five_hour".into()),
                 uncommitted: false,
@@ -1115,6 +1128,7 @@ mod tests {
                     selected: index == selected,
                     loading: false,
                     newly_idle: false,
+                    flashing: false,
                     stop_reason: None,
                     rate_limited: None,
                     uncommitted: false,

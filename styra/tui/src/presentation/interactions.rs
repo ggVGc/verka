@@ -124,6 +124,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             loading: loading == Some(interaction.id.as_str()),
             newly_idle: interaction.activity == styra_protocol::InteractionActivity::Pending
                 && interaction.idle_unseen,
+            flashing: app.interactions.flashing(&interaction.id),
             stop_reason,
             rate_limited,
             uncommitted: interaction.uncommitted_changes,
