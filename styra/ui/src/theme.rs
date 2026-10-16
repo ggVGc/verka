@@ -168,6 +168,9 @@ pub const DIFF_FILE_HEADER_BACKGROUND: Color = palette::DARK_GRAY;
 /// The rules either side of a diff's file headers: the header bar's grey, a
 /// little brighter, so they read as the bar's edges.
 pub const DIFF_FILE_RULE: Color = palette::RULE_GRAY;
+/// The faint rule a Workspace heading runs out to the edge of the
+/// interactions pane, so each workspace's rows read as their own group.
+pub const WORKSPACE_RULE: Color = palette::RULE_GRAY;
 /// `CursorLine`.
 pub const SELECTION_BACKGROUND: Color = palette::DARK_GRAY;
 /// What a branched Session's inherited history fades toward: the code

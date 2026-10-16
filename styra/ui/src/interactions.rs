@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, BorderType, Borders};
 use ratatui::Frame;
 use std::borrow::Cow;
 use styra_protocol::CompletionState;
+use unicode_width::UnicodeWidthStr;
 
 /// Three dots, the heavy one moving rightward one step per event and wrapping
 /// back to the left. It fills the whole status block, so a running row reads
@@ -200,6 +201,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
         }
         _ => block,
     };
+    let inner = block.inner(area);
     // Every other interaction under a heading is drawn on a faint stripe, so
     // the eye can follow a row across the pane and down to its message line.
     // The cursor's row is drawn on a slightly lighter tint in its place.
@@ -210,7 +212,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
         .enumerate()
         .map(|(index, row)| {
             let columns = tree_columns(&view.rows, index);
-            let mut item = row_item(row, view.all_workspaces, &columns);
+            let mut item = row_item(row, view.all_workspaces, &columns, inner.width.into());
             match row {
                 InteractionRow::Workspace(_) | InteractionRow::Directory { .. } => striped = false,
                 InteractionRow::Interaction {
@@ -260,7 +262,6 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
     // line that does not fit is drawn as far as it goes instead of leaving the
     // foot of the pane empty, as `List` would.
     let lines = items.into_iter().flatten().collect::<Vec<_>>();
-    let inner = block.inner(area);
     let viewport = usize::from(inner.height);
     let offset = scroll_offset(view, selected, viewport, lines.len());
     let above = offset;
@@ -405,11 +406,13 @@ fn tree_prefix(columns: &[bool], connected: bool) -> String {
 
 /// `under_workspaces` says whether the list is drawn under Workspace
 /// headings, which every row then steps in beneath. `columns` are the
-/// worktree headings it is drawn beneath — see [`tree_columns`].
+/// worktree headings it is drawn beneath — see [`tree_columns`]. `width` is
+/// the pane's inner width, which a Workspace heading's rule runs out to.
 fn row_item(
     row: &InteractionRow<'_>,
     under_workspaces: bool,
     columns: &[bool],
+    width: usize,
 ) -> Vec<Line<'static>> {
     // Bright, undimmed tree lines make membership readable independently of
     // heading colors, including when the heading has scrolled out of view.
@@ -419,12 +422,22 @@ fn row_item(
     let workspace_edge = if under_workspaces { " " } else { "" };
     match row {
         InteractionRow::Workspace(name) => {
-            return vec![Line::from(Span::styled(
+            // A faint rule from the name to the pane's edge sets each
+            // workspace's rows off from the ones above.
+            let fill = width.saturating_sub(name.width() + 1);
+            let mut spans = vec![Span::styled(
                 name.to_string(),
                 Style::default()
                     .fg(theme::WORKSPACE_NAME)
                     .add_modifier(Modifier::BOLD),
-            ))];
+            )];
+            if fill > 0 {
+                spans.push(Span::styled(
+                    format!(" {}", "─".repeat(fill)),
+                    Style::default().fg(theme::WORKSPACE_RULE),
+                ));
+            }
+            return vec![Line::from(spans)];
         }
         InteractionRow::Directory { name, into, .. } => {
             let mut spans = vec![
@@ -887,7 +900,8 @@ mod tests {
             ..many_rows(0)
         };
         let screen = lines(&all);
-        assert!(screen[1].starts_with("┃Payments"), "{screen:#?}");
+        assert!(screen[1].starts_with("┃Payments ───"), "{screen:#?}");
+        assert!(screen[1].ends_with("─┃"), "{screen:#?}");
         assert!(
             screen[2].starts_with("┃  ●  alone · feature · claude"),
             "{screen:#?}"
