@@ -75,6 +75,9 @@ pub struct LiveInteractions {
     /// Set while the filter is being typed, when every printable key is part
     /// of the term rather than a command on the list.
     typing_filter: bool,
+    /// While the Workspace jump is open over the navigator, the Workspaces its
+    /// query leaves: only their rows are listed. `None` otherwise.
+    pub jump_workspaces: Option<Vec<String>>,
     /// Whether a listing has been taken yet. The first one is what was already
     /// running when this client arrived, so nothing in it is newly arrived.
     listed: bool,
@@ -387,7 +390,11 @@ impl LiveInteractions {
             .filter_map(|(index, interaction)| {
                 (self.in_workspace_scope(interaction, workspace_id)
                     && self.lists(interaction)
-                    && self.matches_typed_filter(interaction))
+                    && self.matches_typed_filter(interaction)
+                    && self
+                        .jump_workspaces
+                        .as_ref()
+                        .is_none_or(|ids| ids.contains(&interaction.workspace_id)))
                 .then_some(index)
             })
             .collect()
@@ -1564,7 +1571,10 @@ pub(crate) mod tests {
         named.name = Some("Named".into());
         let mut live = LiveInteractions::default();
         assert!(!live.listed());
-        live.refresh(vec![named, interaction("two", InteractionActivity::Running)]);
+        live.refresh(vec![
+            named,
+            interaction("two", InteractionActivity::Running),
+        ]);
         assert!(live.listed());
 
         let mut seeded = LiveInteractions::default();

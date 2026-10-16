@@ -97,6 +97,15 @@ impl WorkspaceJump {
         &self.rows
     }
 
+    /// The Workspaces whose rows the query leaves standing.
+    pub fn matching(&self) -> Vec<String> {
+        self.list
+            .matches(&self.rows)
+            .into_iter()
+            .map(|found| self.ids[found.index].clone())
+            .collect()
+    }
+
     /// The Workspace the highlighted row stands for, if the query leaves one.
     pub fn selected(&self) -> Option<&str> {
         self.list
@@ -177,7 +186,11 @@ mod tests {
         }
     }
 
-    fn in_workspace(id: &str, workspace: &str, activity: InteractionActivity) -> InteractionSummary {
+    fn in_workspace(
+        id: &str,
+        workspace: &str,
+        activity: InteractionActivity,
+    ) -> InteractionSummary {
         let mut interaction = interaction(id, activity);
         interaction.workspace_id = workspace.into();
         interaction

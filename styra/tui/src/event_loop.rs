@@ -514,6 +514,20 @@ fn interaction_navigator_passthrough(key: crossterm::event::KeyEvent) -> bool {
         || keys::GLOBAL_STOP.matches(key)
         || keys::GLOBAL_NEXT_LIVE.matches(key)
         || keys::GLOBAL_NEW_SESSION.matches(key)
+        // The jump narrows the navigator to the Workspaces it offers, so the
+        // navigator stays open under it.
+        || keys::GLOBAL_WORKSPACE_JUMP.matches(key)
+        || keys::GLOBAL_WORKSPACE_JUMP_LISTED.matches(key)
+}
+
+/// Narrow an open navigator to the Workspaces the jump's query leaves, or
+/// lift that narrowing once the jump has closed.
+fn narrow_navigator_to_jump(app: &mut App) {
+    app.interactions.jump_workspaces = app
+        .workspace_jump
+        .as_ref()
+        .filter(|_| app.interactions.open)
+        .map(WorkspaceJump::matching);
 }
 
 /// Open the live interactions with the cursor on the first of `target`'s, the
@@ -1259,10 +1273,12 @@ fn run_rounds(
             let grid = match outcome {
                 workspace_jump::Outcome::Stay => {
                     preview_workspace_jump(app);
+                    narrow_navigator_to_jump(app);
                     continue;
                 }
                 _ => app.workspace_jump.take().and_then(|jump| jump.grid),
             };
+            narrow_navigator_to_jump(app);
             match (outcome, grid) {
                 (workspace_jump::Outcome::Cancel, Some((overview, only_current_workspace))) => {
                     app.overview = overview;
@@ -2000,6 +2016,7 @@ fn run_rounds(
                 app.interactions.workspaces = workspaces;
                 app.workspace_jump = Some(jump);
                 preview_workspace_jump(app);
+                narrow_navigator_to_jump(app);
             }
             // The overview reads the same snapshot the loop refreshes on its
             // timer, but the tiles name their Workspaces, and that list is
@@ -2422,6 +2439,62 @@ mod tests {
         assert!(!interaction_navigator_passthrough(press('l')));
     }
 
+    /// Opening the jump over the navigator keeps it open, listing only the
+    /// Workspaces the jump's query leaves; closing the jump lists them all.
+    #[test]
+    fn the_workspace_jump_narrows_the_open_navigator() {
+        use styra_protocol::{InteractionActivity, WorkspaceSummary};
+        let press = |character| crossterm::event::KeyEvent::from(KeyCode::Char(character));
+        assert!(interaction_navigator_passthrough(press('v')));
+        assert!(interaction_navigator_passthrough(press('V')));
+
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+            "one",
+        );
+        let mut other =
+            crate::interactions::tests::interaction("two", InteractionActivity::Running);
+        other.workspace_id = "other".into();
+        let interactions = vec![
+            crate::interactions::tests::interaction("one", InteractionActivity::Running),
+            other,
+        ];
+        let workspaces: Vec<WorkspaceSummary> = ["workspace", "other"]
+            .into_iter()
+            .map(|id| WorkspaceSummary {
+                id: id.into(),
+                name: Some(id.into()),
+                host_path: id.into(),
+                git_repository: None,
+                path: id.into(),
+                session_count: 0,
+                age: String::new(),
+                created_at_ms: 0,
+                last_accessed_at_ms: 0,
+                launch: Default::default(),
+            })
+            .collect();
+        let jump = WorkspaceJump::new(&workspaces, &interactions);
+        app.interactions.open(interactions, workspaces);
+        app.workspace_jump = Some(jump);
+        narrow_navigator_to_jump(&mut app);
+        assert_eq!(app.interactions.visible_indices(None), vec![0, 1]);
+
+        for character in "oth".chars() {
+            app.workspace_jump
+                .as_mut()
+                .unwrap()
+                .handle_key(press(character));
+        }
+        narrow_navigator_to_jump(&mut app);
+        assert_eq!(app.interactions.visible_indices(None), vec![1]);
+
+        app.workspace_jump = None;
+        narrow_navigator_to_jump(&mut app);
+        assert!(app.interactions.open);
+        assert_eq!(app.interactions.visible_indices(None), vec![0, 1]);
+    }
+
     /// Over the grid, the jump narrows the grid to its highlighted Workspace
     /// and moves only the grid's cursor; nothing is scheduled to load.
     #[test]
@@ -2432,7 +2505,8 @@ mod tests {
             "one",
         );
         app.workspace.id = Some("workspace".into());
-        let mut other = crate::interactions::tests::interaction("two", InteractionActivity::Running);
+        let mut other =
+            crate::interactions::tests::interaction("two", InteractionActivity::Running);
         other.workspace_id = "other".into();
         let interactions = vec![
             crate::interactions::tests::interaction("one", InteractionActivity::Running),
@@ -2462,12 +2536,16 @@ mod tests {
         app.workspace_jump
             .as_mut()
             .unwrap()
-            .handle_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Down));
+            .handle_key(crossterm::event::KeyEvent::from(
+                crossterm::event::KeyCode::Down,
+            ));
         preview_workspace_jump(&mut app);
 
         assert!(app.interactions.only_current_workspace);
         assert_eq!(
-            app.overview.indices(&app.interactions, Some("workspace")).len(),
+            app.overview
+                .indices(&app.interactions, Some("workspace"))
+                .len(),
             1,
             "only the highlighted Workspace's tiles are shown"
         );
