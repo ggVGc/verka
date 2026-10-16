@@ -346,6 +346,199 @@ const COMPOSER_FILE: &str = "composer.json";
 /// Where integration keeps its progress through a Session — see
 /// `crate::integration`.
 pub(crate) const INTEGRATION_FILE: &str = "integration.json";
+const SNAPSHOTS_FILE: &str = "snapshots.jsonl";
+const SNAPSHOT_DIFFS_DIRECTORY: &str = "snapshots";
+
+/// When in a turn a [`Snapshot`] was taken.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotMoment {
+    /// Just before an operator message was sent to the agent. The default,
+    /// because it was the only moment before the other was recorded.
+    #[default]
+    BeforeMessage,
+    /// As the interaction stopped working, after any automatic commit of the
+    /// turn's work.
+    TurnEnded,
+}
+
+/// The state of an interaction's checkout at one moment of a turn: one line
+/// of the Session's `snapshots.jsonl`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snapshot {
+    /// Counts from 1 in append order, and names the diff file.
+    pub sequence: u64,
+    pub at_ms: u64,
+    #[serde(default)]
+    pub moment: SnapshotMoment,
+    /// Which operator turn of the Session this belongs to, counting its
+    /// operator messages from 1 — inherited ones included, for a branch —
+    /// so a client can find a turn's snapshots from the messages it lists.
+    /// A snapshot before a message belongs to the turn that message starts.
+    /// `None` for a snapshot written before turns were counted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<u64>,
+    /// The checkout the agent was working in, on the host.
+    pub checkout: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The commit checked out, or `None` on a branch with no commits yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// The diff from `commit` to the working tree, relative to the Session
+    /// directory, for a checkout `git status` reported changes in. `None`
+    /// means it was clean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<PathBuf>,
+}
+
+/// What a snapshot is taken of, before it is numbered and written.
+pub struct SnapshotState {
+    pub moment: SnapshotMoment,
+    pub turn: Option<u64>,
+    pub checkout: PathBuf,
+    pub branch: Option<String>,
+    pub commit: Option<String>,
+    pub diff: Option<Vec<u8>>,
+}
+
+/// Append one snapshot to a Session's record of its checkout, writing its diff
+/// beside it first, so an index line never names a diff that is not there.
+///
+/// Each diff is synced before its line is appended, and the line before this
+/// returns: a snapshot is taken just before an agent is let loose on the
+/// checkout, or just after, and is only worth anything if it survives what
+/// happens next.
+pub fn append_snapshot(path: &Path, state: SnapshotState) -> Result<Snapshot> {
+    let directory = session_directory(path);
+    let sequence = read_snapshots(&directory)?
+        .last()
+        .map_or(1, |last| last.sequence + 1);
+    let diff = match state.diff {
+        None => None,
+        Some(bytes) => {
+            let relative = Path::new(SNAPSHOT_DIFFS_DIRECTORY).join(format!("{sequence:06}.diff"));
+            let diffs = directory.join(SNAPSHOT_DIFFS_DIRECTORY);
+            std::fs::create_dir_all(&diffs)
+                .with_context(|| format!("creating {}", diffs.display()))?;
+            let target = directory.join(&relative);
+            let mut file =
+                File::create(&target).with_context(|| format!("writing {}", target.display()))?;
+            file.write_all(&bytes)
+                .and_then(|()| file.sync_all())
+                .with_context(|| format!("writing {}", target.display()))?;
+            Some(relative)
+        }
+    };
+    let snapshot = Snapshot {
+        sequence,
+        at_ms: now_ms(),
+        moment: state.moment,
+        turn: state.turn,
+        checkout: state.checkout,
+        branch: state.branch,
+        commit: state.commit,
+        diff,
+    };
+    let index = directory.join(SNAPSHOTS_FILE);
+    let mut line = serde_json::to_string(&snapshot).context("serializing a snapshot")?;
+    line.push('\n');
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&index)
+        .with_context(|| format!("opening {}", index.display()))?;
+    file.write_all(line.as_bytes())
+        .and_then(|()| file.sync_all())
+        .with_context(|| format!("appending to {}", index.display()))?;
+    Ok(snapshot)
+}
+
+/// Whether `state` is what the Session's last snapshot recorded: the same
+/// checkout, branch and commit, and the same uncommitted work to the byte.
+/// When it is, nothing has happened in the checkout since.
+pub fn unchanged_since_last_snapshot(path: &Path, state: &SnapshotState) -> Result<bool> {
+    let directory = session_directory(path);
+    let Some(last) = read_snapshots(&directory)?.pop() else {
+        return Ok(false);
+    };
+    if last.checkout != state.checkout || last.branch != state.branch || last.commit != state.commit
+    {
+        return Ok(false);
+    }
+    match (&last.diff, &state.diff) {
+        (None, None) => Ok(true),
+        (Some(stored), Some(diff)) => {
+            let stored = directory.join(stored);
+            let stored =
+                std::fs::read(&stored).with_context(|| format!("reading {}", stored.display()))?;
+            Ok(stored == *diff)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// The snapshots to read one turn's changes from: see [`turn_snapshots`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TurnSnapshots {
+    /// The turn started from the first and ended on the second.
+    Ended(Snapshot, Snapshot),
+    /// The turn has not ended; the most recent snapshot is the one its
+    /// changes so far are read from.
+    Running(Snapshot),
+}
+
+/// The snapshots a turn started from and ended on, if both were taken, or
+/// the most recent snapshot for a turn that has not ended yet.
+///
+/// The end is the turn's own `turn_ended` snapshot. The start is the snapshot
+/// just before it: the one taken before the turn's message, or — when that one
+/// was skipped because nothing had changed — the one the previous turn ended
+/// on. Anything else just before the end means snapshots were not being taken
+/// when the turn started, and there is no start to compare with.
+///
+/// A turn with no end is running only if no later turn has been snapshotted;
+/// otherwise its end was never recorded, and there is nothing to say.
+pub fn turn_snapshots(path: &Path, turn: u64) -> Result<Option<TurnSnapshots>> {
+    let snapshots = read_snapshots(path)?;
+    let Some(end) = snapshots.iter().position(|snapshot| {
+        snapshot.moment == SnapshotMoment::TurnEnded && snapshot.turn == Some(turn)
+    }) else {
+        let later = snapshots
+            .iter()
+            .any(|snapshot| snapshot.turn.is_some_and(|other| other > turn));
+        return Ok((!later)
+            .then(|| snapshots.last().cloned())
+            .flatten()
+            .map(TurnSnapshots::Running));
+    };
+    let Some(start) = end.checked_sub(1).map(|start| &snapshots[start]) else {
+        return Ok(None);
+    };
+    let starts_turn = match start.moment {
+        SnapshotMoment::BeforeMessage => start.turn == Some(turn),
+        SnapshotMoment::TurnEnded => turn > 1 && start.turn == Some(turn - 1),
+    };
+    Ok(starts_turn.then(|| TurnSnapshots::Ended(start.clone(), snapshots[end].clone())))
+}
+
+/// Every snapshot taken of a Session's checkout, oldest first. Absent file
+/// means none were, not an error.
+pub fn read_snapshots(path: &Path) -> Result<Vec<Snapshot>> {
+    let index = session_directory(path).join(SNAPSHOTS_FILE);
+    if !index.exists() {
+        return Ok(Vec::new());
+    }
+    let file = File::open(&index).with_context(|| format!("reading {}", index.display()))?;
+    BufReader::new(file)
+        .lines()
+        .filter(|line| !matches!(line, Ok(line) if line.trim().is_empty()))
+        .map(|line| {
+            let line = line.with_context(|| format!("reading {}", index.display()))?;
+            serde_json::from_str(&line).with_context(|| format!("parsing {}", index.display()))
+        })
+        .collect()
+}
 
 /// Read the operator messages a Session's interaction had queued but not yet
 /// sent, so the queue survives a client disconnect (closing the Styra UI) or a
@@ -1798,6 +1991,128 @@ mod tests {
                 .session_count,
             1
         );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&host).ok();
+    }
+
+    /// A turn runs from the snapshot before its message — or, where that was
+    /// skipped, the one the turn before ended on — to its own end. A turn
+    /// whose start was not snapshotted has no pair.
+    #[test]
+    fn a_turn_is_bracketed_by_the_snapshots_around_it() {
+        let directory = temp_dir("snapshot-turns");
+        let take = |moment, turn| {
+            append_snapshot(
+                &directory,
+                SnapshotState {
+                    moment,
+                    turn: Some(turn),
+                    checkout: directory.clone(),
+                    branch: None,
+                    commit: Some(format!("{moment:?}-{turn}")),
+                    diff: None,
+                },
+            )
+            .unwrap()
+            .sequence
+        };
+        use SnapshotMoment::{BeforeMessage, TurnEnded};
+        // Snapshots turned on in the middle of turn 1.
+        take(TurnEnded, 1);
+        take(TurnEnded, 2);
+        take(BeforeMessage, 3);
+        take(TurnEnded, 3);
+
+        let pair = |turn| match turn_snapshots(&directory, turn).unwrap() {
+            Some(TurnSnapshots::Ended(start, end)) => Some((start.sequence, end.sequence)),
+            Some(TurnSnapshots::Running(_)) => panic!("turn {turn} has ended"),
+            None => None,
+        };
+        let running = |turn| match turn_snapshots(&directory, turn).unwrap() {
+            Some(TurnSnapshots::Running(from)) => Some(from.sequence),
+            _ => None,
+        };
+        assert_eq!(pair(1), None, "nothing before the first");
+        assert_eq!(pair(2), Some((1, 2)), "its message's snapshot was skipped");
+        assert_eq!(pair(3), Some((3, 4)));
+        assert_eq!(
+            running(4),
+            Some(4),
+            "not ended: from the previous turn's end"
+        );
+        take(BeforeMessage, 4);
+        assert_eq!(running(4), Some(5), "from its own message's snapshot");
+        take(BeforeMessage, 5);
+        assert_eq!(
+            turn_snapshots(&directory, 4).unwrap(),
+            None,
+            "a later turn has started, so turn 4's end was never recorded"
+        );
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// Each snapshot is numbered in turn, with a diff file only for a
+    /// checkout that had changes.
+    #[test]
+    fn snapshots_are_stored_with_the_session_and_appended_in_order() {
+        let root = temp_dir("snapshot-store");
+        let host = temp_dir("snapshot-host");
+        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, _) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+        let directory = journal.path().parent().unwrap();
+
+        assert!(read_snapshots(directory).unwrap().is_empty());
+
+        let clean = append_snapshot(
+            directory,
+            SnapshotState {
+                moment: SnapshotMoment::BeforeMessage,
+                turn: Some(1),
+                checkout: host.clone(),
+                branch: Some("main".into()),
+                commit: Some("abc".into()),
+                diff: None,
+            },
+        )
+        .unwrap();
+        let dirty = append_snapshot(
+            directory,
+            SnapshotState {
+                moment: SnapshotMoment::BeforeMessage,
+                turn: Some(1),
+                checkout: host.clone(),
+                branch: None,
+                commit: Some("abc".into()),
+                diff: Some(b"diff --git a/x b/x\n".to_vec()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!((clean.sequence, clean.diff.as_ref()), (1, None));
+        assert_eq!(dirty.sequence, 2);
+        let diff = directory.join(dirty.diff.as_ref().unwrap());
+        assert_eq!(std::fs::read(diff).unwrap(), b"diff --git a/x b/x\n");
+        assert_eq!(read_snapshots(directory).unwrap(), vec![clean, dirty]);
+
+        // The last snapshot is compared to the byte, diff and all.
+        let same = |diff: &[u8]| SnapshotState {
+            moment: SnapshotMoment::BeforeMessage,
+            turn: Some(1),
+            checkout: host.clone(),
+            branch: None,
+            commit: Some("abc".into()),
+            diff: Some(diff.to_vec()),
+        };
+        assert!(unchanged_since_last_snapshot(directory, &same(b"diff --git a/x b/x\n")).unwrap());
+        assert!(!unchanged_since_last_snapshot(directory, &same(b"diff --git a/y b/y\n")).unwrap());
+        let mut clean_again = same(b"");
+        clean_again.diff = None;
+        assert!(!unchanged_since_last_snapshot(directory, &clean_again).unwrap());
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&host).ok();

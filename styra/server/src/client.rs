@@ -6,7 +6,7 @@ use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
     LoadedInteraction, ModelSummary, PlanSession, QueuedMessage, RenameSession, RenameWorkspace,
     Request, Response, ResumeSession, SendMessage, SessionInfo, SetSessionTags, ShellInfo,
-    StoredSession, TemplateSummary, Updates, WireResponse, WorkspaceLaunchChange,
+    StoredSession, TemplateSummary, TurnDiff, Updates, WireResponse, WorkspaceLaunchChange,
 };
 use crate::protocol::{
     CompletionState, ComposerState, InteractionQuery, InteractionSummary, SessionSummary,
@@ -693,6 +693,19 @@ impl Client {
         }
     }
 
+    /// What one operator turn changed in the checkout according to its
+    /// snapshots — so far, for one still running — or `None` when it has no
+    /// snapshots to compare.
+    pub fn snapshot_turn_diff(&self, id: &str, turn: u64) -> Result<Option<TurnDiff>> {
+        match self.request(Request::SnapshotTurnDiff {
+            id: id.to_owned(),
+            turn,
+        })? {
+            Response::SnapshotTurnDiff(value) => Ok(value),
+            other => unexpected("snapshot_turn_diff", other),
+        }
+    }
+
     /// Durable action history for a live or stored interaction.
     pub fn interaction_actions(&self, id: &str) -> Result<Vec<crate::protocol::ActionRecord>> {
         match self.request(Request::InteractionActions { id: id.to_owned() })? {
@@ -901,6 +914,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::InteractionActions { .. } => "interaction_actions",
         Request::InteractionProcesses { .. } => "interaction_processes",
         Request::InteractionDriva { .. } => "interaction_driva",
+        Request::SnapshotTurnDiff { .. } => "snapshot_turn_diff",
         Request::Shutdown => "shutdown",
     }
 }

@@ -253,6 +253,23 @@ the Session into a worktree. The footer shows `^G auto-commit` while it is on.
 Whatever `git status` sees is committed, so if you turn it on in a checkout you
 edit yourself, your changes are committed alongside the agent's.
 
+Every interaction's checkout is snapshotted; there is nothing to turn on. The
+server records the commit checked out in the interaction's working directory and, if
+`git status` reports anything, the diff from that commit to the working tree,
+untracked and binary files included. It does so each time the interaction goes
+idle — after auto-commit, if that is on, so the snapshot shows what the commit
+left — and just before each message is sent to the agent: typed, queued, or the
+`continue` a rate-limit retry sends. The snapshot before a message is skipped
+when the checkout is exactly as the last snapshot recorded it, as it is when
+nothing has happened since the previous turn ended. Your staged changes are left
+as they were. Each snapshot is a line in `snapshots.jsonl` in the Session's
+directory in the store, giving its number, time, `moment` (`turn_ended` or
+`before_message`), checkout, branch, commit and, for a dirty checkout, the path
+of its diff under `snapshots/`. `git apply --binary` restores a diff onto its
+commit. A workspace that is not in a repository records nothing; a snapshot that
+fails is logged in the interaction's stream and holds nothing up — the message
+is sent anyway.
+
 `A` opens the full Session list. In that list, `/` starts a case-insensitive
 filter over the Session name and first prompt; `Esc` abandons the filter. `c`
 shows or hides the Sessions marked completed or abandoned. `C` marks the
@@ -349,7 +366,13 @@ full-screen, `↑`/`↓` scroll it ten lines and `PgUp`/`PgDn` half its height;
 in the full-screen preview `j`/`k` scroll too. On a conversation line (a message, an error or a model
 change), the side preview shows the file changes the agent made during
 that entry's turn — the same stretch `e` lists — rather than the line itself;
-the full-screen preview (`P`) still shows the entry. On a `branch` marker,
+the full-screen preview (`P`) still shows the entry. If the turn was
+snapshotted both as it started and as it ended (see snapshots above), the side preview
+shows the diff between those two snapshots instead, titled `turn snapshot diff`:
+everything that changed in the checkout during the whole turn, including what
+shell commands or you changed, rather than what the agent reported editing.
+A turn that is still running, or that has no snapshot from its start, shows the
+agent's reports as before. On a `branch` marker,
 both previews show the linked interaction's conversation instead: a branch
 from where its own history begins, after what it copied from this one, and a
 source in full. A live interaction's log keeps growing while it is shown.

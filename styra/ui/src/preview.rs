@@ -26,12 +26,24 @@ pub enum PreviewTarget {
     Command,
 }
 
+/// What a snapshot diff in the preview covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapshotDiff {
+    /// The whole of a turn that has ended.
+    Turn,
+    /// A running turn, from the most recent snapshot to the checkout now.
+    SoFar,
+}
+
 pub struct PreviewView<'a> {
     pub entry: Option<EventEntry<'a>>,
     /// The file changes made during a conversation entry's turn, shown under
     /// its summary in place of its own content. `None` for an entry that
     /// previews as itself; empty for a turn that changed no files.
     pub changes: Option<Vec<ChangeView<'a>>>,
+    /// Whether `changes` were read from the turn's snapshots rather than from
+    /// the agent's own reports, and how far they reach.
+    pub changes_from_snapshots: Option<SnapshotDiff>,
     /// The entry itself, when it is a file change: drawn as one, from a diff
     /// the host may have placed in its file (see [`ChangeView::diff`]).
     pub entry_change: Option<ChangeView<'a>>,
@@ -118,7 +130,12 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
             PreviewTarget::Selection => ("preview", "command"),
             PreviewTarget::Command => ("command", "selection"),
         };
-        let shown = if view.changes.is_some() {
+        let shown = if let Some(snapshot) = view.changes_from_snapshots {
+            match snapshot {
+                SnapshotDiff::Turn => "turn snapshot diff",
+                SnapshotDiff::SoFar => "turn snapshot diff so far",
+            }
+        } else if view.changes.is_some() {
             "turn diff"
         } else if view.branch_log.is_some() {
             "branch log"

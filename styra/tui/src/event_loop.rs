@@ -1096,6 +1096,7 @@ fn run_rounds(
         }
 
         dirty |= crate::branch_log::sync(app, client);
+        dirty |= crate::turn_snapshot::sync(app, client);
         dirty |= app.activity.note_progress();
 
         // The parts of a frame that are read off the clock have nothing to

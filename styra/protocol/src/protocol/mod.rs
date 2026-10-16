@@ -19,7 +19,7 @@ pub use types::{
     InteractionActivityReason, InteractionEnd, InteractionQuery, InteractionSummary,
     InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, ModelSummary, MountOrigin,
     QueuedMessage, QuotaEvent, QuotaStatus, RawLine, RebaseStatus, RecentMessage, SandboxProcess,
-    SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary,
+    SessionOrigin, SessionSummary, TemplateSummary, TurnDiff, VariableOrigin, WorkspaceSummary,
     WorktreeCleanup, WorktreeSession, WorktreeSummary, WORKTREES_DIR,
 };
 
@@ -670,6 +670,30 @@ pub enum Request {
     InteractionDriva {
         id: String,
     },
+    /// What one operator turn changed in the checkout, read from the
+    /// snapshots taken as it started and as it ended — everything, whoever
+    /// wrote it, rather than what the agent reported writing.
+    ///
+    /// Every interaction working in a Git checkout is snapshotted as each
+    /// turn ends and before each operator message is sent. A snapshot names
+    /// the commit checked out and, when `git status` reports anything, carries
+    /// the diff from that commit to the working tree, untracked files
+    /// included. The turn-end snapshot is taken after any auto-commit of the
+    /// turn; the one before a message is skipped when the checkout is exactly
+    /// as the last snapshot recorded it. Snapshots are appended to the
+    /// Session's durable directory and outlive the interaction.
+    ///
+    /// A turn that has not ended yet — the latest one, still running — is
+    /// answered from the most recent snapshot to the checkout as it is now,
+    /// so asking again shows the turn's progress.
+    ///
+    /// `turn` counts the Session's operator messages from 1, as a client
+    /// listing them counts them; for a branch that includes the inherited
+    /// ones. Answered for a stored Session as for a live one.
+    SnapshotTurnDiff {
+        id: String,
+        turn: u64,
+    },
     /// Ask the server to remove its socket and exit. Any live interactions it owns die
     /// with it, so this is the deliberate counterpart to the daemon outliving
     /// its clients.
@@ -774,6 +798,9 @@ pub enum Response {
     /// its interaction is still starting.
     InteractionProcesses(Option<Vec<SandboxProcess>>),
     InteractionDriva(DrivaOptions),
+    /// `None` when the turn has no snapshots to compare: it ran outside a
+    /// Git checkout, a snapshot of it failed, or it predates snapshots.
+    SnapshotTurnDiff(Option<TurnDiff>),
 }
 
 /// Response envelope returned for every syntactically valid connection.

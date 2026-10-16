@@ -159,6 +159,18 @@ pub enum QuotaStatus {
     Exhausted,
 }
 
+/// What one turn changed in the checkout, read from its snapshots: see
+/// [`crate::protocol::Request::SnapshotTurnDiff`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnDiff {
+    /// A unified diff, empty for a turn that changed nothing.
+    pub diff: String,
+    /// Whether the turn has ended. `false` for one still running, whose diff
+    /// runs from the most recent snapshot to the checkout as it was when
+    /// asked, and grows as the turn goes on.
+    pub ended: bool,
+}
+
 /// One process running inside a live interaction's sandbox, as the host's
 /// `/proc` describes it at the moment of asking.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

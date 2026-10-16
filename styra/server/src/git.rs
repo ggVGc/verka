@@ -168,6 +168,33 @@ pub trait Git: Send + Sync {
     /// operator would otherwise have been told was uncommitted.
     fn commit_all(&self, checkout: &Path, message: &str) -> Result<String>;
 
+    /// The diff from `HEAD` to everything in `checkout`'s working tree —
+    /// tracked or not, the same scope as [`Self::has_uncommitted_changes`] —
+    /// in a form `git apply` takes back, binary files included. On a branch
+    /// with no commits yet it is the whole tree, as additions.
+    ///
+    /// Read without touching the checkout's own index: what the operator has
+    /// staged is theirs, and a snapshot must not change it.
+    fn working_tree_diff(&self, checkout: &Path) -> Result<Vec<u8>>;
+
+    /// The tree a snapshot recorded: `commit` — or nothing, for a branch with
+    /// no commits yet — with `diff`, as [`Self::working_tree_diff`] wrote it,
+    /// applied on top. Written to the repository `checkout` is in, without
+    /// touching that checkout or its index, and returned by id.
+    ///
+    /// Rebuilt from what the snapshot stored rather than kept from when it was
+    /// taken: a tree nothing refers to is Git's to collect, and the commit and
+    /// diff are what the snapshot keeps durably.
+    fn snapshot_tree(
+        &self,
+        checkout: &Path,
+        commit: Option<&str>,
+        diff: Option<&[u8]>,
+    ) -> Result<String>;
+
+    /// The diff from one tree to another, for reading.
+    fn tree_diff(&self, checkout: &Path, from: &str, to: &str) -> Result<String>;
+
     /// Resolve `path` to the root of its nearest enclosing Git checkout.
     fn repository_root(&self, path: &Path) -> Result<PathBuf> {
         self.discover(path)?
@@ -453,6 +480,110 @@ impl Git for SystemGit {
         Invocation::new(checkout, "read the new commit")
             .args(["rev-parse", "--short", "HEAD"])
             .output()
+    }
+
+    fn working_tree_diff(&self, checkout: &Path) -> Result<Vec<u8>> {
+        // Untracked files only appear in a diff once they are in an index, so
+        // they are added to a copy of the checkout's: a copy rather than a
+        // fresh one read from `HEAD`, so its cached file stats spare `git add`
+        // from rehashing every tracked file.
+        // Not canonicalized: a repository nothing was ever staged in has no
+        // index yet, and that is an empty one.
+        let index = PathBuf::from(
+            Invocation::new(checkout, "locate the index")
+                .args(["rev-parse", "--path-format=absolute", "--git-path", "index"])
+                .output()?,
+        );
+        let scratch = ScratchIndex::new()?;
+        if index.exists() {
+            std::fs::copy(&index, &scratch.0)
+                .with_context(|| format!("copying the index {} for a snapshot", index.display()))?;
+        }
+        Invocation::new(checkout, "stage the working tree for a snapshot")
+            .env("GIT_INDEX_FILE", &scratch.0)
+            .args(["add", "--all"])
+            .succeed()?;
+        // Without a commit named, `--cached` compares with `HEAD`, or with
+        // nothing at all on a branch that has no commits yet.
+        Invocation::new(checkout, "diff the working tree for a snapshot")
+            .env("GIT_INDEX_FILE", &scratch.0)
+            .args([
+                "diff",
+                "--cached",
+                "--binary",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+            ])
+            .bytes()
+    }
+
+    fn snapshot_tree(
+        &self,
+        checkout: &Path,
+        commit: Option<&str>,
+        diff: Option<&[u8]>,
+    ) -> Result<String> {
+        // From the root, because `git apply` run in a subdirectory leaves out
+        // the paths outside it, and a snapshot's diff names them from the root.
+        let root = self.repository_root(checkout)?;
+        let scratch = ScratchIndex::new()?;
+        let read = Invocation::new(&root, "read the snapshot's commit")
+            .env("GIT_INDEX_FILE", &scratch.0)
+            .arg("read-tree");
+        match commit {
+            Some(commit) => read.arg(commit),
+            None => read.arg("--empty"),
+        }
+        .succeed()?;
+        if let Some(diff) = diff {
+            Invocation::new(&root, "apply the snapshot's diff")
+                .env("GIT_INDEX_FILE", &scratch.0)
+                .args(["apply", "--cached", "--binary", "-"])
+                .stdin(diff)
+                .succeed()?;
+        }
+        Invocation::new(&root, "write the snapshot's tree")
+            .env("GIT_INDEX_FILE", &scratch.0)
+            .arg("write-tree")
+            .output()
+    }
+
+    fn tree_diff(&self, checkout: &Path, from: &str, to: &str) -> Result<String> {
+        let diff = Invocation::new(checkout, "diff two snapshots")
+            .args([
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--end-of-options",
+                from,
+                to,
+            ])
+            .bytes()?;
+        // Read, not applied: a file in another encoding shows as best it can.
+        Ok(String::from_utf8_lossy(&diff).into_owned())
+    }
+}
+
+/// An index file of [`Git::working_tree_diff`]'s own, removed when dropped.
+struct ScratchIndex(PathBuf);
+
+impl ScratchIndex {
+    fn new() -> Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("styra-snapshot-{}-{n}.index", std::process::id()));
+        // Left behind by an earlier process with this pid, and stale.
+        let _ = std::fs::remove_file(&path);
+        Ok(Self(path))
+    }
+}
+
+impl Drop for ScratchIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        let _ = std::fs::remove_file(self.0.with_extension("index.lock"));
     }
 }
 
@@ -860,6 +991,41 @@ impl Git for FakeGit {
         commits.push((root, message.to_owned()));
         Ok(format!("{:07x}", commits.len()))
     }
+
+    /// The fake keeps no file contents, so a dirty checkout's diff only names
+    /// the checkout it was taken in.
+    fn working_tree_diff(&self, checkout: &Path) -> Result<Vec<u8>> {
+        if !self.has_uncommitted_changes(checkout)? {
+            return Ok(Vec::new());
+        }
+        let checkout = checkout.canonicalize()?;
+        Ok(format!("fake diff of {}\n", checkout.display()).into_bytes())
+    }
+
+    /// Named after what went into it, so two snapshots of the same state
+    /// share a tree, as they would in Git.
+    fn snapshot_tree(
+        &self,
+        _checkout: &Path,
+        commit: Option<&str>,
+        diff: Option<&[u8]>,
+    ) -> Result<String> {
+        Ok(format!(
+            "tree({}+{})",
+            commit.unwrap_or("empty"),
+            diff.map(String::from_utf8_lossy)
+                .unwrap_or_default()
+                .trim_end()
+        ))
+    }
+
+    fn tree_diff(&self, _checkout: &Path, from: &str, to: &str) -> Result<String> {
+        Ok(if from == to {
+            String::new()
+        } else {
+            format!("fake diff from {from} to {to}\n")
+        })
+    }
 }
 
 /// The nearest enclosing directory of `start` that holds a `.git`. Inside a
@@ -932,7 +1098,8 @@ struct Invocation<'a> {
     directory: &'a Path,
     action: String,
     arguments: Vec<OsString>,
-    stdin: Option<String>,
+    stdin: Option<Vec<u8>>,
+    env: Vec<(OsString, OsString)>,
 }
 
 impl<'a> Invocation<'a> {
@@ -942,12 +1109,20 @@ impl<'a> Invocation<'a> {
             action: action.into(),
             arguments: Vec::new(),
             stdin: None,
+            env: Vec::new(),
         }
     }
 
+    /// Set an environment variable for the command.
+    fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
+        self.env
+            .push((key.as_ref().to_owned(), value.as_ref().to_owned()));
+        self
+    }
+
     /// Feed `input` to the command's standard input.
-    fn stdin(mut self, input: impl Into<String>) -> Self {
-        self.stdin = Some(input.into());
+    fn stdin(mut self, input: impl AsRef<[u8]>) -> Self {
+        self.stdin = Some(input.as_ref().to_vec());
         self
     }
 
@@ -989,22 +1164,37 @@ impl<'a> Invocation<'a> {
         self.run(true).map(|_| ())
     }
 
+    /// Run the command, requiring success, and return stdout exactly as Git
+    /// wrote it — for output that is file contents rather than an answer, and
+    /// need not be UTF-8.
+    fn bytes(self) -> Result<Vec<u8>> {
+        Ok(self.run_raw(true)?.unwrap_or_default())
+    }
+
     fn run(self, require_success: bool) -> Result<Option<String>> {
+        let action = self.action.clone();
+        let Some(stdout) = self.run_raw(require_success)? else {
+            return Ok(None);
+        };
+        let stdout = String::from_utf8(stdout)
+            .with_context(|| format!("git returned non-UTF-8 output when asked to {action}"))?;
+        Ok(Some(stdout.trim_end_matches('\n').to_owned()))
+    }
+
+    fn run_raw(self, require_success: bool) -> Result<Option<Vec<u8>>> {
         let mut command = Command::new("git");
-        command.arg("-C").arg(self.directory).args(&self.arguments);
+        command
+            .arg("-C")
+            .arg(self.directory)
+            .args(&self.arguments)
+            .envs(self.env.iter().map(|(key, value)| (key, value)));
         let output = match &self.stdin {
             None => command.output(),
             Some(input) => feed(&mut command, input),
         }
         .with_context(|| format!("running git to {}", self.action))?;
         if output.status.success() {
-            let stdout = String::from_utf8(output.stdout).with_context(|| {
-                format!(
-                    "git returned non-UTF-8 output when asked to {}",
-                    self.action
-                )
-            })?;
-            return Ok(Some(stdout.trim_end_matches('\n').to_owned()));
+            return Ok(Some(output.stdout));
         }
         if !require_success {
             return Ok(None);
@@ -1021,7 +1211,7 @@ impl<'a> Invocation<'a> {
 }
 
 /// Run `command` with `input` on its standard input, collecting its output.
-fn feed(command: &mut Command, input: &str) -> std::io::Result<std::process::Output> {
+fn feed(command: &mut Command, input: &[u8]) -> std::io::Result<std::process::Output> {
     use std::io::Write;
     use std::process::Stdio;
     let mut child = command
@@ -1034,7 +1224,7 @@ fn feed(command: &mut Command, input: &str) -> std::io::Result<std::process::Out
         .stdin
         .take()
         .expect("stdin was piped")
-        .write_all(input.as_bytes());
+        .write_all(input);
     let output = child.wait_with_output()?;
     // A git that refused before reading all of it says why on stderr, which
     // is the better error than the broken pipe that refusal caused here.
@@ -1431,6 +1621,145 @@ mod conformance {
             .output()
             .unwrap();
         assert_eq!(logged.trim_end(), message);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A snapshot's diff takes the edit, the untracked file and the binary
+    /// one, applies back onto the commit it was taken against, and leaves
+    /// what the operator had staged as it was.
+    #[test]
+    #[ignore = "requires a real git binary"]
+    fn real_git_diffs_the_whole_working_tree_without_touching_the_index() {
+        if !fixture::git_available() {
+            eprintln!("skipping: no usable git");
+            return;
+        }
+        let root = temporary_directory("conformance-snapshot");
+        std::fs::create_dir_all(&root).unwrap();
+        fixture::init(&root);
+        fixture::identify(&root);
+        std::fs::write(root.join("tracked.txt"), "before\n").unwrap();
+        SystemGit.commit_all(&root, "root").unwrap();
+
+        std::fs::write(root.join("tracked.txt"), "after\n").unwrap();
+        std::fs::write(root.join("untracked.txt"), "new\n").unwrap();
+        std::fs::write(root.join("blob.bin"), [0u8, 159, 146, 150, 255]).unwrap();
+        Invocation::new(&root, "stage one file")
+            .args(["add", "tracked.txt"])
+            .succeed()
+            .unwrap();
+        let staged = || {
+            Invocation::new(&root, "read the staged files")
+                .args(["diff", "--cached", "--name-only"])
+                .output()
+                .unwrap()
+        };
+        let before = staged();
+
+        let diff = SystemGit.working_tree_diff(&root).unwrap();
+        let text = String::from_utf8_lossy(&diff);
+        for file in ["tracked.txt", "untracked.txt", "blob.bin"] {
+            assert!(
+                text.contains(&format!("b/{file}")),
+                "missing {file}: {text}"
+            );
+        }
+        assert!(text.contains("GIT binary patch"), "{text}");
+        assert_eq!(staged(), before, "the operator's index is untouched");
+
+        Invocation::new(&root, "discard the work")
+            .args(["reset", "--hard", "--quiet"])
+            .succeed()
+            .unwrap();
+        Invocation::new(&root, "remove untracked files")
+            .args(["clean", "-fdq"])
+            .succeed()
+            .unwrap();
+        let patch = root.join(".git/snapshot.diff");
+        std::fs::write(&patch, &diff).unwrap();
+        Invocation::new(&root, "apply the snapshot")
+            .args(["apply", "--binary"])
+            .arg(&patch)
+            .succeed()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("tracked.txt")).unwrap(),
+            "after\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("untracked.txt")).unwrap(),
+            "new\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("blob.bin")).unwrap(),
+            [0u8, 159, 146, 150, 255]
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A snapshot's tree is rebuilt from its commit and diff — from a
+    /// subdirectory, with the diff naming paths outside it — and two of them
+    /// diff to exactly what changed between.
+    #[test]
+    #[ignore = "requires a real git binary"]
+    fn real_git_rebuilds_snapshot_trees_and_diffs_them() {
+        if !fixture::git_available() {
+            eprintln!("skipping: no usable git");
+            return;
+        }
+        let root = temporary_directory("conformance-snapshot-trees");
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        fixture::init(&root);
+        fixture::identify(&root);
+        std::fs::write(root.join("kept.txt"), "kept\n").unwrap();
+        std::fs::write(nested.join("inner.txt"), "inner\n").unwrap();
+        SystemGit.commit_all(&root, "root").unwrap();
+        let commit = SystemGit.commit(&root, "HEAD").unwrap();
+
+        std::fs::write(root.join("kept.txt"), "before the turn\n").unwrap();
+        let before = SystemGit.working_tree_diff(&root).unwrap();
+        std::fs::write(root.join("added.txt"), "by the turn\n").unwrap();
+        let after = SystemGit.working_tree_diff(&root).unwrap();
+
+        let from = SystemGit
+            .snapshot_tree(&nested, commit.as_deref(), Some(&before))
+            .unwrap();
+        let to = SystemGit
+            .snapshot_tree(&nested, commit.as_deref(), Some(&after))
+            .unwrap();
+        let clean = SystemGit
+            .snapshot_tree(&nested, commit.as_deref(), None)
+            .unwrap();
+        assert_ne!(from, clean, "the diff was applied, paths outside included");
+
+        let diff = SystemGit.tree_diff(&nested, &from, &to).unwrap();
+        assert!(diff.contains("+by the turn"), "{diff}");
+        assert!(!diff.contains("before the turn"), "{diff}");
+        assert_eq!(SystemGit.tree_diff(&nested, &to, &to).unwrap(), "");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// On a branch with no commits yet the whole tree is the diff.
+    #[test]
+    #[ignore = "requires a real git binary"]
+    fn real_git_diffs_an_unborn_branch_as_additions() {
+        if !fixture::git_available() {
+            eprintln!("skipping: no usable git");
+            return;
+        }
+        let root = temporary_directory("conformance-snapshot-unborn");
+        std::fs::create_dir_all(&root).unwrap();
+        fixture::init(&root);
+        std::fs::write(root.join("first.txt"), "hello\n").unwrap();
+
+        assert_eq!(SystemGit.commit(&root, "HEAD").unwrap(), None);
+        let diff = String::from_utf8(SystemGit.working_tree_diff(&root).unwrap()).unwrap();
+        assert!(diff.contains("new file mode"), "{diff}");
+        assert!(diff.contains("+hello"), "{diff}");
 
         std::fs::remove_dir_all(root).unwrap();
     }

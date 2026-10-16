@@ -409,6 +409,14 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "snapshot_turn_diff", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}},
+            %{name: "turn", required: true, type: %{kind: :number, integer: true}}
+          ]
+        }},
         %{name: "shutdown", payload: %{kind: :unit}}
       ]
     },
@@ -466,7 +474,8 @@ defmodule Styra.Protocol do
         %{name: "quota_log", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "QuotaEvent"}}}},
         %{name: "interaction_actions", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "ActionRecord"}}}},
         %{name: "interaction_processes", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :list, item: %{kind: :ref, name: "SandboxProcess"}}}}},
-        %{name: "interaction_driva", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}}
+        %{name: "interaction_driva", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}},
+        %{name: "snapshot_turn_diff", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "TurnDiff"}}}}
       ]
     },
 
@@ -1088,6 +1097,16 @@ defmodule Styra.Protocol do
         %{name: "command", required: true, type: %{kind: :string}},
         %{name: "threads", required: true, type: %{kind: :number, integer: true}},
         %{name: "rss_kib", required: true, type: %{kind: :number, integer: true}}
+      ]
+    },
+
+    # What one turn changed in the checkout, read from its snapshots: see
+    # `crate::protocol::Request::SnapshotTurnDiff`.
+    "TurnDiff" => %{
+      kind: :struct,
+      fields: [
+        %{name: "diff", required: true, type: %{kind: :string}},
+        %{name: "ended", required: true, type: %{kind: :boolean}}
       ]
     },
 
@@ -1955,6 +1974,7 @@ defmodule Styra.Protocol do
     "interaction_actions",
     "interaction_processes",
     "interaction_driva",
+    "snapshot_turn_diff",
     "shutdown"
   ]
 
@@ -3254,6 +3274,38 @@ defmodule Styra.Protocol do
     def interaction_driva!(data), do: Styra.Protocol.build!("interaction_driva", data)
 
     @doc ~S"""
+    What one operator turn changed in the checkout, read from the
+    snapshots taken as it started and as it ended — everything, whoever
+    wrote it, rather than what the agent reported writing.
+
+    Every interaction working in a Git checkout is snapshotted as each
+    turn ends and before each operator message is sent. A snapshot names
+    the commit checked out and, when `git status` reports anything, carries
+    the diff from that commit to the working tree, untracked files
+    included. The turn-end snapshot is taken after any auto-commit of the
+    turn; the one before a message is skipped when the checkout is exactly
+    as the last snapshot recorded it. Snapshots are appended to the
+    Session's durable directory and outlive the interaction.
+
+    A turn that has not ended yet — the latest one, still running — is
+    answered from the most recent snapshot to the checkout as it is now,
+    so asking again shows the turn's progress.
+
+    `turn` counts the Session's operator messages from 1, as a client
+    listing them counts them; for a branch that includes the inherited
+    ones. Answered for a stored Session as for a live one.
+
+    Fields of `data`:
+
+      * `id  `  string
+      * `turn`  number
+    """
+    def snapshot_turn_diff(data), do: Styra.Protocol.build("snapshot_turn_diff", data)
+
+    @doc "`snapshot_turn_diff/1`, raising on a request the server would refuse."
+    def snapshot_turn_diff!(data), do: Styra.Protocol.build!("snapshot_turn_diff", data)
+
+    @doc ~S"""
     Ask the server to remove its socket and exit. Any live interactions it owns die
     with it, so this is the deliberate counterpart to the daemon outliving
     its clients.
@@ -3321,7 +3373,8 @@ defmodule Styra.Protocol.Response do
     {:quota_log, "quota_log"},
     {:interaction_actions, "interaction_actions"},
     {:interaction_processes, "interaction_processes"},
-    {:interaction_driva, "interaction_driva"}
+    {:interaction_driva, "interaction_driva"},
+    {:snapshot_turn_diff, "snapshot_turn_diff"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -3448,6 +3501,12 @@ defmodule Styra.Protocol.Response do
   def interaction_processes, do: "interaction_processes"
 
   def interaction_driva, do: "interaction_driva"
+
+  @doc ~S"""
+  `None` when the turn has no snapshots to compare: it ran outside a
+  Git checkout, a snapshot of it failed, or it predates snapshots.
+  """
+  def snapshot_turn_diff, do: "snapshot_turn_diff"
 end
 
 defmodule Styra.Protocol.WireResponse do

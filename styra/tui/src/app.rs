@@ -327,6 +327,9 @@ pub struct App {
     /// The linked Session's log, while the preview is on a `branch` marker;
     /// see [`crate::branch_log`].
     pub branch_log: Option<crate::branch_log::BranchLog>,
+    /// What the turn the preview's diff is about changed according to its
+    /// snapshots; see [`crate::turn_snapshot`].
+    pub turn_snapshot: Option<crate::turn_snapshot::TurnSnapshot>,
     /// The microphone capture that is running, if one is; see [`Recorded`].
     /// While it is set the message box is the level meter, and the keys that
     /// would type into the box finish, cancel, or boost the recording instead:
@@ -375,7 +378,9 @@ pub enum Request {
     /// Choose among the Workspaces with live work — or, when `listed`, with
     /// any Interaction the navigator lists — to open the live interactions at
     /// the first of that Workspace's.
-    WorkspaceJump { listed: bool },
+    WorkspaceJump {
+        listed: bool,
+    },
     /// Show every running and idle interaction as a grid, with a fresh
     /// listing behind it.
     Overview,
@@ -586,6 +591,7 @@ impl App {
             workspace_jump: None,
             branch_prompt: None,
             branch_log: None,
+            turn_snapshot: None,
             recording: None,
             busy: None,
             insert: None,

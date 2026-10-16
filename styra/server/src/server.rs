@@ -7,7 +7,6 @@ use crate::interaction::{
 };
 use crate::journal::{self, Journal};
 use crate::naming::Topic;
-use crate::protocol::WorkspaceSummary;
 use crate::protocol::{Action, ActionOrigin, ActionStatus};
 use crate::protocol::{
     Answer, CheckoutState, CleanedWorktree, CompletionState, Contract, DrivaOptions,
@@ -20,6 +19,7 @@ use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
     SequencedUpdate, SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
 };
+use crate::protocol::{TurnDiff, WorkspaceSummary};
 use crate::transport::MAX_REQUEST_BYTES;
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -231,11 +231,12 @@ struct GoneIdle {
 
 impl GoneIdle {
     fn became_idle(&self) {
-        // Committed first, so the reading below describes what the commit
-        // left — nothing, ordinarily — and a client arriving at the idle
-        // interaction finds the commit already in its stream.
+        // Committed first, so the snapshot and the reading below describe
+        // what the commit left — nothing, ordinarily — and a client arriving
+        // at the idle interaction finds the commit already in its stream.
         if let Some(interaction) = self.interaction.upgrade() {
             interaction.commit_turn();
+            interaction.snapshot(journal::SnapshotMoment::TurnEnded);
         }
         self.notice.became_idle();
         self.working_tree.reread();
@@ -274,6 +275,10 @@ struct WorkingTree {
     /// moving in and out of an interaction queues one `git` process rather
     /// than one per visit.
     rechecking: AtomicBool,
+    /// Held while a snapshot is read and appended. A turn ending and the next
+    /// message being sent happen on different threads, and each snapshot is
+    /// numbered from the one before it.
+    snapshotting: Mutex<()>,
 }
 
 impl WorkingTree {
@@ -295,6 +300,7 @@ impl WorkingTree {
             uncommitted: AtomicBool::new(false),
             state: Mutex::new(None),
             rechecking: AtomicBool::new(false),
+            snapshotting: Mutex::new(()),
         };
         tree.locate();
         tree
@@ -387,6 +393,35 @@ impl WorkingTree {
         self.git.commit_all(&checkout, message).map(Some)
     }
 
+    /// Append the commit the checkout is at, and the diff of anything
+    /// uncommitted in it, to the snapshots of the Session at `session_path`.
+    /// `None` for a checkout outside any repository, which has nothing to
+    /// record, and before a message when nothing has happened in the checkout
+    /// since the last snapshot — ordinarily the one taken as the last turn
+    /// ended — which already records what the agent is about to be handed.
+    fn snapshot(
+        &self,
+        session_path: &Path,
+        moment: journal::SnapshotMoment,
+        turn: u64,
+    ) -> Result<Option<journal::Snapshot>> {
+        let _snapshotting = self.snapshotting.lock().expect("snapshot lock poisoned");
+        let Some(state) = checkout_now(self.git.as_ref(), &self.checkout())? else {
+            return Ok(None);
+        };
+        let state = journal::SnapshotState {
+            moment,
+            turn: Some(turn),
+            ..state
+        };
+        if moment == journal::SnapshotMoment::BeforeMessage
+            && journal::unchanged_since_last_snapshot(session_path, &state)?
+        {
+            return Ok(None);
+        }
+        journal::append_snapshot(session_path, state).map(Some)
+    }
+
     /// Ask Git where the work is happening, and only that.
     ///
     /// A repository that is unreadable — a workspace outside one, a checkout
@@ -416,6 +451,90 @@ impl WorkingTree {
             .expect("checkout state lock poisoned")
             .clone()
     }
+}
+
+/// What `turn` of the Session at `session_path` changed in its checkout, from
+/// the snapshot it started from to the one it ended on; `None` when it does
+/// not have both.
+///
+/// Git is asked in the checkout the turn ended in, which is where both trees'
+/// objects are: a turn moving between repositories is not one this can diff.
+fn snapshot_turn_diff(
+    git: &dyn crate::git::Git,
+    session_path: &Path,
+    turn: u64,
+) -> Result<Option<TurnDiff>> {
+    let Some(snapshots) = journal::turn_snapshots(session_path, turn)? else {
+        return Ok(None);
+    };
+    let directory = if session_path.is_dir() {
+        session_path
+    } else {
+        session_path.parent().unwrap_or(session_path)
+    };
+    let tree = |snapshot: &journal::Snapshot| -> Result<String> {
+        let diff = snapshot
+            .diff
+            .as_ref()
+            .map(|relative| {
+                let path = directory.join(relative);
+                std::fs::read(&path).with_context(|| format!("reading {}", path.display()))
+            })
+            .transpose()?;
+        git.snapshot_tree(
+            &snapshot.checkout,
+            snapshot.commit.as_deref(),
+            diff.as_deref(),
+        )
+        .with_context(|| format!("rebuilding snapshot {}", snapshot.sequence))
+    };
+    let (checkout, from, to, ended) = match &snapshots {
+        journal::TurnSnapshots::Ended(start, end) => {
+            (&end.checkout, tree(start)?, tree(end)?, true)
+        }
+        // Read as a snapshot would be taken now, without recording one.
+        journal::TurnSnapshots::Running(last) => {
+            let state = checkout_now(git, &last.checkout)?.with_context(|| {
+                format!("{} is no longer in a Git checkout", last.checkout.display())
+            })?;
+            let now = git
+                .snapshot_tree(
+                    &state.checkout,
+                    state.commit.as_deref(),
+                    state.diff.as_deref(),
+                )
+                .context("reading the checkout as it is now")?;
+            (&last.checkout, tree(last)?, now, false)
+        }
+    };
+    let diff = git.tree_diff(checkout, &from, &to)?;
+    Ok(Some(TurnDiff { diff, ended }))
+}
+
+/// The checkout's commit and uncommitted work as a snapshot would record them,
+/// or `None` outside a repository. Not yet placed in a turn: `moment` and
+/// `turn` are for the caller to fill in.
+fn checkout_now(
+    git: &dyn crate::git::Git,
+    checkout: &Path,
+) -> Result<Option<journal::SnapshotState>> {
+    let Some(state) = checkout_state(git, checkout) else {
+        return Ok(None);
+    };
+    let commit = git.commit(checkout, "HEAD")?;
+    let diff = if git.has_uncommitted_changes(checkout)? {
+        Some(git.working_tree_diff(checkout)?)
+    } else {
+        None
+    };
+    Ok(Some(journal::SnapshotState {
+        moment: journal::SnapshotMoment::TurnEnded,
+        turn: None,
+        checkout: checkout.to_path_buf(),
+        branch: state.branch,
+        commit,
+        diff,
+    }))
 }
 
 /// What Git says about the working tree `checkout` sits in, or `None` when it
@@ -861,6 +980,30 @@ impl ManagedInteraction {
         Ok(())
     }
 
+    /// Record the commit the checkout is at, and the diff of anything
+    /// uncommitted beside it, if the interaction works in a Git checkout.
+    ///
+    /// Taken as a turn ends, for what the agent left, and again before the
+    /// next message is sent if anything changed in between — the operator
+    /// working in the checkout, say — so the state the agent was handed is
+    /// always on record. A snapshot that cannot be taken holds nothing back;
+    /// it says so in the interaction's own stream.
+    fn snapshot(&self, moment: journal::SnapshotMoment) {
+        // Before a message, the turn it starts; as a turn ends, the one whose
+        // message is the latest.
+        let turn =
+            self.operator_turns() + u64::from(moment == journal::SnapshotMoment::BeforeMessage);
+        if let Err(error) = self.working_tree.snapshot(&self.session_path, moment, turn) {
+            let when = match moment {
+                journal::SnapshotMoment::BeforeMessage => "before this turn",
+                journal::SnapshotMoment::TurnEnded => "as this turn ended",
+            };
+            self.push_update(InteractionUpdate::Log(LogEntry::warn(format!(
+                "could not snapshot the checkout {when}: {error:#}"
+            ))));
+        }
+    }
+
     /// Commit what the turn that has just ended left in the checkout, if the
     /// operator has left committing on, and say what happened in the
     /// interaction's own stream — a commit the operator did not make has to be
@@ -917,6 +1060,22 @@ impl ManagedInteraction {
                 "could not commit this turn: {error:#}"
             )))),
         }
+    }
+
+    /// How many operator messages this interaction's history holds — a
+    /// resumed or branched one's included, since its history is seeded with
+    /// the journal — which is the number a client counts to the same turn.
+    fn operator_turns(&self) -> u64 {
+        let updates = self.updates.lock().expect("interaction updates poisoned");
+        updates
+            .iter()
+            .filter(|sequenced| {
+                matches!(
+                    sequenced.update,
+                    InteractionUpdate::Event(crate::event::AgentEvent::UserMessage { .. })
+                )
+            })
+            .count() as u64
     }
 
     /// The operator message that started the latest turn, and everything the
@@ -1226,6 +1385,7 @@ impl ManagedInteraction {
                 self.interaction.session_id()
             );
         }
+        self.snapshot(journal::SnapshotMoment::BeforeMessage);
         self.interaction.send(text)?;
         Ok(())
     }
@@ -1247,6 +1407,7 @@ impl ManagedInteraction {
             }
             None => message.text,
         };
+        self.snapshot(journal::SnapshotMoment::BeforeMessage);
         self.interaction
             .send_with_selection(&text, Some(&self.selection()))?;
         // The server accepts the turn before the provider echoes its
@@ -3739,7 +3900,8 @@ impl ServerState {
             | Request::SessionIntegrationResult { id }
             | Request::InteractionActions { id }
             | Request::InteractionProcesses { id }
-            | Request::InteractionDriva { id } => Some(id.as_str()),
+            | Request::InteractionDriva { id }
+            | Request::SnapshotTurnDiff { id, .. } => Some(id.as_str()),
             _ => match crate::actions::scope(&request) {
                 Scope::Session(id) => Some(id),
                 _ => None,
@@ -3760,6 +3922,14 @@ impl ServerState {
             }
         }
         match request {
+            Request::SnapshotTurnDiff { id, turn } => {
+                let summary = self.stored_summary(&id)?;
+                Ok(Response::SnapshotTurnDiff(snapshot_turn_diff(
+                    self.inner.git.as_ref(),
+                    &summary.path,
+                    turn,
+                )?))
+            }
             Request::InteractionProcesses { id } => {
                 let live = self
                     .inner
@@ -5287,6 +5457,87 @@ mod tests {
         std::fs::create_dir_all(&bare).unwrap();
         let outside = WorkingTree::new(crate::git::FakeGit::shared(), bare);
         assert_eq!(outside.commit("Anything").unwrap(), None, "no repository");
+    }
+
+    /// A snapshot names the commit and carries a diff only when there is
+    /// uncommitted work. One is always taken as a turn ends; one before a
+    /// message only when the checkout changed since the last, and none
+    /// outside a repository at all.
+    #[test]
+    fn a_working_tree_snapshot_records_the_commit_and_any_uncommitted_diff() {
+        use journal::SnapshotMoment::{BeforeMessage, TurnEnded};
+        let host = temp_path("working-tree-snapshot-host");
+        let session = temp_path("working-tree-snapshot-session");
+        for directory in [&host, &session] {
+            std::fs::remove_dir_all(directory).ok();
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let tree = WorkingTree::new(git.clone(), host.clone());
+
+        let first = tree.snapshot(&session, BeforeMessage, 1).unwrap().unwrap();
+        assert_eq!((first.sequence, first.moment), (1, BeforeMessage));
+        assert!(first.commit.is_some());
+        assert_eq!(first.diff, None, "a clean checkout has no diff");
+
+        // The agent changes nothing: the turn's end is recorded all the same.
+        let ended = tree.snapshot(&session, TurnEnded, 1).unwrap().unwrap();
+        assert_eq!((ended.sequence, ended.moment), (2, TurnEnded));
+        // And nothing happens before the next message, so it is not recorded.
+        assert_eq!(tree.snapshot(&session, BeforeMessage, 2).unwrap(), None);
+
+        // The operator edits the checkout between turns.
+        git.set_uncommitted_changes(&host, true);
+        let edited = tree.snapshot(&session, BeforeMessage, 2).unwrap().unwrap();
+        assert_eq!(edited.sequence, 3);
+        assert_eq!(edited.commit, first.commit);
+        let diff = std::fs::read_to_string(session.join(edited.diff.unwrap())).unwrap();
+        assert!(diff.starts_with("fake diff of"), "{diff}");
+        assert_eq!(tree.snapshot(&session, BeforeMessage, 2).unwrap(), None);
+
+        // A turn whose work was committed ends on a clean checkout.
+        git.commit_all(&host, "Turn").unwrap();
+        let committed = tree.snapshot(&session, TurnEnded, 2).unwrap().unwrap();
+        assert_eq!(committed.diff, None);
+        assert_eq!(journal::read_snapshots(&session).unwrap().len(), 4);
+
+        // Turn 1 changed nothing; turn 2 started from the operator's edit.
+        let diff = |turn| snapshot_turn_diff(git.as_ref(), &session, turn).unwrap();
+        let first = diff(1).unwrap();
+        assert_eq!((first.diff.as_str(), first.ended), ("", true));
+        let second = diff(2).unwrap();
+        assert!(second.ended);
+        assert!(
+            second.diff.starts_with("fake diff from tree("),
+            "{second:?}"
+        );
+        assert!(
+            second.diff.contains("fake diff of"),
+            "from the edited tree: {second:?}"
+        );
+
+        // Turn 3 is running: read from turn 2's end to the checkout now,
+        // without recording anything.
+        let running = diff(3).unwrap();
+        assert_eq!((running.diff.as_str(), running.ended), ("", false));
+        git.set_uncommitted_changes(&host, true);
+        let running = diff(3).unwrap();
+        assert!(!running.ended);
+        assert!(running.diff.contains("fake diff of"), "{running:?}");
+        assert_eq!(journal::read_snapshots(&session).unwrap().len(), 4);
+        git.set_uncommitted_changes(&host, false);
+
+        let bare = temp_path("working-tree-snapshot-bare");
+        std::fs::remove_dir_all(&bare).ok();
+        std::fs::create_dir_all(&bare).unwrap();
+        let outside = WorkingTree::new(crate::git::FakeGit::shared(), bare);
+        assert_eq!(
+            outside.snapshot(&session, TurnEnded, 1).unwrap(),
+            None,
+            "no repository"
+        );
+        assert_eq!(journal::read_snapshots(&session).unwrap().len(), 4);
     }
 
     /// The subject is the start of what the agent said last; the body is the

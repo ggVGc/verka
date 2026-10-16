@@ -638,6 +638,8 @@ fn draw_main(
         quota: &quota_alert,
         auto_retry: app.auto_retry,
         auto_commit: app.auto_commit && !app.session_id.is_empty(),
+        // Shown on the blank screen too: there it is the choice the first
+        // message's interaction will be created with.
     };
     let launcher = app.launcher.as_ref().map(launcher_view);
     let capture = app.recording.as_ref().map(recording);
