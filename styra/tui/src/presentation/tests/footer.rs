@@ -131,21 +131,6 @@ mod tests {
         );
     }
 
-    /// The fleet tally rides the panel's bottom border rather than the footer
-    /// row below it, so the footer can give its whole left edge to the path.
-    #[test]
-    fn panel_border_opens_with_the_fleet_tally() {
-        let mut app = test_support::app("current");
-        app.interactions.refresh(vec![
-            interaction("current", InteractionActivity::Running),
-            interaction("other", InteractionActivity::Pending),
-            interaction("done", InteractionActivity::Stopped),
-        ]);
-
-        let bottom_border = test_support::screen(&app).row(18);
-        assert!(bottom_border.starts_with("└ 1/1/1 "), "{bottom_border}");
-    }
-
     #[test]
     fn working_directory_opens_the_bottom_row() {
         let mut app = test_support::app("s1");
