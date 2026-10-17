@@ -51,7 +51,8 @@ fn run(terminal: &mut DefaultTerminal, diff: &mut CheckoutDiff) -> anyhow::Resul
         let mut measured = CheckoutDiffFeedback::default();
         terminal
             .draw(|frame| {
-                let view = diff.view(block(notice.as_deref()));
+                let mut view = diff.view(block(notice.as_deref()));
+                view.thumbnail = true;
                 measured = render(frame, &view, frame.area());
             })
             .context("drawing the diff")?;

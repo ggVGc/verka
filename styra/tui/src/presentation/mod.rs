@@ -476,6 +476,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 Some(diff) => diff.view(block),
                 None => styra_diff::CheckoutDiffView::unread(block),
             };
+            diff.thumbnail = true;
             if app.diff_conversation {
                 diff.conversation = Some(styra_ui::picker::latest_conversation(
                     app.timeline.entries.iter().map(|entry| entry.event()),

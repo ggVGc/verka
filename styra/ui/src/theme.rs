@@ -161,6 +161,9 @@ pub const USER_MESSAGE_BACKGROUND: Color = palette::DARK_GREEN_TINT;
 /// [`ERROR`], faint enough that the code's own colors still read over it.
 pub const DIFF_ADDED_BACKGROUND: Color = palette::FAINT_GREEN;
 pub const DIFF_REMOVED_BACKGROUND: Color = palette::FAINT_RED;
+/// Stronger, soft fills for the diff overview's contiguous edit sections.
+pub const DIFF_MAP_ADDED: Color = palette::GREEN_TINT_BRIGHT;
+pub const DIFF_MAP_REMOVED: Color = palette::RED_TINT_BRIGHT;
 /// Red mixed into removed lines' syntax colors.
 pub const DIFF_REMOVED_FOREGROUND_TINT: Color = palette::RED_FG;
 /// Behind a diff's file headers, so each file's patch opens under a bar.

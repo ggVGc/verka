@@ -200,6 +200,7 @@ impl CheckoutDiff {
             },
             requested_scroll: self.scroll.clamped(),
             per_file: self.per_file,
+            thumbnail: false,
             hide_removed: self.hide_removed,
             compact_dirs: self.compact_dirs,
             tint: self.tint,
