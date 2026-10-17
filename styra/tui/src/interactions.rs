@@ -40,9 +40,9 @@ pub struct LiveInteractions {
     /// include every completed one, so this hides those whatever
     /// `show_completed` says.
     pub hide_stopped: bool,
-    /// Draws each row without the line quoting its last response, so more
-    /// rows fit in the list.
-    pub hide_responses: bool,
+    /// Shows the line quoting each row's last response. Off by default so
+    /// more rows fit in the list.
+    pub show_responses: bool,
     pub items: Vec<InteractionSummary>,
     pub workspaces: Vec<WorkspaceSummary>,
     /// The one client-side index of operator-facing Session names. Interaction
@@ -1002,7 +1002,7 @@ impl LiveInteractions {
     }
 
     pub fn toggle_responses(&mut self) {
-        self.hide_responses = !self.hide_responses;
+        self.show_responses = !self.show_responses;
     }
 
     /// Select the entry to move to after completing or abandoning an interaction.

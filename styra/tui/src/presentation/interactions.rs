@@ -133,7 +133,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             last_message: interaction
                 .last_message
                 .as_deref()
-                .filter(|_| !app.interactions.hide_responses),
+                .filter(|_| app.interactions.show_responses),
         });
     }
     InteractionNavigator {

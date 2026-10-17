@@ -169,8 +169,9 @@ interaction's tags, `C` / `Z` marks it completed / abandoned and stops it (also
 available directly in the event view), and `c` shows or hides those rows
 again. `s` hides or shows every stopped interaction, completed ones included,
 leaving only those still taking messages; the list's title says
-`stopped hidden` while it is on. `m` hides or shows the line under each row
-quoting its last response. Completing or abandoning an interaction in the list moves to another
+`stopped hidden` while it is on. `m` shows or hides the line under each row
+quoting its last response; these lines are hidden by default.
+Completing or abandoning an interaction in the list moves to another
 live interaction in the same worktree first, then in the same Workspace, then
 to a stopped one in the same Workspace — the nearest row in the list each time.
 It leaves the Workspace only when nothing unfinished is left in it.
