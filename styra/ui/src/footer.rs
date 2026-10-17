@@ -58,13 +58,19 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
             Constraint::Length(commit_width),
         ])
         .split(area);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            view.working_directory.to_owned(),
-            Style::default().fg(theme::ADDITIONAL_INFO),
-        ))),
-        chunks[0],
-    );
+    let mut context = Vec::new();
+    let build_branch = env!("STYRA_BUILD_BRANCH");
+    if build_branch != "main" {
+        context.push(Span::styled(
+            format!("[build: {build_branch}] "),
+            Style::default().fg(theme::ACCENT),
+        ));
+    }
+    context.push(Span::styled(
+        view.working_directory.to_owned(),
+        Style::default().fg(theme::ADDITIONAL_INFO),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(context)), chunks[0]);
     if !view.quota.is_empty() {
         let spans = view
             .quota
@@ -155,7 +161,7 @@ mod tests {
             bold: true,
         }];
         let output = screen(
-            120,
+            120 + env!("STYRA_BUILD_BRANCH").width() as u16,
             &FooterView {
                 working_directory: "/workspace",
                 quota: &quota,
@@ -170,6 +176,11 @@ mod tests {
             "/workspace",
         ] {
             assert!(output.contains(expected), "missing {expected}: {output}");
+        }
+        if env!("STYRA_BUILD_BRANCH") == "main" {
+            assert!(!output.contains("[build:"));
+        } else {
+            assert!(output.contains(&format!("[build: {}]", env!("STYRA_BUILD_BRANCH"))));
         }
     }
 }
