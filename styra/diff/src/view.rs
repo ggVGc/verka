@@ -18,6 +18,7 @@ use std::path::Path;
 use styra_ui::application::{Panel, PanelFeedback};
 use styra_ui::diff::{diff_block_lines, diff_block_lines_fading, fill_changed_rows, CONTEXT_FADE};
 use styra_ui::event_list::wrap_rendered;
+use styra_ui::markdown::{markdown_block_lines_with_links, LinkDisplay};
 use styra_ui::preview::PreviewFeedback;
 use styra_ui::search::SearchView;
 use styra_ui::theme;
@@ -703,15 +704,12 @@ fn render_description(
     let muted = Style::default().fg(theme::MUTED_TEXT);
     let mut lines = match report.describe(file.path, file.patch) {
         Described::Described { description, stale } => {
-            let mut lines: Vec<_> = description
-                .lines()
-                .map(|line| {
-                    Line::from(Span::styled(
-                        format!(" {line}"),
-                        Style::default().fg(theme::TEXT),
-                    ))
-                })
-                .collect();
+            let mut lines = markdown_block_lines_with_links(
+                description,
+                Style::default().fg(theme::TEXT),
+                " ",
+                LinkDisplay::Compact,
+            );
             if stale {
                 lines.push(Line::from(Span::styled(
                     " written before the file's latest edits · E: describe them again",
@@ -1461,7 +1459,8 @@ index 1111111..2222222 100644
                     "src/a.rs".to_owned(),
                     crate::FileReport {
                         fingerprint: crate::report::fingerprint(patch),
-                        description: "Replaces b with c and d, so callers get both.".into(),
+                        description: "**Replaces** `b` with `c` and `d`, so callers get both."
+                            .into(),
                     },
                 )]
                 .into(),
