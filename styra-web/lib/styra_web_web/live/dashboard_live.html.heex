@@ -1,283 +1,234 @@
 <Layouts.app flash={@flash}>
-  <div class="min-h-screen bg-gray-100 text-gray-900">
-    <header class="border-b border-gray-300 bg-white">
-      <div class="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-5 lg:px-8">
-        <div class="flex items-center gap-3">
-          <div class="grid size-9 place-items-center rounded-sm bg-gray-900 text-base font-bold text-white">
-            S
-          </div>
-          <div>
-            <h1 class="text-base font-semibold tracking-tight">Styra Live</h1>
-            <p class="text-xs text-gray-500">Local interaction console</p>
-          </div>
-        </div>
-
-        <div
-          id="connection-status"
-          class="flex items-center gap-2 border border-gray-300 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700"
-        >
-          <span class={[
-            "size-2 rounded-full",
-            if(@connected, do: "bg-emerald-600", else: "bg-red-600")
-          ]}></span>
-          <span>{if @connected, do: @service || "Connected", else: "Offline"}</span>
-        </div>
+  <div id="styra-console" class="styra-console" phx-hook="ConsoleKeys">
+    <header class="console-header">
+      <h1>styra <span>/ live</span></h1>
+      <div id="connection-status" class="connection-status" data-connected={to_string(@connected)}>
+        <span aria-hidden="true">●</span>
+        {if @connected, do: @service || "connected", else: "offline"}
       </div>
     </header>
 
-    <div :if={@error} class="mx-auto max-w-[1600px] px-4 pt-4 sm:px-5 lg:px-8">
-      <div
-        class="flex items-center gap-3 border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800"
-        role="alert"
-      >
-        <.icon name="hero-exclamation-triangle" class="size-5 shrink-0" />
-        <span>{@error}</span>
-      </div>
+    <div :if={@error} id="console-error" class="console-error" role="alert">
+      <.icon name="hero-exclamation-triangle" class="size-4 shrink-0" />
+      {@error}
     </div>
 
-    <div class="mx-auto grid max-w-[1600px] gap-4 px-3 py-4 sm:px-5 lg:grid-cols-[22rem_minmax(0,1fr)] lg:px-8">
-      <aside class={[
-        "overflow-hidden border border-gray-300 bg-white",
-        @selected_id && "hidden lg:block"
-      ]}>
-        <div class="flex items-center justify-between border-b border-gray-300 bg-gray-50 px-4 py-2.5">
-          <div>
-            <h2 class="text-sm font-semibold">Interactions</h2>
-            <p class="text-xs text-gray-500">
-              {if @connected, do: "#{@interaction_count} live", else: "Server unavailable"}
-            </p>
-          </div>
-          <span
-            :if={@refreshing}
-            class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700"
-          ></span>
-        </div>
-
-        <div
-          id="interactions"
-          phx-update="stream"
-          class="max-h-[calc(100dvh-11.5rem)] divide-y divide-gray-200 overflow-y-auto sm:max-h-[calc(100dvh-12rem)]"
+    <section class="console-pane" aria-label="Interaction console">
+      <div class="pane-title">
+        <button
+          id="back-to-interactions"
+          type="button"
+          phx-click="toggle_interactions"
+          aria-expanded={to_string(@navigator_open)}
+          aria-controls="interaction-navigator"
+          class="navigator-toggle"
         >
-          <div
-            id="interactions-empty"
-            class="hidden px-4 py-12 text-center text-sm text-gray-500 only:block"
-          >
-            No live interactions.
+          <span aria-hidden="true">{if @navigator_open, do: "▾", else: "▸"}</span>
+          live interactions <span class="count">{@interaction_count}</span>
+          <kbd>l</kbd>
+        </button>
+        <span :if={@selected_interaction} class="pane-selection">
+          {display_name(@selected_interaction)}
+        </span>
+      </div>
+
+      <div id="interaction-navigator" class="interaction-navigator" hidden={!@navigator_open}>
+        <div class="navigator-heading">
+          <span>all workspaces · live interactions</span>
+          <span class="navigator-hint">↑ ↓ move · Enter open · Esc close</span>
+        </div>
+        <div id="interactions" phx-update="stream" class="interaction-list">
+          <div id="interactions-empty" class="stream-empty hidden only:block">
+            {if @connected, do: "No live interactions.", else: "Waiting for the Styra server…"}
           </div>
           <button
             :for={{dom_id, interaction} <- @streams.interactions}
             id={dom_id}
             type="button"
-            phx-click="select"
+            phx-click={JS.push("select") |> JS.focus(to: "#transcript")}
             phx-value-id={interaction["id"]}
-            class={[
-              "block min-h-16 w-full touch-manipulation border-l-2 px-3 py-2.5 text-left",
-              if(@selected_id == interaction["id"],
-                do: "border-l-gray-900 bg-gray-100",
-                else: "border-l-transparent hover:bg-gray-50"
-              )
-            ]}
+            aria-current={if @selected_id == interaction["id"], do: "true", else: "false"}
+            class="interaction-row"
           >
-            <div class="flex items-start justify-between gap-3">
-              <span class="truncate text-sm font-semibold">{display_name(interaction)}</span>
-              <span class="flex shrink-0 items-center gap-1.5 text-[11px] uppercase tracking-wide text-gray-500">
-                <span class={["size-1.5 rounded-full", activity_class(interaction["activity"])]}></span>
-                {interaction["activity"]}
+            <span class="interaction-main">
+              <span
+                class="activity-marker"
+                data-activity={interaction["activity"]}
+                aria-label={interaction["activity"]}
+              >
+                {activity_marker(interaction["activity"])}
               </span>
-            </div>
-            <p class="mt-0.5 truncate font-mono text-[11px] text-gray-500">
-              {selection_name(interaction)}
-            </p>
-            <p class="mt-1.5 line-clamp-2 text-sm leading-snug text-gray-600">
-              {interaction["last_message"] || "No agent message yet"}
-            </p>
+              <span class="interaction-name">{display_name(interaction)}</span>
+              <span class="interaction-model">{selection_name(interaction)}</span>
+              <span class="interaction-activity" data-activity={interaction["activity"]}>{interaction[
+                "activity"
+              ]}</span>
+            </span>
+            <span class="interaction-context">{interaction["workspace"]}</span>
+            <span :if={interaction["last_message"]} class="interaction-preview">{interaction[
+              "last_message"
+            ]}</span>
           </button>
         </div>
-      </aside>
+      </div>
 
-      <section class={[
-        "min-h-[calc(100dvh-8rem)] min-w-0 flex-col overflow-hidden border border-gray-300 bg-white lg:flex lg:min-h-[calc(100vh-8.5rem)]",
-        if(@selected_id, do: "flex", else: "hidden")
-      ]}>
-        <%= if interaction = @selected_interaction do %>
-          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-300 bg-gray-50 px-3 py-2 sm:gap-3 sm:px-4">
-            <div class="flex min-w-0 flex-1 items-center gap-2">
-              <button
-                id="back-to-interactions"
-                type="button"
-                aria-label="Back to interactions"
-                class="grid size-10 shrink-0 touch-manipulation place-items-center border border-gray-300 bg-white text-gray-600 hover:bg-gray-100 lg:hidden"
-                phx-click="deselect"
-              >
-                <.icon name="hero-chevron-left" class="size-5" />
-              </button>
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <h2 class="truncate text-sm font-semibold">{display_name(interaction)}</h2>
-                  <span class="border border-gray-300 bg-white px-1.5 py-0.5 text-[11px] text-gray-600">
-                    {interaction["activity"]}
-                  </span>
-                </div>
-                <p class="truncate font-mono text-xs text-gray-500">
-                  {interaction["workspace"]}
-                </p>
-              </div>
-            </div>
-            <div class="flex shrink-0 gap-2">
-              <button
-                id="interrupt-button"
-                class="min-h-9 touch-manipulation border border-gray-300 bg-white px-3 text-sm text-gray-700 hover:bg-gray-100"
-                phx-click="action"
-                phx-value-name="interrupt"
-              >
-                Interrupt
-              </button>
-              <button
-                id="stop-button"
-                class="min-h-9 touch-manipulation border border-red-300 bg-white px-3 text-sm text-red-700 hover:bg-red-50"
-                phx-click="action"
-                phx-value-name="stop"
-              >
-                Stop
-              </button>
-            </div>
-          </div>
+      <div class="log-heading">
+        <h2>interaction log</h2>
+        <div :if={@selected_interaction} class="log-actions">
+          <button
+            id="interrupt-button"
+            type="button"
+            phx-click="action"
+            phx-value-name="interrupt"
+          >interrupt</button>
+          <button id="stop-button" type="button" phx-click="action" phx-value-name="stop">stop</button>
+        </div>
+      </div>
 
-          <div
-            id="transcript"
-            phx-update="stream"
-            class="flex-1 space-y-2 overflow-y-auto overscroll-contain bg-gray-50 p-3 sm:p-4"
-          >
-            <div
-              id="transcript-empty"
-              class="hidden h-full min-h-72 place-items-center text-center only:grid"
-            >
+      <div
+        id="transcript"
+        phx-update="stream"
+        phx-hook="FollowLog"
+        class="interaction-log"
+        tabindex="0"
+        aria-label="Interaction log"
+      >
+        <div id="transcript-empty" class="log-empty hidden only:grid">
+          <%= cond do %>
+            <% @selected_id && !@selected_interaction -> %>
+              <p>Loading interaction…</p>
+            <% @selected_interaction -> %>
               <div>
-                <.icon name="hero-chat-bubble-left-right" class="mx-auto size-10 text-gray-400" />
-                <p class="mt-3 text-sm text-gray-500">Waiting for interaction events…</p>
+                <p>Waiting for interaction events…</p><span>Press i to write a message.</span>
               </div>
-            </div>
-            <article
-              :for={{dom_id, item} <- @streams.updates}
-              id={dom_id}
-              class={[
-                "border px-3 py-2",
-                if(conversational?(item),
-                  do:
-                    if(user_message?(item),
-                      do: "ml-4 border-gray-400 bg-white sm:ml-10",
-                      else: "mr-4 border-gray-300 bg-white sm:mr-10"
-                    ),
-                  else: "border-gray-200 bg-gray-100"
-                )
-              ]}
-            >
-              <div class="mb-1 flex items-center justify-between gap-3">
-                <span class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
-                  {update_kind(item) |> String.replace("_", " ")}
-                </span>
-                <span class="font-mono text-[10px] text-gray-400">#{item["sequence"]}</span>
+            <% true -> %>
+              <div>
+                <p>styra</p><span>Choose a live interaction above to open its log.</span>
               </div>
-              <p class="whitespace-pre-wrap break-words text-sm leading-6 text-gray-800">
-                {update_text(item)}
-              </p>
-            </article>
+          <% end %>
+        </div>
+        <article
+          :for={{dom_id, item} <- @streams.updates}
+          id={dom_id}
+          class={[
+            "log-entry",
+            conversational?(item) && "conversation-entry",
+            user_message?(item) && "user-entry"
+          ]}
+        >
+          <span class="entry-sequence" aria-label={"Event #{item["sequence"]}"}>{item["sequence"]}</span>
+          <div class="entry-content">
+            <span class="entry-label">{update_label(item)}</span>
+            <p>{update_text(item)}</p>
           </div>
+        </article>
+      </div>
 
-          <div class="border-t border-gray-300 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-            <.form
-              for={@message_form}
-              id="message-form"
-              phx-change="update_draft"
-              phx-submit="send"
-              class="[&>div]:mb-0"
-            >
-              <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem] sm:gap-3 [&>div]:mb-0 [&>div]:min-w-0">
-                <div class="relative [&>div]:mb-0">
-                  <.input
-                    field={@message_form[:text]}
-                    type="textarea"
-                    aria-label="Message"
-                    placeholder="Send a message to this interaction…"
-                    rows="2"
-                    readonly={@audio_state != :idle}
-                    class="min-h-20 w-full resize-none border border-gray-300 bg-white px-3 py-2 pr-14 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-900 sm:min-h-16 sm:text-sm"
-                  />
-                  <button
-                    id="voice-recorder"
-                    type="button"
-                    phx-hook="VoiceRecorder"
-                    phx-update="ignore"
-                    data-state="idle"
-                    aria-label="Record a voice message"
-                    title="Record a voice message"
-                    class="voice-recorder absolute bottom-2 right-2 grid size-10 touch-manipulation place-items-center rounded-full border border-gray-300 bg-white text-gray-600 shadow-sm transition hover:border-gray-500 hover:bg-gray-50 sm:size-9"
-                  >
-                    <.icon name="hero-microphone" class="voice-recorder-mic size-5" />
-                    <span class="voice-recorder-stop size-3 rounded-sm bg-current"></span>
-                  </button>
-                </div>
-                <div class="flex gap-2 sm:flex-col [&>div]:mb-0 [&>div]:min-w-0 [&>div]:flex-1">
-                  <.input
-                    field={@message_form[:contract]}
-                    type="select"
-                    aria-label="Answer contract"
-                    options={contract_options()}
-                    disabled={@audio_state != :idle}
-                    class="h-10 w-full border border-gray-300 bg-white px-2 text-sm text-gray-800 outline-none focus:border-gray-900 sm:h-9"
-                  />
-                  <button
-                    id="send-button"
-                    class="flex h-10 shrink-0 touch-manipulation items-center justify-center gap-2 border border-gray-900 bg-gray-900 px-5 text-sm font-semibold text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50 phx-submit-loading:opacity-60 sm:h-9 sm:px-4"
-                    type="submit"
-                    disabled={@audio_state != :idle}
-                  >
-                    Send <.icon name="hero-arrow-up" class="size-4" />
-                  </button>
-                </div>
-              </div>
-            </.form>
+      <div :if={@selected_interaction} id="interaction-status" class="interaction-status">
+        <span class="status-activity" data-activity={@selected_interaction["activity"]}>
+          {activity_marker(@selected_interaction["activity"])} {@selected_interaction["activity"]}
+        </span>
+        <span class="status-workspace">{@selected_interaction["workspace"]}</span>
+        <span class="status-model">{selection_name(@selected_interaction)}</span>
+      </div>
+      <footer class="console-footer">
+        <button
+          id="compose-button"
+          type="button"
+          phx-click="open_composer"
+          disabled={!@selected_interaction}
+        >
+          <kbd>i</kbd> {if @message_form[:text].value == "", do: "message", else: "continue draft"}
+        </button>
+        <span><kbd>l</kbd> interactions</span>
+        <span class="footer-note">local session console</span>
+      </footer>
+    </section>
 
-            <form id="audio-upload-form" phx-change="validate_audio" class="hidden">
-              <.live_file_input upload={@uploads.audio} />
-            </form>
-
-            <div
-              :if={@audio_state != :idle}
-              id="voice-status"
-              class="mt-2 flex items-center gap-2 text-xs font-medium text-gray-600"
-              role="status"
-            >
-              <span class={[
-                "size-2 rounded-full",
-                if(@audio_state == :recording,
-                  do: "animate-pulse bg-red-600",
-                  else: "bg-amber-500"
-                )
-              ]}></span>
-              {audio_status(@audio_state)}
+    <div :if={@composer_open && @selected_interaction} id="message-modal" class="message-overlay">
+      <div class="message-backdrop" aria-hidden="true" phx-click="close_composer"></div>
+      <.focus_wrap
+        id="message-dialog"
+        class="message-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="message-title"
+        aria-describedby="message-help"
+        phx-mounted={JS.focus(to: "#message-text")}
+        phx-remove={JS.focus(to: "#compose-button")}
+      >
+        <div class="message-titlebar">
+          <h2 id="message-title">message <span>· {display_name(@selected_interaction)}</span></h2>
+          <span class="message-model">{selection_name(@selected_interaction)}</span>
+          <button
+            id="close-composer"
+            type="button"
+            phx-click="close_composer"
+            aria-label="Close message"
+            disabled={@audio_state != :idle}
+          >
+            <.icon name="hero-x-mark" class="size-4" />
+          </button>
+        </div>
+        <.form for={@message_form} id="message-form" phx-change="update_draft" phx-submit="send">
+          <.input
+            id="message-text"
+            field={@message_form[:text]}
+            type="textarea"
+            aria-label="Message"
+            placeholder="Type a message, Enter to send…"
+            rows="5"
+            readonly={@audio_state != :idle}
+            class="message-text"
+          />
+          <div class="message-controls">
+            <div class="contract-control">
+              <label for="message-contract">answer</label>
+              <.input
+                id="message-contract"
+                field={@message_form[:contract]}
+                type="select"
+                aria-label="Answer contract"
+                options={contract_options()}
+                disabled={@audio_state != :idle}
+                class="contract-select"
+              />
             </div>
-            <p
-              :for={error <- upload_errors(@uploads.audio)}
-              class="mt-2 text-xs font-medium text-red-700"
+            <button
+              id="voice-recorder"
+              type="button"
+              phx-hook="VoiceRecorder"
+              phx-update="ignore"
+              data-state="idle"
+              aria-label="Record a voice message"
+              title="Record a voice message"
+              class="voice-recorder"
             >
-              {upload_error(error)}
-            </p>
+              <.icon name="hero-microphone" class="voice-recorder-mic size-4" />
+              <span class="voice-recorder-stop size-3 bg-current"></span>
+            </button>
+            <button
+              id="send-button"
+              class="send-button"
+              type="submit"
+              disabled={@audio_state != :idle}
+            >send ↵</button>
           </div>
-        <% else %>
-          <div class="grid flex-1 place-items-center p-10 text-center">
-            <div class="max-w-sm">
-              <div class="mx-auto grid size-14 place-items-center border border-gray-300 bg-gray-50">
-                <.icon name="hero-command-line" class="size-7 text-gray-400" />
-              </div>
-              <h2 class="mt-5 text-base font-semibold">Select an interaction</h2>
-              <p class="mt-2 text-sm leading-6 text-gray-600">
-                Choose a live Styra session to stream its events and send the next turn.
-              </p>
-            </div>
-          </div>
-        <% end %>
-      </section>
+        </.form>
+        <form id="audio-upload-form" phx-change="validate_audio" class="hidden">
+          <.live_file_input upload={@uploads.audio} />
+        </form>
+        <div :if={@audio_state != :idle} id="voice-status" class="voice-status" role="status">
+          {audio_status(@audio_state)}
+        </div>
+        <p :for={error <- upload_errors(@uploads.audio)} class="console-error">
+          {upload_error(error)}
+        </p>
+        <p :if={@error} class="message-error" role="alert">{@error}</p>
+        <div id="message-help" class="message-help">
+          <span>Enter send · Shift+Enter newline</span><span>Esc keep draft & close</span>
+        </div>
+      </.focus_wrap>
     </div>
   </div>
 </Layouts.app>

@@ -25,6 +25,67 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/styra_web"
 import topbar from "../vendor/topbar"
 
+// Keep terminal shortcuts out of text fields and browser shortcuts.
+const ConsoleKeys = {
+  mounted() {
+    this.onKey = event => {
+      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return
+      const modal = document.getElementById("message-dialog")
+      if (modal) {
+        if (event.key === "Escape") {
+          event.preventDefault()
+          this.pushEvent("close_composer", {})
+        } else if (event.target.id === "message-text" && event.key === "Enter" && !event.shiftKey && !event.target.readOnly) {
+          event.preventDefault()
+          document.getElementById("message-form")?.requestSubmit(document.getElementById("send-button"))
+        }
+        return
+      }
+      if (event.target.closest("input, textarea, select, [contenteditable='true']")) return
+      const navigator = document.getElementById("interaction-navigator")
+      if (event.key === "l") {
+        event.preventDefault()
+        document.getElementById("back-to-interactions")?.click()
+      } else if (event.key === "i") {
+        event.preventDefault()
+        document.getElementById("compose-button")?.click()
+      } else if (navigator && !navigator.hidden && ["ArrowDown", "ArrowUp", "j", "k"].includes(event.key)) {
+        event.preventDefault()
+        const rows = [...navigator.querySelectorAll(".interaction-row")]
+        const current = rows.indexOf(document.activeElement)
+        const step = ["ArrowDown", "j"].includes(event.key) ? 1 : -1
+        const next = current < 0 ? (step > 0 ? 0 : rows.length - 1) : (current + step + rows.length) % rows.length
+        rows[next]?.focus()
+      } else if (event.key === "Escape" && navigator && !navigator.hidden) {
+        event.preventDefault()
+        document.getElementById("back-to-interactions")?.click()
+      }
+    }
+    document.addEventListener("keydown", this.onKey)
+  },
+  destroyed() { document.removeEventListener("keydown", this.onKey) },
+}
+
+// Follow new events only while the reader is already at the end of the log.
+const FollowLog = {
+  mounted() {
+    this.follow = true
+    this.handleEvent("log-reset", () => { this.follow = true })
+    this.onScroll = () => {
+      this.follow = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 64
+    }
+    this.el.addEventListener("scroll", this.onScroll, {passive: true})
+    this.observer = new MutationObserver(() => {
+      if (this.follow) this.el.scrollTop = this.el.scrollHeight
+    })
+    this.observer.observe(this.el, {childList: true, subtree: true, characterData: true})
+  },
+  destroyed() {
+    this.observer.disconnect()
+    this.el.removeEventListener("scroll", this.onScroll)
+  },
+}
+
 const MAX_RECORDING_MS = 120_000
 const WAV_SAMPLE_RATE = 16_000
 const RECORDING_CHUNK_MS = 250
@@ -207,7 +268,7 @@ const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, VoiceRecorder},
+  hooks: {...colocatedHooks, VoiceRecorder, ConsoleKeys, FollowLog},
 })
 
 // Show progress bar on live navigation and form submits

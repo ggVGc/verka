@@ -80,6 +80,8 @@ defmodule StyraWebWeb.DashboardLiveTest do
     render_async(view)
 
     assert has_element?(view, "#update-1", "Ready when you are.")
+    view |> element("#compose-button") |> render_click()
+    assert has_element?(view, "#message-dialog[aria-modal=true]")
     assert has_element?(view, "#voice-recorder")
     assert has_element?(view, "#audio-upload-form input[type=file]")
 
@@ -104,6 +106,7 @@ defmodule StyraWebWeb.DashboardLiveTest do
     |> render_click()
 
     refute has_element?(view, "#message-form")
+    assert has_element?(view, "#interaction-navigator:not([hidden])")
     assert has_element?(view, "#interaction-styra-1")
   end
 
@@ -113,6 +116,7 @@ defmodule StyraWebWeb.DashboardLiveTest do
 
     view |> element("#interaction-styra-1") |> render_click()
     render_async(view)
+    view |> element("#compose-button") |> render_click()
 
     view |> element("#voice-recorder") |> render_hook("audio_recording_started", %{})
     assert has_element?(view, "#voice-status", "Recording")
@@ -178,6 +182,7 @@ defmodule StyraWebWeb.DashboardLiveTest do
                       }
                     }}
 
+    view |> element("#compose-button") |> render_click()
     view |> element("#voice-recorder") |> render_hook("audio_recording_started", %{})
 
     view
@@ -213,6 +218,7 @@ defmodule StyraWebWeb.DashboardLiveTest do
 
     view |> element("#interaction-styra-1") |> render_click()
     render_async(view)
+    view |> element("#compose-button") |> render_click()
 
     view
     |> form("#message-form", message: %{text: "First recording", contract: "none"})
@@ -227,6 +233,36 @@ defmodule StyraWebWeb.DashboardLiveTest do
     assert has_element?(view, "#message-form textarea", "")
     refute has_element?(view, "#message-form textarea", "First recording")
     assert_receive {:styra_request, %{"operation" => "audio_recording_started"}}
+  end
+
+  test "opens the navigator above the log and preserves a dismissed message draft", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/")
+    render_async(view)
+    assert has_element?(view, "#interaction-navigator:not([hidden])")
+    assert has_element?(view, "#compose-button[disabled]")
+
+    view |> element("#interaction-styra-1") |> render_click()
+    render_async(view)
+    assert has_element?(view, "#interaction-navigator[hidden]")
+    assert has_element?(view, "#interaction-styra-1[aria-current=true]")
+
+    view |> element("#compose-button") |> render_click()
+
+    view
+    |> form("#message-form", message: %{text: "Keep this draft", contract: "files"})
+    |> render_change()
+
+    view |> element("#close-composer") |> render_click()
+    refute has_element?(view, "#message-dialog")
+    view |> element("#compose-button") |> render_click()
+    assert has_element?(view, "#message-text", "Keep this draft")
+    assert has_element?(view, "#message-contract option[value=files][selected]")
+    view |> form("#message-form", message: %{text: "", contract: "files"}) |> render_submit()
+    assert has_element?(view, "#message-dialog [role=alert]")
+    view |> element("#close-composer") |> render_click()
+    view |> element("#back-to-interactions") |> render_click()
+    assert has_element?(view, "#interaction-navigator:not([hidden])")
+    assert has_element?(view, "#update-1")
   end
 
   defp ok(type, data) do

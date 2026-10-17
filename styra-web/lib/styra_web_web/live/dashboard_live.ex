@@ -26,6 +26,8 @@ defmodule StyraWebWeb.DashboardLive do
         page_title: "Live interactions",
         socket_path: socket_path,
         message_form: message_form(),
+        navigator_open: true,
+        composer_open: false,
         connected: false,
         service: nil,
         error: socket_error,
@@ -135,12 +137,18 @@ defmodule StyraWebWeb.DashboardLive do
   end
 
   @impl true
+  def handle_event("select", %{"id" => id}, %{assigns: %{selected_id: id}} = socket) do
+    {:noreply, assign(socket, :navigator_open, false)}
+  end
+
   def handle_event("select", %{"id" => id}, socket) do
     send(self(), :poll)
 
     {:noreply,
      socket
      |> assign(
+       navigator_open: false,
+       composer_open: false,
        selected_id: id,
        selected_interaction: nil,
        updates_empty?: true,
@@ -148,7 +156,24 @@ defmodule StyraWebWeb.DashboardLive do
        error: nil,
        message_form: message_form()
      )
-     |> stream(:updates, [], reset: true)}
+     |> stream(:updates, [], reset: true)
+     |> push_event("log-reset", %{})}
+  end
+
+  def handle_event("toggle_interactions", _params, socket) do
+    {:noreply, assign(socket, :navigator_open, !socket.assigns.navigator_open)}
+  end
+
+  def handle_event("open_composer", _params, socket) do
+    {:noreply, assign(socket, :composer_open, not is_nil(socket.assigns.selected_interaction))}
+  end
+
+  def handle_event("close_composer", _params, socket) do
+    if socket.assigns.audio_state == :idle do
+      {:noreply, assign(socket, :composer_open, false)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("deselect", _params, socket) do
@@ -187,7 +212,13 @@ defmodule StyraWebWeb.DashboardLive do
         case result do
           :ok ->
             send(self(), :poll)
-            {:noreply, assign(socket, message_form: message_form(contract), error: nil)}
+
+            {:noreply,
+             assign(socket,
+               message_form: message_form(contract),
+               composer_open: false,
+               error: nil
+             )}
 
           {:error, message} ->
             {:noreply, assign(socket, :error, message)}
@@ -289,6 +320,8 @@ defmodule StyraWebWeb.DashboardLive do
         interaction_count: length(snapshot.interactions),
         selected_id: nil,
         selected_interaction: nil,
+        navigator_open: true,
+        composer_open: false,
         cursor: 0,
         updates_empty?: true
       )
@@ -328,6 +361,7 @@ defmodule StyraWebWeb.DashboardLive do
 
         path ->
           socket_path = socket.assigns.socket_path
+
           context = %{
             contract: socket.assigns.audio_contract,
             before: socket.assigns.audio_before,
@@ -392,10 +426,19 @@ defmodule StyraWebWeb.DashboardLive do
     "#{selection["provider"] || "?"}:#{selection["model"] || "?"}/#{selection["effort"] || "?"}"
   end
 
-  defp activity_class("running"), do: "bg-amber-500"
-  defp activity_class("background"), do: "bg-sky-600"
-  defp activity_class("pending"), do: "bg-emerald-600"
-  defp activity_class(_activity), do: "bg-gray-400"
+  defp activity_marker("running"), do: "•··"
+  defp activity_marker("pending"), do: "○"
+  defp activity_marker("idle"), do: "●"
+  defp activity_marker("background"), do: "◐"
+  defp activity_marker(_activity), do: "■"
+
+  defp update_label(item) do
+    case update_kind(item) do
+      "user_message" -> "you"
+      "agent_message" -> "agent"
+      kind -> String.replace(kind, "_", " ")
+    end
+  end
 
   defp update_kind(%{"update" => %{"type" => "event", "data" => event}}),
     do: event["type"] || "event"
