@@ -4,7 +4,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::Block;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use styra_ui::scroll::Scroll;
 use styra_ui::search::Search;
 
@@ -83,6 +83,45 @@ pub struct CheckoutDiff {
 }
 
 impl CheckoutDiff {
+    /// Focus a changed file, optionally at a working-tree line present in a
+    /// hunk. An unmatched location leaves the view untouched.
+    pub fn jump_to(&mut self, path: &Path, line: Option<u32>) -> Result<(), String> {
+        let relative = path
+            .strip_prefix(&self.target.worktree)
+            .map_err(|_| format!("{} is outside this diff's checkout", path.display()))?;
+        let text = self.diff.as_deref().map_err(Clone::clone)?;
+        let (index, file) = crate::files::file_diffs(text)
+            .into_iter()
+            .enumerate()
+            .find(|(_, file)| Path::new(file.path) == relative)
+            .ok_or_else(|| format!("{} has no change in this diff", relative.display()))?;
+        let row = match line {
+            Some(line) => crate::files::row_at_line(file.patch, line).ok_or_else(|| {
+                format!(
+                    "{}:{line} is outside this diff's changed hunks",
+                    relative.display()
+                )
+            })?,
+            None => 0,
+        };
+        let offset = rows(file.patch, self.hide_removed)
+            .iter()
+            .position(|shown| matches!(shown, Row::Line(index) if *index == row))
+            .unwrap_or(0);
+        if !self.per_file {
+            std::mem::swap(&mut self.scroll, &mut self.combined_scroll);
+        }
+        self.per_file = true;
+        self.search.cancel();
+        self.selected_file = index;
+        self.file_list_offset = 0;
+        self.scroll.offset = u16::try_from(offset).unwrap_or(u16::MAX);
+        // The old viewport's limit belongs to a different patch. Let the
+        // next render measure this one before clamping the requested row.
+        self.scroll.note_limit(u16::MAX);
+        Ok(())
+    }
+
     /// Read the diff now. It is read when the view opens rather than on every
     /// frame: opening the view again refreshes it, and so can the host every
     /// few seconds while the checkout is being worked on (see
@@ -395,6 +434,42 @@ mod tests {
         };
         diff.scroll.note_limit(100);
         diff
+    }
+
+    #[test]
+    fn jump_focuses_the_matching_file_and_hunk_line() {
+        let mut diff = two_files();
+        diff.diff = Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n\
+            diff --git a/b.txt b/b.txt\n@@ -10,3 +10,3 @@\n keep\n-old\n+new\n after\n\
+            @@ -30 +30 @@\n-last\n+end\n"
+            .into());
+        diff.scroll.offset = 2;
+        diff.jump_to(Path::new("/w/b.txt"), Some(30)).unwrap();
+        assert!(diff.per_file);
+        assert_eq!(diff.selected_file, 1);
+        assert_eq!(diff.combined_scroll.offset, 2);
+        let shown = rows(diff.shown_text().unwrap(), false);
+        let row = line_at(&shown, usize::from(diff.scroll.clamped())).unwrap();
+        assert_eq!(diff.shown_text().unwrap().lines().nth(row), Some("+end"));
+
+        diff.hide_removed = true;
+        diff.jump_to(Path::new("/w/b.txt"), Some(11)).unwrap();
+        let shown = rows(diff.shown_text().unwrap(), true);
+        let row = line_at(&shown, usize::from(diff.scroll.clamped())).unwrap();
+        assert_eq!(diff.shown_text().unwrap().lines().nth(row), Some("+new"));
+        diff.jump_to(Path::new("/w/b.txt"), Some(10)).unwrap();
+        let offset = diff.scroll.offset;
+        for (path, line) in [
+            ("/w/b.txt", Some(20)),
+            ("/w/unchanged", None),
+            ("/else/b.txt", None),
+        ] {
+            assert!(diff.jump_to(Path::new(path), line).is_err());
+            assert_eq!(diff.scroll.offset, offset);
+            assert_eq!(diff.selected_file, 1);
+        }
+        diff.jump_to(Path::new("/w/a.txt"), None).unwrap();
+        assert_eq!((diff.selected_file, diff.scroll.offset), (0, 0));
     }
 
     /// A file appearing ahead of the selected one moves its index, not the

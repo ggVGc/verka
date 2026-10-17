@@ -422,6 +422,14 @@ pub enum Request {
     ShowDiff(styra_diff::DiffTarget),
     /// Read the checkout diff into the fullscreen view.
     ShowDiffFullscreen(styra_diff::DiffTarget),
+    /// Open the diff at the selected file or file reference, when it occurs
+    /// in the checkout's changes.
+    ShowDiffAt {
+        target: styra_diff::DiffTarget,
+        path: PathBuf,
+        line: Option<u32>,
+        fullscreen: bool,
+    },
     /// Open a Markdown link's resolved path in the configured editor.
     OpenPath(PathBuf),
     /// Open the file at the top of the diff view in the configured editor, at

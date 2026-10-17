@@ -17,7 +17,7 @@ use crate::launch;
 use crate::link_menu::LinkAction;
 use crate::preferences;
 use crate::session::{self, Attachment};
-use styra_diff::{DiffTarget, Outcome};
+use styra_diff::Outcome;
 use styra_protocol::{CompletionState, Contract, LogEntry};
 use styra_server::Client;
 
@@ -410,9 +410,9 @@ pub fn handle_list_key(
         k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
         // `d` opens the diff in the preview; `D` opens it fullscreen.
         // The details view keeps `D` for saving the launch default.
-        k if GLOBAL_DIFF.matches(k) => return ask_for_diff(app, Request::ShowDiff),
+        k if GLOBAL_DIFF.matches(k) => return ask_for_diff(app, false),
         k if GLOBAL_DIFF_FULLSCREEN.matches(k) && app.view != View::Driva => {
-            return ask_for_diff(app, Request::ShowDiffFullscreen)
+            return ask_for_diff(app, true)
         }
         // Not from the preview. The overview takes `i` itself, for the tile
         // under its cursor.
@@ -1129,14 +1129,41 @@ fn open_diff_file(app: &mut App) {
 }
 
 /// Ask for a diff of the interaction's checkout against the commit its branch
-/// was made at, as `request` — in this window or another. An interaction with
+/// was made at, in the preview pane or fullscreen. An interaction with
 /// nothing to diff says why instead (see [`checkout_diff::target`]).
-fn ask_for_diff(app: &mut App, request: fn(DiffTarget) -> Request) {
+fn ask_for_diff(app: &mut App, fullscreen: bool) {
     let Some(interaction) = app.interactions.current(&app.session_id) else {
         return app.show_warning("no interaction to diff");
     };
     match checkout_diff::target(interaction) {
-        Ok(target) => app.ask(request(target)),
+        Ok(target) => {
+            let location = if app.link_highlight.is_some() {
+                match app.highlighted_link_target() {
+                    Some((_, Ok(path), line)) => Some((path, line)),
+                    Some((_, Err(reason), _)) => return app.show_warning(reason),
+                    None => return app.show_warning("selected link names no file to diff"),
+                }
+            } else if app.view == View::Files {
+                match app.selected_file_path() {
+                    Some(path) => Some((path, None)),
+                    None => return app.show_warning("no file selected to diff"),
+                }
+            } else {
+                None
+            };
+            if let Some((path, line)) = location {
+                app.ask(Request::ShowDiffAt {
+                    target,
+                    path,
+                    line,
+                    fullscreen,
+                });
+            } else if fullscreen {
+                app.ask(Request::ShowDiffFullscreen(target));
+            } else {
+                app.ask(Request::ShowDiff(target));
+            }
+        }
         Err(reason) => app.show_error(reason),
     }
 }
@@ -1242,6 +1269,7 @@ fn handle_choosing_key(app: &mut App, key: KeyEvent) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use styra_diff::DiffTarget;
     use styra_protocol::{
         AttributedMount, DrivaOptions, LaunchMount, Mount, MountAccess, MountOrigin,
     };
@@ -2324,6 +2352,44 @@ mod tests {
             base: "4bf5c35d".into(),
             branch_point: true,
         }
+    }
+
+    #[test]
+    fn diff_keys_carry_the_selected_file_or_reference_location() {
+        let root = tree("diff-selected-location");
+        let mut app = app_with_diffable_interaction(&root);
+        app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
+            text: "see `notes.txt`".into(),
+        });
+        app.view = View::Files;
+        press_d(&mut app, &root);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ShowDiffAt {
+                target: diffable_target(),
+                path: root.join("notes.txt"),
+                line: None,
+                fullscreen: false,
+            })
+        );
+
+        app.view = View::Events;
+        app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
+            text: "see [here](notes.txt:3)".into(),
+        });
+        app.select_last();
+        app.highlight_first_link();
+        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('D')));
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ShowDiffAt {
+                target: diffable_target(),
+                path: root.join("notes.txt"),
+                line: Some(3),
+                fullscreen: true,
+            })
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// `d` diffs the checkout the interaction works in against the commit its

@@ -2341,6 +2341,27 @@ fn run_rounds(
                     ))),
                 }
             }
+            Some(Request::ShowDiffAt {
+                target,
+                path,
+                line,
+                fullscreen,
+            }) => {
+                let mut diff = styra_diff::CheckoutDiff::read(target);
+                if let Err(reason) = diff.jump_to(&path, line) {
+                    app.show_warning(reason);
+                    continue;
+                }
+                app.checkout_diff = Some(diff);
+                diff_refreshed = Instant::now();
+                app.diff_preview = !fullscreen;
+                app.diff_interaction_focus = false;
+                if fullscreen {
+                    app.view = View::CheckoutDiff;
+                } else if !matches!(app.view, View::Events | View::Files) {
+                    app.view = View::Events;
+                }
+            }
             Some(Request::ShowDiff(target)) => {
                 app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
                 diff_refreshed = Instant::now();

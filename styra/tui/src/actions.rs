@@ -319,7 +319,7 @@ impl Action {
             Self::GlobalShell => "open session shell in a new terminal",
             Self::GlobalDirectory => "open a terminal in the interaction's working directory",
             Self::GlobalDiff => {
-                "diff the checkout in the preview pane; Esc returns to the entry preview"
+                "diff the checkout in the preview pane, at the selected file or reference"
             }
             Self::GlobalDiffFullscreen => "the same diff fullscreen; Esc returns to events",
             Self::DiffConversation => "switch the header for the last 3 messages and back",

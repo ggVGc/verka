@@ -260,6 +260,10 @@ the current branch left `BASE`, or against `HEAD` when no base is given.
 The view's keys live in that crate too, so both answer them the same way;
 while the view is open in Styra its navigation keys act, and Esc closes it.
 `D` also expands a diff already open in the preview pane to fullscreen.
+With a file selected in the Files view or a file reference highlighted in the
+conversation, `d` and `D` jump to its patch. References with a line number jump
+to that line when it appears in a changed hunk (including context). If the file
+or line has no matching change, a notice explains why and the current view stays open.
 The per-file list uses compact change markers: `A` added, `D` deleted, `M`
 edited, `R` moved, `R+` moved with edits, `C` copied, `C+` copied with edits,
 and `T` file mode changed. A fixed row above the selected patch explains its

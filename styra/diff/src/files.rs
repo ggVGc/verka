@@ -193,6 +193,25 @@ fn hunk_start(header: &str) -> Option<u32> {
     new.split(',').next()?.parse().ok()
 }
 
+/// The diff row containing a working-tree line, including unchanged context.
+/// Lines outside the patch's hunks have no corresponding row.
+pub fn row_at_line(patch: &str, wanted: u32) -> Option<usize> {
+    let mut next = None;
+    for (row, line) in patch.lines().enumerate() {
+        if line.starts_with("@@") {
+            next = hunk_start(line);
+        } else if let Some(number) = next {
+            if matches!(line.as_bytes().first(), Some(b' ' | b'+')) {
+                if number == wanted {
+                    return Some(row);
+                }
+                next = Some(number.saturating_add(1));
+            }
+        }
+    }
+    None
+}
+
 /// File-name filtering starts with the first character and ignores case.
 pub fn filtered_file_diffs<'a>(text: &'a str, query: Option<&str>) -> Vec<(usize, FileDiff<'a>)> {
     let query = query.unwrap_or_default().to_lowercase();
