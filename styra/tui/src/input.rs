@@ -131,6 +131,7 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
             }
         }
         Outcome::OpenFile => open_diff_file(app),
+        Outcome::GenerateReport => app.ask(Request::GenerateEditReport),
     }
 }
 
@@ -2540,6 +2541,7 @@ mod tests {
             selected_file: 0,
                         file_list_offset: 0,
             search: Default::default(),
+            report: Default::default(),
         });
         let diff = app.checkout_diff.as_mut().unwrap();
         diff.scroll.note_limit(100);
@@ -2582,6 +2584,15 @@ mod tests {
             styra_diff::Tint::Half
         );
         assert_eq!(app.view, View::CheckoutDiff, "t is the diff's here");
+        // `e` puts the edit report away and back; `E` asks for a new one.
+        press(&mut app, KeyCode::Char('e'));
+        assert!(app.checkout_diff.as_ref().unwrap().report.hidden);
+        assert_eq!(app.view, View::CheckoutDiff, "e is the diff's here");
+        press(&mut app, KeyCode::Char('e'));
+        assert!(!app.checkout_diff.as_ref().unwrap().report.hidden);
+        press(&mut app, KeyCode::Char('E'));
+        assert_eq!(app.take_request(), Some(Request::GenerateEditReport));
+        assert_eq!(app.take_request(), None);
         press(&mut app, KeyCode::Char('r'));
         assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
         press(&mut app, KeyCode::Down);

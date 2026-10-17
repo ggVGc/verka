@@ -20,6 +20,43 @@ pub struct IntegrationResult {
     pub message: String,
 }
 
+/// One file's edits, put to an agent to describe: see
+/// [`crate::protocol::Request::GenerateEditReport`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditReportFile {
+    /// The file's path in the working tree, as the diff names it.
+    pub path: String,
+    /// The file's patch against the base, as much of it as the client chose
+    /// to send.
+    pub patch: String,
+    /// The client's fingerprint of the file's whole patch, kept with the
+    /// description so a client can tell when the file has changed since.
+    pub fingerprint: String,
+}
+
+/// What each edited file of a Session's checkout was changed for: a short
+/// description per file, written by an agent from the file's patch, the
+/// Session's task, and its branch's commit messages.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditReport {
+    pub generated_at_ms: u64,
+    /// The commit the edits were measured from.
+    pub base: String,
+    /// The files described, in the order they were sent. A file the agent
+    /// gave no description for is left out.
+    pub files: Vec<FileEditReport>,
+    /// How many files were sent to be described.
+    pub requested: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEditReport {
+    pub path: String,
+    /// [`EditReportFile::fingerprint`] of the patch described.
+    pub fingerprint: String,
+    pub description: String,
+}
+
 /// Where integration landed a Session's work: the squash commit it made on
 /// the branch the Session's own branch was made from — see
 /// [`crate::protocol::Request::IntegrateSession`].

@@ -56,6 +56,22 @@ M.types.Request = {
         { name = "id", required = true, type = { kind = "string" } },
       },
     } },
+    { name = "generate_edit_report", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+        { name = "base", required = true, type = { kind = "string" } },
+        { name = "files", required = true, type = { kind = "list", item = { kind = "ref", name = "EditReportFile" } } },
+      },
+    } },
+    { name = "edit_report", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "session_integration_result", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -421,6 +437,7 @@ M.types.Response = {
     { name = "session_rebase_status", payload = { kind = "newtype", type = { kind = "ref", name = "RebaseStatus" } } },
     { name = "integration_started", payload = { kind = "unit" } },
     { name = "integration_message", payload = { kind = "newtype", type = { kind = "string" } } },
+    { name = "edit_report", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "ref", name = "EditReport" } } } },
     { name = "session_integration_result", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "ref", name = "IntegrationResult" } } } },
     { name = "health", payload = { kind = "newtype", type = { kind = "ref", name = "Health" } } },
     { name = "workspace_created", payload = { kind = "newtype", type = { kind = "ref", name = "WorkspaceSummary" } } },
@@ -486,6 +503,17 @@ M.types.WireResponse = {
         { name = "error", required = true, type = { kind = "string" } },
       },
     } },
+  },
+}
+
+--- One file's edits, put to an agent to describe: see
+--- `crate::protocol::Request::GenerateEditReport`.
+M.types.EditReportFile = {
+  kind = "struct",
+  fields = {
+    { name = "path", required = true, type = { kind = "string" } },
+    { name = "patch", required = true, type = { kind = "string" } },
+    { name = "fingerprint", required = true, type = { kind = "string" } },
   },
 }
 
@@ -736,6 +764,19 @@ M.types.RebaseStatus = {
     { name = "message", required = true, type = { kind = "string" } },
     { name = "source_commit", required = true, type = { kind = "string" } },
     { name = "output", required = false, type = { kind = "string" } },
+  },
+}
+
+--- What each edited file of a Session's checkout was changed for: a short
+--- description per file, written by an agent from the file's patch, the
+--- Session's task, and its branch's commit messages.
+M.types.EditReport = {
+  kind = "struct",
+  fields = {
+    { name = "generated_at_ms", required = true, type = { kind = "number", integer = true } },
+    { name = "base", required = true, type = { kind = "string" } },
+    { name = "files", required = true, type = { kind = "list", item = { kind = "ref", name = "FileEditReport" } } },
+    { name = "requested", required = true, type = { kind = "number", integer = true } },
   },
 }
 
@@ -1135,6 +1176,15 @@ M.types.LaunchMount = {
     { name = "source", required = true, type = { kind = "string", path = true } },
     { name = "destination", required = false, type = { kind = "optional", inner = { kind = "string", path = true } } },
     { name = "writable", required = false, type = { kind = "boolean" } },
+  },
+}
+
+M.types.FileEditReport = {
+  kind = "struct",
+  fields = {
+    { name = "path", required = true, type = { kind = "string" } },
+    { name = "fingerprint", required = true, type = { kind = "string" } },
+    { name = "description", required = true, type = { kind = "string" } },
   },
 }
 
@@ -1892,11 +1942,13 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "integrate_session", "generate_integration_message", "session_integration_result", "rebase_session", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff", "shutdown" }
+M.enums.Request = { "integrate_session", "generate_integration_message", "generate_edit_report", "edit_report", "session_integration_result", "rebase_session", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   INTEGRATE_SESSION = "integrate_session",
   GENERATE_INTEGRATION_MESSAGE = "generate_integration_message",
+  GENERATE_EDIT_REPORT = "generate_edit_report",
+  EDIT_REPORT = "edit_report",
   SESSION_INTEGRATION_RESULT = "session_integration_result",
   REBASE_SESSION = "rebase_session",
   SESSION_REBASE_STATUS = "session_rebase_status",
@@ -1961,13 +2013,14 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "rebase_started", "session_rebase_status", "integration_started", "integration_message", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff" }
+M.enums.Response = { "rebase_started", "session_rebase_status", "integration_started", "integration_message", "edit_report", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff" }
 --- Wire spellings of `Response`.
 M.Response = {
   REBASE_STARTED = "rebase_started",
   SESSION_REBASE_STATUS = "session_rebase_status",
   INTEGRATION_STARTED = "integration_started",
   INTEGRATION_MESSAGE = "integration_message",
+  EDIT_REPORT = "edit_report",
   SESSION_INTEGRATION_RESULT = "session_integration_result",
   HEALTH = "health",
   WORKSPACE_CREATED = "workspace_created",
@@ -2661,6 +2714,27 @@ end
 ---   id  string
 function M.request.generate_integration_message(data)
   return M.build("generate_integration_message", data)
+end
+
+--- Have an errand describe each edited file of the Session's checkout —
+--- what changed in it and why — and keep the report with the Session,
+--- replacing any earlier one. The client sends the patches, split per file
+--- exactly as it shows them, so the report covers the files it lists.
+---
+--- Fields of `data`:
+---   id     string
+---   base   string
+---   files  EditReportFile[]
+function M.request.generate_edit_report(data)
+  return M.build("generate_edit_report", data)
+end
+
+--- The Session's last generated edit report, if it has one.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.edit_report(data)
+  return M.build("edit_report", data)
 end
 
 --- None while integration is running; otherwise its final result.

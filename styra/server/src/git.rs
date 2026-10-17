@@ -92,6 +92,12 @@ pub trait Git: Send + Sync {
     fn is_ancestor(&self, _checkout: &Path, _ancestor: &str, _descendant: &str) -> Result<bool> {
         anyhow::bail!("this Git backend does not support integration")
     }
+    /// The messages of the commits `checkout` has made since `base`, newest
+    /// first. Merges are left out: their messages say where work came from,
+    /// not what it was for.
+    fn commit_messages(&self, _checkout: &Path, _base: &str) -> Result<String> {
+        anyhow::bail!("this Git backend does not model commit messages")
+    }
     /// Discover the Git checkout containing `start`.
     ///
     /// `Ok(None)` means the path is not inside a working tree. Other failures
@@ -352,6 +358,13 @@ impl Git for SystemGit {
         Invocation::new(checkout, "read the integration diff")
             .args(["diff", "--no-ext-diff", "--no-textconv"])
             .arg(format!("{source}...HEAD"))
+            .arg("--")
+            .output()
+    }
+    fn commit_messages(&self, checkout: &Path, base: &str) -> Result<String> {
+        Invocation::new(checkout, "read the branch's commit messages")
+            .args(["log", "--no-merges", "--format=%B"])
+            .arg(format!("{base}..HEAD"))
             .arg("--")
             .output()
     }

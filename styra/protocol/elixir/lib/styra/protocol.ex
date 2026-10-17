@@ -66,6 +66,22 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "generate_edit_report", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}},
+            %{name: "base", required: true, type: %{kind: :string}},
+            %{name: "files", required: true, type: %{kind: :list, item: %{kind: :ref, name: "EditReportFile"}}}
+          ]
+        }},
+        %{name: "edit_report", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "session_integration_result", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -431,6 +447,7 @@ defmodule Styra.Protocol do
         %{name: "session_rebase_status", payload: %{kind: :newtype, type: %{kind: :ref, name: "RebaseStatus"}}},
         %{name: "integration_started", payload: %{kind: :unit}},
         %{name: "integration_message", payload: %{kind: :newtype, type: %{kind: :string}}},
+        %{name: "edit_report", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "EditReport"}}}},
         %{name: "session_integration_result", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "IntegrationResult"}}}},
         %{name: "health", payload: %{kind: :newtype, type: %{kind: :ref, name: "Health"}}},
         %{name: "workspace_created", payload: %{kind: :newtype, type: %{kind: :ref, name: "WorkspaceSummary"}}},
@@ -496,6 +513,17 @@ defmodule Styra.Protocol do
             %{name: "error", required: true, type: %{kind: :string}}
           ]
         }}
+      ]
+    },
+
+    # One file's edits, put to an agent to describe: see
+    # `crate::protocol::Request::GenerateEditReport`.
+    "EditReportFile" => %{
+      kind: :struct,
+      fields: [
+        %{name: "path", required: true, type: %{kind: :string}},
+        %{name: "patch", required: true, type: %{kind: :string}},
+        %{name: "fingerprint", required: true, type: %{kind: :string}}
       ]
     },
 
@@ -746,6 +774,19 @@ defmodule Styra.Protocol do
         %{name: "message", required: true, type: %{kind: :string}},
         %{name: "source_commit", required: true, type: %{kind: :string}},
         %{name: "output", required: false, type: %{kind: :string}}
+      ]
+    },
+
+    # What each edited file of a Session's checkout was changed for: a short
+    # description per file, written by an agent from the file's patch, the
+    # Session's task, and its branch's commit messages.
+    "EditReport" => %{
+      kind: :struct,
+      fields: [
+        %{name: "generated_at_ms", required: true, type: %{kind: :number, integer: true}},
+        %{name: "base", required: true, type: %{kind: :string}},
+        %{name: "files", required: true, type: %{kind: :list, item: %{kind: :ref, name: "FileEditReport"}}},
+        %{name: "requested", required: true, type: %{kind: :number, integer: true}}
       ]
     },
 
@@ -1145,6 +1186,15 @@ defmodule Styra.Protocol do
         %{name: "source", required: true, type: %{kind: :string, path: true}},
         %{name: "destination", required: false, type: %{kind: :optional, inner: %{kind: :string, path: true}}},
         %{name: "writable", required: false, type: %{kind: :boolean}}
+      ]
+    },
+
+    "FileEditReport" => %{
+      kind: :struct,
+      fields: [
+        %{name: "path", required: true, type: %{kind: :string}},
+        %{name: "fingerprint", required: true, type: %{kind: :string}},
+        %{name: "description", required: true, type: %{kind: :string}}
       ]
     },
 
@@ -1914,6 +1964,8 @@ defmodule Styra.Protocol do
   @operations [
     "integrate_session",
     "generate_integration_message",
+    "generate_edit_report",
+    "edit_report",
     "session_integration_result",
     "rebase_session",
     "session_rebase_status",
@@ -2473,6 +2525,35 @@ defmodule Styra.Protocol do
 
     @doc "`generate_integration_message/1`, raising on a request the server would refuse."
     def generate_integration_message!(data), do: Styra.Protocol.build!("generate_integration_message", data)
+
+    @doc ~S"""
+    Have an errand describe each edited file of the Session's checkout —
+    what changed in it and why — and keep the report with the Session,
+    replacing any earlier one. The client sends the patches, split per file
+    exactly as it shows them, so the report covers the files it lists.
+
+    Fields of `data`:
+
+      * `id   `  string
+      * `base `  string
+      * `files`  EditReportFile[]
+    """
+    def generate_edit_report(data), do: Styra.Protocol.build("generate_edit_report", data)
+
+    @doc "`generate_edit_report/1`, raising on a request the server would refuse."
+    def generate_edit_report!(data), do: Styra.Protocol.build!("generate_edit_report", data)
+
+    @doc ~S"""
+    The Session's last generated edit report, if it has one.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def edit_report(data), do: Styra.Protocol.build("edit_report", data)
+
+    @doc "`edit_report/1`, raising on a request the server would refuse."
+    def edit_report!(data), do: Styra.Protocol.build!("edit_report", data)
 
     @doc ~S"""
     None while integration is running; otherwise its final result.
@@ -3330,6 +3411,7 @@ defmodule Styra.Protocol.Response do
     {:session_rebase_status, "session_rebase_status"},
     {:integration_started, "integration_started"},
     {:integration_message, "integration_message"},
+    {:edit_report, "edit_report"},
     {:session_integration_result, "session_integration_result"},
     {:health, "health"},
     {:workspace_created, "workspace_created"},
@@ -3406,6 +3488,8 @@ defmodule Styra.Protocol.Response do
   def integration_started, do: "integration_started"
 
   def integration_message, do: "integration_message"
+
+  def edit_report, do: "edit_report"
 
   def session_integration_result, do: "session_integration_result"
 

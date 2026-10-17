@@ -1330,6 +1330,7 @@ styra/server/            # the server application + its client interface library
     git.rs               # host-side enclosing-repository discovery
     worktree.rs          # the linked checkout an interaction works in
     errand.rs            # one cheap, bounded, bare-sandbox question Styra asks for itself
+    edit_report.rs       # each edited file described by errands, kept with the Session
     naming.rs            # an interaction's topic: what its branch and its Session are called
 
 styra/tui/               # the terminal client application
@@ -1356,6 +1357,7 @@ styra/tui/               # the terminal client application
     mount.rs             # writing, reading and locating host mounts (pure)
     launcher.rs          # the agent/model/effort picker's state
     composer.rs          # the message buffer and prompt history
+    edit_report.rs       # asking for the diff's edit report off the terminal thread
     presentation/        # App-to-presentation adapters and boundary tests; contains no widgets
 
 styra/ui/                # package styra-ui, library styra_ui
@@ -1375,6 +1377,7 @@ styra/diff/              # package styra-diff: library styra_diff, [[bin]] styra
     keys.rs              # the view's keys, answered the same in Styra and on its own
     view.rs              # the header, file tree and patch, drawn as a styra-ui Panel
     files.rs             # a diff split into one patch per file (pure)
+    report.rs            # a host-written description of each file's edits
     git.rs               # reading the diff, and the standalone program's base
     main.rs              # `styra-diff [-C DIR] [BASE]`: the same view on its own
 ```

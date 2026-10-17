@@ -9,6 +9,7 @@ use styra_ui::scroll::Scroll;
 use styra_ui::search::Search;
 
 use crate::files::{filtered_file_diffs, position, FileDiff};
+use crate::report::ReportState;
 use crate::view::{rows, CheckoutDiffFeedback, CheckoutDiffView, Row, Tint};
 
 /// What a diff of a checkout compares.
@@ -39,6 +40,8 @@ pub(crate) enum Action {
     ToggleRemoved,
     /// Step the added and removed rows' bands through full, half, and none.
     CycleTint,
+    /// Put the per-file view's edit report away, or bring it back.
+    ToggleReport,
     /// Fold the file tree's directories that hold no files of their own and
     /// a single subdirectory onto one row, or give each its own again.
     ToggleCompactDirs,
@@ -80,6 +83,8 @@ pub struct CheckoutDiff {
     pub selected_file: usize,
     pub file_list_offset: usize,
     pub search: Search,
+    /// What each file was edited for, once the host has had it described.
+    pub report: ReportState,
 }
 
 impl CheckoutDiff {
@@ -142,6 +147,7 @@ impl CheckoutDiff {
             selected_file: 0,
             file_list_offset: 0,
             search: Default::default(),
+            report: ReportState::default(),
         }
     }
 
@@ -207,6 +213,7 @@ impl CheckoutDiff {
             selected_file: self.selected_file,
             file_list_offset: self.file_list_offset,
             search: self.search.view(),
+            report: Some(&self.report),
             conversation: None,
         }
     }
@@ -252,6 +259,7 @@ impl CheckoutDiff {
             // The selected file stays selected, and the list keeps it in view.
             Action::CycleTint => self.tint = self.tint.next(),
             Action::ToggleCompactDirs => self.compact_dirs = !self.compact_dirs,
+            Action::ToggleReport => self.report.hidden = !self.report.hidden,
             Action::Down if self.per_file => self.select_file(true, 1),
             Action::Up if self.per_file => self.select_file(false, 1),
             Action::FilesDown if self.per_file => self.select_file(true, 5),
@@ -432,6 +440,7 @@ mod tests {
             selected_file: 0,
             file_list_offset: 0,
             search: Search::default(),
+            report: ReportState::default(),
         };
         diff.scroll.note_limit(100);
         diff

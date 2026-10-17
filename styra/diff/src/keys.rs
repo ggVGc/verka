@@ -15,6 +15,7 @@ enum Command {
     /// Clear a standing file filter, or else close the view.
     Close,
     OpenFile,
+    GenerateReport,
 }
 
 /// One row of the table: the keys, how a reference shows them and what it
@@ -72,6 +73,18 @@ pub const BINDINGS: &[Binding] = &[
         "v",
         "open the file at the top of the diff in the editor, at that line",
         Command::OpenFile,
+    ),
+    bind(
+        &[KeyCode::Char('E')],
+        "E",
+        "describe each file's edits and why, in an edit report",
+        Command::GenerateReport,
+    ),
+    bind(
+        &[KeyCode::Char('e')],
+        "e (per-file view)",
+        "show / hide the edit report's description of the file",
+        Command::View(Action::ToggleReport),
     ),
     bind(
         &[KeyCode::Char('t')],
@@ -159,6 +172,9 @@ pub enum Outcome {
     /// Open the file at the top of the view in the editor, at
     /// [`CheckoutDiff::location`].
     OpenFile,
+    /// Have each file's edits described, and put the report in
+    /// [`CheckoutDiff::report`] when it comes.
+    GenerateReport,
 }
 
 impl CheckoutDiff {
@@ -191,6 +207,7 @@ impl CheckoutDiff {
             Command::Close if self.clear_filter() => Outcome::Handled,
             Command::Close => Outcome::Close,
             Command::OpenFile => Outcome::OpenFile,
+            Command::GenerateReport => Outcome::GenerateReport,
         }
     }
 }
@@ -238,15 +255,20 @@ mod tests {
     #[test]
     fn view_keys_act_and_the_rest_go_to_the_host() {
         let mut diff = diff();
-        for key in ['r', 'f', 'j', 'c', 't'] {
+        for key in ['r', 'f', 'j', 'c', 't', 'e'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Outcome::Handled);
         }
+        assert!(diff.report.hidden);
         assert!(diff.hide_removed);
         assert!(diff.per_file);
         assert!(!diff.compact_dirs);
         assert_eq!(diff.tint, crate::Tint::Half);
         assert_eq!(diff.selected_file, 1);
         assert_eq!(press(&mut diff, KeyCode::Char('v')), Outcome::OpenFile);
+        assert_eq!(
+            press(&mut diff, KeyCode::Char('E')),
+            Outcome::GenerateReport
+        );
         for key in ['q', 'd', 'i', 'y', '?'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Outcome::Ignored);
         }

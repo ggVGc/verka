@@ -12,6 +12,7 @@ use crossterm::terminal::{
 };
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use ratatui::{Frame, Terminal};
+use std::collections::VecDeque;
 use std::io::{Stdout, Write};
 use std::time::Duration;
 
@@ -259,6 +260,9 @@ pub struct TerminalUi<B: Backend> {
     terminal: Option<Terminal<B>>,
     restore: fn(&mut Terminal<B>),
     bracketed_paste: fn(bool) -> UiResult<()>,
+    /// Input a test has scripted, answered in place of the terminal's; see
+    /// [`TestUi::script`]. `None` reads the terminal.
+    scripted: Option<VecDeque<crossterm::event::Event>>,
 }
 
 pub type RatatuiUi = TerminalUi<CrosstermBackend<Stdout>>;
@@ -283,6 +287,7 @@ impl RatatuiUi {
                 terminal: Some(terminal),
                 restore: restore_crossterm,
                 bracketed_paste: set_crossterm_paste,
+                scripted: None,
             }),
             Err(error) => {
                 disable_raw_mode().ok();
@@ -587,6 +592,12 @@ where
     }
 
     fn poll_event(&mut self, timeout: Duration) -> UiResult<Option<crossterm::event::Event>> {
+        if let Some(script) = self.scripted.as_mut() {
+            return script
+                .pop_front()
+                .map(Some)
+                .ok_or_else(|| UiError::new("the scripted input has run out"));
+        }
         if crossterm::event::poll(timeout)
             .context("polling terminal input")
             .map_err(UiError::from)?
@@ -803,7 +814,18 @@ impl TestUi {
             ),
             restore: no_restore,
             bracketed_paste: |_| Ok(()),
+            scripted: Some(VecDeque::new()),
         })
+    }
+
+    /// Queue `events` as the input the next polls answer, so a test can drive
+    /// a loop that reads from this terminal. A test terminal never reads the
+    /// real one: once its script runs out, a poll fails, which ends a loop
+    /// still waiting rather than leaving the test to hang.
+    pub fn script(&mut self, events: impl IntoIterator<Item = crossterm::event::Event>) {
+        self.scripted
+            .get_or_insert_with(VecDeque::new)
+            .extend(events);
     }
 
     /// Copy the rendered terminal cells into plain text rows. This keeps

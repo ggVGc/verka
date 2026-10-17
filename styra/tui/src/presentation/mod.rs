@@ -1267,6 +1267,7 @@ mod tests {
             selected_file: 0,
             file_list_offset: 0,
             search: Default::default(),
+            report: Default::default(),
         });
         app.view = View::CheckoutDiff;
 

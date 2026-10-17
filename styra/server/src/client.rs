@@ -3,7 +3,8 @@
 //! Every call is a JSON exchange over a Unix domain socket with the daemon.
 
 use crate::protocol::{
-    Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
+    Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, EditReport, EditReportFile,
+    Health, LaunchPolicy,
     LoadedInteraction, ModelSummary, PlanSession, QueuedMessage, RenameSession, RenameWorkspace,
     Request, Response, ResumeSession, SendMessage, SessionInfo, SetSessionTags, ShellInfo,
     StoredSession, TemplateSummary, TurnDiff, Updates, WireResponse, WorkspaceLaunchChange,
@@ -188,6 +189,33 @@ impl Client {
         match self.request(Request::GenerateIntegrationMessage { id: id.into() })? {
             Response::IntegrationMessage(message) => Ok(message),
             other => unexpected("integration_message", other),
+        }
+    }
+
+    /// Describe each of `files` — what changed and why — and keep the report
+    /// with the Session. Takes as long as the errands it runs: call it off
+    /// any thread that has a screen to keep drawing.
+    pub fn generate_edit_report(
+        &self,
+        id: &str,
+        base: &str,
+        files: Vec<EditReportFile>,
+    ) -> Result<EditReport> {
+        match self.request(Request::GenerateEditReport {
+            id: id.into(),
+            base: base.into(),
+            files,
+        })? {
+            Response::EditReport(Some(report)) => Ok(report),
+            other => unexpected("edit_report", other),
+        }
+    }
+
+    /// The Session's last generated edit report, if it has one.
+    pub fn edit_report(&self, id: &str) -> Result<Option<EditReport>> {
+        match self.request(Request::EditReport { id: id.into() })? {
+            Response::EditReport(report) => Ok(report),
+            other => unexpected("edit_report", other),
         }
     }
 
@@ -865,6 +893,8 @@ fn request_operation(request: &Request) -> &'static str {
         Request::SessionRebaseStatus { .. } => "session_rebase_status",
         Request::IntegrateSession { .. } => "integrate_session",
         Request::GenerateIntegrationMessage { .. } => "generate_integration_message",
+        Request::GenerateEditReport { .. } => "generate_edit_report",
+        Request::EditReport { .. } => "edit_report",
         Request::SessionIntegrationResult { .. } => "session_integration_result",
         Request::SetWorkspaceGitRepository { .. } => "set_workspace_git_repository",
         Request::SetWorkspaceHostPath { .. } => "set_workspace_host_path",

@@ -7,6 +7,7 @@
 //! while the diff below it scrolls.
 
 use crate::files::{filtered_file_diffs, FileChange, FileDiff};
+use crate::report::{Described, ReportState};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -16,6 +17,7 @@ use std::io::BufRead;
 use std::path::Path;
 use styra_ui::application::{Panel, PanelFeedback};
 use styra_ui::diff::{diff_block_lines, diff_block_lines_fading, fill_changed_rows, CONTEXT_FADE};
+use styra_ui::event_list::wrap_rendered;
 use styra_ui::preview::PreviewFeedback;
 use styra_ui::search::SearchView;
 use styra_ui::theme;
@@ -55,6 +57,10 @@ pub struct CheckoutDiffView<'a> {
     /// First visible row in the file tree, retained between frames.
     pub file_list_offset: usize,
     pub search: SearchView<'a>,
+    /// The edit report the per-file view describes the selected file from.
+    /// `None` where no report can be had, as in `styra-diff` on its own,
+    /// which leaves its keys out of the header too.
+    pub report: Option<&'a ReportState>,
     /// Lines the host shows in place of the header, such as the latest
     /// messages of the conversation the diff belongs to. `None` keeps the
     /// header.
@@ -82,6 +88,7 @@ impl<'a> CheckoutDiffView<'a> {
             selected_file: 0,
             file_list_offset: 0,
             search: SearchView::default(),
+            report: None,
             conversation: None,
         }
     }
@@ -369,7 +376,10 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         let [info, patch] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
         frame.render_widget(Paragraph::new(file_info(file)), info);
-        patch
+        match view.report.filter(|report| report.shown()) {
+            Some(report) => render_description(frame, report, file, patch),
+            None => patch,
+        }
     } else {
         body
     };
@@ -678,6 +688,72 @@ fn file_info(file: &FileDiff<'_>) -> Line<'static> {
     ])
 }
 
+/// The most of the patch's area a file's description may take, so a long one
+/// still leaves the patch in view: one part in this many.
+const DESCRIPTION_SHARE: u16 = 2;
+
+/// The edit report's description of `file` across the top of `area`, above
+/// a rule; what is left of `area` is the patch's.
+fn render_description(
+    frame: &mut Frame,
+    report: &ReportState,
+    file: &FileDiff<'_>,
+    area: Rect,
+) -> Rect {
+    let muted = Style::default().fg(theme::MUTED_TEXT);
+    let mut lines = match report.describe(file.path, file.patch) {
+        Described::Described { description, stale } => {
+            let mut lines: Vec<_> = description
+                .lines()
+                .map(|line| {
+                    Line::from(Span::styled(
+                        format!(" {line}"),
+                        Style::default().fg(theme::TEXT),
+                    ))
+                })
+                .collect();
+            if stale {
+                lines.push(Line::from(Span::styled(
+                    " written before the file's latest edits · E: describe them again",
+                    muted,
+                )));
+            }
+            lines
+        }
+        Described::Missing if report.pending => Vec::new(),
+        Described::Missing => vec![Line::from(Span::styled(
+            " the edit report does not describe this file · E: write a new one",
+            muted,
+        ))],
+    };
+    if report.pending {
+        lines.push(Line::from(Span::styled(
+            " describing each file's edits…",
+            Style::default().fg(theme::ACCENT),
+        )));
+    }
+    let width = usize::from(area.width.saturating_sub(1));
+    let lines: Vec<_> = lines
+        .into_iter()
+        .flat_map(|line| wrap_rendered(line, width, 1))
+        .collect();
+    let height = u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .min(area.height / DESCRIPTION_SHARE)
+        .max(1);
+    let [top, rest] =
+        Layout::vertical([Constraint::Length(height + 1), Constraint::Min(0)]).areas(area);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(theme::INACTIVE)),
+        ),
+        top,
+    );
+    rest
+}
+
 /// What one row of the view shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Row {
@@ -866,6 +942,23 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
         "f: per-file diffs · j/k: scroll · ↑/↓: scroll 10 · PgUp/PgDn: half-screen"
     };
     lines.push(muted(navigation));
+    if let Some(report) = view.report {
+        let has = report.report.is_some() || report.pending;
+        let toggle = match (view.per_file, has, report.hidden) {
+            (true, true, false) => " · e: hide edit report",
+            (true, true, true) => " · e: show edit report",
+            (false, true, _) => " · f: see it per file",
+            (_, false, _) => "",
+        };
+        let state = if report.pending {
+            "E: describing edits…"
+        } else if report.report.is_some() {
+            "E: describe edits again"
+        } else {
+            "E: describe each file's edits"
+        };
+        lines.push(muted(&format!("{state}{toggle}")));
+    }
     let removed = if view.hide_removed {
         "r: show removed lines · removed lines hidden"
     } else {
@@ -1308,6 +1401,7 @@ index 1111111..2222222 100644
                         selected_file,
                         file_list_offset: 0,
                         search,
+                        report: None,
                         conversation: None,
                     },
                     frame.area(),
@@ -1323,6 +1417,88 @@ index 1111111..2222222 100644
             .collect::<Vec<_>>()
             .join("\n");
         ((output, measured.scroll.limit), measured.scroll.viewport)
+    }
+
+    /// The per-file view with `report`, 100 columns wide: the screen, and the
+    /// rows left for the patch.
+    fn report_screen(report: &ReportState, per_file: bool) -> (String, u16) {
+        let (width, height) = (100, 24);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut viewport = 0;
+        terminal
+            .draw(|frame| {
+                let mut view = CheckoutDiffView::unread(Block::bordered());
+                view.diff = Ok(DIFF);
+                view.per_file = per_file;
+                view.report = Some(report);
+                viewport = render(frame, &view, frame.area()).scroll.viewport;
+            })
+            .unwrap();
+        let output = terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (output, viewport)
+    }
+
+    /// The selected file's description sits between its name and its patch,
+    /// saying when the file has changed since; a report on its way says so,
+    /// and a hidden one gives its rows back to the patch.
+    #[test]
+    fn the_per_file_view_describes_the_selected_file_from_the_report() {
+        let (_, without) = report_screen(&ReportState::default(), true);
+        let (output, _) = report_screen(&ReportState::default(), true);
+        assert!(output.contains("E: describe each file's edits"), "{output}");
+        assert!(!output.contains("e: hide"), "{output}");
+
+        let described = |patch: &str| ReportState {
+            report: Some(crate::Report {
+                files: [(
+                    "src/a.rs".to_owned(),
+                    crate::FileReport {
+                        fingerprint: crate::report::fingerprint(patch),
+                        description: "Replaces b with c and d, so callers get both.".into(),
+                    },
+                )]
+                .into(),
+            }),
+            ..Default::default()
+        };
+        let (output, with) = report_screen(&described(DIFF), true);
+        assert!(
+            output.contains("Replaces b with c and d, so callers get both."),
+            "{output}"
+        );
+        assert!(!output.contains("written before"), "{output}");
+        assert!(output.contains("E: describe edits again · e: hide edit report"));
+        assert_eq!(with, without - 2, "a line of description and its rule");
+        let description = output.find("Replaces b").unwrap();
+        assert!(output.find("src/a.rs · edited").unwrap() < description);
+        assert!(description < output.find("fn c()").unwrap(), "{output}");
+
+        let (output, _) = report_screen(&described("an earlier patch"), true);
+        assert!(output.contains("written before the file's latest edits"));
+
+        let mut pending = described(DIFF);
+        pending.pending = true;
+        let (output, _) = report_screen(&pending, true);
+        assert!(output.contains("Replaces b"), "{output}");
+        assert!(output.contains("describing each file's edits…"), "{output}");
+
+        let mut hidden = described(DIFF);
+        hidden.hidden = true;
+        let (output, rows) = report_screen(&hidden, true);
+        assert!(!output.contains("Replaces b"), "{output}");
+        assert!(output.contains("e: show edit report"), "{output}");
+        assert_eq!(rows, without);
+
+        let (output, _) = report_screen(&described(DIFF), false);
+        assert!(!output.contains("Replaces b"), "only per file: {output}");
+        assert!(output.contains("f: see it per file"), "{output}");
     }
 
     #[test]
@@ -1547,6 +1723,7 @@ index 1111111..2222222 100644
                             selected_file,
                             file_list_offset: offset,
                             search: Default::default(),
+                            report: None,
                             conversation: None,
                         },
                         frame.area(),
@@ -1736,6 +1913,7 @@ index 1111111..2222222 100644
                         selected_file: 0,
                         file_list_offset: 0,
                         search: Default::default(),
+                        report: None,
                         conversation: None,
                     },
                     frame.area(),

@@ -269,6 +269,13 @@ edited, `R` moved, `R+` moved with edits, `C` copied, `C+` copied with edits,
 and `T` file mode changed. A fixed row above the selected patch explains its
 change and shows the source path for moves and copies. Moves are detected
 using Git's rename similarity threshold.
+`E` in the diff writes an edit report: the server has the interaction's agent,
+on its cheapest model, describe each file of the diff — its main edits and why,
+from the patch, the interaction's first prompt, and the branch's commit
+messages. It runs in the background and is kept with the Session, so reopening
+the diff shows it again. The per-file view shows the selected file's
+description above its patch (`e` hides or shows it), noting when the file has
+changed since it was described.
 The Rust wire types are in `styra_server::api`, and the blocking client used by
 the TUI is `styra_server::Client`.
 

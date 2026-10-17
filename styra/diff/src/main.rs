@@ -45,7 +45,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run(terminal: &mut DefaultTerminal, diff: &mut CheckoutDiff) -> anyhow::Result<()> {
-    // Why the last `v` opened nothing, until the next key.
+    // Why the last key did nothing — a `v` that opened no file, say — until
+    // the next key.
     let mut notice: Option<String> = None;
     loop {
         let mut measured = CheckoutDiffFeedback::default();
@@ -53,6 +54,8 @@ fn run(terminal: &mut DefaultTerminal, diff: &mut CheckoutDiff) -> anyhow::Resul
             .draw(|frame| {
                 let mut view = diff.view(block(notice.as_deref()));
                 view.thumbnail = true;
+                // There is no agent here to write an edit report with.
+                view.report = None;
                 measured = render(frame, &view, frame.area());
             })
             .context("drawing the diff")?;
@@ -67,6 +70,7 @@ fn run(terminal: &mut DefaultTerminal, diff: &mut CheckoutDiff) -> anyhow::Resul
         match handle(diff, key) {
             Step::Stay => {}
             Step::Quit => return Ok(()),
+            Step::Notice(text) => notice = Some(text.to_owned()),
             Step::Edit => {
                 let edited = diff
                     .location()
@@ -78,7 +82,7 @@ fn run(terminal: &mut DefaultTerminal, diff: &mut CheckoutDiff) -> anyhow::Resul
 }
 
 /// The frame around the view, saying how to leave it — there is no Styra
-/// around it to go back to — and why a file did not open.
+/// around it to go back to — and why the last key did nothing.
 fn block(notice: Option<&str>) -> Block<'static> {
     let muted = Style::default().fg(theme::MUTED_TEXT);
     let mut title = vec![
@@ -143,6 +147,8 @@ enum Step {
     Quit,
     /// Open the file at the top of the view in the editor.
     Edit,
+    /// Say why a key did nothing.
+    Notice(&'static str),
 }
 
 /// The view's own keys, as Styra answers them, with Esc closing the view —
@@ -156,6 +162,9 @@ fn handle(diff: &mut CheckoutDiff, key: KeyEvent) -> Step {
         Outcome::Handled => Step::Stay,
         Outcome::Close => Step::Quit,
         Outcome::OpenFile => Step::Edit,
+        Outcome::GenerateReport => {
+            Step::Notice("edit reports are written in Styra, which has an agent to ask")
+        }
         Outcome::Ignored if key.code == KeyCode::Char('q') => Step::Quit,
         Outcome::Ignored => Step::Stay,
     }
@@ -222,6 +231,10 @@ mod tests {
         assert_eq!(diff.tint, styra_diff::Tint::Half);
         assert_eq!(diff.selected_file, 1);
         assert_eq!(press(&mut diff, KeyCode::Char('v')), Step::Edit);
+        assert!(matches!(
+            press(&mut diff, KeyCode::Char('E')),
+            Step::Notice(_)
+        ));
     }
 
     /// `$VISUAL` before `$EDITOR`, either with arguments of its own, and

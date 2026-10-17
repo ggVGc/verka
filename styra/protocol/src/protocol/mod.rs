@@ -15,12 +15,13 @@ mod types;
 pub use types::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
     BranchHistory, BranchPoint, CheckoutState, CleanedWorktree, CompletionState, Contract,
-    Direction, DrivaOptions, FileLocation, Integration, IntegrationResult, InteractionActivity,
-    InteractionActivityReason, InteractionEnd, InteractionQuery, InteractionSummary,
-    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, ModelSummary, MountOrigin,
-    QueuedMessage, QuotaEvent, QuotaStatus, RawLine, RebaseStatus, RecentMessage, SandboxProcess,
-    SessionOrigin, SessionSummary, TemplateSummary, TurnDiff, VariableOrigin, WorkspaceSummary,
-    WorktreeCleanup, WorktreeSession, WorktreeSummary, WORKTREES_DIR,
+    Direction, DrivaOptions, EditReport, EditReportFile, FileEditReport, FileLocation, Integration,
+    IntegrationResult, InteractionActivity, InteractionActivityReason, InteractionEnd,
+    InteractionQuery, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
+    LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
+    RebaseStatus, RecentMessage, SandboxProcess, SessionOrigin, SessionSummary, TemplateSummary,
+    TurnDiff, VariableOrigin, WorkspaceSummary, WorktreeCleanup, WorktreeSession, WorktreeSummary,
+    WORKTREES_DIR,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -325,6 +326,20 @@ pub enum Request {
     },
     /// Ask an errand for an editable squash commit message.
     GenerateIntegrationMessage {
+        id: String,
+    },
+    /// Have an errand describe each edited file of the Session's checkout —
+    /// what changed in it and why — and keep the report with the Session,
+    /// replacing any earlier one. The client sends the patches, split per file
+    /// exactly as it shows them, so the report covers the files it lists.
+    GenerateEditReport {
+        id: String,
+        /// The commit the patches are measured from.
+        base: String,
+        files: Vec<EditReportFile>,
+    },
+    /// The Session's last generated edit report, if it has one.
+    EditReport {
         id: String,
     },
     /// None while integration is running; otherwise its final result.
@@ -751,6 +766,7 @@ pub enum Response {
     SessionRebaseStatus(RebaseStatus),
     IntegrationStarted,
     IntegrationMessage(String),
+    EditReport(Option<EditReport>),
     SessionIntegrationResult(Option<IntegrationResult>),
     Health(Health),
     WorkspaceCreated(WorkspaceSummary),

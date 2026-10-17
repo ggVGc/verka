@@ -53,6 +53,8 @@ pub struct ServerState {
     inner: Arc<ServerInner>,
 }
 
+#[path = "edit_report.rs"]
+mod edit_report;
 #[path = "integration.rs"]
 mod integration;
 #[path = "rebase.rs"]
@@ -3896,6 +3898,8 @@ impl ServerState {
             | Request::TurnAnswer { id, .. }
             | Request::SessionComposer { id }
             | Request::GenerateIntegrationMessage { id }
+            | Request::GenerateEditReport { id, .. }
+            | Request::EditReport { id }
             | Request::SessionRebaseStatus { id }
             | Request::SessionIntegrationResult { id }
             | Request::InteractionActions { id }
@@ -4134,6 +4138,10 @@ impl ServerState {
             Request::GenerateIntegrationMessage { id } => Ok(Response::IntegrationMessage(
                 self.generate_integration_message(&id)?,
             )),
+            Request::GenerateEditReport { id, base, files } => Ok(Response::EditReport(Some(
+                self.generate_edit_report(&id, &base, files)?,
+            ))),
+            Request::EditReport { id } => Ok(Response::EditReport(self.edit_report(&id)?)),
             Request::SessionIntegrationResult { id } => Ok(Response::SessionIntegrationResult(
                 self.integration_result(&id)?,
             )),

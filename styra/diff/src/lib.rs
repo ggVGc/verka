@@ -12,9 +12,11 @@
 pub mod files;
 pub mod git;
 pub mod keys;
+pub mod report;
 mod state;
 mod view;
 
 pub use keys::Outcome;
+pub use report::{FileReport, Report, ReportState};
 pub use state::{CheckoutDiff, DiffTarget};
 pub use view::{render, CheckoutDiffFeedback, CheckoutDiffView, Tint};

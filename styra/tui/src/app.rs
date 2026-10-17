@@ -358,6 +358,9 @@ pub enum Request {
     Rebase,
     Integrate(String),
     GenerateIntegrationMessage,
+    /// Have each file of the checkout diff on screen described, in an edit
+    /// report (see [`crate::edit_report`]).
+    GenerateEditReport,
     Quit,
     /// Choose a Workspace, then one of its Sessions.
     Workspace,

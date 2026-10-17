@@ -12,6 +12,7 @@ use crate::activity::Status;
 use crate::app::{App, Focus, LaunchPolicy, Request, View};
 use crate::audio::AudioInput;
 use crate::config::Configuration;
+use crate::edit_report::EditReports;
 use crate::input;
 use crate::keybindings as keys;
 use crate::launch::{self, LaunchScope};
@@ -857,6 +858,7 @@ fn run_rounds(
     app.recent_models = preferences::load_recent_models(preferences_path);
     let launch_effects = LaunchEffects::new(client.clone());
     let mut interactions_poll = InteractionsPoll::new(client.clone());
+    let mut edit_reports = EditReports::new();
     let mut audio = AudioInput::new();
     let mut pending_fold = false;
     // Keys the action menu chose, still to be handled as if they were typed.
@@ -884,9 +886,631 @@ fn run_rounds(
     loop {
         session::save_composer(app, client, false);
         let workspace_id = app.workspace.id.clone().unwrap_or_default();
+        // Every request the last round queued is carried out here, at the
+        // top of the next, before anything is drawn. A key handler that
+        // `continue`s — and most of them do — still restarts the loop, so
+        // nothing it asked for can be left sitting in the queue behind
+        // later keys, as the diff's keys once were. A picker that the
+        // operator backs out of leaves the session as it was, so those arms
+        // go on to the next request rather than returning.
+        while let Some(request) = app.take_request() {
+            dirty = true;
+            match request {
+                Request::Rebase => {
+                    let id = app.session_id.clone();
+                    let started = client.rebase_session(&id);
+                    app.rebase_status = Some(styra_protocol::RebaseStatus {
+                        finished: started.is_err(),
+                        succeeded: false,
+                        output: String::new(),
+                        source_commit: String::new(),
+                        message: match &started {
+                            Ok(()) => "Starting rebase…".into(),
+                            Err(error) => format!("Could not rebase: {error:#}"),
+                        },
+                    });
+                    if started.is_ok() {
+                        app.pending_rebase = Some(id);
+                    }
+                }
+                Request::Quit => return Ok(RunOutcome::Quit),
+                Request::Integrate(_) | Request::GenerateIntegrationMessage => {}
+                Request::Workspace => {
+                    let mut workspaces = client.list_workspaces()?;
+                    // The picker keeps the listing it is handed fresh while it is
+                    // open, during which this loop is not polling, so what it
+                    // ends on is the newest listing there is.
+                    ensure_listed(app, client)?;
+                    let mut interactions = app.interactions.snapshot();
+                    let query = app.interactions.query(&app.session_id);
+                    let choice = picker::run_workspace_picker(
+                        terminal,
+                        client,
+                        &mut workspaces,
+                        &mut interactions,
+                        &query,
+                        None,
+                    );
+                    app.interactions.refresh(interactions);
+                    // Backing out never leaves Styra, even with no Workspace (or a
+                    // deleted one) behind the list: it lands on the interaction
+                    // view, where `q` is still the way out.
+                    let Some(choice) = choice? else {
+                        app.view = crate::app::View::Events;
+                        app.focus = Focus::List;
+                        continue;
+                    };
+                    let workspace = match choice {
+                        // Looking the Workspace up again records the access, which
+                        // is what floats it to the top of the picker next time. The
+                        // summary the picker already holds stands in if the server
+                        // cannot answer.
+                        picker::WorkspaceChoice::Existing(workspace) => {
+                            client.workspace(&workspace.id).unwrap_or(workspace)
+                        }
+                        // A fresh interaction is asked for outright, so neither
+                        // live work nor the Session list stands in the way.
+                        picker::WorkspaceChoice::New(workspace) => {
+                            return Ok(RunOutcome::OpenWorkspace {
+                                workspace: Box::new(
+                                    client.workspace(&workspace.id).unwrap_or(workspace),
+                                ),
+                                session_id: None,
+                                open_interactions: false,
+                            });
+                        }
+                        picker::WorkspaceChoice::CreateCurrentDirectory => {
+                            let host_path = session::resolve_workspace(None)?;
+                            session::create_workspace(client, host_path, None)?
+                        }
+                    };
+                    // A Workspace with work in flight is entered at that work, the
+                    // way `v` enters it: the live list opens with the cursor on the
+                    // Workspace's first Interaction, so the operator sees the rest
+                    // of the live list without being asked which Session they meant.
+                    if workspace_jump::has_live_work(&app.interactions.items, &workspace.id) {
+                        open_interactions_in_workspace(app, client, &workspace.id)?;
+                        continue;
+                    }
+                    let mut sessions = client.list_sessions(&workspace.id)?;
+                    if sessions.is_empty() {
+                        return Ok(RunOutcome::OpenWorkspace {
+                            workspace: Box::new(workspace),
+                            session_id: None,
+                            open_interactions: false,
+                        });
+                    }
+                    // Starting fresh from this list enters the Workspace that was
+                    // just chosen with no Session loaded, which is the same place
+                    // entering a Workspace that has no history at all lands.
+                    if let Some(choice) = picker::run_session_picker(
+                        terminal,
+                        client,
+                        &crate::workspace::display_name(&workspace),
+                        &mut sessions,
+                        &app.interactions.items,
+                        None,
+                        true,
+                    )? {
+                        return Ok(RunOutcome::OpenWorkspace {
+                            workspace: Box::new(workspace),
+                            session_id: match choice {
+                                picker::SessionChoice::Open(id) => Some(id),
+                                picker::SessionChoice::New => None,
+                            },
+                            open_interactions: false,
+                        });
+                    }
+                    if !client
+                        .list_workspaces()?
+                        .iter()
+                        .any(|workspace| workspace.id == workspace_id)
+                    {
+                        return Ok(RunOutcome::Quit);
+                    }
+                }
+                Request::OpenSession(id) => return Ok(RunOutcome::OpenSession(id)),
+                Request::OpenBranch(id) => return Ok(RunOutcome::OpenBranch(id)),
+                Request::JumpBack => return Ok(RunOutcome::JumpBack),
+                Request::Sessions => {
+                    let mut sessions = client.list_sessions(&workspace_id)?;
+                    if sessions.is_empty() {
+                        app.push_log(LogEntry::warn("no sessions found in the current Workspace"));
+                        continue;
+                    }
+                    match picker::run_session_picker(
+                        terminal,
+                        client,
+                        app.workspace.name.as_deref().unwrap_or("styra"),
+                        &mut sessions,
+                        &app.interactions.items,
+                        Some(&app.session_id),
+                        true,
+                    )? {
+                        Some(picker::SessionChoice::Open(id)) => {
+                            return Ok(RunOutcome::OpenSession(id))
+                        }
+                        // The same new interaction `n` starts from the main view:
+                        // it inherits the context being viewed, in this Workspace.
+                        Some(picker::SessionChoice::New) => return Ok(RunOutcome::NewSession),
+                        None => {}
+                    }
+                }
+                // Listed here rather than inside the picker so that a server that
+                // cannot answer — one older than the request — is a logged line
+                // and not the end of the client.
+                Request::Worktrees => {
+                    let worktrees = match client.list_worktrees(Some(&workspace_id)) {
+                        Ok(worktrees) => worktrees,
+                        Err(error) => {
+                            app.push_log(LogEntry::error(format!(
+                                "could not list worktrees: {error:#}"
+                            )));
+                            continue;
+                        }
+                    };
+                    let Some(choice) = crate::worktree_picker::run_worktree_picker(
+                        terminal,
+                        client,
+                        worktrees,
+                        &workspace_id,
+                        &app.session_id,
+                    )?
+                    else {
+                        continue;
+                    };
+                    // With every Workspace listed the Session may be in another
+                    // one, which has to be entered for the view to follow it.
+                    if choice.workspace_id != workspace_id {
+                        if let Some(workspace) = client
+                            .list_workspaces()?
+                            .into_iter()
+                            .find(|workspace| workspace.id == choice.workspace_id)
+                        {
+                            return Ok(RunOutcome::OpenWorkspace {
+                                workspace: Box::new(workspace),
+                                session_id: Some(choice.session_id),
+                                open_interactions: false,
+                            });
+                        }
+                    }
+                    return Ok(RunOutcome::OpenSession(choice.session_id));
+                }
+                Request::Interactions => {
+                    ensure_listed(app, client)?;
+                    if app.interactions.items.is_empty() {
+                        app.push_log(LogEntry::warn("no live interactions on the server"));
+                        continue;
+                    }
+                    let workspaces = client.list_workspaces()?;
+                    app.view = crate::app::View::Events;
+                    app.focus = Focus::List;
+                    app.interactions.show(workspaces);
+                }
+                // The listing the loop keeps, as `a` takes, so the choice offered
+                // is of the work running at the last refresh.
+                // `V` offers what the navigator would list rather than only live
+                // work, so it opens on the list itself: the grid tiles live work
+                // alone and could not show most of what it offers.
+                Request::WorkspaceJump { listed } => {
+                    ensure_listed(app, client)?;
+                    let workspaces = client.list_workspaces()?;
+                    let interactions = &app.interactions.items;
+                    let mut jump = if listed {
+                        WorkspaceJump::listed(&workspaces, interactions, |interaction| {
+                            app.interactions.lists(interaction)
+                        })
+                    } else {
+                        WorkspaceJump::new(&workspaces, interactions)
+                    };
+                    if jump.is_empty() {
+                        app.show_warning(if listed {
+                            "no Workspace has interactions the list shows"
+                        } else {
+                            "no Workspace has live interactions"
+                        });
+                        continue;
+                    }
+                    if !listed && app.view == crate::app::View::Overview {
+                        jump.grid = Some((
+                            app.overview.clone(),
+                            app.interactions.only_current_workspace,
+                        ));
+                    }
+                    app.interactions.workspaces = workspaces;
+                    app.workspace_jump = Some(jump);
+                    preview_workspace_jump(app);
+                    narrow_navigator_to_jump(app);
+                }
+                // The overview reads the same snapshot the loop refreshes on its
+                // timer, but the tiles name their Workspaces, and that list is
+                // only fetched when asked for. It is best-effort: a grid a moment
+                // stale is still the grid.
+                Request::Overview => {
+                    if let Ok(workspaces) = client.list_workspaces() {
+                        app.interactions.workspaces = workspaces;
+                    }
+                    app.interactions.close();
+                    app.overview.open();
+                    app.view = crate::app::View::Overview;
+                    app.focus = Focus::List;
+                }
+                // Loaded outright, as `n` does. A load that fails leaves the
+                // overview up, and says so where the operator is looking rather
+                // than only in the log.
+                Request::ShowInteraction(id) => {
+                    if id == app.session_id {
+                        app.view = crate::app::View::Events;
+                        continue;
+                    }
+                    let Some(interaction) = app.interactions.current(&id).cloned() else {
+                        app.show_warning("that interaction is no longer running");
+                        continue;
+                    };
+                    make_interaction_current(app, live, client, standing_launch, interaction);
+                    if app.session_id != id {
+                        app.show_error(
+                            "could not open that interaction; the log (ctrl-l) says why",
+                        );
+                    }
+                }
+                // As above, but the grid stays up behind the message box, so the
+                // operator can go on to the next tile once this one is answered.
+                Request::MessageInteraction(id) => {
+                    let Some(interaction) = app.interactions.current(&id).cloned() else {
+                        app.show_warning("that interaction is no longer running");
+                        continue;
+                    };
+                    make_interaction_current(app, live, client, standing_launch, interaction);
+                    app.view = crate::app::View::Overview;
+                    if app.session_id == id {
+                        app.enter_input();
+                    } else {
+                        app.show_error(
+                            "could not open that interaction; the log (ctrl-l) says why",
+                        );
+                    }
+                }
+                // The interaction is loaded outright rather than cursored, and the
+                // navigator is left as it was: open or closed. Newly idle work
+                // takes priority; otherwise this walks every live interaction.
+                Request::NextLiveInteraction => {
+                    // The client's snapshot is at most a refresh old, which is
+                    // fresh enough to step by: one stopped since then still loads.
+                    let overview =
+                        (app.view == crate::app::View::Overview).then(|| app.overview.clone());
+                    let next = if let Some(overview) = &overview {
+                        overview.next_attention_or_live(
+                            &app.interactions,
+                            &app.session_id,
+                            app.workspace.id.as_deref(),
+                        )
+                    } else {
+                        app.interactions
+                            .next_attention_or_live(&app.session_id, app.workspace.id.as_deref())
+                    };
+                    let Some(next) = next else {
+                        app.show_warning("no other interaction is running");
+                        continue;
+                    };
+                    let target_id = next.id.clone();
+                    make_interaction_current(app, live, client, standing_launch, next);
+                    if let Some(mut overview) = overview {
+                        if app.session_id == target_id {
+                            if overview.running_only
+                                && overview
+                                    .indices(&app.interactions, app.workspace.id.as_deref())
+                                    .iter()
+                                    .all(|index| {
+                                        app.interactions.items[*index].id != app.session_id
+                                    })
+                            {
+                                overview.toggle_running_only();
+                            }
+                            overview.open();
+                        }
+                        app.overview = overview;
+                        app.view = crate::app::View::Overview;
+                    }
+                }
+                Request::NextWorkingInteraction => {
+                    let Some(next) = app
+                        .interactions
+                        .next_active(&app.session_id, app.workspace.id.as_deref())
+                    else {
+                        app.show_warning("no other interaction is actively working");
+                        continue;
+                    };
+                    make_interaction_current(app, live, client, standing_launch, next);
+                }
+                Request::NewSession => return Ok(RunOutcome::NewSession),
+                // Naming the branch asks the model for a topic and the checkout
+                // copies the repository out, which together take long enough to
+                // look like a hang. `W` and `Ctrl-Enter` differ only in what the
+                // checkout is made for: a Session already running, which has to be
+                // restarted into it — carrying the message, if `Ctrl-Enter` sent
+                // one — or one that the first prompt launches there.
+                Request::CreateWorktree { message } => {
+                    let message = match message {
+                        Some(message) if app.session_id.is_empty() => {
+                            // The launch branches and checks out before it sends,
+                            // and reports its own failure — restoring the message
+                            // box.
+                            blocked_on(terminal, app, CREATING_WORKTREE, |app| {
+                                session::submit_message(
+                                    app,
+                                    client,
+                                    &workspace_id,
+                                    live,
+                                    message,
+                                    true,
+                                )
+                            })?;
+                            continue;
+                        }
+                        message => message,
+                    };
+                    let session_id = app.session_id.clone();
+                    let created = blocked_on(terminal, app, CREATING_WORKTREE, |_| {
+                        client.create_session_worktree(&session_id)
+                    })?;
+                    if let Err(error) = created {
+                        app.show_error(format!("could not create a linked workspace: {error}"));
+                        // Nothing was sent: the message waits in the box for a
+                        // plain Enter, or for another try.
+                        if let Some(message) = message {
+                            app.set_input(message);
+                            app.enter_input();
+                        }
+                        continue;
+                    }
+                    if let Some(message) = message {
+                        let sent = blocked_on(
+                            terminal,
+                            app,
+                            "restarting the interaction in the linked workspace…",
+                            |app| session::restart_and_send(app, client, live, message),
+                        )?;
+                        if sent {
+                            return Ok(RunOutcome::OpenSession(session_id));
+                        }
+                        app.show_error(
+                            "created the linked workspace, but could not restart in it; the message is back in the box",
+                        );
+                        app.enter_input();
+                        continue;
+                    }
+                    // The checkout is read when the agent launches, so the
+                    // interaction is restarted into it rather than left running in
+                    // the directory it started in. Reopening the Session afterwards
+                    // is what puts the checkout on screen: the view then reads its
+                    // directory from the revived interaction.
+                    let restarted = blocked_on(
+                        terminal,
+                        app,
+                        "restarting the interaction in the linked workspace…",
+                        |app| session::restart(app, client, live),
+                    )?;
+                    match restarted {
+                        Ok(_) => return Ok(RunOutcome::OpenSession(session_id)),
+                        Err(error) => app.show_error(format!(
+                            "created the linked workspace, but could not restart in it ({error}); it will be used when this Session next launches"
+                        )),
+                    }
+                }
+                Request::ApplySelection => {
+                    let Attachment::Attached { .. } = live else {
+                        continue;
+                    };
+                    let selection = app.selection.clone();
+                    match client.set_session_selection(&app.session_id, &selection) {
+                        Ok(()) => {
+                            app.show_action_message(format!("model set to {}", selection.model))
+                        }
+                        Err(error) => app.push_log(LogEntry::error(format!(
+                            "could not switch to {}: {error:#}",
+                            selection.model
+                        ))),
+                    }
+                }
+                // Moving a stopped Session onto another agent. The server copies
+                // the whole history into the new agent's native format as a
+                // sibling Session, and that sibling — not this one — is where the
+                // conversation carries on, so the view follows it. Both sides keep
+                // a branch marker, so the Session it came from stays reachable.
+                Request::ConvertProvider(selection) => {
+                    match client.branch_session_with_selection(
+                        &app.session_id,
+                        None,
+                        styra_protocol::BranchHistory::ThroughSelected,
+                        Some(selection.provider),
+                        Some(selection.clone()),
+                    ) {
+                        Ok(converted) => {
+                            app.push_log(LogEntry::info(format!(
+                                "converted this Session's history to {}; continuing in Session {}",
+                                selection.provider.as_str(),
+                                converted.name.as_deref().unwrap_or(&converted.id)
+                            )));
+                            return Ok(RunOutcome::OpenSession(converted.id));
+                        }
+                        Err(error) => app.push_log(LogEntry::error(format!(
+                            "could not convert this Session to {}: {error:#}",
+                            selection.provider.as_str()
+                        ))),
+                    }
+                }
+                Request::Templates => {
+                    // Which templates the picker starts from is the layer being
+                    // edited. For the Workspace's own that is exactly its list. For
+                    // this interaction's, the picker offers and returns the whole
+                    // layering a launch would apply — the Workspace's templates
+                    // included, since those are as much part of what the operator is
+                    // choosing as their own. Turning that choice back into an
+                    // overlay is `App`'s job.
+                    let current = match app.launch.scope {
+                        LaunchScope::Workspace => app.launch.workspace.templates.clone(),
+                        LaunchScope::Interaction => app.launch.effective().templates,
+                    };
+                    let request_id = launch_effects.submit_templates(workspace_id.clone());
+                    app.template_picker = Some(picker::TemplatePicker::loading(
+                        request_id,
+                        workspace_id.clone(),
+                        app.launch.scope,
+                        current,
+                    ));
+                }
+                Request::ChangeWorkspaceLaunch {
+                    change,
+                    clear_interaction,
+                } => {
+                    submit_workspace_launch(
+                        &launch_effects,
+                        app,
+                        workspace_id.clone(),
+                        change,
+                        clear_interaction,
+                    );
+                }
+                // Parsing is the server's, since it holds the session's recorded
+                // contract and the journal the answer is read from; this client
+                // only asks and renders.
+                Request::Answer { contract } => {
+                    let id = app.session_id.clone();
+                    if id.is_empty() {
+                        app.answer.set(Err("no session to answer from yet".into()));
+                        continue;
+                    }
+                    let answer = match contract {
+                        Some(contract) => client.turn_answer_as(&id, contract),
+                        None => client.turn_answer(&id),
+                    };
+                    app.answer.set(answer.map_err(|error| format!("{error:#}")));
+                }
+                Request::Quota => refresh_quota(app, client),
+                Request::Processes => {
+                    refresh_processes(app, client);
+                }
+                // The setting is the server's to keep — it is stored with the
+                // Session and acted on long after this client has gone — so what
+                // is shown is what the server accepted, not what was pressed.
+                Request::SetAutoRetry(enabled) => {
+                    match client.set_interaction_auto_retry(&app.session_id, enabled) {
+                        Ok(()) => {
+                            app.auto_retry = enabled;
+                            app.show_action_message(if enabled {
+                                "rate-limit retry on — this session will be asked again after a reset"
+                            } else {
+                                "rate-limit retry off"
+                            });
+                        }
+                        Err(error) => {
+                            let message =
+                                format!("could not change the rate-limit retry: {error:#}");
+                            app.show_error(message.clone());
+                            app.push_log(LogEntry::error(message));
+                        }
+                    }
+                }
+                Request::SetAutoCommit(enabled) => {
+                    match client.set_interaction_auto_commit(&app.session_id, enabled) {
+                        Ok(()) => {
+                            app.auto_commit = enabled;
+                            app.show_action_message(if enabled {
+                                "auto-commit on — each turn's work is committed when it goes idle"
+                            } else {
+                                "auto-commit off"
+                            });
+                        }
+                        Err(error) => {
+                            let message = format!("could not change auto-commit: {error:#}");
+                            app.show_error(message.clone());
+                            app.push_log(LogEntry::error(message));
+                        }
+                    }
+                }
+                Request::EditFile => {
+                    let Some(path) = app.selected_file_path() else {
+                        continue;
+                    };
+                    open_path(app, config, &path, None);
+                }
+                Request::OpenPath(path) => open_path(app, config, &path, None),
+                Request::OpenPathAt(path, line) => open_path(app, config, &path, line),
+                Request::OpenUrl(url) => open_url(app, config, &url),
+                Request::OpenDirectory => {
+                    let Some(directory) = app.workspace.working_directory_or_current() else {
+                        app.show_warning("no directory to open a terminal in");
+                        continue;
+                    };
+                    match crate::terminal::open_directory(&directory, config) {
+                        Ok(program) => app.show_action_message(format!(
+                            "opened {program} in {}",
+                            directory.display()
+                        )),
+                        Err(error) => app.push_log(LogEntry::error(format!(
+                            "could not open a terminal in {}: {error:#}",
+                            directory.display()
+                        ))),
+                    }
+                }
+                Request::ShowDiffAt {
+                    target,
+                    path,
+                    line,
+                    fullscreen,
+                } => {
+                    let mut diff = styra_diff::CheckoutDiff::read(target);
+                    if let Err(reason) = diff.jump_to(&path, line) {
+                        app.show_warning(reason);
+                        continue;
+                    }
+                    app.checkout_diff = Some(diff);
+                    edit_reports.load(app, client);
+                    diff_refreshed = Instant::now();
+                    app.diff_preview = !fullscreen;
+                    app.diff_interaction_focus = false;
+                    if fullscreen {
+                        app.view = View::CheckoutDiff;
+                    } else if !matches!(app.view, View::Events | View::Files) {
+                        app.view = View::Events;
+                    }
+                }
+                Request::ShowDiff(target) => {
+                    app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
+                    edit_reports.load(app, client);
+                    diff_refreshed = Instant::now();
+                    app.diff_preview = true;
+                    app.diff_interaction_focus = false;
+                    if !matches!(app.view, View::Events | View::Files) {
+                        app.view = View::Events;
+                    }
+                }
+                Request::ShowDiffFullscreen(target) => {
+                    app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
+                    edit_reports.load(app, client);
+                    diff_refreshed = Instant::now();
+                    app.diff_preview = false;
+                    app.diff_interaction_focus = false;
+                    app.view = View::CheckoutDiff;
+                }
+                Request::GenerateEditReport => edit_reports.start(app, client),
+                Request::OpenShell => {
+                    match crate::terminal::open_shell(client, &app.session_id, config) {
+                        Ok(program) => {
+                            app.show_action_message(format!("opened shell in {program}"))
+                        }
+                        Err(error) => app.push_log(LogEntry::error(format!(
+                            "could not open session shell: {error:#}"
+                        ))),
+                    }
+                }
+            }
+        }
         dirty |= app.notices.expire();
         dirty |= app.interactions.expire_flashes();
         dirty |= launch_effects.apply_ready(app, &workspace_id);
+        dirty |= edit_reports.apply_ready(app);
         dirty |= audio.apply_ready(app, client);
         // Workspace launch policy is a server-owned read model. Refresh it
         // independently of input so edits from another Styra client flow into
@@ -1794,599 +2418,6 @@ fn run_rounds(
                 }
             }
         }
-
-        // A picker that the operator backs out of leaves the session as it was,
-        // so those arms fall through to the next frame rather than returning.
-        match app.take_request() {
-            None => {}
-            Some(Request::Rebase) => {
-                let id = app.session_id.clone();
-                let started = client.rebase_session(&id);
-                app.rebase_status = Some(styra_protocol::RebaseStatus {
-                    finished: started.is_err(),
-                    succeeded: false,
-                    output: String::new(),
-                    source_commit: String::new(),
-                    message: match &started {
-                        Ok(()) => "Starting rebase…".into(),
-                        Err(error) => format!("Could not rebase: {error:#}"),
-                    },
-                });
-                if started.is_ok() {
-                    app.pending_rebase = Some(id);
-                }
-            }
-            Some(Request::Quit) => return Ok(RunOutcome::Quit),
-            Some(Request::Integrate(_) | Request::GenerateIntegrationMessage) => {}
-            Some(Request::Workspace) => {
-                let mut workspaces = client.list_workspaces()?;
-                // The picker keeps the listing it is handed fresh while it is
-                // open, during which this loop is not polling, so what it
-                // ends on is the newest listing there is.
-                ensure_listed(app, client)?;
-                let mut interactions = app.interactions.snapshot();
-                let query = app.interactions.query(&app.session_id);
-                let choice = picker::run_workspace_picker(
-                    terminal,
-                    client,
-                    &mut workspaces,
-                    &mut interactions,
-                    &query,
-                    None,
-                );
-                app.interactions.refresh(interactions);
-                // Backing out never leaves Styra, even with no Workspace (or a
-                // deleted one) behind the list: it lands on the interaction
-                // view, where `q` is still the way out.
-                let Some(choice) = choice? else {
-                    app.view = crate::app::View::Events;
-                    app.focus = Focus::List;
-                    continue;
-                };
-                let workspace = match choice {
-                    // Looking the Workspace up again records the access, which
-                    // is what floats it to the top of the picker next time. The
-                    // summary the picker already holds stands in if the server
-                    // cannot answer.
-                    picker::WorkspaceChoice::Existing(workspace) => {
-                        client.workspace(&workspace.id).unwrap_or(workspace)
-                    }
-                    // A fresh interaction is asked for outright, so neither
-                    // live work nor the Session list stands in the way.
-                    picker::WorkspaceChoice::New(workspace) => {
-                        return Ok(RunOutcome::OpenWorkspace {
-                            workspace: Box::new(
-                                client.workspace(&workspace.id).unwrap_or(workspace),
-                            ),
-                            session_id: None,
-                            open_interactions: false,
-                        });
-                    }
-                    picker::WorkspaceChoice::CreateCurrentDirectory => {
-                        let host_path = session::resolve_workspace(None)?;
-                        session::create_workspace(client, host_path, None)?
-                    }
-                };
-                // A Workspace with work in flight is entered at that work, the
-                // way `v` enters it: the live list opens with the cursor on the
-                // Workspace's first Interaction, so the operator sees the rest
-                // of the live list without being asked which Session they meant.
-                if workspace_jump::has_live_work(&app.interactions.items, &workspace.id) {
-                    open_interactions_in_workspace(app, client, &workspace.id)?;
-                    continue;
-                }
-                let mut sessions = client.list_sessions(&workspace.id)?;
-                if sessions.is_empty() {
-                    return Ok(RunOutcome::OpenWorkspace {
-                        workspace: Box::new(workspace),
-                        session_id: None,
-                        open_interactions: false,
-                    });
-                }
-                // Starting fresh from this list enters the Workspace that was
-                // just chosen with no Session loaded, which is the same place
-                // entering a Workspace that has no history at all lands.
-                if let Some(choice) = picker::run_session_picker(
-                    terminal,
-                    client,
-                    &crate::workspace::display_name(&workspace),
-                    &mut sessions,
-                    &app.interactions.items,
-                    None,
-                    true,
-                )? {
-                    return Ok(RunOutcome::OpenWorkspace {
-                        workspace: Box::new(workspace),
-                        session_id: match choice {
-                            picker::SessionChoice::Open(id) => Some(id),
-                            picker::SessionChoice::New => None,
-                        },
-                        open_interactions: false,
-                    });
-                }
-                if !client
-                    .list_workspaces()?
-                    .iter()
-                    .any(|workspace| workspace.id == workspace_id)
-                {
-                    return Ok(RunOutcome::Quit);
-                }
-            }
-            Some(Request::OpenSession(id)) => return Ok(RunOutcome::OpenSession(id)),
-            Some(Request::OpenBranch(id)) => return Ok(RunOutcome::OpenBranch(id)),
-            Some(Request::JumpBack) => return Ok(RunOutcome::JumpBack),
-            Some(Request::Sessions) => {
-                let mut sessions = client.list_sessions(&workspace_id)?;
-                if sessions.is_empty() {
-                    app.push_log(LogEntry::warn("no sessions found in the current Workspace"));
-                    continue;
-                }
-                match picker::run_session_picker(
-                    terminal,
-                    client,
-                    app.workspace.name.as_deref().unwrap_or("styra"),
-                    &mut sessions,
-                    &app.interactions.items,
-                    Some(&app.session_id),
-                    true,
-                )? {
-                    Some(picker::SessionChoice::Open(id)) => {
-                        return Ok(RunOutcome::OpenSession(id))
-                    }
-                    // The same new interaction `n` starts from the main view:
-                    // it inherits the context being viewed, in this Workspace.
-                    Some(picker::SessionChoice::New) => return Ok(RunOutcome::NewSession),
-                    None => {}
-                }
-            }
-            // Listed here rather than inside the picker so that a server that
-            // cannot answer — one older than the request — is a logged line
-            // and not the end of the client.
-            Some(Request::Worktrees) => {
-                let worktrees = match client.list_worktrees(Some(&workspace_id)) {
-                    Ok(worktrees) => worktrees,
-                    Err(error) => {
-                        app.push_log(LogEntry::error(format!(
-                            "could not list worktrees: {error:#}"
-                        )));
-                        continue;
-                    }
-                };
-                let Some(choice) = crate::worktree_picker::run_worktree_picker(
-                    terminal,
-                    client,
-                    worktrees,
-                    &workspace_id,
-                    &app.session_id,
-                )?
-                else {
-                    continue;
-                };
-                // With every Workspace listed the Session may be in another
-                // one, which has to be entered for the view to follow it.
-                if choice.workspace_id != workspace_id {
-                    if let Some(workspace) = client
-                        .list_workspaces()?
-                        .into_iter()
-                        .find(|workspace| workspace.id == choice.workspace_id)
-                    {
-                        return Ok(RunOutcome::OpenWorkspace {
-                            workspace: Box::new(workspace),
-                            session_id: Some(choice.session_id),
-                            open_interactions: false,
-                        });
-                    }
-                }
-                return Ok(RunOutcome::OpenSession(choice.session_id));
-            }
-            Some(Request::Interactions) => {
-                ensure_listed(app, client)?;
-                if app.interactions.items.is_empty() {
-                    app.push_log(LogEntry::warn("no live interactions on the server"));
-                    continue;
-                }
-                let workspaces = client.list_workspaces()?;
-                app.view = crate::app::View::Events;
-                app.focus = Focus::List;
-                app.interactions.show(workspaces);
-            }
-            // The listing the loop keeps, as `a` takes, so the choice offered
-            // is of the work running at the last refresh.
-            // `V` offers what the navigator would list rather than only live
-            // work, so it opens on the list itself: the grid tiles live work
-            // alone and could not show most of what it offers.
-            Some(Request::WorkspaceJump { listed }) => {
-                ensure_listed(app, client)?;
-                let workspaces = client.list_workspaces()?;
-                let interactions = &app.interactions.items;
-                let mut jump = if listed {
-                    WorkspaceJump::listed(&workspaces, interactions, |interaction| {
-                        app.interactions.lists(interaction)
-                    })
-                } else {
-                    WorkspaceJump::new(&workspaces, interactions)
-                };
-                if jump.is_empty() {
-                    app.show_warning(if listed {
-                        "no Workspace has interactions the list shows"
-                    } else {
-                        "no Workspace has live interactions"
-                    });
-                    continue;
-                }
-                if !listed && app.view == crate::app::View::Overview {
-                    jump.grid = Some((
-                        app.overview.clone(),
-                        app.interactions.only_current_workspace,
-                    ));
-                }
-                app.interactions.workspaces = workspaces;
-                app.workspace_jump = Some(jump);
-                preview_workspace_jump(app);
-                narrow_navigator_to_jump(app);
-            }
-            // The overview reads the same snapshot the loop refreshes on its
-            // timer, but the tiles name their Workspaces, and that list is
-            // only fetched when asked for. It is best-effort: a grid a moment
-            // stale is still the grid.
-            Some(Request::Overview) => {
-                if let Ok(workspaces) = client.list_workspaces() {
-                    app.interactions.workspaces = workspaces;
-                }
-                app.interactions.close();
-                app.overview.open();
-                app.view = crate::app::View::Overview;
-                app.focus = Focus::List;
-            }
-            // Loaded outright, as `n` does. A load that fails leaves the
-            // overview up, and says so where the operator is looking rather
-            // than only in the log.
-            Some(Request::ShowInteraction(id)) => {
-                if id == app.session_id {
-                    app.view = crate::app::View::Events;
-                    continue;
-                }
-                let Some(interaction) = app.interactions.current(&id).cloned() else {
-                    app.show_warning("that interaction is no longer running");
-                    continue;
-                };
-                make_interaction_current(app, live, client, standing_launch, interaction);
-                if app.session_id != id {
-                    app.show_error("could not open that interaction; the log (ctrl-l) says why");
-                }
-            }
-            // As above, but the grid stays up behind the message box, so the
-            // operator can go on to the next tile once this one is answered.
-            Some(Request::MessageInteraction(id)) => {
-                let Some(interaction) = app.interactions.current(&id).cloned() else {
-                    app.show_warning("that interaction is no longer running");
-                    continue;
-                };
-                make_interaction_current(app, live, client, standing_launch, interaction);
-                app.view = crate::app::View::Overview;
-                if app.session_id == id {
-                    app.enter_input();
-                } else {
-                    app.show_error("could not open that interaction; the log (ctrl-l) says why");
-                }
-            }
-            // The interaction is loaded outright rather than cursored, and the
-            // navigator is left as it was: open or closed. Newly idle work
-            // takes priority; otherwise this walks every live interaction.
-            Some(Request::NextLiveInteraction) => {
-                // The client's snapshot is at most a refresh old, which is
-                // fresh enough to step by: one stopped since then still loads.
-                let overview =
-                    (app.view == crate::app::View::Overview).then(|| app.overview.clone());
-                let next = if let Some(overview) = &overview {
-                    overview.next_attention_or_live(
-                        &app.interactions,
-                        &app.session_id,
-                        app.workspace.id.as_deref(),
-                    )
-                } else {
-                    app.interactions
-                        .next_attention_or_live(&app.session_id, app.workspace.id.as_deref())
-                };
-                let Some(next) = next else {
-                    app.show_warning("no other interaction is running");
-                    continue;
-                };
-                let target_id = next.id.clone();
-                make_interaction_current(app, live, client, standing_launch, next);
-                if let Some(mut overview) = overview {
-                    if app.session_id == target_id {
-                        if overview.running_only
-                            && overview
-                                .indices(&app.interactions, app.workspace.id.as_deref())
-                                .iter()
-                                .all(|index| app.interactions.items[*index].id != app.session_id)
-                        {
-                            overview.toggle_running_only();
-                        }
-                        overview.open();
-                    }
-                    app.overview = overview;
-                    app.view = crate::app::View::Overview;
-                }
-            }
-            Some(Request::NextWorkingInteraction) => {
-                let Some(next) = app
-                    .interactions
-                    .next_active(&app.session_id, app.workspace.id.as_deref())
-                else {
-                    app.show_warning("no other interaction is actively working");
-                    continue;
-                };
-                make_interaction_current(app, live, client, standing_launch, next);
-            }
-            Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
-            // Naming the branch asks the model for a topic and the checkout
-            // copies the repository out, which together take long enough to
-            // look like a hang. `W` and `Ctrl-Enter` differ only in what the
-            // checkout is made for: a Session already running, which has to be
-            // restarted into it — carrying the message, if `Ctrl-Enter` sent
-            // one — or one that the first prompt launches there.
-            Some(Request::CreateWorktree { message }) => {
-                let message = match message {
-                    Some(message) if app.session_id.is_empty() => {
-                        // The launch branches and checks out before it sends,
-                        // and reports its own failure — restoring the message
-                        // box.
-                        blocked_on(terminal, app, CREATING_WORKTREE, |app| {
-                            session::submit_message(app, client, &workspace_id, live, message, true)
-                        })?;
-                        continue;
-                    }
-                    message => message,
-                };
-                let session_id = app.session_id.clone();
-                let created = blocked_on(terminal, app, CREATING_WORKTREE, |_| {
-                    client.create_session_worktree(&session_id)
-                })?;
-                if let Err(error) = created {
-                    app.show_error(format!("could not create a linked workspace: {error}"));
-                    // Nothing was sent: the message waits in the box for a
-                    // plain Enter, or for another try.
-                    if let Some(message) = message {
-                        app.set_input(message);
-                        app.enter_input();
-                    }
-                    continue;
-                }
-                if let Some(message) = message {
-                    let sent = blocked_on(
-                        terminal,
-                        app,
-                        "restarting the interaction in the linked workspace…",
-                        |app| session::restart_and_send(app, client, live, message),
-                    )?;
-                    if sent {
-                        return Ok(RunOutcome::OpenSession(session_id));
-                    }
-                    app.show_error(
-                        "created the linked workspace, but could not restart in it; the message is back in the box",
-                    );
-                    app.enter_input();
-                    continue;
-                }
-                // The checkout is read when the agent launches, so the
-                // interaction is restarted into it rather than left running in
-                // the directory it started in. Reopening the Session afterwards
-                // is what puts the checkout on screen: the view then reads its
-                // directory from the revived interaction.
-                let restarted = blocked_on(
-                    terminal,
-                    app,
-                    "restarting the interaction in the linked workspace…",
-                    |app| session::restart(app, client, live),
-                )?;
-                match restarted {
-                    Ok(_) => return Ok(RunOutcome::OpenSession(session_id)),
-                    Err(error) => app.show_error(format!(
-                        "created the linked workspace, but could not restart in it ({error}); it will be used when this Session next launches"
-                    )),
-                }
-            }
-            Some(Request::ApplySelection) => {
-                let Attachment::Attached { .. } = live else {
-                    continue;
-                };
-                let selection = app.selection.clone();
-                match client.set_session_selection(&app.session_id, &selection) {
-                    Ok(()) => app.show_action_message(format!("model set to {}", selection.model)),
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not switch to {}: {error:#}",
-                        selection.model
-                    ))),
-                }
-            }
-            // Moving a stopped Session onto another agent. The server copies
-            // the whole history into the new agent's native format as a
-            // sibling Session, and that sibling — not this one — is where the
-            // conversation carries on, so the view follows it. Both sides keep
-            // a branch marker, so the Session it came from stays reachable.
-            Some(Request::ConvertProvider(selection)) => {
-                match client.branch_session_with_selection(
-                    &app.session_id,
-                    None,
-                    styra_protocol::BranchHistory::ThroughSelected,
-                    Some(selection.provider),
-                    Some(selection.clone()),
-                ) {
-                    Ok(converted) => {
-                        app.push_log(LogEntry::info(format!(
-                            "converted this Session's history to {}; continuing in Session {}",
-                            selection.provider.as_str(),
-                            converted.name.as_deref().unwrap_or(&converted.id)
-                        )));
-                        return Ok(RunOutcome::OpenSession(converted.id));
-                    }
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not convert this Session to {}: {error:#}",
-                        selection.provider.as_str()
-                    ))),
-                }
-            }
-            Some(Request::Templates) => {
-                // Which templates the picker starts from is the layer being
-                // edited. For the Workspace's own that is exactly its list. For
-                // this interaction's, the picker offers and returns the whole
-                // layering a launch would apply — the Workspace's templates
-                // included, since those are as much part of what the operator is
-                // choosing as their own. Turning that choice back into an
-                // overlay is `App`'s job.
-                let current = match app.launch.scope {
-                    LaunchScope::Workspace => app.launch.workspace.templates.clone(),
-                    LaunchScope::Interaction => app.launch.effective().templates,
-                };
-                let request_id = launch_effects.submit_templates(workspace_id.clone());
-                app.template_picker = Some(picker::TemplatePicker::loading(
-                    request_id,
-                    workspace_id.clone(),
-                    app.launch.scope,
-                    current,
-                ));
-            }
-            Some(Request::ChangeWorkspaceLaunch {
-                change,
-                clear_interaction,
-            }) => {
-                submit_workspace_launch(
-                    &launch_effects,
-                    app,
-                    workspace_id.clone(),
-                    change,
-                    clear_interaction,
-                );
-            }
-            // Parsing is the server's, since it holds the session's recorded
-            // contract and the journal the answer is read from; this client
-            // only asks and renders.
-            Some(Request::Answer { contract }) => {
-                let id = app.session_id.clone();
-                if id.is_empty() {
-                    app.answer.set(Err("no session to answer from yet".into()));
-                    continue;
-                }
-                let answer = match contract {
-                    Some(contract) => client.turn_answer_as(&id, contract),
-                    None => client.turn_answer(&id),
-                };
-                app.answer.set(answer.map_err(|error| format!("{error:#}")));
-            }
-            Some(Request::Quota) => refresh_quota(app, client),
-            Some(Request::Processes) => {
-                refresh_processes(app, client);
-            }
-            // The setting is the server's to keep — it is stored with the
-            // Session and acted on long after this client has gone — so what
-            // is shown is what the server accepted, not what was pressed.
-            Some(Request::SetAutoRetry(enabled)) => {
-                match client.set_interaction_auto_retry(&app.session_id, enabled) {
-                    Ok(()) => {
-                        app.auto_retry = enabled;
-                        app.show_action_message(if enabled {
-                            "rate-limit retry on — this session will be asked again after a reset"
-                        } else {
-                            "rate-limit retry off"
-                        });
-                    }
-                    Err(error) => {
-                        let message = format!("could not change the rate-limit retry: {error:#}");
-                        app.show_error(message.clone());
-                        app.push_log(LogEntry::error(message));
-                    }
-                }
-            }
-            Some(Request::SetAutoCommit(enabled)) => {
-                match client.set_interaction_auto_commit(&app.session_id, enabled) {
-                    Ok(()) => {
-                        app.auto_commit = enabled;
-                        app.show_action_message(if enabled {
-                            "auto-commit on — each turn's work is committed when it goes idle"
-                        } else {
-                            "auto-commit off"
-                        });
-                    }
-                    Err(error) => {
-                        let message = format!("could not change auto-commit: {error:#}");
-                        app.show_error(message.clone());
-                        app.push_log(LogEntry::error(message));
-                    }
-                }
-            }
-            Some(Request::EditFile) => {
-                let Some(path) = app.selected_file_path() else {
-                    continue;
-                };
-                open_path(app, config, &path, None);
-            }
-            Some(Request::OpenPath(path)) => open_path(app, config, &path, None),
-            Some(Request::OpenPathAt(path, line)) => open_path(app, config, &path, line),
-            Some(Request::OpenUrl(url)) => open_url(app, config, &url),
-            Some(Request::OpenDirectory) => {
-                let Some(directory) = app.workspace.working_directory_or_current() else {
-                    app.show_warning("no directory to open a terminal in");
-                    continue;
-                };
-                match crate::terminal::open_directory(&directory, config) {
-                    Ok(program) => app.show_action_message(format!(
-                        "opened {program} in {}",
-                        directory.display()
-                    )),
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not open a terminal in {}: {error:#}",
-                        directory.display()
-                    ))),
-                }
-            }
-            Some(Request::ShowDiffAt {
-                target,
-                path,
-                line,
-                fullscreen,
-            }) => {
-                let mut diff = styra_diff::CheckoutDiff::read(target);
-                if let Err(reason) = diff.jump_to(&path, line) {
-                    app.show_warning(reason);
-                    continue;
-                }
-                app.checkout_diff = Some(diff);
-                diff_refreshed = Instant::now();
-                app.diff_preview = !fullscreen;
-                app.diff_interaction_focus = false;
-                if fullscreen {
-                    app.view = View::CheckoutDiff;
-                } else if !matches!(app.view, View::Events | View::Files) {
-                    app.view = View::Events;
-                }
-            }
-            Some(Request::ShowDiff(target)) => {
-                app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
-                diff_refreshed = Instant::now();
-                app.diff_preview = true;
-                app.diff_interaction_focus = false;
-                if !matches!(app.view, View::Events | View::Files) {
-                    app.view = View::Events;
-                }
-            }
-            Some(Request::ShowDiffFullscreen(target)) => {
-                app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
-                diff_refreshed = Instant::now();
-                app.diff_preview = false;
-                app.diff_interaction_focus = false;
-                app.view = View::CheckoutDiff;
-            }
-            Some(Request::OpenShell) => {
-                match crate::terminal::open_shell(client, &app.session_id, config) {
-                    Ok(program) => app.show_action_message(format!("opened shell in {program}")),
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not open session shell: {error:#}"
-                    ))),
-                }
-            }
-        }
     }
 }
 
@@ -2758,5 +2789,97 @@ mod tests {
             .notices
             .iter()
             .any(|notice| notice.text.contains("disk full")));
+    }
+
+    /// A server that answers nothing, and says what it was asked.
+    #[derive(Default)]
+    struct Unreachable {
+        asked: std::sync::Mutex<Vec<styra_protocol::Request>>,
+    }
+
+    impl styra_server::InProcessServer for Unreachable {
+        fn handle(
+            &self,
+            request: styra_protocol::Request,
+        ) -> anyhow::Result<styra_protocol::Response> {
+            self.asked.lock().unwrap().push(request);
+            anyhow::bail!("this test's server answers nothing")
+        }
+
+        fn shutdown(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Run the loop over a fullscreen diff of two files, pressing `keys`.
+    /// The loop ends with what the keys asked for or, once the script runs
+    /// out, with an error.
+    fn run_over_diff(keys: &str, server: std::sync::Arc<Unreachable>) -> Result<RunOutcome> {
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.enter_list();
+        app.view = View::CheckoutDiff;
+        let mut diff = styra_diff::CheckoutDiff::read(styra_diff::DiffTarget {
+            worktree: std::env::temp_dir().join("styra-event-loop-no-such-checkout"),
+            branch: None,
+            base_branch: None,
+            base: "4bf5c35d".into(),
+            branch_point: true,
+        });
+        diff.diff = Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n".into());
+        app.checkout_diff = Some(diff);
+        assert!(app.diff_focused());
+        let mut terminal = styra_ui::TestUi::new(100, 30).unwrap();
+        terminal.script(
+            keys.chars()
+                .map(|key| Event::Key(crossterm::event::KeyEvent::from(KeyCode::Char(key)))),
+        );
+        let preferences = std::env::temp_dir().join("styra-event-loop-no-preferences.toml");
+        run(
+            &mut terminal,
+            &mut app,
+            &Client::in_process(server),
+            &mut Attachment::Detached,
+            RunContext {
+                standing_launch: &LaunchPolicy::default(),
+                preferences_path: &preferences,
+                config: &crate::config::Defaults,
+            },
+        )
+    }
+
+    /// The diff owns the keyboard, and its key handler never falls through
+    /// to the rest of the round; what its keys ask for is still done on the
+    /// key, not left queued behind keys that never come.
+    #[test]
+    fn what_a_diff_key_asks_for_is_done_on_that_key() {
+        let quit = run_over_diff("q", Default::default());
+        assert!(
+            matches!(quit, Ok(RunOutcome::Quit)),
+            "q quits from the diff"
+        );
+
+        let server = std::sync::Arc::new(Unreachable::default());
+        assert!(matches!(
+            run_over_diff("Eq", server.clone()),
+            Ok(RunOutcome::Quit)
+        ));
+        // The report is asked for off the loop's thread.
+        let asked = || {
+            server.asked.lock().unwrap().iter().any(|request| {
+                matches!(
+                    request,
+                    styra_protocol::Request::GenerateEditReport { id, files, .. }
+                        if id == "s1" && files.len() == 1
+                )
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !asked() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(asked(), "E asked the server for an edit report");
     }
 }
