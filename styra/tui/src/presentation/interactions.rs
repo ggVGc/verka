@@ -130,7 +130,10 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             uncommitted: interaction.uncommitted_changes,
             completion: interaction.completed,
             tags: &interaction.tags,
-            last_message: interaction.last_message.as_deref(),
+            last_message: interaction
+                .last_message
+                .as_deref()
+                .filter(|_| !app.interactions.hide_responses),
         });
     }
     InteractionNavigator {

@@ -242,6 +242,7 @@ bindings! { INTERACTIONS = "Interactions";
     INTERACTIONS_SCOPE: [Key::ch('w')] => Action::InteractionsScope;
     INTERACTIONS_COMPLETED: [Key::ch('c')] => Action::InteractionsCompleted;
     INTERACTIONS_STOPPED: [Key::ch('s')] => Action::InteractionsStopped;
+    INTERACTIONS_RESPONSES: [Key::ch('m')] => Action::InteractionsResponses;
     INTERACTIONS_COMPLETE: [Key::ch('C')] => Action::InteractionsComplete;
     INTERACTIONS_ABANDON: [Key::ch('Z')] => Action::InteractionsAbandon;
     INTERACTIONS_TAGS: [Key::ch('T')] => Action::InteractionsTags;

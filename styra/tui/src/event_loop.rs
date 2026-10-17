@@ -1619,6 +1619,12 @@ fn run_rounds(
                     }
                     continue;
                 }
+                // Only how the rows are drawn changes, so the cursor's
+                // pending move need not be loaded first.
+                k if keys::INTERACTIONS_RESPONSES.matches(k) => {
+                    app.interactions.toggle_responses();
+                    continue;
+                }
                 k if keys::INTERACTIONS_NEXT_WORKSPACE.matches(k) => {
                     app.interactions
                         .cursor_next_workspace(&session_id, app.workspace.id.as_deref());
