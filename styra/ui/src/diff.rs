@@ -17,27 +17,21 @@
 //! in the new one. A hunk whose header gives no position — Claude's snippets,
 //! where the host could not place them — leaves the column blank.
 
-use crate::code::with_gutter;
 use crate::event_list::{blended_style, faded_style};
 use crate::markdown::syntax_highlighted_code_lines;
 use crate::theme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// Render `text` as a diff, each row prefixed with `indent` and the code
-/// gutter. `path` names the file for a diff that carries no headers saying
+/// Render `text` as a diff without decorative indentation or a gutter.
+/// `path` names the file for a diff that carries no headers saying
 /// so; a header in the diff takes over from it.
 ///
 /// `compact` leaves out what a reader skimming a change does not need:
 /// unchanged context and the per-file metadata, keeping the path each file
 /// header names and the hunk boundaries.
-pub fn diff_block_lines(
-    text: &str,
-    path: Option<&str>,
-    compact: bool,
-    indent: &str,
-) -> Vec<Line<'static>> {
-    diff_block_lines_fading(text, path, compact, indent, CONTEXT_FADE)
+pub fn diff_block_lines(text: &str, path: Option<&str>, compact: bool) -> Vec<Line<'static>> {
+    diff_body_lines(text, path, compact)
 }
 
 /// How far, in tenths, context and other metadata are faded toward the
@@ -51,13 +45,9 @@ pub fn diff_block_lines_fading(
     text: &str,
     path: Option<&str>,
     compact: bool,
-    indent: &str,
     context_fade: u16,
 ) -> Vec<Line<'static>> {
     diff_body_lines_fading(text, path, compact, context_fade)
-        .into_iter()
-        .map(|line| with_gutter(line, indent))
-        .collect()
 }
 
 /// The diff's rows, without the gutter.

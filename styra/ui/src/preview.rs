@@ -4,7 +4,9 @@ use std::borrow::Cow;
 
 use crate::code::code_block_lines;
 use crate::diff::diff_block_lines;
-use crate::event_list::{summary_line, suspicious_shell_success, wrap_rendered, EventEntry};
+use crate::event_list::{
+    summary_line, suspicious_shell_success, wrap_rendered, EventEntry, SummaryContext,
+};
 use crate::footer::message_text_color;
 use crate::markdown::{markdown_block_render, EntryIndex, LinkDisplay};
 use crate::theme;
@@ -162,6 +164,11 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
         preview_lines(view),
         usize::from(content_area.width),
         summary_indent(view.entry.as_ref()),
+        if view.changes.is_some() || view.entry_change.is_some() {
+            0
+        } else {
+            DETAIL_INDENT.len()
+        },
     );
     crate::diff::fill_changed_rows(&mut lines, usize::from(content_area.width));
     let limit = preview_scroll_limit(&lines, content_area.width, content_area.height);
@@ -189,16 +196,14 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
     };
     let mut lines = vec![summary_line(
         entry,
-        entry.expanded,
-        entry.has_detail,
-        false,
+        SummaryContext::Preview,
         view.protocol,
     )];
     if let Some(changes) = &view.changes {
         if changes.is_empty() {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!("{DETAIL_INDENT}no file changes during this turn"),
+                "no file changes during this turn",
                 Style::default().fg(theme::MUTED_TEXT),
             )));
         }
@@ -277,10 +282,10 @@ fn change_lines(change: &ChangeView<'_>, workspace_roots: &[String]) -> Vec<Line
             if !lines.is_empty() {
                 lines.push(Line::from(""));
             }
-            lines.extend(diff_block_lines(diff, path, true, DETAIL_INDENT));
+            lines.extend(diff_block_lines(diff, path, true));
         }
         None => lines.push(Line::from(Span::styled(
-            format!("{DETAIL_INDENT}no diff reported"),
+            "no diff reported",
             Style::default().fg(theme::MUTED_TEXT),
         ))),
     }
@@ -301,11 +306,10 @@ fn changed_path_line(path: &str, workspace_roots: &[String]) -> Line<'static> {
     });
     match relative {
         Some(relative) => Line::from(vec![
-            Span::raw(DETAIL_INDENT),
             Span::styled(WORKSPACE_SHORTHAND, Style::default().fg(theme::MUTED_TEXT)),
             Span::styled(relative.to_owned(), style),
         ]),
-        None => Line::from(Span::styled(format!("{DETAIL_INDENT}{path}"), style)),
+        None => Line::from(Span::styled(path.to_owned(), style)),
     }
 }
 
@@ -377,6 +381,7 @@ fn wrap_preview_lines(
     lines: Vec<Line<'static>>,
     width: usize,
     summary_indent: usize,
+    detail_indent: usize,
 ) -> Vec<Line<'static>> {
     lines
         .into_iter()
@@ -388,7 +393,7 @@ fn wrap_preview_lines(
                 if index == 0 {
                     summary_indent
                 } else {
-                    DETAIL_INDENT.len()
+                    detail_indent
                 },
             )
         })
@@ -423,9 +428,9 @@ mod tests {
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect();
-            assert_eq!(texts, [DETAIL_INDENT, WORKSPACE_SHORTHAND, "src/retry.rs"]);
-            assert_eq!(line.spans[1].style.fg, Some(theme::MUTED_TEXT));
-            assert_eq!(line.spans[2].style.fg, Some(message_text_color("files")));
+            assert_eq!(texts, [WORKSPACE_SHORTHAND, "src/retry.rs"]);
+            assert_eq!(line.spans[0].style.fg, Some(theme::MUTED_TEXT));
+            assert_eq!(line.spans[1].style.fg, Some(message_text_color("files")));
         }
     }
 
@@ -436,7 +441,7 @@ mod tests {
         for path in ["/tmp/styra/workspace2/a.rs", "/etc/hosts", "src/a.rs"] {
             let line = changed_path_line(path, &roots());
             assert_eq!(line.spans.len(), 1, "{path}");
-            assert_eq!(line.spans[0].content, format!("{DETAIL_INDENT}{path}"));
+            assert_eq!(line.spans[0].content, path.to_owned());
         }
     }
 }

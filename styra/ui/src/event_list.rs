@@ -1185,7 +1185,7 @@ fn build_entry_rows(
     );
     let summary_indent = if is_conversation { 2 } else { 0 };
     let summary = selected_summary_line(
-        summary_line(entry, entry.expanded, entry.has_detail, true, protocol),
+        summary_line(entry, SummaryContext::EventList, protocol),
         is_conversation,
         entry.selected,
     );
@@ -1372,6 +1372,15 @@ pub fn wrap_rendered(
     width: usize,
     continuation_indent: usize,
 ) -> Vec<Line<'static>> {
+    // Changed diff rows use the whole pane, including on continuation rows.
+    // Their signs can otherwise be mistaken for Markdown list markers.
+    if line.spans.iter().any(|span| {
+        span.style.bg.is_some_and(|bg| {
+            [theme::DIFF_ADDED_BACKGROUND, theme::DIFF_REMOVED_BACKGROUND].contains(&bg)
+        })
+    }) {
+        return wrap_line(line, width, 0);
+    }
     let indent = structural_indent(&line).unwrap_or(continuation_indent);
     wrap_line(line, width, indent)
 }
@@ -1703,28 +1712,24 @@ fn split_keep_whitespace(s: &str) -> Vec<String> {
     tokens
 }
 
-/// `has_detail` is false when the entry has nothing beyond its summary (e.g.
-/// a bare `turn started` marker); folding is meaningless there, so no arrow
-/// is shown at all rather than one that never does anything when pressed. An
-/// expanded entry also shows no arrow: its content is already on screen, so
-/// the marker column is reserved for entries that still have something to
-/// unfold.
-/// `show_summary` is false in previews, whose detail body carries the full
-/// content. Inline expanded entries keep the summary in this first row and
-/// omit the matching first detail row, so expansion does not make the header
-/// appear empty or move its first line down.
+/// Where an entry's header is displayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SummaryContext {
+    /// Includes summary text and an expansion marker for collapsed entries
+    /// with detail. Expanded entries reserve the marker's space.
+    EventList,
+    /// The body already shows the full content, so the header omits summary
+    /// text and expansion controls.
+    Preview,
+}
+
+/// Render an entry's header for its display context. Expansion state and
+/// detail availability come from the entry itself.
 pub fn summary_line(
     entry: &EventEntry<'_>,
-    expanded: bool,
-    has_detail: bool,
-    show_summary: bool,
+    context: SummaryContext,
     protocol: Protocol,
 ) -> Line<'static> {
-    let marker = match (has_detail, expanded) {
-        (false, _) => " ",
-        (true, true) => " ",
-        (true, false) => "▸",
-    };
     let tag = entry.event.tag();
     let is_conversation = matches!(
         entry.event,
@@ -1826,7 +1831,7 @@ pub fn summary_line(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    if show_summary {
+    if context == SummaryContext::EventList {
         if !prefix.is_empty() {
             spans.push(Span::styled(prefix, prefix_style));
         }
@@ -1840,7 +1845,7 @@ pub fn summary_line(
                 summary = text.lines().next().unwrap_or_default().to_owned();
             }
         }
-        if expanded && summary.ends_with('…') {
+        if entry.expanded && summary.ends_with('…') {
             if let Some(first_line) = crate::answer::presented_detail(entry.event, protocol)
                 .first()
                 .and_then(|block| match block {
@@ -1900,7 +1905,8 @@ pub fn summary_line(
             Style::default().fg(theme::ACCENT),
         ));
     }
-    if has_detail {
+    if context == SummaryContext::EventList && entry.has_detail {
+        let marker = if entry.expanded { " " } else { "▸" };
         spans.push(Span::styled(
             format!(" {marker}"),
             Style::default().fg(theme::ADDITIONAL_INFO),
@@ -2455,7 +2461,7 @@ mod tests {
                 branch_provider_switch: None,
                 inherited: false,
             };
-            summary_line(&entry, false, false, true, Protocol::default())
+            summary_line(&entry, SummaryContext::EventList, Protocol::default())
                 .spans
                 .into_iter()
                 .find(|span| span.content.contains(content))
@@ -2493,7 +2499,7 @@ mod tests {
                 branch_provider_switch: None,
                 inherited: false,
             };
-            summary_line(&entry, false, true, true, Protocol::default())
+            summary_line(&entry, SummaryContext::EventList, Protocol::default())
                 .spans
                 .into_iter()
                 .map(|span| span.content.into_owned())
@@ -2558,9 +2564,7 @@ mod tests {
         entry.event = &destination_marker;
         let destination_summary = text(vec![summary_line(
             &entry,
-            false,
-            true,
-            true,
+            SummaryContext::EventList,
             Protocol::default(),
         )]);
         assert!(destination_summary.contains("provider switch: claude → codex"));

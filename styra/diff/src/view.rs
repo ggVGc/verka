@@ -464,7 +464,7 @@ fn is_file_header(line: &str) -> bool {
 /// complete patch.
 fn patch_lines(text: &str, hide_removed: bool, tint: Tint, width: usize) -> Vec<Line<'static>> {
     // The diff is drawn a row for each of its lines.
-    let mut rendered: Vec<_> = diff_block_lines_fading(text, None, false, "", tint.fade())
+    let mut rendered: Vec<_> = diff_block_lines_fading(text, None, false, tint.fade())
         .into_iter()
         .map(Some)
         .collect();
@@ -523,7 +523,7 @@ fn rule(glyph: char, width: usize) -> Line<'static> {
 /// For each row `text` is drawn as with nothing hidden, whether hiding
 /// removed lines hides it.
 pub(crate) fn removed_rows(text: &str) -> Vec<bool> {
-    diff_block_lines(text, None, false, "")
+    diff_block_lines(text, None, false)
         .iter()
         .map(is_removed)
         .collect()
@@ -1276,35 +1276,35 @@ index 1111111..2222222 100644
         assert_eq!(
             body(false),
             [
-                "[│ diff --git a/src/a.rs b/src/a.rs]",
+                "[diff --git a/src/a.rs b/src/a.rs]",
                 "▔",
-                "│ index 1111111..2222222 100644",
-                "│ --- a/src/a.rs",
-                "│ +++ b/src/a.rs",
-                "│ @@ -1,2 +1,3 @@",
-                "│ 1  fn a() {}",
-                "│ 2 -fn b() {}",
-                "│ 2 +fn c() {}",
-                "│ 3 +fn d() {}",
+                "index 1111111..2222222 100644",
+                "--- a/src/a.rs",
+                "+++ b/src/a.rs",
+                "@@ -1,2 +1,3 @@",
+                "1  fn a() {}",
+                "2 -fn b() {}",
+                "2 +fn c() {}",
+                "3 +fn d() {}",
                 "▁",
-                "[│ diff --git a/b.txt b/b.txt]",
+                "[diff --git a/b.txt b/b.txt]",
                 "▔",
-                "│ @@ -1 +1 @@",
-                "│ 1 +kept",
-                "│ 1 -gone",
+                "@@ -1 +1 @@",
+                "1 +kept",
+                "1 -gone",
                 "▁",
-                "[│ diff --git a/c.txt b/c.txt]",
+                "[diff --git a/c.txt b/c.txt]",
                 "▔",
-                "│ @@ -1 +1 @@",
-                "│ 1 -x",
-                "│ 1 +y",
+                "@@ -1 +1 @@",
+                "1 -x",
+                "1 +y",
             ]
         );
         let hidden = body(true);
         assert_eq!(hidden.len(), body(false).len() - 3, "{hidden:?}");
         assert_eq!(
             hidden[13..16],
-            ["│ 1 +kept", "▁", "[│ diff --git a/c.txt b/c.txt]"]
+            ["1 +kept", "▁", "[diff --git a/c.txt b/c.txt]"]
         );
     }
 

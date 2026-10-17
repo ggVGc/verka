@@ -14,7 +14,8 @@ use ratatui::text::{Line, Span};
 const GUTTER: &str = "│ ";
 
 /// Renders one code block as styled lines, each prefixed with `indent` and a
-/// gutter that sets the block off from the surrounding text.
+/// gutter that sets the block off from the surrounding text. Diffs use the
+/// pane's full width without either prefix.
 ///
 /// `suspicious_shell` marks a command that reported success while printing an
 /// error diagnostic; those output lines are colored as errors so the
@@ -26,6 +27,9 @@ pub fn code_block_lines(
     suspicious_shell: bool,
     indent: &str,
 ) -> Vec<Line<'static>> {
+    if language == Some("diff") {
+        return crate::diff::diff_block_lines(text, None, false);
+    }
     body_lines(text, language, text_color, suspicious_shell)
         .into_iter()
         .map(|line| with_gutter(line, indent))
@@ -54,9 +58,6 @@ fn body_lines(
     text_color: Color,
     suspicious_shell: bool,
 ) -> Vec<Line<'static>> {
-    if language == Some("diff") {
-        return crate::diff::diff_body_lines(text, None, false);
-    }
     // Agent-message fences become `DetailBlock::Code` before they reach the
     // UI. Feed recognized languages back through the shared TextMate renderer
     // so they receive the same theme as fenced Markdown elsewhere.
