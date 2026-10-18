@@ -15,13 +15,6 @@ pub const PROVIDERS: [Provider; 2] = [Provider::Codex, Provider::Claude];
 
 /// Validate an interactive Styra launch selection.
 pub fn validate_selection(selection: &Selection) -> anyhow::Result<()> {
-    if !PROVIDERS.contains(&selection.provider) {
-        anyhow::bail!(
-            "agent provider {:?} is not interactive; Styra supports: {}",
-            selection.provider.as_str(),
-            PROVIDERS.map(|provider| provider.as_str()).join(", ")
-        );
-    }
     let model = selection.model.trim();
     if model.is_empty() {
         anyhow::bail!("the agent model cannot be empty");
@@ -50,11 +43,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn styra_only_accepts_interactive_providers() {
+    fn styra_accepts_both_providers() {
         validate_selection(&Selection::new(Provider::Codex)).unwrap();
         validate_selection(&Selection::new(Provider::Claude)).unwrap();
-        let error = validate_selection(&Selection::new(Provider::CodexExec)).unwrap_err();
-        assert!(error.to_string().contains("not interactive"));
     }
 
     /// A rung one model has and another does not is accepted on the first and

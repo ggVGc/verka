@@ -517,8 +517,8 @@ Three things define it, and each is a deliberate contrast with an interaction:
 - **The cheap tier of the operator's own provider.** An errand runs the agent
   the operator selected, with their credentials, but on that provider's
   `cheapest_model` at its lowest effort — `claude-haiku-4-5-20251001`,
-  `gpt-5.6-luna` — and in its one-shot form (an errand for interactive `codex`
-  is a `codex-exec` run). Genta declares the cheap tier separately from
+  `gpt-5.6-luna` — and in batch mode (Codex uses `exec`, while Claude closes its
+  stream after one prompt). Genta declares the cheap tier separately from
   `default_model` precisely so that routing errands down cannot drag unpinned
   *launches* down with them.
 - **Bounded.** Styra runs errands in front of something an operator is waiting

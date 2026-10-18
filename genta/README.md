@@ -7,9 +7,14 @@ graph, no orchestration, no isolation mechanism, and no process.
 ## What it owns
 
 - **Launch profiles** (`agent`) — the command line, mounts, environment, and
-  sandbox layout for an agent, including Codex (`exec`, `app-server`) and
-  Claude Code. A profile is a description, not an invocation. A `Selection`
-  names one as `provider:model/effort` (`codex:gpt-5.6-sol/high`,
+  sandbox layout for an agent, including Codex and Claude Code. Provider
+  identity is independent of execution mode: `Selection::resolve` builds a
+  conversation profile, while
+  `Selection::resolve_for(ExecutionMode::Batch, &layout)` builds a batch
+  profile. Codex uses `app-server` for conversations and `exec` for batches;
+  Claude uses `stream-json` for both. Batch callers send one prompt and close
+  stdin. Both modes share the provider's model and effort defaults. A profile
+  is a description, not an invocation. A `Selection` names one as `provider:model/effort` (`codex:gpt-5.6-sol/high`,
   `claude:claude-opus-5/xhigh`), translating the model and reasoning effort into
   whichever flags or config overrides that agent takes. A selection always pins
   both: the shorter `provider[:model][/effort]` forms parse, but fill in that

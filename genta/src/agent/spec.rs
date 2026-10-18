@@ -14,7 +14,7 @@
 //! providers genuinely share are shared by naming a const, so the sharing is
 //! visible at both sites and every provider still states every field.
 
-use super::{Effort, Profile, SandboxLayout};
+use super::{Effort, ExecutionMode, Profile, SandboxLayout};
 use crate::event::Protocol;
 use anyhow::Result;
 use std::path::Path;
@@ -59,8 +59,8 @@ pub(crate) struct ProviderSpec {
     pub name: &'static str,
     /// The agent's own executable name, as located on the host's `PATH`.
     pub executable: &'static str,
-    /// The wire protocol this provider speaks, and thus the decoder and
-    /// presentation rules its journal is read with.
+    /// The conversation wire protocol and presentation rules. Batch profiles
+    /// carry their actual protocol, which may differ.
     pub protocol: Protocol,
     /// Models worth offering in a picker, most capable first, each with its own
     /// effort ladder.
@@ -94,6 +94,7 @@ pub(crate) trait ProviderOps: Sync {
     /// binary already located on the host's `PATH`.
     fn profile(
         &self,
+        mode: ExecutionMode,
         layout: &SandboxLayout,
         executable: &Path,
         model: &str,

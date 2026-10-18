@@ -1,6 +1,5 @@
 //! Styra's Unix-socket server and server-owned interaction manager.
 
-use crate::protocol::{ProjectAction, ProjectActionSession};
 use crate::actions::{ActionLog, Scope};
 use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::interaction::{
@@ -20,6 +19,7 @@ use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
     SequencedUpdate, SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
 };
+use crate::protocol::{ProjectAction, ProjectActionSession};
 use crate::protocol::{TurnDiff, WorkspaceSummary};
 use crate::transport::MAX_REQUEST_BYTES;
 use anyhow::{Context, Result};
@@ -4894,9 +4894,6 @@ fn native_session_roots(provider: crate::agent::Provider) -> Result<Vec<PathBuf>
             home.join(".codex/archived_sessions"),
         ],
         crate::agent::Provider::Claude => vec![home.join(".claude/projects")],
-        crate::agent::Provider::CodexExec => {
-            anyhow::bail!("provider codex-exec does not support resuming sessions")
-        }
     })
 }
 
@@ -4939,16 +4936,11 @@ fn find_session_file(root: &Path, provider_session_id: &str) -> Option<PathBuf> 
     None
 }
 
-/// The other of Styra's two interactive providers — conversion always flips
-/// between exactly these two, since Genta's batch-only `codex-exec` has no
-/// resumable native session to convert to or from.
+/// The other provider to convert a native session to.
 fn other_interactive_provider(provider: crate::agent::Provider) -> Result<crate::agent::Provider> {
     match provider {
         crate::agent::Provider::Codex => Ok(crate::agent::Provider::Claude),
         crate::agent::Provider::Claude => Ok(crate::agent::Provider::Codex),
-        crate::agent::Provider::CodexExec => {
-            anyhow::bail!("provider codex-exec does not support session conversion")
-        }
     }
 }
 
@@ -4956,9 +4948,7 @@ fn other_interactive_provider(provider: crate::agent::Provider) -> Result<crate:
 /// for a given provider.
 fn native_session_format(provider: crate::agent::Provider) -> genta::session::SessionFormat {
     match provider {
-        crate::agent::Provider::Codex | crate::agent::Provider::CodexExec => {
-            genta::session::SessionFormat::Codex
-        }
+        crate::agent::Provider::Codex => genta::session::SessionFormat::Codex,
         crate::agent::Provider::Claude => genta::session::SessionFormat::Claude,
     }
 }
@@ -5092,9 +5082,6 @@ fn native_session_destination(
         crate::agent::Provider::Codex => Ok(home
             .join(".codex/sessions/genta-imported")
             .join(format!("rollout-{session_id}.jsonl"))),
-        crate::agent::Provider::CodexExec => {
-            anyhow::bail!("provider codex-exec cannot store a resumable session")
-        }
     }
 }
 
@@ -8036,17 +8023,12 @@ mod tests {
             other_interactive_provider(crate::agent::Provider::Claude).unwrap(),
             crate::agent::Provider::Codex
         );
-        assert!(other_interactive_provider(crate::agent::Provider::CodexExec).is_err());
     }
 
     #[test]
     fn native_session_format_matches_each_providers_own_transcript() {
         assert_eq!(
             native_session_format(crate::agent::Provider::Codex),
-            genta::session::SessionFormat::Codex
-        );
-        assert_eq!(
-            native_session_format(crate::agent::Provider::CodexExec),
             genta::session::SessionFormat::Codex
         );
         assert_eq!(
@@ -8077,13 +8059,6 @@ mod tests {
             native_session_destination(crate::agent::Provider::Codex, "new-id", Path::new("/x"))
                 .unwrap();
         assert!(codex.ends_with("genta-imported/rollout-new-id.jsonl"));
-
-        assert!(native_session_destination(
-            crate::agent::Provider::CodexExec,
-            "new-id",
-            Path::new("/x")
-        )
-        .is_err());
     }
 
     /// What a resume is *changing* is measured against the end of the

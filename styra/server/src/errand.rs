@@ -81,14 +81,10 @@ impl Errand {
     /// What this errand runs on: the one-shot form of the operator's provider,
     /// on its cheapest model and lowest effort.
     ///
-    /// Interactive codex speaks a multi-turn app-server protocol that an
-    /// errand has no use for, so an errand for `codex` is a `codex-exec` run.
-    /// Claude Code's own `--print` mode is already one-shot.
+    /// Execution mode is chosen when resolving the profile; the provider
+    /// remains the same as the operator's session.
     pub fn selection(&self) -> Selection {
-        let provider = match self.provider {
-            Provider::Codex | Provider::CodexExec => Provider::CodexExec,
-            Provider::Claude => Provider::Claude,
-        };
+        let provider = self.provider;
         Selection {
             provider,
             model: provider.cheapest_model().to_owned(),
@@ -107,7 +103,10 @@ impl Errand {
         let base = driva::BaseConfig::default();
         let profile = self
             .selection()
-            .resolve(&SandboxLayout::same_path(SCRATCH))
+            .resolve_for(
+                genta::agent::ExecutionMode::Batch,
+                &SandboxLayout::same_path(SCRATCH),
+            )
             .with_context(|| format!("resolving the {} errand profile", self.provider.as_str()))?;
         let request = request(&profile, &base)?;
         let backend = driva::BwrapIsolation {
@@ -293,7 +292,8 @@ mod tests {
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
         Errand::new(provider, "name this")
             .selection()
-            .resolve_on_path(
+            .resolve_for_on_path(
+                genta::agent::ExecutionMode::Batch,
                 &SandboxLayout::same_path(SCRATCH),
                 &OsString::from(&directory),
             )
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn an_errand_runs_on_the_providers_cheapest_launchable_model() {
         let codex = Errand::new(Provider::Codex, "name this").selection();
-        assert_eq!(codex.provider, Provider::CodexExec);
+        assert_eq!(codex.provider, Provider::Codex);
         assert_eq!(codex.model, "gpt-5.6-luna");
         assert_eq!(codex.effort, Effort::Low);
 

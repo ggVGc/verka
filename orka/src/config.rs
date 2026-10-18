@@ -25,7 +25,7 @@ pub const CONFIG_FILE: &str = "orka.toml";
 /// changes. The generated values *are* those defaults, so a fresh project starts
 /// where Genta points.
 pub fn default_config() -> String {
-    let provider = Provider::CodexExec;
+    let provider = Provider::Codex;
     format!(
         "# Genta describes the Codex process; Orka launches it through Driva.\n\
          [agent]\n\
@@ -249,9 +249,9 @@ impl Config {
                     .executable
                     .as_deref()
                     .unwrap_or_else(|| Path::new("codex"));
-                // Genta's `codex-exec` provider declares both defaults; the
+                // Genta's Codex provider declares both defaults; the
                 // configuration only overrides them.
-                let provider = Provider::CodexExec;
+                let provider = Provider::Codex;
                 let model = self
                     .agent
                     .model
@@ -391,12 +391,14 @@ mod tests {
         let defaulted: Config =
             toml::from_str(&format!("[agent]\nkind = \"codex\"\n{base}")).unwrap();
         let command = defaulted.policy().unwrap().command;
-        assert!(command.iter().any(
-            |argument| argument == &format!("model={:?}", Provider::CodexExec.default_model())
-        ));
         assert!(command
             .iter()
-            .any(|argument| argument == r#"model_reasoning_effort="high""#));
+            .any(|argument| argument == &format!("model={:?}", Provider::Codex.default_model())));
+        assert!(command.iter().any(|argument| argument
+            == &format!(
+                "model_reasoning_effort={:?}",
+                Provider::Codex.default_effort().as_str()
+            )));
 
         let pinned: Config = toml::from_str(&format!(
             "[agent]\nkind = \"codex\"\nmodel = \"gpt-5.6-luna\"\neffort = \"low\"\n{base}"

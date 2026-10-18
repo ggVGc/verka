@@ -83,7 +83,7 @@ function M.completion(value)
   return one_of("CompletionState", value, "a completion state")
 end
 
---- A `Provider`, from its wire spelling: "codex", "codex-exec" or "claude".
+--- A `Provider`, from its wire spelling: "codex" or "claude".
 function M.provider(value)
   return one_of("Provider", value, "a provider")
 end

@@ -676,22 +676,10 @@ mod tests {
         assert!(library.contains("def quota_log, do: Styra.Protocol.build(\"quota_log\")"));
     }
 
-    /// `Provider::CodexExec` spells itself `codex-exec`, which is a perfectly
-    /// good wire spelling and not a function name at all. The shortcut is the
-    /// part that has to give way: the spelling itself stays reachable, because
-    /// a library that cannot name a provider the server accepts is broken in a
-    /// way a missing convenience is not.
+    /// Wire spellings with punctuation require quoted atoms.
     #[test]
-    fn a_spelling_that_is_no_function_name_is_still_reachable() {
-        let library = generated();
-        assert_eq!(crate::agent::Provider::CodexExec.as_str(), "codex-exec");
-        assert!(library.contains(r#"{:"codex-exec", "codex-exec"}"#));
-        assert!(
-            !library.contains("def codex-exec"),
-            "a dash cannot be a function name"
-        );
-        // And the atom it parses back to is the one the spelling names.
-        assert_eq!(atom("codex-exec"), r#":"codex-exec""#);
+    fn a_spelling_that_is_no_function_name_uses_a_quoted_atom() {
+        assert_eq!(atom("batch-mode"), r#":"batch-mode""#);
         assert_eq!(atom("codex"), ":codex");
     }
 

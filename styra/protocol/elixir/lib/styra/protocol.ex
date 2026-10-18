@@ -457,6 +457,13 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "snapshot_base", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "snapshot_turn_diff", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -526,7 +533,8 @@ defmodule Styra.Protocol do
         %{name: "interaction_actions", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "ActionRecord"}}}},
         %{name: "interaction_processes", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :list, item: %{kind: :ref, name: "SandboxProcess"}}}}},
         %{name: "interaction_driva", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}},
-        %{name: "snapshot_turn_diff", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "TurnDiff"}}}}
+        %{name: "snapshot_turn_diff", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "TurnDiff"}}}},
+        %{name: "snapshot_base", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :string}}}}
       ]
     },
 
@@ -625,7 +633,8 @@ defmodule Styra.Protocol do
     # `provider:model/effort` — `codex:gpt-5.6-terra/medium`,
     # `claude:claude-opus-5/xhigh`. That string is the profile name, so it is also
     # what a journal records and a status line shows: a stored session states which
-    # model and effort ran, and re-parsing it reproduces the launch. Parsing accepts
+    # model and effort ran. The host chooses execution mode separately when
+    # resolving the selection. Parsing accepts
     # the shorter `provider[:model][/effort]` forms and fills in the defaults, so
     # `--profile claude` still works and names itself fully afterwards.
     "Selection" => %{
@@ -658,16 +667,14 @@ defmodule Styra.Protocol do
       ]
     },
 
-    # Which coding agent a session launches, and thus which command line and wire
-    # protocol it gets. The model and reasoning effort are chosen separately (see
-    # `Selection`); a provider is only the agent itself.
+    # Which coding agent a session launches. Model, reasoning effort, and execution
+    # mode are chosen separately; a provider is only the agent itself.
     "Provider" => %{
       kind: :enum,
       tagging: %{style: :external},
       plain: true,
       variants: [
         %{name: "codex", payload: %{kind: :unit}},
-        %{name: "codex-exec", payload: %{kind: :unit}},
         %{name: "claude", payload: %{kind: :unit}}
       ]
     },
@@ -2116,6 +2123,7 @@ defmodule Styra.Protocol do
     "interaction_actions",
     "interaction_processes",
     "interaction_driva",
+    "snapshot_base",
     "snapshot_turn_diff",
     "shutdown"
   ]
@@ -3498,12 +3506,25 @@ defmodule Styra.Protocol do
     def interaction_driva!(data), do: Styra.Protocol.build!("interaction_driva", data)
 
     @doc ~S"""
+    Rebuild the first recorded snapshot as a Git tree for checkout diff mode.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def snapshot_base(data), do: Styra.Protocol.build("snapshot_base", data)
+
+    @doc "`snapshot_base/1`, raising on a request the server would refuse."
+    def snapshot_base!(data), do: Styra.Protocol.build!("snapshot_base", data)
+
+    @doc ~S"""
     What one operator turn changed in the checkout, read from the
     snapshots taken as it started and as it ended — everything, whoever
     wrote it, rather than what the agent reported writing.
 
-    Every interaction working in a Git checkout is snapshotted as each
-    turn ends and before each operator message is sent. A snapshot names
+    Every interaction working in a Git checkout has an initial snapshot
+    recorded before the provider starts, then as each turn ends and before
+    each operator message is sent. A snapshot names
     the commit checked out and, when `git status` reports anything, carries
     the diff from that commit to the working tree, untracked files
     included. The turn-end snapshot is taken after any auto-commit of the
@@ -3601,7 +3622,8 @@ defmodule Styra.Protocol.Response do
     {:interaction_actions, "interaction_actions"},
     {:interaction_processes, "interaction_processes"},
     {:interaction_driva, "interaction_driva"},
-    {:snapshot_turn_diff, "snapshot_turn_diff"}
+    {:snapshot_turn_diff, "snapshot_turn_diff"},
+    {:snapshot_base, "snapshot_base"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -3740,6 +3762,11 @@ defmodule Styra.Protocol.Response do
   Git checkout, a snapshot of it failed, or it predates snapshots.
   """
   def snapshot_turn_diff, do: "snapshot_turn_diff"
+
+  @doc ~S"""
+  The first snapshot tree, or `None` when the Session has no snapshots.
+  """
+  def snapshot_base, do: "snapshot_base"
 end
 
 defmodule Styra.Protocol.WireResponse do
@@ -3830,14 +3857,12 @@ defmodule Styra.Protocol.Provider do
   @moduledoc ~S"""
   Wire spellings of `Provider`.
 
-  Which coding agent a session launches, and thus which command line and wire
-  protocol it gets. The model and reasoning effort are chosen separately (see
-  `Selection`); a provider is only the agent itself.
+  Which coding agent a session launches. Model, reasoning effort, and execution
+  mode are chosen separately; a provider is only the agent itself.
   """
 
   @spellings [
     {:codex, "codex"},
-    {:"codex-exec", "codex-exec"},
     {:claude, "claude"}
   ]
 
@@ -3864,7 +3889,7 @@ defmodule Styra.Protocol.Provider do
   end
 
   @doc ~S"""
-  Multi-turn codex over the `app-server` JSON-RPC protocol.
+  Codex: app-server conversations or one-shot batch execution.
   """
   def codex, do: "codex"
 

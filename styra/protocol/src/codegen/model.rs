@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn rename_all_matches_serdes_own_case_conversion() {
         assert_eq!(rename("XHigh", Some("lowercase")), "xhigh");
-        assert_eq!(rename("CodexExec", Some("kebab-case")), "codex-exec");
+        assert_eq!(rename("BatchMode", Some("kebab-case")), "batch-mode");
         assert_eq!(
             rename("GitRepository", Some("snake_case")),
             "git_repository"

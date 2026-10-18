@@ -1,26 +1,23 @@
-//! Codex: the multi-turn `app-server` provider and the one-shot `exec` one.
+//! Codex: app-server conversations and one-shot exec batches.
 //!
-//! Two providers over one binary. They share an executable, a catalog, an
-//! effort ladder, and an isolation policy, and differ in wire protocol,
-//! declared defaults, and whether a session spans more than one turn. The
-//! sharing is by named const below rather than by inheriting one spec from the
-//! other, so each still states every field it has — see
-//! [`ProviderSpec`](super::spec::ProviderSpec).
+//! One provider, with a transport chosen by execution mode. Both transports
+//! share a model catalog, defaults, and isolation policy.
 
 use super::spec::{ModelSpec, ProviderOps, ProviderSpec};
-use super::{profile_name, Effort, MessageFormat, MountSpec, Profile, Provider, SandboxLayout};
+use super::{
+    profile_name, Effort, ExecutionMode, MessageFormat, MountSpec, Profile, Provider, SandboxLayout,
+};
 use crate::event::Protocol;
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// The codex binary both providers launch.
+/// The executable used for both execution modes.
 const EXECUTABLE: &str = "codex";
 
-/// Models worth offering in a picker, most capable first. Shared by both codex
-/// providers: the catalog is the agent's, and both launch the same agent.
+/// Models worth offering in a picker, most capable first.
 ///
 /// The models the installed codex catalog marks `visibility: list` (read out
 /// of codex-cli 0.156.1 on 2026-09-24), newest tier first. The hidden ones are
@@ -78,12 +75,10 @@ const LEGACY_EFFORTS: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High, E
 /// around a session rather than for the session's own work.
 const CHEAPEST_MODEL: &str = "gpt-5.6-luna";
 
-static APP_SERVER_OPS: AppServerOps = AppServerOps;
-static EXEC_OPS: ExecOps = ExecOps;
+static OPS: Ops = Ops;
 
-/// Interactive codex over the `app-server` JSON-RPC protocol. Styra's
-/// interactive sessions default to the balanced Terra profile at `medium`.
-pub(super) static APP_SERVER_SPEC: ProviderSpec = ProviderSpec {
+/// Codex identity and defaults shared by conversation and batch execution.
+pub(super) static SPEC: ProviderSpec = ProviderSpec {
     name: "codex",
     executable: EXECUTABLE,
     protocol: Protocol::CodexAppServer,
@@ -92,59 +87,26 @@ pub(super) static APP_SERVER_SPEC: ProviderSpec = ProviderSpec {
     default_model: "gpt-5.6-terra",
     default_effort: Effort::Medium,
     cheapest_model: CHEAPEST_MODEL,
-    ops: &APP_SERVER_OPS,
+    ops: &OPS,
 };
 
-/// Batch `codex exec --json`, which keeps its own explicit defaults: the
-/// strongest model, at `high`.
-pub(super) static EXEC_SPEC: ProviderSpec = ProviderSpec {
-    name: "codex-exec",
-    executable: EXECUTABLE,
-    protocol: Protocol::CodexJsonl,
-    models: MODELS,
-    efforts: EFFORTS,
-    default_model: "gpt-5.6-sol",
-    default_effort: Effort::High,
-    cheapest_model: CHEAPEST_MODEL,
-    ops: &EXEC_OPS,
-};
+struct Ops;
 
-struct AppServerOps;
-struct ExecOps;
-
-impl ProviderOps for AppServerOps {
+impl ProviderOps for Ops {
     fn profile(
         &self,
+        mode: ExecutionMode,
         layout: &SandboxLayout,
         executable: &Path,
         model: &str,
         effort: Effort,
     ) -> Profile {
-        codex_appserver(layout, executable, model, effort)
+        codex(mode, layout, executable, model, effort)
     }
 
-    /// Codex resumes through its app-server protocol rather than its command
-    /// line, so the profile is unchanged and the host passes the id to
-    /// [`AppServer`](crate::appserver::AppServer).
+    // Codex resumes through the host's app-server handshake.
     fn resume(&self, _profile: &mut Profile, _provider_session_id: &str) -> Result<()> {
         Ok(())
-    }
-}
-
-impl ProviderOps for ExecOps {
-    fn profile(
-        &self,
-        layout: &SandboxLayout,
-        executable: &Path,
-        model: &str,
-        effort: Effort,
-    ) -> Profile {
-        codex(layout, executable, model, effort)
-    }
-
-    /// A one-shot run has no conversation to reopen.
-    fn resume(&self, _profile: &mut Profile, _provider_session_id: &str) -> Result<()> {
-        bail!("provider codex-exec does not support resuming sessions")
     }
 }
 
@@ -176,7 +138,7 @@ pub fn codex_appserver(
         command,
         protocol: Protocol::CodexAppServer,
         single_turn: false,
-        ..codex(layout, executable, model, effort)
+        ..codex_exec(layout, executable, "-", model, effort)
     }
 }
 
@@ -192,29 +154,28 @@ fn codex_model_overrides(model: &str, effort: Effort) -> Vec<String> {
     ]
 }
 
-/// The built-in single-turn codex profile.
-///
-/// Isolation follows Orka's proven codex shape: the workspace is trusted so
-/// codex does not prompt, its inner sandbox is disabled in favour of Driva's
-/// outer Bubblewrap isolation, `~/.codex` is mounted writable so credentials
-/// and native session state persist, and stable `HOME`/`TERM` are set because
-/// Bubblewrap clears the environment.
-///
-/// The command is `codex exec --json -`: a single-turn run that reads the
-/// prompt from stdin and streams `thread`/`turn`/`item` events, verified
-/// against codex-cli 0.145.
-///
-/// `executable` is the codex binary to launch, as located by
-/// [`resolve_executable`](super::resolve_executable).
-pub fn codex(layout: &SandboxLayout, executable: &Path, model: &str, effort: Effort) -> Profile {
-    codex_exec(layout, executable, "-", model, effort)
+/// Build the Codex profile for the host's execution mode. Both modes share
+/// credentials, isolation policy, model, and effort; the command and wire
+/// protocol follow the mode. Batch prompts are read from stdin.
+pub fn codex(
+    mode: ExecutionMode,
+    layout: &SandboxLayout,
+    executable: &Path,
+    model: &str,
+    effort: Effort,
+) -> Profile {
+    match mode {
+        ExecutionMode::Conversation => codex_appserver(layout, executable, model, effort),
+        ExecutionMode::Batch => codex_exec(layout, executable, "-", model, effort),
+    }
 }
 
 /// Build a complete single-turn Codex profile with a host-selected executable
 /// and prompt argument.
 ///
-/// Hosts normally use [`codex`], which reads the prompt from stdin. A batch
-/// orchestrator may instead stage its full prompt elsewhere and pass a short
+/// Hosts normally resolve a [`Selection`](super::Selection) in batch mode,
+/// which reads the prompt from stdin. A batch orchestrator may instead stage
+/// its full prompt elsewhere and pass a short
 /// instruction here, while retaining Genta's command flags, credentials,
 /// environment, network policy, and wire-protocol identity as one profile.
 pub fn codex_exec(
@@ -225,7 +186,7 @@ pub fn codex_exec(
     effort: Effort,
 ) -> Profile {
     Profile {
-        name: profile_name(Provider::CodexExec, model, effort),
+        name: profile_name(Provider::Codex, model, effort),
         command: codex_exec_command(
             &executable.to_string_lossy(),
             &layout.workspace.to_string_lossy(),
@@ -314,14 +275,21 @@ fn submission_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::testing::{builtin, stub};
+    use crate::agent::testing::{agent_bin, builtin, stub};
     use serde_json::Value;
     use std::path::PathBuf;
+
+    fn batch(name: &str, layout: &SandboxLayout) -> Profile {
+        crate::agent::Selection::parse(name)
+            .unwrap()
+            .resolve_for_on_path(ExecutionMode::Batch, layout, agent_bin().as_os_str())
+            .unwrap()
+    }
 
     #[test]
     fn codex_exec_profile_isolates_the_workspace_and_speaks_the_decoded_protocol() {
         let layout = SandboxLayout::default();
-        let profile = builtin("codex-exec", &layout).unwrap();
+        let profile = batch("codex", &layout);
 
         assert_eq!(profile.protocol, Protocol::CodexJsonl);
         assert!(profile.network);
@@ -415,11 +383,16 @@ mod tests {
     #[test]
     fn codex_model_and_effort_become_config_overrides_before_the_subcommand() {
         let layout = SandboxLayout::default();
-        for (name, subcommand) in [
-            ("codex:gpt-5.6-terra/xhigh", "app-server"),
-            ("codex-exec:gpt-5.6-terra/xhigh", "exec"),
+        let name = "codex:gpt-5.6-terra/xhigh";
+        for (mode, subcommand) in [
+            (ExecutionMode::Conversation, "app-server"),
+            (ExecutionMode::Batch, "exec"),
         ] {
-            let command = builtin(name, &layout).unwrap().command;
+            let command = crate::agent::Selection::parse(name)
+                .unwrap()
+                .resolve_for_on_path(mode, &layout, agent_bin().as_os_str())
+                .unwrap()
+                .command;
             let position = |argument: &str| {
                 command
                     .iter()
@@ -441,9 +414,9 @@ mod tests {
     /// launching something that silently starts over.
     #[test]
     fn codex_exec_refuses_to_resume() {
-        let mut profile = builtin("codex-exec", &SandboxLayout::default()).unwrap();
+        let mut profile = batch("codex", &SandboxLayout::default());
         let error = profile
-            .resume(Provider::CodexExec, "thread-1")
+            .resume(Provider::Codex, "thread-1")
             .expect_err("a one-shot run cannot be resumed");
         assert!(format!("{error:#}").contains("does not support resuming"));
     }
@@ -462,10 +435,11 @@ mod tests {
         Profile {
             message_format: MessageFormat::CodexSubmission,
             ..codex(
+                ExecutionMode::Batch,
                 &SandboxLayout::default(),
                 Path::new("codex"),
-                Provider::CodexExec.default_model(),
-                Provider::CodexExec.default_effort(),
+                Provider::Codex.default_model(),
+                Provider::Codex.default_effort(),
             )
         }
     }
@@ -504,10 +478,11 @@ mod tests {
     #[test]
     fn plain_line_format_flattens_to_a_single_line() {
         let profile = codex(
+            ExecutionMode::Batch,
             &SandboxLayout::default(),
             Path::new("codex"),
-            Provider::CodexExec.default_model(),
-            Provider::CodexExec.default_effort(),
+            Provider::Codex.default_model(),
+            Provider::Codex.default_effort(),
         );
         assert_eq!(profile.message_format, MessageFormat::PlainLine);
         let encoded = profile.encode_message("one\ntwo");

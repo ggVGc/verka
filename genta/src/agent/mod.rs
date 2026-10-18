@@ -87,23 +87,30 @@ impl SandboxLayout {
     }
 }
 
-/// Which coding agent a session launches, and thus which command line and wire
-/// protocol it gets. The model and reasoning effort are chosen separately (see
-/// [`Selection`]); a provider is only the agent itself.
+/// How a host intends to drive an agent, independently of its identity,
+/// model, and reasoning effort. The resolved profile declares the actual wire
+/// protocol: Codex uses app-server for conversations and exec for batches;
+/// Claude uses stream-json for both (a batch host closes stdin after its prompt).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionMode {
+    Conversation,
+    Batch,
+}
+
+/// Which coding agent a session launches. Model, reasoning effort, and execution
+/// mode are chosen separately; a provider is only the agent itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Provider {
-    /// Multi-turn codex over the `app-server` JSON-RPC protocol.
+    /// Codex: app-server conversations or one-shot batch execution.
     Codex,
-    /// One-shot `codex exec --json`.
-    CodexExec,
     /// Multi-turn Claude Code over bidirectional `stream-json`.
     Claude,
 }
 
 impl Provider {
     /// Every provider, in the order a picker should offer them.
-    pub const ALL: [Provider; 3] = [Provider::Codex, Provider::CodexExec, Provider::Claude];
+    pub const ALL: [Provider; 2] = [Provider::Codex, Provider::Claude];
 
     /// What this provider declares about itself.
     ///
@@ -113,8 +120,7 @@ impl Provider {
     /// and one answer per module, which the compiler demands at each literal.
     fn spec(&self) -> &'static ProviderSpec {
         match self {
-            Provider::Codex => &self::codex::APP_SERVER_SPEC,
-            Provider::CodexExec => &self::codex::EXEC_SPEC,
+            Provider::Codex => &self::codex::SPEC,
             Provider::Claude => &self::claude::SPEC,
         }
     }
@@ -124,7 +130,8 @@ impl Provider {
     }
 
     /// The wire protocol (and therefore provider-specific presentation rules)
-    /// used by this provider.
+    /// used by this provider in conversation mode. Batch profiles declare
+    /// their actual protocol on [`Profile::protocol`].
     pub fn protocol(&self) -> Protocol {
         self.spec().protocol
     }
@@ -339,7 +346,8 @@ impl Effort {
 /// `provider:model/effort` — `codex:gpt-5.6-terra/medium`,
 /// `claude:claude-opus-5/xhigh`. That string is the profile name, so it is also
 /// what a journal records and a status line shows: a stored session states which
-/// model and effort ran, and re-parsing it reproduces the launch. Parsing accepts
+/// model and effort ran. The host chooses execution mode separately when
+/// resolving the selection. Parsing accepts
 /// the shorter `provider[:model][/effort]` forms and fills in the defaults, so
 /// `--profile claude` still works and names itself fully afterwards.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -407,20 +415,36 @@ impl Selection {
         )
     }
 
-    /// Build the launchable profile, locating the agent on the host's `PATH`.
+    /// Build a conversation profile, locating the agent on the host's `PATH`.
     pub fn resolve(&self, layout: &SandboxLayout) -> Result<Profile> {
+        self.resolve_for(ExecutionMode::Conversation, layout)
+    }
+
+    /// Build a profile for the requested execution mode. A batch host sends
+    /// one prompt, closes stdin, and reads the answer until the process exits.
+    pub fn resolve_for(&self, mode: ExecutionMode, layout: &SandboxLayout) -> Result<Profile> {
         let search = std::env::var_os("PATH").unwrap_or_default();
-        self.resolve_on_path(layout, &search)
+        self.resolve_for_on_path(mode, layout, &search)
     }
 
     /// [`Selection::resolve`] against an explicit executable search path.
     pub fn resolve_on_path(&self, layout: &SandboxLayout, search: &OsStr) -> Result<Profile> {
+        self.resolve_for_on_path(ExecutionMode::Conversation, layout, search)
+    }
+
+    /// [`Selection::resolve_for`] against an explicit executable search path.
+    pub fn resolve_for_on_path(
+        &self,
+        mode: ExecutionMode,
+        layout: &SandboxLayout,
+        search: &OsStr,
+    ) -> Result<Profile> {
         let executable = resolve_executable_on_path(Path::new(self.provider.executable()), search)?;
         Ok(self
             .provider
             .spec()
             .ops
-            .profile(layout, &executable, &self.model, self.effort))
+            .profile(mode, layout, &executable, &self.model, self.effort))
     }
 }
 
@@ -461,9 +485,8 @@ pub struct Profile {
     pub environment: BTreeMap<String, String>,
     pub network: bool,
     pub message_format: MessageFormat,
-    /// The agent reads one prompt to end-of-input, then runs to completion (a
-    /// one-shot `exec` agent). The session closes stdin after the operator's
-    /// message so the turn can start; a further message is not possible.
+    /// The host closes stdin after one prompt and runs the agent to completion.
+    /// Further messages and resuming this profile are not supported.
     pub single_turn: bool,
 }
 
@@ -508,6 +531,9 @@ impl Profile {
     pub fn resume(&mut self, provider: Provider, provider_session_id: &str) -> Result<()> {
         if provider_session_id.trim().is_empty() {
             bail!("cannot resume an empty provider session id");
+        }
+        if self.single_turn {
+            bail!("a single-turn profile does not support resuming sessions");
         }
         provider.spec().ops.resume(self, provider_session_id)
     }
@@ -577,7 +603,7 @@ mod tests {
     /// sandbox can exec, not a name that only the operator's own `PATH` finds.
     #[test]
     fn a_profile_launches_the_resolved_executable_path_not_a_bare_name() {
-        for name in ["codex", "codex-exec", "claude", "claude:opus"] {
+        for name in ["codex", "claude", "claude:opus"] {
             let profile = builtin(name, &SandboxLayout::default()).unwrap();
             let command = Path::new(&profile.command[0]);
             assert!(
@@ -649,9 +675,9 @@ mod tests {
                 },
             ),
             (
-                "codex-exec:gpt-5.6-luna/minimal",
+                "codex:gpt-5.6-luna/minimal",
                 Selection {
-                    provider: Provider::CodexExec,
+                    provider: Provider::Codex,
                     model: "gpt-5.6-luna".into(),
                     effort: Effort::Minimal,
                 },
@@ -786,7 +812,13 @@ mod tests {
 
     #[test]
     fn an_unknown_provider_or_effort_is_rejected_by_name() {
-        for name in ["gpt5", "codex/turbo", "claude:opus/turbo", "codex:/high"] {
+        for name in [
+            "gpt5",
+            "codex-exec",
+            "codex/turbo",
+            "claude:opus/turbo",
+            "codex:/high",
+        ] {
             let error = Selection::parse(name)
                 .expect_err("an unlaunchable selection must not parse")
                 .to_string();
@@ -805,14 +837,14 @@ mod tests {
         for name in [
             "codex:gpt-5.6-sol/high",
             "claude:claude-opus-5/max",
-            "codex-exec:gpt-5.6-terra/low",
+            "codex:gpt-5.6-terra/low",
         ] {
             let profile = builtin(name, &layout).unwrap();
             assert_eq!(profile.name, name);
         }
         // A shorter name resolves to a profile named after the defaults it took,
         // so `--profile claude` still records the model that ran.
-        for short in ["codex", "claude", "codex-exec"] {
+        for short in ["codex", "claude"] {
             let selection = Selection::parse(short).unwrap();
             let profile = builtin(short, &layout).unwrap();
             assert_eq!(profile.name, selection.name());
@@ -820,9 +852,7 @@ mod tests {
         }
     }
 
-    /// A provider's declared protocol and the one its built profile carries are
-    /// two statements of the same fact, and a journal is replayed with the
-    /// declared one.
+    /// A conversation profile uses the provider's declared conversation protocol.
     #[test]
     fn a_built_profile_speaks_the_protocol_its_provider_declares() {
         for provider in Provider::ALL {
@@ -832,6 +862,43 @@ mod tests {
                 provider.protocol(),
                 "{provider:?} builds a profile that speaks a protocol it does not declare"
             );
+        }
+    }
+
+    #[test]
+    fn execution_mode_preserves_selection_and_isolation_but_selects_the_transport() {
+        let layout = SandboxLayout::default();
+        for provider in Provider::ALL {
+            let selection = Selection::new(provider);
+            let conversation = selection
+                .resolve_on_path(&layout, agent_bin().as_os_str())
+                .unwrap();
+            let mut batch = selection
+                .resolve_for_on_path(ExecutionMode::Batch, &layout, agent_bin().as_os_str())
+                .unwrap();
+            assert_eq!(batch.name, selection.name());
+            assert_eq!(conversation.name, batch.name);
+            assert_eq!(conversation.mounts, batch.mounts);
+            assert_eq!(conversation.environment, batch.environment);
+            assert_eq!(conversation.network, batch.network);
+            assert!(!conversation.single_turn);
+            assert!(batch.single_turn);
+            assert!(batch.resume(provider, "previous-session").is_err());
+            match provider {
+                Provider::Codex => {
+                    assert_eq!(conversation.protocol, Protocol::CodexAppServer);
+                    assert_eq!(batch.protocol, Protocol::CodexJsonl);
+                    assert_eq!(batch.encode_message("hello"), b"hello\n");
+                    assert!(batch.command.iter().any(|arg| arg == "exec"));
+                }
+                Provider::Claude => {
+                    assert_eq!(conversation.protocol, Protocol::ClaudeJsonl);
+                    assert_eq!(conversation.command, batch.command);
+                    let input: serde_json::Value =
+                        serde_json::from_slice(&batch.encode_message("hello")).unwrap();
+                    assert_eq!(input["message"]["content"], "hello");
+                }
+            }
         }
     }
 
@@ -923,10 +990,8 @@ mod tests {
     /// launch on it — including the errand path, which takes the lowest rung.
     #[test]
     fn codex_does_not_offer_a_minimal_effort() {
-        for provider in [Provider::Codex, Provider::CodexExec] {
-            assert!(!provider.efforts().contains(&Effort::Minimal));
-            assert_eq!(provider.cheapest_effort(), Effort::Low);
-        }
+        assert!(!Provider::Codex.efforts().contains(&Effort::Minimal));
+        assert_eq!(Provider::Codex.cheapest_effort(), Effort::Low);
     }
 
     /// The two Claude models that predate the effort parameter are offered, but
@@ -952,8 +1017,8 @@ mod tests {
     #[test]
     fn a_declared_default_stands_on_a_shorter_ladder_that_has_it() {
         assert_eq!(
-            Provider::CodexExec.default_effort_for("gpt-5.5"),
-            Provider::CodexExec.default_effort()
+            Provider::Codex.default_effort_for("gpt-5.5"),
+            Provider::Codex.default_effort()
         );
         assert_eq!(
             Provider::Claude.default_effort_for("claude-opus-4-5-20251101"),

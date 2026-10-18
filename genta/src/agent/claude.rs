@@ -1,7 +1,9 @@
 //! Claude Code: the multi-turn `stream-json` provider.
 
 use super::spec::{ModelSpec, ProviderOps, ProviderSpec};
-use super::{profile_name, Effort, MessageFormat, MountSpec, Profile, Provider, SandboxLayout};
+use super::{
+    profile_name, Effort, ExecutionMode, MessageFormat, MountSpec, Profile, Provider, SandboxLayout,
+};
 use crate::event::Protocol;
 use anyhow::Result;
 use std::collections::BTreeMap;
@@ -100,12 +102,16 @@ struct Ops;
 impl ProviderOps for Ops {
     fn profile(
         &self,
+        mode: ExecutionMode,
         layout: &SandboxLayout,
         executable: &Path,
         model: &str,
         effort: Effort,
     ) -> Profile {
-        claude(layout, executable, model, effort)
+        Profile {
+            single_turn: mode == ExecutionMode::Batch,
+            ..claude(layout, executable, model, effort)
+        }
     }
 
     /// Claude Code resumes at process launch time, so the id joins the command
