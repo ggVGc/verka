@@ -95,7 +95,7 @@ pub fn project_command(
         })
 }
 
-/// Open the configured command in a terminal at the Workspace directory.
+/// Open the configured command in a terminal at the selected project directory.
 pub fn open_project_action(
     directory: &Path,
     command: &str,

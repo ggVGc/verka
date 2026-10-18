@@ -495,6 +495,33 @@ pub struct RunContext<'a> {
     pub config: &'a dyn Configuration,
 }
 
+/// Use the interaction's checkout for project commands, including stored Sessions.
+fn project_action_directory(app: &App, client: &Client) -> Result<std::path::PathBuf> {
+    if let Some(root) = app.workspace.root() {
+        return Ok(root.to_path_buf());
+    }
+    // Stored Sessions have no live sandbox root, but can still own a checkout.
+    if let Some(workspace_id) = app.workspace.id.as_deref() {
+        for worktree in client.list_worktrees(Some(workspace_id))? {
+            if worktree.exists
+                && worktree
+                    .sessions
+                    .iter()
+                    .any(|session| session.id == app.session_id)
+            {
+                if let Some(path) = worktree.worktree {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+    app.workspace
+        .host_path
+        .clone()
+        .or_else(|| app.workspace.root_or_current_directory())
+        .ok_or_else(|| anyhow::anyhow!("could not determine the Workspace directory"))
+}
+
 /// Hand one host path to the configured opener, at `line` when one is known,
 /// reporting the outcome the way
 /// [`terminal::open_shell`](crate::terminal::open_shell) does.
@@ -1541,14 +1568,12 @@ fn run_rounds(
                     app.set_view(View::CheckoutDiff);
                 }
                 Request::ProjectAction(action) => {
-                    let Some(directory) = app
-                        .workspace
-                        .host_path
-                        .clone()
-                        .or_else(|| app.workspace.root_or_current_directory())
-                    else {
-                        app.show_error("could not determine the Workspace directory");
-                        continue;
+                    let directory = match project_action_directory(app, client) {
+                        Ok(directory) => directory,
+                        Err(error) => {
+                            app.show_error(format!("could not locate the project: {error:#}"));
+                            continue;
+                        }
                     };
                     let result = crate::terminal::project_command(
                         &directory,

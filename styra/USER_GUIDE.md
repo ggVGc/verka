@@ -140,7 +140,7 @@ where `Space` keeps its own link menu.
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
-| `E` / `Ctrl+E` (main interaction view) | run / test the project from the Workspace directory, in the configured terminal; see "Run and test actions" |
+| `E` / `Ctrl+E` (main interaction view) | run / test the project from the interaction's worktree, or the Workspace directory, in the configured terminal; see "Run and test actions" |
 | `a` / `A` / `Ctrl+V` | live interactions / sessions in this Workspace / Workspaces |
 | `v` | choose a Workspace with live interactions (typed at) and open the live list at its first; over the grid, the grid narrows to the highlighted Workspace, Enter keeps it and Esc restores the grid; `Ctrl-N` starts a new interaction in the highlighted Workspace |
 | `V` | as `v`, but every Workspace with an interaction the live list shows under its completion, stopped and tag filters; always opens the live list |
@@ -493,8 +493,11 @@ dimmed, to show they are disabled rather than gone.
 ## Run and test actions
 
 In the main interaction view, `E` (execute) runs the project and `Ctrl+E` tests
-it. The configured command runs with `sh` on the host from the Workspace
-directory, in the configured terminal. No running interaction is required.
+it. The configured command runs with `sh` on the host from the interaction's
+worktree when one exists, otherwise from the Workspace directory, in the
+configured terminal. Stored sessions also use their existing worktree. No
+running interaction is required. Template defaults are read from `driva.toml`
+in the same directory.
 When the command exits, the window shows its exit status and stays open until
 you press `Enter`. Each invocation opens a new terminal.
 
