@@ -198,7 +198,13 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         ))];
     };
     let mut lines = if let Some(message) = view.turn_start_message {
-        detail_lines(message, view, false, None, None)
+        detail_lines(
+            message,
+            view,
+            false,
+            None,
+            &crate::event_list::BranchLink::default(),
+        )
     } else {
         vec![summary_line(entry, SummaryContext::Preview, view.protocol)]
     };
