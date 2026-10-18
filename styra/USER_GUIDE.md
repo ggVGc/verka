@@ -366,7 +366,9 @@ interaction ten text lines without changing the selection.
 At the bottom, at least the final five interaction lines remain visible (or
 all of them when the interaction is shorter).
 `g`/`G` jumps first/last, and `Enter` on a `branch` marker opens the linked
-interaction (from either side of a branch). Otherwise, `Enter`
+interaction (from either side of a branch). A marker shows that
+interaction's status as its row in the live list does, and expanded, its
+last message. Otherwise, `Enter`
 folds the selected event; `O` expands only it, `z R` expands all, `z M`
 collapses all, and `m` hides/shows minor events. With a preview open, side or
 full-screen, `↑`/`↓` scroll it ten lines and `PgUp`/`PgDn` half its height;

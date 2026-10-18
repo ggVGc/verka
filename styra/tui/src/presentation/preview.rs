@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use styra_protocol::agent::SandboxLayout;
 use styra_protocol::event::AgentEvent;
 
-use super::list::{branch_name, branch_provider_switch, ui_link_display};
+use super::list::{branch_link, branch_provider_switch, ui_link_display};
 use crate::app::App;
 use crate::preview::PreviewTarget;
 
@@ -37,7 +37,7 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
                 .link_highlight
                 .filter(|highlight| highlight.entry == app.timeline.selected)
                 .map(|highlight| highlight.link),
-            branch_name: branch_name(app, entry.event()),
+            branch: branch_link(app, entry.event()),
             branch_provider_switch: branch_provider_switch(app, entry.event()),
             // The preview is for reading the entry in full, wherever it sits.
             inherited: false,

@@ -24,16 +24,24 @@ pub(crate) fn ui_link_display(value: crate::app::LinkDisplay) -> LinkDisplay {
     }
 }
 
-/// For a branch marker, the other session's current name, resolved live from
-/// the roster rather than trusted from the event itself: the event's own
-/// `name` is a snapshot taken when the marker was written, and a rename since
-/// would leave it stale. `None` both for an event that is not a marker and
-/// for one whose target the roster has no row for.
-pub(crate) fn branch_name<'a>(
+/// For a branch marker, the other session's current name, state, and latest
+/// message, resolved live from the roster rather than trusted from the event
+/// itself: the event's own `name` is a snapshot taken when the marker was
+/// written, and a rename since would leave it stale. Empty both for an event
+/// that is not a marker and for one whose target the roster has no row for.
+pub(crate) fn branch_link<'a>(
     app: &'a App,
     event: &styra_protocol::event::AgentEvent,
-) -> Option<&'a str> {
-    app.interactions.name(event.branch_target()?)
+) -> styra_ui::event_list::BranchLink<'a> {
+    let Some(id) = event.branch_target() else {
+        return Default::default();
+    };
+    let interaction = app.interactions.current(id);
+    styra_ui::event_list::BranchLink {
+        name: app.interactions.name(id),
+        state: interaction.map(super::interactions::state),
+        message: interaction.and_then(|interaction| interaction.last_message.as_deref()),
+    }
 }
 
 pub(crate) fn branch_provider_switch(
@@ -69,20 +77,29 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         .iter()
         .enumerate()
         .filter(|(index, _)| app.timeline.is_visible(*index))
-        .map(|(index, entry)| styra_ui::event_list::EventEntry {
-            event: entry.event(),
-            version: ui_version(entry.version()),
-            expanded: app.timeline.entry_expanded(index),
-            has_detail: entry.has_detail(),
-            contract: entry.contract.as_ref(),
-            selected: index == app.timeline.selected,
-            link_highlight: app
-                .link_highlight
-                .filter(|highlight| highlight.entry == index)
-                .map(|highlight| highlight.link),
-            branch_name: branch_name(app, entry.event()),
-            branch_provider_switch: branch_provider_switch(app, entry.event()),
-            inherited: branch_point.is_some_and(|point| index < point),
+        .map(|(index, entry)| {
+            let branch = branch_link(app, entry.event());
+            // A marker's only detail is the message of where it leads, which
+            // the roster may not have.
+            let has_detail = match entry.event().branch_target() {
+                Some(_) => branch.message.is_some(),
+                None => entry.has_detail(),
+            };
+            styra_ui::event_list::EventEntry {
+                event: entry.event(),
+                version: ui_version(entry.version()),
+                expanded: app.timeline.entry_expanded(index),
+                has_detail,
+                contract: entry.contract.as_ref(),
+                selected: index == app.timeline.selected,
+                link_highlight: app
+                    .link_highlight
+                    .filter(|highlight| highlight.entry == index)
+                    .map(|highlight| highlight.link),
+                branch,
+                branch_provider_switch: branch_provider_switch(app, entry.event()),
+                inherited: branch_point.is_some_and(|point| index < point),
+            }
         })
         .collect();
     let progress = app.activity.progress();

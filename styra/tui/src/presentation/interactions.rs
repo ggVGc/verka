@@ -4,7 +4,9 @@ use crate::activity::{IdleReason, Status};
 use crate::app::App;
 use std::borrow::Cow;
 use styra_protocol::InteractionSummary;
-use styra_ui::interactions::{InteractionNavigator, InteractionRow, InteractionStatus};
+use styra_ui::interactions::{
+    InteractionNavigator, InteractionRow, InteractionState, InteractionStatus,
+};
 
 pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
     let ordered = app.interactions.display_rows(app.workspace.id.as_deref());
@@ -74,27 +76,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
                 .unwrap_or_else(|| styra_ui::picker::short_id(id))
                 .to_owned()
         };
-        // The navigator's gutter has one cell per row, so the reasons the
-        // status carries are dropped here rather than rendered: they belong to
-        // the status line of the interaction the panes below are showing. The
-        // exception is a stopped one — see `InteractionRow::stop_reason`.
-        let reported = Status::reported(interaction);
-        let stop_reason = match &reported {
-            // A completed (or abandoned, or sealed) row already says so with
-            // its own badge, and the stop reason next to it would only repeat
-            // the badge.
-            Status::Stopped(_) if interaction.completed.is_done() => None,
-            Status::Stopped(why) => Some(Cow::Owned(why.label())),
-            _ => None,
-        };
-        // A refused turn leaves the interaction idle, which on its own reads
-        // as "your turn": the window that is holding it is named so the row
-        // cannot be mistaken for one waiting on the operator.
-        let rate_limited = match &reported {
-            Status::Idle(IdleReason::RateLimited(limit)) => Some(Cow::Owned(limit.window.clone())),
-            _ => None,
-        };
-        let status = status(&reported, interaction);
+        let state = state(interaction);
         let name = app
             .interactions
             .name(&interaction.id)
@@ -125,16 +107,15 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
                     .as_ref()
                     .is_some_and(|checkout| checkout.branch.as_deref() != Some(*expected))
             }),
-            status,
+            status: state.status,
             selected: interaction.id == cursor,
             loading: loading == Some(interaction.id.as_str()),
-            newly_idle: interaction.activity == styra_protocol::InteractionActivity::Pending
-                && interaction.idle_unseen,
+            newly_idle: state.newly_idle,
             flashing: app.interactions.flashing(&interaction.id),
-            stop_reason,
-            rate_limited,
+            stop_reason: state.stop_reason.map(Cow::Owned),
+            rate_limited: state.rate_limited.map(Cow::Owned),
             uncommitted: interaction.uncommitted_changes,
-            completion: interaction.completed,
+            completion: state.completion,
             tags: &interaction.tags,
             last_message: interaction
                 .last_message
@@ -154,6 +135,39 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         typing_filter: app.interactions.typing_filter(),
         requested_offset: app.interactions.scroll_offset,
         rows,
+    }
+}
+
+/// What `interaction` is doing, as its navigator row draws it — and anywhere
+/// else it is mentioned, such as a branch marker leading to it.
+pub(crate) fn state(interaction: &InteractionSummary) -> InteractionState {
+    // The navigator's gutter has one cell per row, so the reasons the status
+    // carries are dropped here rather than rendered: they belong to the status
+    // line of the interaction the panes below are showing. The exception is a
+    // stopped one — see `InteractionRow::stop_reason`.
+    let reported = Status::reported(interaction);
+    let stop_reason = match &reported {
+        // A completed (or abandoned, or sealed) row already says so with its
+        // own badge, and the stop reason next to it would only repeat the
+        // badge.
+        Status::Stopped(_) if interaction.completed.is_done() => None,
+        Status::Stopped(why) => Some(why.label()),
+        _ => None,
+    };
+    // A refused turn leaves the interaction idle, which on its own reads as
+    // "your turn": the window that is holding it is named so the row cannot
+    // be mistaken for one waiting on the operator.
+    let rate_limited = match &reported {
+        Status::Idle(IdleReason::RateLimited(limit)) => Some(limit.window.clone()),
+        _ => None,
+    };
+    InteractionState {
+        status: status(&reported, interaction),
+        stop_reason,
+        rate_limited,
+        newly_idle: interaction.activity == styra_protocol::InteractionActivity::Pending
+            && interaction.idle_unseen,
+        completion: interaction.completed,
     }
 }
 

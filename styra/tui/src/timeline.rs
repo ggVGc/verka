@@ -144,7 +144,11 @@ impl Entry {
     /// ellipsis also counts, even with no extra detail lines, since its full
     /// text is only reachable by expanding.
     pub fn has_detail(&self) -> bool {
-        detail_line_count(&self.event) > 0 || self.event.summary().ends_with('…')
+        // A branch marker's detail is what the host knows of the session it
+        // leads to, which the event alone does not carry.
+        detail_line_count(&self.event) > 0
+            || self.event.summary().ends_with('…')
+            || self.event.branch_target().is_some()
     }
 }
 

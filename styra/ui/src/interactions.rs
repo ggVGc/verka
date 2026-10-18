@@ -24,7 +24,7 @@ pub(crate) fn running_indicator(events: usize) -> &'static str {
     RUNNING_INDICATOR[events % RUNNING_INDICATOR.len()]
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InteractionStatus {
     Pending,
     Running {
@@ -39,6 +39,39 @@ pub enum InteractionStatus {
     Stopped(StopTone),
     Error,
     Ended,
+}
+
+/// What an interaction is doing, as its row in the navigator says it: the
+/// status block and the labels after the name. For drawing that state where
+/// the interaction is mentioned outside the navigator, the same way.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct InteractionState {
+    pub status: InteractionStatus,
+    /// See [`InteractionRow::Interaction`]'s `stop_reason`.
+    pub stop_reason: Option<String>,
+    /// See [`InteractionRow::Interaction`]'s `rate_limited`.
+    pub rate_limited: Option<String>,
+    pub newly_idle: bool,
+    pub completion: CompletionState,
+}
+
+impl InteractionState {
+    /// The status block an unselected row starts with.
+    pub fn block(&self) -> Span<'static> {
+        status_block(self.status, false)
+    }
+
+    /// The labels an unselected row carries after its name.
+    pub fn labels(&self) -> Vec<Span<'static>> {
+        state_labels(
+            self.status,
+            self.stop_reason.as_deref(),
+            false,
+            self.rate_limited.as_deref(),
+            self.newly_idle,
+            self.completion,
+        )
+    }
 }
 
 pub enum InteractionRow<'a> {
@@ -491,16 +524,6 @@ fn row_item(
     else {
         unreachable!()
     };
-    let (marker, color) = status_marker(*status);
-    // The marker sits on a faint block of its own hue at the head of the row,
-    // so the state reads from the color down the left edge of the list and
-    // from the shape up close. The cursor lights its row's block up, so the
-    // status still reads under it.
-    let marker_style = Style::default()
-        .fg(color)
-        .bg(status_background(*status, *selected))
-        .add_modifier(Modifier::BOLD);
-    let running = matches!(status, InteractionStatus::Running { .. });
     // A branch hangs from its source's row rather than joining the worktree's
     // line itself, so the line only carries on past it.
     let directory_edge = tree_prefix(columns, *depth == 0);
@@ -508,15 +531,7 @@ fn row_item(
     let mut main = vec![
         Span::styled(format!("{workspace_edge}{directory_edge}"), group_style),
         Span::styled(edge.clone(), Style::default().fg(theme::INACTIVE)),
-        // The running indicator is already as wide as the block.
-        Span::styled(
-            if running {
-                marker.to_owned()
-            } else {
-                format!(" {marker} ")
-            },
-            marker_style,
-        ),
+        status_block(*status, *selected),
         Span::raw(" "),
     ];
     // Work left uncommitted is flagged ahead of the prompt, where the eye
@@ -590,66 +605,19 @@ fn row_item(
         format!(" · {provider} · {model}"),
         Style::default().fg(theme::INTERACTION_STATUS_INFO),
     ));
-    if let Some(why) = stop_reason {
-        // In the stop's own color, so how it ended is told apart down the
-        // foot of the list without reading every word.
-        let tone = match status {
-            InteractionStatus::Stopped(tone) => tone.color(),
-            _ => theme::INTERACTION_STATUS_INFO,
-        };
-        main.push(Span::styled(format!(" · {why}"), Style::default().fg(tone)));
-    }
-    if *loading {
-        main.push(Span::styled(
-            " · loading…",
-            Style::default().fg(theme::INACTIVE),
-        ));
-    }
-    if matches!(status, InteractionStatus::IdleFailed) {
-        main.push(Span::styled(
-            " · TURN FAILED",
-            Style::default()
-                .fg(theme::ERROR)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    if let Some(window) = rate_limited {
-        main.push(Span::styled(
-            format!(" · RATE LIMITED ({window})"),
-            Style::default()
-                .fg(theme::ERROR)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    if *newly_idle {
-        main.push(Span::styled(
-            " · NEWLY IDLE",
-            Style::default()
-                .fg(theme::SUCCESS)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    let badge = match completion {
-        // Sealed by integration, which is the part worth reading.
-        CompletionState::Sealed if *status == InteractionStatus::Stopped(StopTone::Integrated) => {
-            Some((" · INTEGRATED", theme::STOP_INTEGRATED))
-        }
-        CompletionState::Active => None,
-        CompletionState::Completed => Some((" · COMPLETED", theme::STOP_COMPLETED)),
-        CompletionState::Abandoned => Some((" · ABANDONED", theme::STOP_ABANDONED)),
-        CompletionState::Sealed => Some((" · SEALED", theme::STOP_SEALED)),
-    };
-    if let Some((badge, color)) = badge {
-        main.push(Span::styled(
-            badge,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ));
-    }
+    main.extend(state_labels(
+        *status,
+        stop_reason.as_deref(),
+        *loading,
+        rate_limited.as_deref(),
+        *newly_idle,
+        *completion,
+    ));
     // Everything after the name is lifted toward white and bolded on the
     // cursor's row, and faded on every other, so the cursor's row stands out.
     // The tree edges, status marker and name keep their base styles here;
     // render applies the whole-row fade to unselected interactions afterward.
-    let message_style = Style::default().fg(theme::SUBORDINATE_TEXT);
+    let message_style = Style::default().fg(LAST_MESSAGE_COLOR);
     let adjust = |style: Style| {
         if *selected {
             blended_style(style, theme::TEXT, SELECTED_BRIGHTEN).add_modifier(Modifier::BOLD)
@@ -670,12 +638,113 @@ fn row_item(
                 group_style,
             ),
             Span::styled(
-                format!("{}    « {text}", " ".repeat(edge.chars().count())),
+                format!(
+                    "{}    {}",
+                    " ".repeat(edge.chars().count()),
+                    last_message_text(text)
+                ),
                 message_style,
             ),
         ]));
     }
     lines
+}
+
+/// An interaction's last message as its row's second line has it, for any
+/// view mentioning the interaction to quote it the same way.
+pub(crate) fn last_message_text(text: &str) -> String {
+    format!("« {text}")
+}
+
+/// The color an interaction's last message line is drawn in, before the
+/// cursor's row lifts it or the others fade it.
+pub(crate) const LAST_MESSAGE_COLOR: ratatui::style::Color = theme::SUBORDINATE_TEXT;
+
+/// The marker a row's status is drawn with, on a faint block of its own hue,
+/// so the state reads from the color down the left edge of the list and from
+/// the shape up close. The cursor lights its row's block up, so the status
+/// still reads under it.
+pub(crate) fn status_block(status: InteractionStatus, selected: bool) -> Span<'static> {
+    let (marker, color) = status_marker(status);
+    let style = Style::default()
+        .fg(color)
+        .bg(status_background(status, selected))
+        .add_modifier(Modifier::BOLD);
+    // The running indicator is already as wide as the block.
+    if matches!(status, InteractionStatus::Running { .. }) {
+        Span::styled(marker, style)
+    } else {
+        Span::styled(format!(" {marker} "), style)
+    }
+}
+
+/// The labels a row carries after its name and selection that say how it
+/// came to be in its state, each in its own color.
+pub(crate) fn state_labels(
+    status: InteractionStatus,
+    stop_reason: Option<&str>,
+    loading: bool,
+    rate_limited: Option<&str>,
+    newly_idle: bool,
+    completion: CompletionState,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    if let Some(why) = stop_reason {
+        // In the stop's own color, so how it ended is told apart down the
+        // foot of the list without reading every word.
+        let tone = match status {
+            InteractionStatus::Stopped(tone) => tone.color(),
+            _ => theme::INTERACTION_STATUS_INFO,
+        };
+        spans.push(Span::styled(format!(" · {why}"), Style::default().fg(tone)));
+    }
+    if loading {
+        spans.push(Span::styled(
+            " · loading…",
+            Style::default().fg(theme::INACTIVE),
+        ));
+    }
+    if matches!(status, InteractionStatus::IdleFailed) {
+        spans.push(Span::styled(
+            " · TURN FAILED",
+            Style::default()
+                .fg(theme::ERROR)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some(window) = rate_limited {
+        spans.push(Span::styled(
+            format!(" · RATE LIMITED ({window})"),
+            Style::default()
+                .fg(theme::ERROR)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if newly_idle {
+        spans.push(Span::styled(
+            " · NEWLY IDLE",
+            Style::default()
+                .fg(theme::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    let badge = match completion {
+        // Sealed by integration, which is the part worth reading.
+        CompletionState::Sealed if status == InteractionStatus::Stopped(StopTone::Integrated) => {
+            Some((" · INTEGRATED", theme::STOP_INTEGRATED))
+        }
+        CompletionState::Active => None,
+        CompletionState::Completed => Some((" · COMPLETED", theme::STOP_COMPLETED)),
+        CompletionState::Abandoned => Some((" · ABANDONED", theme::STOP_ABANDONED)),
+        CompletionState::Sealed => Some((" · SEALED", theme::STOP_SEALED)),
+    };
+    if let Some((badge, color)) = badge {
+        spans.push(Span::styled(
+            badge,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans
 }
 
 /// The tree edge a branch hangs from, matching the Session picker's: a child

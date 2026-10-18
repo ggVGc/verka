@@ -722,7 +722,7 @@ pub fn open_interaction_navigator(
 /// the server takes a long time to answer it.
 fn ensure_listed(app: &mut App, client: &Client) -> Result<()> {
     if !app.interactions.listed() {
-        let query = app.interactions.query(&app.session_id);
+        let query = app.interactions_query();
         app.interactions.refresh(client.list_interactions(&query)?);
     }
     Ok(())
@@ -932,7 +932,7 @@ fn run_rounds(
                     // ends on is the newest listing there is.
                     ensure_listed(app, client)?;
                     let mut interactions = app.interactions.snapshot();
-                    let query = app.interactions.query(&app.session_id);
+                    let query = app.interactions_query();
                     let choice = picker::run_workspace_picker(
                         terminal,
                         client,
@@ -1638,7 +1638,7 @@ fn run_rounds(
                     Ok(None) => {}
                 }
             }
-            interactions_poll.request(app.interactions.query(&app.session_id));
+            interactions_poll.request(app.interactions_query());
         }
         if let Some(interactions) = interactions_poll.ready() {
             dirty |= app.interactions.refresh(interactions);
@@ -2377,7 +2377,7 @@ fn run_rounds(
                     // row is still listed and the server is what says so: take
                     // its word for the new state rather than writing one here.
                     if let Ok(interactions) =
-                        client.list_interactions(&app.interactions.query(&app.session_id))
+                        client.list_interactions(&app.interactions_query())
                     {
                         app.interactions.refresh(interactions);
                     }

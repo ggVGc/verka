@@ -53,7 +53,7 @@ fn frame(events: &[AgentEvent], versions: &[EntryVersion]) -> usize {
                 contract: None,
                 selected: false,
                 link_highlight: None,
-                branch_name: None,
+                branch: Default::default(),
                 branch_provider_switch: None,
                 inherited: false,
             };
@@ -97,7 +97,7 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
             contract: None,
             selected: index == selected,
             link_highlight: None,
-            branch_name: None,
+            branch: Default::default(),
             branch_provider_switch: None,
             inherited: false,
         })

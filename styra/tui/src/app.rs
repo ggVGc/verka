@@ -1086,6 +1086,23 @@ impl App {
         self.activity.status.is_active()
     }
 
+    /// What to ask the server for to fill the navigator: see
+    /// [`LiveInteractions::query`](crate::interactions::LiveInteractions::query).
+    /// The interactions this Session's branch markers lead to are kept too,
+    /// finished or not, since the markers are drawn by their name, state and
+    /// latest message. The navigator's own filters still leave them out.
+    pub fn interactions_query(&self) -> styra_protocol::InteractionQuery {
+        let mut query = self.interactions.query(&self.session_id);
+        for entry in &self.timeline.entries {
+            if let Some(id) = entry.event().branch_target() {
+                if !query.keep.iter().any(|kept| kept == id) {
+                    query.keep.push(id.to_owned());
+                }
+            }
+        }
+        query
+    }
+
     // --- Ingesting session updates -----------------------------------------
     //
     // How an event changes the list is [`crate::ingest`]'s; these are the parts
@@ -1917,6 +1934,26 @@ mod tests {
         assert!(next.files.shows_all());
         assert!(next.interactions.only_current_workspace);
         assert_eq!(next.recent_models, vec!["gpt-5.6-sol".to_owned()]);
+    }
+
+    #[test]
+    fn the_interactions_listing_keeps_where_branch_markers_lead() {
+        use styra_protocol::event::BranchDirection;
+        let mut app = App::new(app().selection.clone(), "session-1");
+        for (direction, session) in [
+            (BranchDirection::From, "source"),
+            (BranchDirection::To, "branch"),
+            (BranchDirection::To, "branch"),
+        ] {
+            app.push_event(AgentEvent::Branched {
+                direction,
+                session: session.into(),
+                name: None,
+            });
+        }
+        let query = app.interactions_query();
+        assert!(query.skip_done);
+        assert_eq!(query.keep, ["session-1", "source", "branch"]);
     }
 
     #[test]

@@ -1145,7 +1145,9 @@ fn mark_stopped(app: &mut App, live: &mut Attachment, reason: StopReason) {
     *live = Attachment::Detached;
 }
 
-/// Resolve persisted branch origins for markers on either side, including stored Sessions.
+/// Resolve persisted branch origins and names for markers on either side,
+/// including stored Sessions: a marker can lead to one no interaction serves,
+/// which the live listing never names.
 fn note_branch_origins(client: &Client, app: &mut App, workspace_id: &str) {
     if let Ok(sessions) = client.list_sessions(workspace_id) {
         for session in sessions {
@@ -1154,6 +1156,9 @@ fn note_branch_origins(client: &Client, app: &mut App, workspace_id: &str) {
                 session.selection.provider,
                 session.origin.as_ref(),
             );
+            if app.interactions.name(&session.id).is_none() {
+                app.interactions.note_name(session.id, session.name);
+            }
         }
     }
 }

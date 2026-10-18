@@ -228,7 +228,7 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         view,
         suspicious,
         view.link_highlight,
-        entry.branch_name,
+        &entry.branch,
     ));
     lines
 }
@@ -319,14 +319,13 @@ fn detail_lines(
     view: &PreviewView<'_>,
     suspicious: bool,
     highlight: Option<EntryIndex>,
-    branch_name: Option<&str>,
+    branch: &crate::event_list::BranchLink<'_>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut entries_before = 0;
-    let blocks = crate::event_list::with_live_branch_name(
+    let blocks = crate::event_list::without_branch_snapshot(
         event,
         crate::answer::presented_detail(event, view.protocol),
-        branch_name,
     );
     for (index, block) in blocks.into_iter().enumerate() {
         if index > 0 {
@@ -341,6 +340,7 @@ fn detail_lines(
             &mut entries_before,
         ));
     }
+    lines.extend(crate::event_list::branch_message_line(branch));
     lines
 }
 

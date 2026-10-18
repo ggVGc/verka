@@ -1363,7 +1363,7 @@ pub enum BranchHistory {
 /// operator's final word, not a checkbox. The history stays readable, and
 /// branching still takes a copy that can run; the sealed Session itself does
 /// not run again.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompletionState {
     /// The operator has not said they are done with this Session.

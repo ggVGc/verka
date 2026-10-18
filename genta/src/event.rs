@@ -812,12 +812,12 @@ impl AgentEvent {
                 vec![DetailBlock::Text(lines.join("\n"))]
             }
             AgentEvent::Branched {
-                direction,
-                session,
-                name,
+                direction, name, ..
             } => {
-                // Name the id even when there is a name to show: following the
-                // link opens that session, and the id is what identifies it.
+                // The id is left out: following the marker is how an operator
+                // gets to that session, and the id says nothing they can read.
+                // A host adds what it knows of the session now — see
+                // `styra_ui::event_list::with_live_branch`.
                 let mut lines = vec![match direction {
                     BranchDirection::From => "branched from this session:".to_string(),
                     BranchDirection::To => "branched into this session:".to_string(),
@@ -825,7 +825,6 @@ impl AgentEvent {
                 if let Some(name) = name {
                     lines.push(format!("name: {name}"));
                 }
-                lines.push(format!("session: {session}"));
                 vec![DetailBlock::Text(lines.join("\n"))]
             }
             AgentEvent::TaskStarted {

@@ -51,13 +51,9 @@ pub struct EventEntry<'a> {
     pub selected: bool,
     /// The Markdown link within this entry to mark, if link navigation is on it.
     pub link_highlight: Option<EntryIndex>,
-    /// For an [`AgentEvent::Branched`] entry, the other session's *current*
-    /// operator-facing name, resolved by the host from its live roster —
-    /// `None` when the host has no row for that id (it was never listed, or
-    /// has since been forgotten). The event's own `name` field is not used
-    /// for display: it is a snapshot taken when the marker was written, and a
-    /// rename afterward would leave it stale.
-    pub branch_name: Option<&'a str>,
+    /// For an [`AgentEvent::Branched`] entry, what the host knows of the
+    /// other session now. See [`BranchLink`].
+    pub branch: BranchLink<'a>,
     /// Provider transition recorded by the linked branch's origin.
     pub branch_provider_switch: Option<(
         styra_protocol::agent::Provider,
@@ -66,6 +62,25 @@ pub struct EventEntry<'a> {
     /// The entry precedes a branched Session's branch point: history copied
     /// from its source rather than its own, drawn faded so the two read apart.
     pub inherited: bool,
+}
+
+/// The session an [`AgentEvent::Branched`] marker leads to, as the host's
+/// live roster has it now. Every field is `None` when the host has no row for
+/// that id (it was never listed, or has since been forgotten), and for an
+/// entry that is not a marker at all.
+///
+/// The event's own `name` field is not used for display: it is a snapshot
+/// taken when the marker was written, and a rename afterward would leave it
+/// stale. The same goes for the rest, which the event never carried.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BranchLink<'a> {
+    /// The operator-facing name.
+    pub name: Option<&'a str>,
+    /// What it is doing, drawn as its row in the navigator draws it.
+    pub state: Option<crate::interactions::InteractionState>,
+    /// The agent's last message, already one line, as the navigator quotes
+    /// it beneath the row.
+    pub message: Option<&'a str>,
 }
 
 pub enum EventListStatus {
@@ -1043,6 +1058,8 @@ struct RowKey {
     inherited: bool,
     search: Option<String>,
     branch_name: Option<String>,
+    branch_state: Option<crate::interactions::InteractionState>,
+    branch_message: Option<String>,
     branch_provider_switch: Option<(
         styra_protocol::agent::Provider,
         styra_protocol::agent::Provider,
@@ -1097,7 +1114,9 @@ fn entry_rows_with_max_rows(
         link_highlight: entry.link_highlight,
         inherited: entry.inherited,
         search: render.search.map(str::to_owned),
-        branch_name: entry.branch_name.map(str::to_owned),
+        branch_name: entry.branch.name.map(str::to_owned),
+        branch_state: entry.branch.state.clone(),
+        branch_message: entry.branch.message.map(str::to_owned),
         branch_provider_switch: entry.branch_provider_switch,
     };
     ROW_CACHE.with(|cache| {
@@ -1193,7 +1212,7 @@ pub fn message_rows(
         contract,
         selected: false,
         link_highlight: None,
-        branch_name: None,
+        branch: Default::default(),
         branch_provider_switch: None,
         inherited: false,
     };
@@ -1242,14 +1261,8 @@ fn build_entry_rows(
             .collect();
     }
     let mut lines = vec![summary];
-    let mut detail = detail_lines_with_links(
-        entry.event,
-        protocol,
-        None,
-        links,
-        entry.link_highlight,
-        entry.branch_name,
-    );
+    let mut detail =
+        detail_lines_with_links(entry.event, protocol, None, links, entry.link_highlight);
     // The first detail line is the summary already shown above. Link focus is
     // rendered on that summary, so it never needs a duplicate body line.
     if !detail.is_empty() {
@@ -1274,6 +1287,10 @@ fn build_entry_rows(
     }
     lines.extend(detail);
     let mut wrapped = wrap_log_lines(lines, width, summary_indent);
+    // Cut rather than wrapped, so it stays the one line the navigator has.
+    if let Some(line) = branch_message_line(&entry.branch) {
+        wrapped.push(truncate_line(line, width, false));
+    }
     crate::diff::fill_changed_rows(&mut wrapped, width);
     // The cap above bounds logical detail lines, which say nothing about how
     // many rows they occupy once wrapped, so the height has to be bounded
@@ -1895,31 +1912,40 @@ pub fn summary_line(
             }
         }
         // The marker reads by where it leads, under the name the operator
-        // knows that Session by; the id it is followed by is in the detail.
+        // knows that Session by, drawn as the navigator draws its row: the
+        // status block, the name, then how it came to be in that state.
+        let mut branch_tail = Vec::new();
         if let AgentEvent::Branched { direction, .. } = entry.event {
             let way = match direction {
                 styra_protocol::event::BranchDirection::To => "to",
                 styra_protocol::event::BranchDirection::From => "from",
             };
-            summary = format!("Branch {way}: {}", entry.branch_name.unwrap_or("untitled"));
-        }
-        if let Some((from, to)) = entry.branch_provider_switch {
-            let sealed = if matches!(
-                entry.event,
-                AgentEvent::Branched {
-                    direction: styra_protocol::event::BranchDirection::To,
-                    ..
-                }
-            ) {
-                "; source sealed"
-            } else {
-                ""
-            };
-            summary.push_str(&format!(
-                " (provider switch: {} → {}{sealed})",
-                from.as_str(),
-                to.as_str()
+            summary = format!("Branch {way}:");
+            branch_tail.push(Span::raw(" "));
+            if let Some(state) = &entry.branch.state {
+                branch_tail.extend([state.block(), Span::raw(" ")]);
+            }
+            branch_tail.push(Span::styled(
+                entry.branch.name.unwrap_or("untitled").to_owned(),
+                summary_style,
             ));
+            if let Some((from, to)) = entry.branch_provider_switch {
+                let sealed = match direction {
+                    styra_protocol::event::BranchDirection::To => "; source sealed",
+                    styra_protocol::event::BranchDirection::From => "",
+                };
+                branch_tail.push(Span::styled(
+                    format!(
+                        " (provider switch: {} → {}{sealed})",
+                        from.as_str(),
+                        to.as_str()
+                    ),
+                    summary_style,
+                ));
+            }
+            if let Some(state) = &entry.branch.state {
+                branch_tail.extend(state.labels());
+            }
         }
         let display_summary = match entry.event {
             AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
@@ -1935,6 +1961,7 @@ pub fn summary_line(
             summary_style,
             entry.link_highlight,
         ));
+        spans.extend(branch_tail);
     }
     // The framing this turn was sent with is stripped from the message, so the
     // row says what was asked of it instead of showing ten lines saying so.
@@ -2018,17 +2045,12 @@ fn file_action_summary(event: &AgentEvent) -> Option<String> {
     Some(format!("{action} {}", paths.join(", ")))
 }
 
-/// Replace whatever name an [`AgentEvent::Branched`] detail block carries
-/// with the live one the host resolved from its roster, dropping the line
-/// entirely rather than falling back to a stale one when the host has none.
-/// A no-op for every other event: the cached `name` on the event is never
-/// trusted for display, so there is nothing to override when the host did
-/// not resolve a live one either, and nothing to do for events that are not
-/// branch markers at all.
-pub(crate) fn with_live_branch_name(
+/// Drop the name an [`AgentEvent::Branched`] detail block carries: it is a
+/// snapshot taken when the marker was written, and the marker's summary
+/// already reads by the live one. A no-op for every other event.
+pub(crate) fn without_branch_snapshot(
     event: &AgentEvent,
     blocks: Vec<DetailBlock>,
-    branch_name: Option<&str>,
 ) -> Vec<DetailBlock> {
     if !matches!(event, AgentEvent::Branched { .. }) {
         return blocks;
@@ -2036,21 +2058,30 @@ pub(crate) fn with_live_branch_name(
     blocks
         .into_iter()
         .map(|block| match block {
-            DetailBlock::Text(text) => {
-                let mut lines: Vec<String> = text
-                    .lines()
+            DetailBlock::Text(text) => DetailBlock::Text(
+                text.lines()
                     .filter(|line| !line.starts_with("name: "))
-                    .map(str::to_owned)
-                    .collect();
-                if let Some(name) = branch_name {
-                    let at = lines.len().min(1);
-                    lines.insert(at, format!("name: {name}"));
-                }
-                DetailBlock::Text(lines.join("\n"))
-            }
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
             other => other,
         })
         .collect()
+}
+
+/// The other session's last message, quoted on one line as the navigator
+/// quotes it beneath that session's row. A view cuts it to its width rather
+/// than wrapping it.
+pub(crate) fn branch_message_line(branch: &BranchLink<'_>) -> Option<Line<'static>> {
+    branch.message.map(|text| {
+        Line::from(Span::styled(
+            format!(
+                "{DETAIL_INDENT}{}",
+                crate::interactions::last_message_text(text)
+            ),
+            Style::default().fg(crate::interactions::LAST_MESSAGE_COLOR),
+        ))
+    })
 }
 
 /// The pretty, provider-aware expandable body of an entry. `cap` bounds how
@@ -2062,17 +2093,12 @@ pub fn detail_lines_with_links(
     cap: Option<usize>,
     links: LinkDisplay,
     highlight: Option<EntryIndex>,
-    branch_name: Option<&str>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let text_color = message_text_color(event.tag());
     let suspicious_shell = suspicious_shell_success(event);
     let mut entries_before = 0;
-    for block in with_live_branch_name(
-        event,
-        crate::answer::presented_detail(event, protocol),
-        branch_name,
-    ) {
+    for block in without_branch_snapshot(event, crate::answer::presented_detail(event, protocol)) {
         match block {
             DetailBlock::Text(text) => {
                 let base_style = Style::default().fg(text_color);
@@ -2220,7 +2246,7 @@ mod tests {
                 contract: None,
                 selected: index == selected,
                 link_highlight: None,
-                branch_name: None,
+                branch: Default::default(),
                 branch_provider_switch: None,
                 inherited: false,
             })
@@ -2397,7 +2423,7 @@ mod tests {
                 contract: None,
                 selected: true,
                 link_highlight: None,
-                branch_name: None,
+                branch: Default::default(),
                 branch_provider_switch: None,
                 inherited: false,
             }],
@@ -2498,7 +2524,7 @@ mod tests {
                 contract: None,
                 selected,
                 link_highlight: None,
-                branch_name: None,
+                branch: Default::default(),
                 branch_provider_switch: None,
                 inherited: false,
             };
@@ -2527,7 +2553,7 @@ mod tests {
             session: "4f1c-session-id".into(),
             name: Some("stale snapshot".into()),
         };
-        let summary = |event: &AgentEvent, branch_name| {
+        let summary = |event: &AgentEvent, name| {
             let entry = EventEntry {
                 event,
                 version: version(),
@@ -2536,7 +2562,10 @@ mod tests {
                 contract: None,
                 selected: false,
                 link_highlight: None,
-                branch_name,
+                branch: BranchLink {
+                    name,
+                    ..Default::default()
+                },
                 branch_provider_switch: None,
                 inherited: false,
             };
@@ -2557,6 +2586,78 @@ mod tests {
     }
 
     #[test]
+    fn an_expanded_branch_marker_reads_as_the_navigator_row_of_where_it_leads() {
+        use crate::chrome::StopTone;
+        use crate::interactions::{InteractionState, InteractionStatus};
+        use styra_protocol::event::BranchDirection;
+        use styra_protocol::CompletionState;
+        let event = AgentEvent::Branched {
+            direction: BranchDirection::To,
+            session: "4f1c-session-id".into(),
+            name: Some("stale snapshot".into()),
+        };
+        let paused = InteractionState {
+            status: InteractionStatus::Stopped(StopTone::Paused),
+            stop_reason: Some("paused".into()),
+            rate_limited: None,
+            newly_idle: false,
+            completion: CompletionState::Active,
+        };
+        let long = format!("Backoff now doubles up to 30s. {}", "More. ".repeat(40));
+        let mut entry = EventEntry {
+            event: &event,
+            version: version(),
+            expanded: true,
+            has_detail: true,
+            contract: None,
+            selected: false,
+            link_highlight: None,
+            branch: BranchLink {
+                name: Some("Retry backoff"),
+                state: Some(paused),
+                message: Some(&long),
+            },
+            branch_provider_switch: None,
+            inherited: false,
+        };
+        let render = EntryRender {
+            protocol: Protocol::default(),
+            links: LinkDisplay::Compact,
+            search: None,
+        };
+        let rows = |entry: &EventEntry<'_>| {
+            entry_rows_with_max_rows(entry, 80, 20, render)
+                .into_iter()
+                .map(|line| line.spans.into_iter().map(|span| span.content).collect())
+                .collect::<Vec<String>>()
+        };
+        let shown = rows(&entry);
+        // The state on the summary row, the message alone on one row under it,
+        // and the name said once.
+        assert_eq!(shown.len(), 2, "{shown:#?}");
+        assert!(
+            shown[0].contains("Branch to:  ■  Retry backoff · paused"),
+            "{shown:#?}"
+        );
+        assert!(shown[1].contains("« Backoff now doubles up to 30s."));
+        assert!(shown[1].ends_with('…'), "{shown:#?}");
+        let all = shown.join("\n");
+        assert!(!all.contains("name:"), "{all}");
+        assert!(!all.contains("stale snapshot"), "{all}");
+        assert!(!all.contains("4f1c-session-id"), "{all}");
+
+        // A change of state on the other side is a different row, though the
+        // marker itself has not changed.
+        entry.branch.state = Some(InteractionState {
+            status: InteractionStatus::Running { events: 3 },
+            stop_reason: None,
+            ..entry.branch.state.clone().unwrap()
+        });
+        let running = rows(&entry);
+        assert!(!running[0].contains("paused"), "{running:#?}");
+    }
+
+    #[test]
     fn provider_switch_is_shown_in_branch_summary_and_invalidates_cached_rows() {
         use styra_protocol::agent::Provider;
         use styra_protocol::event::BranchDirection;
@@ -2573,7 +2674,7 @@ mod tests {
             contract: None,
             selected: false,
             link_highlight: None,
-            branch_name: None,
+            branch: Default::default(),
             branch_provider_switch: None,
             inherited: false,
         };
@@ -2625,7 +2726,7 @@ mod tests {
             contract: None,
             selected: true,
             link_highlight: Some(0),
-            branch_name: None,
+            branch: Default::default(),
             branch_provider_switch: None,
             inherited: false,
         };
@@ -2934,7 +3035,7 @@ mod tests {
             contract: None,
             selected: false,
             link_highlight: None,
-            branch_name: None,
+            branch: Default::default(),
             branch_provider_switch: None,
             inherited: false,
         }

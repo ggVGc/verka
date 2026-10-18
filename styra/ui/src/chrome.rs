@@ -18,7 +18,7 @@ pub enum StatusTone {
 
 /// Why an interaction stopped, as far as its color goes. Shared by every view
 /// that draws a stopped interaction, so one reason reads the same everywhere.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StopTone {
     Paused,
     Completed,
