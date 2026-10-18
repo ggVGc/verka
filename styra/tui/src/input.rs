@@ -1016,7 +1016,7 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
         // As in the event list, Esc clears a standing search before it
         // leaves the grid.
         k if k.code == KeyCode::Esc && app.search.query().is_some() => app.search.cancel(),
-        k if OVERVIEW_CLOSE.matches(k) => app.view = View::Events,
+        k if OVERVIEW_CLOSE.matches(k) => app.set_view(View::Events),
         _ => return false,
     }
     if overview_navigation_key(key) {
@@ -2098,18 +2098,47 @@ mod tests {
     }
 
     #[test]
-    fn leaving_file_selection_restores_the_preview() {
-        let root = tree("files-preview-restore");
+    fn link_highlight_temporarily_opens_the_file_preview() {
+        let root = tree("links-preview-restore");
         for open in [false, true] {
-            for exit in [KeyCode::Char('F'), KeyCode::Char('f'), KeyCode::Esc] {
+            for exit in [KeyCode::Esc, KeyCode::Enter, KeyCode::Char('M')] {
                 let mut app = app(&root);
                 app.preview.open = open;
-                press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('F')));
-                assert_eq!(app.view, View::Files);
+                app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
+                    text: "[notes](notes.txt) and [summary](reports/summary.md)".into(),
+                });
+                // Re-entering link navigation must preserve the original choice.
+                for _ in 0..2 {
+                    press_list_key(&mut app, &root, KeyCode::Char('f').into());
+                    assert!(app.link_highlight.is_some());
+                    assert!(app.preview.open);
+                }
+                assert_eq!(
+                    app.highlighted_link_target().unwrap().1,
+                    Ok(root.join("notes.txt"))
+                );
+                press_list_key(&mut app, &root, KeyCode::Char('j').into());
+                assert_eq!(
+                    app.highlighted_link_target().unwrap().1,
+                    Ok(root.join("reports/summary.md"))
+                );
                 assert!(app.preview.open);
-                press_list_key(&mut app, &root, KeyEvent::from(exit));
-                assert_eq!(app.view, View::Events);
+                press_list_key(&mut app, &root, KeyCode::Char('k').into());
+                // An initially open preview is restored even if hidden here;
+                // an initially closed one closes on exit without a manual toggle.
+                if open {
+                    press_list_key(&mut app, &root, KeyCode::Char('p').into());
+                }
+                assert_eq!(app.preview.open, !open);
+                press_list_key(&mut app, &root, exit.into());
+                assert!(app.link_highlight.is_none());
                 assert_eq!(app.preview.open, open);
+                if exit == KeyCode::Enter {
+                    assert_eq!(
+                        app.take_request(),
+                        Some(Request::OpenPath(root.join("notes.txt")))
+                    );
+                }
             }
         }
         let _ = std::fs::remove_dir_all(root);

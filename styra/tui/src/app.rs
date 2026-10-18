@@ -312,13 +312,13 @@ pub struct App {
     /// Selected file in the Files view and whether it aggregates the session;
     /// see [`FilesView`].
     pub files: FilesView,
-    /// Preview visibility to restore when leaving file selection.
-    files_preview_open: Option<bool>,
     /// The typed answer last fetched for this session, and the selection
     /// within it; see [`AnswerView`].
     pub answer: AnswerView,
-    /// The Markdown link selected while walking the conversation with `F`.
+    /// The Markdown link selected while walking the conversation with `f`.
     pub link_highlight: Option<LinkHighlight>,
+    /// Preview visibility to restore when leaving link navigation.
+    link_preview_open: Option<bool>,
     /// The actions offered on the highlighted link, while that menu is open.
     pub link_menu: Option<LinkMenu>,
     /// The current window's actions, searchable, while Space has them open.
@@ -603,9 +603,9 @@ impl App {
             diff_conversation: false,
             entry_log: EntryLog::default(),
             files: FilesView::default(),
-            files_preview_open: None,
             answer: AnswerView::default(),
             link_highlight: None,
+            link_preview_open: None,
             link_menu: None,
             action_menu: None,
             workspace_jump: None,
@@ -641,9 +641,7 @@ impl App {
     /// state, which the replacement rebuilds from the server.
     pub fn take_operator_state(&mut self) -> OperatorState {
         self.close_integration_prompt();
-        if self.view == View::Files {
-            self.set_view(View::Events);
-        }
+        self.clear_link_highlight();
         OperatorState {
             interactions: std::mem::take(&mut self.interactions),
             integration_drafts: std::mem::take(&mut self.integration_drafts),
@@ -952,19 +950,12 @@ impl App {
         });
     }
 
-    /// Change views, restoring the preview choice after file selection ends.
+    /// Change views, ending link navigation and restoring its preview choice.
     pub fn set_view(&mut self, view: View) {
-        if self.view == view {
-            return;
+        if self.view != view {
+            self.clear_link_highlight();
+            self.view = view;
         }
-        if let Some(open) = self.files_preview_open.take() {
-            self.preview.open = open;
-        }
-        if view == View::Files {
-            self.files_preview_open = Some(self.preview.open);
-            self.preview.show();
-        }
-        self.view = view;
     }
 
     /// Toggle the entry-log pane below the event list. Opening it returns to
@@ -1282,7 +1273,12 @@ impl App {
     /// Open the combined interaction/files layout with its entry preview
     /// visible, or return to the ordinary event list when already open.
     pub fn toggle_files(&mut self) {
-        self.toggle_view(View::Files);
+        if self.view == View::Files {
+            self.set_view(View::Events);
+        } else {
+            self.set_view(View::Files);
+            self.preview.show();
+        }
     }
 
     // --- Typed turn answers ---------------------------------------------------
@@ -1365,14 +1361,19 @@ impl App {
     /// Select the first link at or below the selected event, wrapping to the
     /// start of the visible conversation when the selection is after its last
     /// link. The selection is kept in timeline coordinates, so it remains
-    /// correct as messages wrap or link destinations are toggled.
+    /// correct as messages wrap or link destinations are toggled. Opens the
+    /// preview until link navigation ends, preserving its previous visibility.
     pub fn highlight_first_link(&mut self) {
         self.set_view(View::Events);
         let start = self.timeline.selected;
         self.link_highlight = self
             .find_link_from(start, 0)
             .or_else(|| self.find_link_before(start));
-        if self.link_highlight.is_none() {
+        if self.link_highlight.is_some() {
+            self.link_preview_open.get_or_insert(self.preview.open);
+            self.preview.show();
+        } else {
+            self.clear_link_highlight();
             self.show_warning("no links or file references in the visible conversation");
         }
         self.reveal_highlighted_link();
@@ -1417,9 +1418,12 @@ impl App {
         self.reveal_highlighted_link();
     }
 
-    /// Leave link navigation and restore ordinary list navigation keys.
+    /// Leave link navigation, restoring ordinary keys and preview visibility.
     pub fn clear_link_highlight(&mut self) {
         self.link_highlight = None;
+        if let Some(open) = self.link_preview_open.take() {
+            self.preview.open = open;
+        }
     }
 
     /// Offer the actions that can be taken on the highlighted link.
@@ -3822,31 +3826,6 @@ mod tests {
     }
 
     #[test]
-    fn files_view_restores_preview_visibility_on_exit() {
-        for open in [false, true] {
-            let mut screen = app();
-            screen.preview.open = open;
-            for _ in 0..2 {
-                screen.toggle_files();
-                assert!(screen.preview.open);
-                screen.toggle_files();
-                assert_eq!(screen.view, View::Events);
-                assert_eq!(screen.preview.open, open);
-            }
-
-            screen.toggle_files();
-            screen.toggle_view(View::Messages);
-            assert_eq!(screen.preview.open, open);
-
-            screen.toggle_files();
-            let state = screen.take_operator_state();
-            let mut next = app();
-            next.adopt(state);
-            assert_eq!(next.preview.open, open);
-        }
-    }
-
-    #[test]
     fn focus_toggles_and_a_typed_message_is_taken_for_sending() {
         let mut app = app();
         assert_eq!(app.focus, Focus::List);
@@ -3986,6 +3965,44 @@ mod tests {
             .notices
             .iter()
             .any(|message| message.text.contains("no such file")));
+    }
+
+    #[test]
+    fn link_highlight_restores_preview_on_view_or_interaction_switch() {
+        for open in [false, true] {
+            let mut screen = app();
+            screen.preview.open = open;
+            screen.push_event(AgentEvent::AgentMessage {
+                text: "[link](https://example.com)".into(),
+            });
+            screen.highlight_first_link();
+            assert!(screen.preview.open);
+            screen.toggle_view(View::Messages);
+            assert!(screen.link_highlight.is_none());
+            assert_eq!(screen.preview.open, open);
+
+            screen.highlight_first_link();
+            assert!(screen.preview.open);
+            let state = screen.take_operator_state();
+            let mut next = app();
+            next.adopt(state);
+            assert!(next.link_highlight.is_none());
+            assert_eq!(next.preview.open, open);
+        }
+    }
+
+    #[test]
+    fn link_highlight_without_links_leaves_preview_visibility_alone() {
+        for open in [false, true] {
+            let mut screen = app();
+            screen.preview.open = open;
+            screen.push_event(AgentEvent::AgentMessage {
+                text: "No references here.".into(),
+            });
+            screen.highlight_first_link();
+            assert!(screen.link_highlight.is_none());
+            assert_eq!(screen.preview.open, open);
+        }
     }
 
     #[test]
