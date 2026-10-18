@@ -46,6 +46,9 @@ pub struct PreviewView<'a> {
     /// Whether `changes` were read from the turn's snapshots rather than from
     /// the agent's own reports, and how far they reach.
     pub changes_from_snapshots: Option<SnapshotDiff>,
+    /// The user message that started the snapshotted turn, shown in full
+    /// above its diff instead of the selected entry's summary.
+    pub turn_start_message: Option<&'a AgentEvent>,
     /// The entry itself, when it is a file change: drawn as one, from a diff
     /// the host may have placed in its file (see [`ChangeView::diff`]).
     pub entry_change: Option<ChangeView<'a>>,
@@ -194,11 +197,11 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
             Style::default().fg(theme::MUTED_TEXT),
         ))];
     };
-    let mut lines = vec![summary_line(
-        entry,
-        SummaryContext::Preview,
-        view.protocol,
-    )];
+    let mut lines = if let Some(message) = view.turn_start_message {
+        detail_lines(message, view, false, None, None)
+    } else {
+        vec![summary_line(entry, SummaryContext::Preview, view.protocol)]
+    };
     if let Some(changes) = &view.changes {
         if changes.is_empty() {
             lines.push(Line::from(""));

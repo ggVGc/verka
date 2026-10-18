@@ -73,6 +73,13 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
                 styra_ui::preview::SnapshotDiff::SoFar
             }
         }),
+        turn_start_message: snapshot_diff.and_then(|_| {
+            app.timeline.entries[..=app.timeline.conversation_span().start]
+                .iter()
+                .rev()
+                .map(|entry| entry.event())
+                .find(|event| matches!(event, AgentEvent::UserMessage { .. }))
+        }),
         entry_change: app
             .preview_entry()
             .and_then(|entry| change_view(app, entry.event())),
@@ -277,6 +284,57 @@ mod tests {
         let screen = test_support::screen_sized(&app, 120, 30).all();
         assert!(screen.contains("turn diff · C: command"), "{screen}");
         assert!(screen.contains("delay * 2"), "{screen}");
+    }
+
+    #[test]
+    fn a_snapshot_diff_starts_with_the_full_turn_request_even_on_its_reply() {
+        for ended in [false, true] {
+            for diff in [
+                "",
+                "diff --git a/helper.rs b/helper.rs\n@@\n+snapshot_name\n",
+            ] {
+                let mut app = app_with_two_turns();
+                app.push_event(AgentEvent::UserMessage {
+                    text: "update the helper\n\nKeep the public interface intact.".into(),
+                });
+                app.turn_snapshot = Some(crate::turn_snapshot::TurnSnapshot::loaded_as(
+                    "s1",
+                    3,
+                    Some(diff),
+                    ended,
+                ));
+                app.select_last();
+                for on_reply in [false, true] {
+                    if on_reply {
+                        app.push_event(AgentEvent::AgentMessage {
+                            text: "the helper is updated".into(),
+                        });
+                        app.select_last();
+                    }
+                    let view = super::view(&app, false);
+                    let content = styra_ui::preview::preview_lines(&view)
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    assert!(
+                        content.trim_start().starts_with("update the helper"),
+                        "{content}"
+                    );
+                    let request_end = content.find("Keep the public interface intact.").unwrap();
+                    let changes = content
+                        .find(if diff.is_empty() {
+                            "no file changes during this turn"
+                        } else {
+                            "snapshot_name"
+                        })
+                        .unwrap();
+                    assert!(request_end < changes, "{content}");
+                    assert!(!content.contains("the helper is updated"), "{content}");
+                    assert!(!content.contains("and rename the helper"), "{content}");
+                }
+            }
+        }
     }
 
     /// A turn still running shows what has changed since the most recent
