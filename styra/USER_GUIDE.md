@@ -565,6 +565,20 @@ jumps to the session you pick.
 
 ### Rebasing an interaction
 
+Press `Alt+B` to retarget an interaction onto another local branch. Enter the
+new target branch and press Enter. Styra creates a fresh branch from the
+interaction's current branch, then replays its commits onto the new target.
+Changes inherited from the old source branch are excluded. Conflicts use the
+same model-assisted resolution and progress display as the normal rebase action.
+Commit any outstanding changes and wait for the interaction to become idle first.
+
+The previous branch and its source are saved with the session, and its Git ref
+is kept intact. In the `Alt+B` prompt, press Tab to cycle through saved branches,
+then Enter to return to one without rebasing it. The branch you leave is saved
+too, so you can switch back again. This history survives server restarts and
+worktree cleanup. If a retarget rebase stops, use `Ctrl+B` to retry it before
+switching branches.
+
 Press `Ctrl+B` while viewing an interaction to rebase its branch onto the current
 commit of its recorded source branch. A modal shows progress, conflict resolution,
 and the final result; press `Enter` or `Esc` to close it when the action finishes.

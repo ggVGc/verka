@@ -3893,6 +3893,8 @@ impl ServerState {
                 | Request::BranchSession { .. }
                 | Request::ConvertSessionProvider { .. }
                 | Request::CreateSessionWorktree { .. }
+                | Request::RetargetSession { .. }
+                | Request::RestoreSessionBranch { .. }
                 | Request::RebaseSession { .. }
                 | Request::IntegrateSession { .. }
         ) {
@@ -3916,6 +3918,7 @@ impl ServerState {
             | Request::GenerateIntegrationMessage { id }
             | Request::GenerateEditReport { id, .. }
             | Request::EditReport { id }
+            | Request::SessionBranchHistory { id }
             | Request::SessionRebaseStatus { id }
             | Request::SessionIntegrationResult { id }
             | Request::InteractionActions { id }
@@ -4140,6 +4143,17 @@ impl ServerState {
                 self.create_session_worktree(&id)?;
                 Ok(Response::SessionWorktreeCreated)
             }
+            Request::RetargetSession { id, target } => {
+                self.start_checkout_change(&id, Some(&target), None)?;
+                Ok(Response::RebaseStarted)
+            }
+            Request::RestoreSessionBranch { id, branch } => {
+                self.start_checkout_change(&id, None, Some(&branch))?;
+                Ok(Response::Accepted)
+            }
+            Request::SessionBranchHistory { id } => Ok(Response::SessionBranchHistory(
+                journal::read_session_branch_history(&self.stored_summary(&id)?.path)?,
+            )),
             Request::RebaseSession { id } => {
                 self.start_rebase(&id)?;
                 Ok(Response::RebaseStarted)

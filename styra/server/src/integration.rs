@@ -1212,6 +1212,277 @@ mod tests {
     }
 
     #[test]
+    fn retarget_forks_only_interaction_commits_and_can_restore_saved_branches() {
+        let fixture = Fixture::new();
+        let initial = git(&fixture.host, &["rev-parse", "HEAD"]);
+        git(&fixture.host, &["branch", "other", &initial]);
+        // Changes belonging to the old source must not follow the interaction.
+        std::fs::write(fixture.host.join("old-source"), "old source\n").unwrap();
+        SystemGit.commit_all(&fixture.host, "old source").unwrap();
+        fixture.state.start_rebase(&fixture.id).unwrap();
+        assert!(wait_for_rebase(&fixture).succeeded);
+        fixture.feature();
+        let old_head = git(fixture.path(), &["rev-parse", "HEAD"]);
+        git(&fixture.host, &["switch", "other"]);
+        std::fs::write(fixture.host.join("new-source"), "new source\n").unwrap();
+        SystemGit.commit_all(&fixture.host, "new source").unwrap();
+        let target = git(&fixture.host, &["rev-parse", "HEAD"]);
+        fixture
+            .state
+            .handle(Request::RetargetSession {
+                id: fixture.id.clone(),
+                target: "other".into(),
+            })
+            .unwrap();
+        let status = wait_for_rebase(&fixture);
+        assert!(status.succeeded, "{}", status.message);
+        let retargeted = journal::read_session_checkout(&fixture.session)
+            .unwrap()
+            .unwrap();
+        assert_ne!(retargeted.branch, fixture.checkout.branch);
+        assert_eq!(retargeted.path, fixture.checkout.path);
+        assert_eq!(
+            retargeted.branched_from.as_ref().unwrap(),
+            &crate::protocol::BranchPoint {
+                branch: Some("other".into()),
+                commit: target,
+            }
+        );
+        assert_eq!(
+            git(fixture.path(), &["rev-list", "--count", "other..HEAD"]),
+            "2"
+        );
+        assert!(!fixture.path().join("old-source").exists());
+        assert!(fixture.path().join("new-source").exists());
+        assert_eq!(
+            git(&fixture.host, &["rev-parse", &fixture.checkout.branch]),
+            old_head
+        );
+        let Response::SessionBranchHistory(history) = fixture
+            .state
+            .handle(Request::SessionBranchHistory {
+                id: fixture.id.clone(),
+            })
+            .unwrap()
+        else {
+            panic!("expected history")
+        };
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].branch, fixture.checkout.branch);
+        assert_eq!(
+            history[0].branched_from.as_ref().unwrap().branch.as_deref(),
+            Some("main")
+        );
+        // A new server reads the same history and can restore it.
+        let restarted =
+            ServerState::with_git(SystemGit::shared(), fixture.state.inner.store_root.clone());
+        restarted
+            .handle(Request::RestoreSessionBranch {
+                id: fixture.id.clone(),
+                branch: history[0].branch.clone(),
+            })
+            .unwrap();
+        assert_eq!(git(fixture.path(), &["rev-parse", "HEAD"]), old_head);
+        assert!(fixture.path().join("old-source").exists());
+        assert!(!fixture.path().join("new-source").exists());
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session)
+                .unwrap()
+                .unwrap()
+                .branched_from
+                .unwrap()
+                .branch
+                .as_deref(),
+            Some("main")
+        );
+        restarted
+            .handle(Request::RestoreSessionBranch {
+                id: fixture.id.clone(),
+                branch: retargeted.branch.clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session).unwrap(),
+            Some(retargeted)
+        );
+    }
+
+    #[test]
+    fn retarget_history_survives_worktree_cleanup() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        git(&fixture.host, &["branch", "other"]);
+        fixture
+            .state
+            .start_checkout_change(&fixture.id, Some("other"), None)
+            .unwrap();
+        assert!(wait_for_rebase(&fixture).succeeded);
+        let retargeted = journal::read_session_checkout(&fixture.session)
+            .unwrap()
+            .unwrap();
+        SystemGit
+            .remove_worktree(&fixture.host, fixture.path())
+            .unwrap();
+        journal::clear_session_worktree(&fixture.session).unwrap();
+        fixture
+            .state
+            .start_checkout_change(&fixture.id, None, Some(&fixture.checkout.branch))
+            .unwrap();
+        let restored = journal::read_session_checkout(&fixture.session)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.branch, fixture.checkout.branch);
+        assert_eq!(
+            git(
+                restored.path.as_deref().unwrap(),
+                &["branch", "--show-current"]
+            ),
+            fixture.checkout.branch
+        );
+        assert_eq!(
+            journal::read_session_branch_history(&fixture.session)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            journal::read_session_branch_history(&fixture.session).unwrap()[0].branch,
+            retargeted.branch
+        );
+    }
+
+    #[test]
+    fn retarget_rejects_invalid_targets_and_dirty_worktrees_without_history_changes() {
+        let fixture = Fixture::new();
+        git(&fixture.host, &["branch", "other"]);
+        for target in [
+            "missing",
+            "HEAD",
+            "main",
+            "main~1",
+            "main^{commit}",
+            "--invalid",
+            &fixture.checkout.branch,
+        ] {
+            assert!(fixture
+                .state
+                .start_checkout_change(&fixture.id, Some(target), None)
+                .is_err());
+        }
+        std::fs::write(fixture.path().join("dirty"), "work").unwrap();
+        assert!(fixture
+            .state
+            .start_checkout_change(&fixture.id, Some("other"), None)
+            .is_err());
+        assert!(fixture
+            .state
+            .start_checkout_change(&fixture.id, None, Some("other"))
+            .is_err());
+        assert!(journal::read_session_branch_history(&fixture.session)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session).unwrap(),
+            Some(fixture.checkout.clone())
+        );
+        assert_eq!(
+            git(fixture.path(), &["branch", "--show-current"]),
+            fixture.checkout.branch
+        );
+        assert!(!fixture.session.join("retarget.json").exists());
+    }
+
+    #[test]
+    fn retarget_conflicts_use_the_rebase_resolver_and_retain_the_original_branch() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.path().join("file"), "feature\n").unwrap();
+        SystemGit.commit_all(fixture.path(), "feature").unwrap();
+        let original_head = git(fixture.path(), &["rev-parse", "HEAD"]);
+        git(&fixture.host, &["switch", "-c", "other"]);
+        std::fs::write(fixture.host.join("file"), "target\n").unwrap();
+        SystemGit.commit_all(&fixture.host, "target").unwrap();
+        let target = git(&fixture.host, &["rev-parse", "HEAD"]);
+        // Prepare the fork without launching a real provider; supply a resolver below.
+        let mut checkout = fixture.checkout.clone();
+        checkout.branch = "styra/test-retarget".into();
+        checkout.branched_from.as_mut().unwrap().branch = Some("other".into());
+        SystemGit
+            .switch_branch(fixture.path(), &checkout.branch, true)
+            .unwrap();
+        journal::store_retargeted_checkout(&fixture.session, &fixture.checkout, &checkout).unwrap();
+        std::fs::write(
+            fixture.session.join("retarget.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "branch": checkout.branch,
+                "upstream": fixture.checkout.branched_from.as_ref().unwrap().commit,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut status = crate::protocol::RebaseStatus {
+            finished: false,
+            succeeded: false,
+            message: String::new(),
+            output: String::new(),
+            source_commit: target.clone(),
+        };
+        // A failed resolver leaves a retryable rebase and the old Git ref intact.
+        assert!(fixture
+            .state
+            .run_rebase_with_resolver(
+                &fixture.id,
+                checkout.clone(),
+                &mut status,
+                &fixture.session.join("rebase.json"),
+                |_, _, _| anyhow::bail!("resolver interrupted")
+            )
+            .is_err());
+        assert!(SystemGit.rebase_in_progress(fixture.path()).unwrap());
+        assert!(fixture
+            .state
+            .start_checkout_change(&fixture.id, Some("main"), None)
+            .is_err());
+        let mut resolved = false;
+        fixture
+            .state
+            .run_rebase_with_resolver(
+                &fixture.id,
+                checkout,
+                &mut status,
+                &fixture.session.join("rebase.json"),
+                |_, path, _| {
+                    resolved = true;
+                    std::fs::write(path.join("file"), "target and feature\n")?;
+                    git(path, &["add", "file"]);
+                    let result = Command::new("git")
+                        .arg("-C")
+                        .arg(path)
+                        .env("GIT_EDITOR", "true")
+                        .args(["rebase", "--continue"])
+                        .output()?;
+                    anyhow::ensure!(result.status.success(), "rebase continue failed");
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(resolved);
+        assert_eq!(
+            git(&fixture.host, &["rev-parse", &fixture.checkout.branch]),
+            original_head
+        );
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session)
+                .unwrap()
+                .unwrap()
+                .branched_from
+                .unwrap()
+                .commit,
+            target
+        );
+        assert!(!fixture.session.join("retarget.json").exists());
+    }
+
+    #[test]
     fn standalone_rebase_updates_the_base_and_keeps_the_interaction() {
         let fixture = Fixture::new();
         fixture.feature();

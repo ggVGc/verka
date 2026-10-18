@@ -161,6 +161,33 @@ impl Client {
         }
     }
 
+    pub fn retarget_session(&self, id: &str, target: &str) -> Result<()> {
+        match self.request(Request::RetargetSession {
+            id: id.into(),
+            target: target.into(),
+        })? {
+            Response::RebaseStarted => Ok(()),
+            other => unexpected("rebase_started", other),
+        }
+    }
+
+    pub fn session_branch_history(&self, id: &str) -> Result<Vec<crate::protocol::SavedBranch>> {
+        match self.request(Request::SessionBranchHistory { id: id.into() })? {
+            Response::SessionBranchHistory(branches) => Ok(branches),
+            other => unexpected("session_branch_history", other),
+        }
+    }
+
+    pub fn restore_session_branch(&self, id: &str, branch: &str) -> Result<()> {
+        match self.request(Request::RestoreSessionBranch {
+            id: id.into(),
+            branch: branch.into(),
+        })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
     pub fn rebase_session(&self, id: &str) -> Result<()> {
         match self.request(Request::RebaseSession { id: id.into() })? {
             Response::RebaseStarted => Ok(()),
@@ -889,6 +916,9 @@ fn request_operation(request: &Request) -> &'static str {
         Request::Workspace { .. } => "workspace",
         Request::WorkspaceForPath { .. } => "workspace_for_path",
         Request::RenameWorkspace(_) => "rename_workspace",
+        Request::RetargetSession { .. } => "retarget_session",
+        Request::RestoreSessionBranch { .. } => "restore_session_branch",
+        Request::SessionBranchHistory { .. } => "session_branch_history",
         Request::RebaseSession { .. } => "rebase_session",
         Request::SessionRebaseStatus { .. } => "session_rebase_status",
         Request::IntegrateSession { .. } => "integrate_session",

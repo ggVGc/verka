@@ -227,3 +227,23 @@ including processes that daemonized away from the agent. Each carries its host
 host `parent_pid`, the kernel `state` letter, `command`, `threads`, and
 `rss_kib`. The answer is `null` when no sandbox runs for the Session — it is
 stopped, or still starting. It is a snapshot; a client showing it polls.
+
+### Retargeting an interaction
+
+`retarget_session` takes `id` and `target` (an existing local branch). It creates
+a new branch from the interaction's branch and rebases its own commits onto the
+new target. It returns `rebase_started`; poll `session_rebase_status` for progress
+and the result, as with `rebase_session`. Conflict resolution uses the same model
+as a normal rebase. Retry a stopped rebase with `rebase_session`.
+
+`session_branch_history` takes `id` and returns `session_branch_history` containing
+saved branches, oldest first. Each entry has `branch` and `branched_from` (the
+original target branch and base commit). Branch refs remain in Git. History is
+stored with the session and survives server restarts and worktree cleanup.
+
+`restore_session_branch` takes `id` and `branch` from that history and returns
+`accepted` after switching the worktree back without rebasing. It restores the
+saved target/base and saves the branch being left in history. Retargeting and
+restoring require an idle interaction, committed changes, no queued messages,
+and a checkout that is not shared by another active interaction. Finish an
+ongoing rebase before changing branches. Sealed sessions cannot change branches.

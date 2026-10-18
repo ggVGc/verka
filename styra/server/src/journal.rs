@@ -72,6 +72,8 @@ struct StoredSessionMeta {
     /// finds nothing here still looks on disk before concluding it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     checkout: Option<Checkout>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    previous_branches: Vec<crate::protocol::SavedBranch>,
     /// Whether the operator has finished with this Session. A property of the
     /// Session rather than of whichever interaction happened to be open when
     /// it was set, so it outlives that interaction and is what the stored-
@@ -617,6 +619,7 @@ fn write_session_meta(
         auto_retry: false,
         auto_commit: None,
         checkout: None,
+        previous_branches: Vec::new(),
         completed: CompletionState::Active,
         agent: meta.clone(),
     };
@@ -898,6 +901,33 @@ pub fn store_session_checkout(path: &Path, checkout: &Checkout) -> Result<()> {
         None => stored.checkout = Some(checkout.clone()),
     }
     write_stored_session_meta(&directory, &stored)
+}
+
+/// Previous Git refs and their original targets survive worktree cleanup and restarts.
+pub fn read_session_branch_history(path: &Path) -> Result<Vec<crate::protocol::SavedBranch>> {
+    Ok(read_stored_session_meta(path)?.previous_branches)
+}
+
+/// Save the old branch and replace the checkout in one metadata write.
+pub fn store_retargeted_checkout(
+    path: &Path,
+    previous: &Checkout,
+    checkout: &Checkout,
+) -> Result<()> {
+    let mut stored = read_stored_session_meta(path)?;
+    anyhow::ensure!(
+        stored.checkout.as_ref() == Some(previous),
+        "the session checkout changed during retargeting"
+    );
+    stored
+        .previous_branches
+        .retain(|saved| saved.branch != previous.branch && saved.branch != checkout.branch);
+    stored.previous_branches.push(crate::protocol::SavedBranch {
+        branch: previous.branch.clone(),
+        branched_from: previous.branched_from.clone(),
+    });
+    stored.checkout = Some(checkout.clone());
+    write_stored_session_meta(path, &stored)
 }
 
 /// Update the base only after verifying a rebase of this same checkout.

@@ -19,9 +19,9 @@ pub use types::{
     IntegrationResult, InteractionActivity, InteractionActivityReason, InteractionEnd,
     InteractionQuery, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
     LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
-    RebaseStatus, RecentMessage, SandboxProcess, SessionOrigin, SessionSummary, TemplateSummary,
-    TurnDiff, VariableOrigin, WorkspaceSummary, WorktreeCleanup, WorktreeSession, WorktreeSummary,
-    WORKTREES_DIR,
+    RebaseStatus, RecentMessage, SandboxProcess, SavedBranch, SessionOrigin, SessionSummary,
+    TemplateSummary, TurnDiff, VariableOrigin, WorkspaceSummary, WorktreeCleanup, WorktreeSession,
+    WorktreeSummary, WORKTREES_DIR,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -349,6 +349,20 @@ pub enum Request {
     /// Rebase onto the recorded source branch, retaining the checkout.
     RebaseSession {
         id: String,
+    },
+    /// Fork the interaction branch and replay its commits onto another local branch.
+    RetargetSession {
+        id: String,
+        target: String,
+    },
+    /// Previous branches, oldest first. Their Git refs are retained.
+    SessionBranchHistory {
+        id: String,
+    },
+    /// Return the worktree to a branch saved by retargeting, without rebasing it.
+    RestoreSessionBranch {
+        id: String,
+        branch: String,
     },
     SessionRebaseStatus {
         id: String,
@@ -763,6 +777,7 @@ pub struct ActionRecord {
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
     RebaseStarted,
+    SessionBranchHistory(Vec<SavedBranch>),
     SessionRebaseStatus(RebaseStatus),
     IntegrationStarted,
     IntegrationMessage(String),

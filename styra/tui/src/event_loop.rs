@@ -53,6 +53,27 @@ const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
 /// the server for updates, interactions and quota.
 const KEY_POLL: Duration = Duration::from_millis(100);
 
+fn start_rebase(app: &mut App, client: &Client, target: Option<&str>) {
+    let id = app.session_id.clone();
+    let started = match target {
+        Some(target) => client.retarget_session(&id, target),
+        None => client.rebase_session(&id),
+    };
+    app.rebase_status = Some(styra_protocol::RebaseStatus {
+        finished: started.is_err(),
+        succeeded: false,
+        output: String::new(),
+        source_commit: String::new(),
+        message: match &started {
+            Ok(()) => "Starting rebase…".into(),
+            Err(error) => format!("Could not rebase: {error:#}"),
+        },
+    });
+    if started.is_ok() {
+        app.pending_rebase = Some(id);
+    }
+}
+
 /// The message box owns paste only when no inner prompt or chooser owns input.
 fn message_paste_active(app: &App) -> bool {
     app.focus == Focus::Input
@@ -60,6 +81,7 @@ fn message_paste_active(app: &App) -> bool {
         && app.rebase_status.is_none()
         && app.launcher.is_none()
         && app.template_picker.is_none()
+        && app.retarget_prompt.is_none()
         && app.integration_prompt.is_none()
         && app.branch_prompt.is_none()
         && app.link_menu.is_none()
@@ -80,6 +102,7 @@ fn action_menu_available(app: &App) -> bool {
     app.focus == Focus::List
         && app.launcher.is_none()
         && app.template_picker.is_none()
+        && app.retarget_prompt.is_none()
         && app.integration_prompt.is_none()
         && app.branch_prompt.is_none()
         && app.link_menu.is_none()
@@ -896,23 +919,8 @@ fn run_rounds(
         while let Some(request) = app.take_request() {
             dirty = true;
             match request {
-                Request::Rebase => {
-                    let id = app.session_id.clone();
-                    let started = client.rebase_session(&id);
-                    app.rebase_status = Some(styra_protocol::RebaseStatus {
-                        finished: started.is_err(),
-                        succeeded: false,
-                        output: String::new(),
-                        source_commit: String::new(),
-                        message: match &started {
-                            Ok(()) => "Starting rebase…".into(),
-                            Err(error) => format!("Could not rebase: {error:#}"),
-                        },
-                    });
-                    if started.is_ok() {
-                        app.pending_rebase = Some(id);
-                    }
-                }
+                Request::Rebase => start_rebase(app, client, None),
+                Request::Retarget(target) => start_rebase(app, client, Some(&target)),
                 Request::Quit => return Ok(RunOutcome::Quit),
                 Request::Integrate(_) | Request::GenerateIntegrationMessage => {}
                 Request::Workspace => {
@@ -1863,6 +1871,7 @@ fn run_rounds(
         if keys::HELP.matches(key)
             && app.insert.is_none()
             && app.git_repository_prompt.is_none()
+            && app.retarget_prompt.is_none()
             && app.integration_prompt.is_none()
             && app.launch.prompt.is_none()
             && !app.search.typing()
@@ -1989,6 +1998,10 @@ fn run_rounds(
 
         // The branching choice is modal and can replace the current Session
         // on confirmation, so it owns the key before every underlying view.
+        if app.retarget_prompt.is_some() {
+            input::handle_retarget_prompt_key(app, client, key);
+            continue;
+        }
         if app.integration_prompt.is_some() {
             input::handle_integration_prompt_key(app, key);
             if let Some(request) = app.take_request() {
@@ -2446,6 +2459,9 @@ mod tests {
         assert!(!message_paste_active(&app));
         app.focus = Focus::Input;
         assert!(message_paste_active(&app));
+        app.retarget_prompt = Some((String::new(), Vec::new()));
+        assert!(!message_paste_active(&app));
+        app.retarget_prompt = None;
         app.integration_prompt = Some(String::new());
         assert!(!message_paste_active(&app));
         app.integration_prompt = None;

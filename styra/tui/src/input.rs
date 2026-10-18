@@ -37,6 +37,48 @@ pub fn handle_search_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+pub fn handle_retarget_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
+    let Some((text, history)) = app.retarget_prompt.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc => app.retarget_prompt = None,
+        KeyCode::Tab if !history.is_empty() => {
+            let index = history
+                .iter()
+                .position(|saved| saved.branch == *text)
+                .map(|index| (index + history.len() - 1) % history.len())
+                .unwrap_or(history.len() - 1);
+            *text = history[index].branch.clone();
+        }
+        KeyCode::Backspace => {
+            text.pop();
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            text.push(c)
+        }
+        KeyCode::Enter if !text.trim().is_empty() => {
+            let branch = text.trim().to_owned();
+            let restore = history.iter().any(|saved| saved.branch == branch);
+            app.retarget_prompt = None;
+            if restore {
+                match client.restore_session_branch(&app.session_id, &branch) {
+                    Ok(()) => app.show_action_message(format!("Returned to {branch}")),
+                    Err(error) => app.show_warning(format!("Could not restore branch: {error:#}")),
+                }
+            } else {
+                app.ask(Request::Retarget(branch));
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => app.close_integration_prompt(),
@@ -391,6 +433,13 @@ pub fn handle_list_key(
         }
         k if GLOBAL_STOP.matches(k) => return session::pause_interaction(app, client, live),
         k if GLOBAL_BRANCH.matches(k) => return session::open_branch_prompt(app),
+        k if GLOBAL_RETARGET.matches(k) && !app.session_id.is_empty() => {
+            match client.session_branch_history(&app.session_id) {
+                Ok(history) => app.retarget_prompt = Some((String::new(), history)),
+                Err(error) => app.show_warning(format!("Could not read branch history: {error:#}")),
+            }
+            return;
+        }
         k if GLOBAL_REBASE.matches(k) && !app.session_id.is_empty() => {
             return app.ask(Request::Rebase);
         }
@@ -1274,6 +1323,48 @@ mod tests {
     use styra_protocol::{
         AttributedMount, DrivaOptions, LaunchMount, Mount, MountAccess, MountOrigin,
     };
+
+    #[test]
+    fn retarget_prompt_cycles_saved_branches_and_submits_a_new_target() {
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        app.retarget_prompt = Some((
+            String::new(),
+            vec![
+                styra_protocol::SavedBranch {
+                    branch: "styra/first".into(),
+                    branched_from: None,
+                },
+                styra_protocol::SavedBranch {
+                    branch: "styra/second".into(),
+                    branched_from: None,
+                },
+            ],
+        ));
+        for expected in ["styra/second", "styra/first", "styra/second"] {
+            handle_retarget_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Tab));
+            assert_eq!(app.retarget_prompt.as_ref().unwrap().0, expected);
+        }
+        handle_retarget_prompt_key(
+            &mut app,
+            &client,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        for c in "release".chars() {
+            handle_retarget_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Char(c)));
+        }
+        handle_retarget_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
+        assert!(app.retarget_prompt.is_none());
+        assert!(
+            matches!(app.take_request(), Some(Request::Retarget(target)) if target == "release")
+        );
+        app.retarget_prompt = Some((String::new(), Vec::new()));
+        handle_retarget_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
+        assert!(app.retarget_prompt.is_some());
+        handle_retarget_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
+        assert!(app.retarget_prompt.is_none());
+        assert!(app.take_request().is_none());
+    }
 
     #[test]
     fn integration_message_defaults_to_the_name_and_keeps_edits_on_escape() {

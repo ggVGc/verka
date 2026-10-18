@@ -71,11 +71,24 @@ pub fn render_rebase_status(frame: &mut Frame, status: &styra_protocol::RebaseSt
     }
 }
 
+/// Choose a new target or return to a saved branch.
+pub fn render_retarget(frame: &mut Frame, branch: &str, restore: bool) {
+    let title = if restore {
+        " return to saved branch "
+    } else {
+        " retarget onto local branch "
+    };
+    let prompt = TextPrompt::new(title, branch)
+        .bottom(" Enter apply · Tab previous branches · Ctrl-U clear · Esc cancel ");
+    text_prompt::render(frame, &prompt, frame.area());
+}
+
 /// The integration commit message being written, with the branch it will be
 /// committed to in the top-right corner when the interaction recorded one.
 pub fn render_integration_message(frame: &mut Frame, message: &str, target: Option<&str>) {
-    let mut prompt = TextPrompt::new(" integration commit message ", message)
-        .bottom(" Enter integrate · Ctrl-G generate · Ctrl-W delete word · Alt-Enter newline · Esc cancel ");
+    let mut prompt = TextPrompt::new(" integration commit message ", message).bottom(
+        " Enter integrate · Ctrl-G generate · Ctrl-W delete word · Alt-Enter newline · Esc cancel ",
+    );
     if let Some(target) = target {
         prompt = prompt.top_right(Line::from(vec![
             Span::styled(" into ", Style::default().fg(theme::TEXT)),

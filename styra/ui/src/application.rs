@@ -106,6 +106,7 @@ pub struct PanelFeedback {
 #[derive(Default)]
 pub struct ApplicationOverlays<'a> {
     pub rebase_status: Option<&'a styra_protocol::RebaseStatus>,
+    pub retarget_prompt: Option<(&'a str, bool)>,
     pub integration_message: Option<&'a str>,
     /// The branch the integration commit will land on, named in the
     /// message prompt's corner.
@@ -466,6 +467,9 @@ fn note_preview_scroll(
 }
 
 fn render_reading_overlays(frame: &mut Frame, view: &ApplicationOverlays<'_>) {
+    if let Some((branch, restore)) = view.retarget_prompt {
+        overlays::render_retarget(frame, branch, restore);
+    }
     if let Some(status) = view.rebase_status {
         overlays::render_rebase_status(frame, status);
     }

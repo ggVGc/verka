@@ -39,6 +39,7 @@ bindings! { GLOBAL = "Global";
         => Action::GlobalSessionWorktree;
     GLOBAL_TAGS: [Key::ch('T')] => Action::GlobalTags;
     GLOBAL_REBASE: [Key::ctrl('b')] => Action::GlobalRebase;
+    GLOBAL_RETARGET: [Key::alt_code(KeyCode::Char('b'))] => Action::GlobalRetarget;
     GLOBAL_INTEGRATE: [Key::ch('I')] => Action::GlobalIntegrate;
     GLOBAL_MESSAGES: [Key::ch('M')] => Action::GlobalMessages;
     GLOBAL_RAW: [Key::ch('r')] => Action::GlobalRaw;

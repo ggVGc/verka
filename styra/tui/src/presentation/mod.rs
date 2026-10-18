@@ -685,6 +685,12 @@ fn draw_main(
         footer: &footer,
         overlays: styra_ui::application::ApplicationOverlays {
             rebase_status: app.rebase_status.as_ref(),
+            retarget_prompt: app.retarget_prompt.as_ref().map(|(text, history)| {
+                (
+                    text.as_str(),
+                    history.iter().any(|saved| saved.branch == text.trim()),
+                )
+            }),
             integration_message: app.integration_prompt.as_deref(),
             integration_target: app
                 .interactions

@@ -234,6 +234,7 @@ pub struct App {
     pub integration_prompt: Option<String>,
     /// Commit-message drafts kept in this client, keyed by interaction.
     integration_drafts: std::collections::HashMap<String, String>,
+    pub retarget_prompt: Option<(String, Vec<styra_protocol::SavedBranch>)>,
     pub rebase_status: Option<styra_protocol::RebaseStatus>,
     pub pending_rebase: Option<String>,
     pub pending_integration: Option<String>,
@@ -356,6 +357,7 @@ pub struct App {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Rebase,
+    Retarget(String),
     Integrate(String),
     GenerateIntegrationMessage,
     /// Have each file of the checkout diff on screen described, in an edit
@@ -569,6 +571,7 @@ impl App {
             git_repository_prompt: None,
             integration_prompt: None,
             integration_drafts: std::collections::HashMap::new(),
+            retarget_prompt: None,
             rebase_status: None,
             pending_rebase: None,
             pending_integration: None,

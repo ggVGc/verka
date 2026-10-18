@@ -34,6 +34,7 @@ pub(crate) enum Action {
     GlobalWorktrees,
     GlobalSessionWorktree,
     GlobalRebase,
+    GlobalRetarget,
     GlobalIntegrate,
     GlobalTags,
     GlobalRaw,
@@ -335,6 +336,7 @@ impl Action {
             }
             Self::GlobalWorktrees => "worktrees and the sessions in each",
             Self::GlobalSessionWorktree => "create and associate a Git branch and workspace",
+            Self::GlobalRetarget => "retarget this interaction or return to a previous branch",
             Self::GlobalRebase => "rebase this interaction onto its source branch",
             Self::GlobalIntegrate => "integrate this interaction into its source branch",
             Self::GlobalTags => "edit the current interaction's tags",

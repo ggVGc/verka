@@ -77,6 +77,15 @@ pub trait Git: Send + Sync {
     fn rebase(&self, _checkout: &Path, _source: &str) -> Result<bool> {
         anyhow::bail!("this Git backend does not support rebasing")
     }
+    fn local_branch_commit(&self, checkout: &Path, branch: &str) -> Result<Option<String>> {
+        self.commit(checkout, &format!("refs/heads/{branch}"))
+    }
+    fn rebase_onto(&self, _checkout: &Path, _source: &str, _upstream: &str) -> Result<bool> {
+        anyhow::bail!("this Git backend does not support retargeting")
+    }
+    fn switch_branch(&self, _checkout: &Path, _branch: &str, _create: bool) -> Result<()> {
+        anyhow::bail!("this Git backend does not support switching branches")
+    }
     fn rebase_in_progress(&self, _checkout: &Path) -> Result<bool> {
         anyhow::bail!("this Git backend does not support rebasing")
     }
@@ -316,6 +325,41 @@ impl Git for SystemGit {
             Ok(()) => Ok(true),
             Err(_) if self.rebase_in_progress(checkout)? => Ok(false),
             Err(error) => Err(error),
+        }
+    }
+
+    fn local_branch_commit(&self, checkout: &Path, branch: &str) -> Result<Option<String>> {
+        // check-ref-format rejects revision syntax such as main~1 or main^{commit}.
+        Invocation::new(checkout, "validate the target branch")
+            .args(["check-ref-format", &format!("refs/heads/{branch}")])
+            .succeed()?;
+        self.commit(checkout, &format!("refs/heads/{branch}"))
+    }
+
+    fn rebase_onto(&self, checkout: &Path, source: &str, upstream: &str) -> Result<bool> {
+        if self.rebase_in_progress(checkout)? {
+            return Ok(false);
+        }
+        anyhow::ensure!(
+            !self.has_uncommitted_changes(checkout)?,
+            "commit changes before retargeting"
+        );
+        match Invocation::new(checkout, "rebase onto the new target")
+            .args(["rebase", "--onto", source, upstream])
+            .succeed()
+        {
+            Ok(()) => Ok(true),
+            Err(_) if self.rebase_in_progress(checkout)? => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn switch_branch(&self, checkout: &Path, branch: &str, create: bool) -> Result<()> {
+        let invocation = Invocation::new(checkout, "switch the interaction branch");
+        if create {
+            invocation.args(["switch", "-c", branch]).succeed()
+        } else {
+            invocation.args(["switch", "--", branch]).succeed()
         }
     }
 

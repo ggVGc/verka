@@ -96,6 +96,29 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "retarget_session", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}},
+            %{name: "target", required: true, type: %{kind: :string}}
+          ]
+        }},
+        %{name: "session_branch_history", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
+        %{name: "restore_session_branch", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}},
+            %{name: "branch", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "session_rebase_status", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -444,6 +467,7 @@ defmodule Styra.Protocol do
       tagging: %{style: :adjacent, tag: "type", content: "data"},
       variants: [
         %{name: "rebase_started", payload: %{kind: :unit}},
+        %{name: "session_branch_history", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "SavedBranch"}}}},
         %{name: "session_rebase_status", payload: %{kind: :newtype, type: %{kind: :ref, name: "RebaseStatus"}}},
         %{name: "integration_started", payload: %{kind: :unit}},
         %{name: "integration_message", payload: %{kind: :newtype, type: %{kind: :string}}},
@@ -765,6 +789,15 @@ defmodule Styra.Protocol do
       ]
     },
 
+    # A previous interaction branch, retained when its worktree changes branches.
+    "SavedBranch" => %{
+      kind: :struct,
+      fields: [
+        %{name: "branch", required: true, type: %{kind: :string}},
+        %{name: "branched_from", required: true, type: %{kind: :optional, inner: %{kind: :ref, name: "BranchPoint"}}}
+      ]
+    },
+
     # Progress and final outcome of a standalone interaction rebase.
     "RebaseStatus" => %{
       kind: :struct,
@@ -1031,6 +1064,7 @@ defmodule Styra.Protocol do
         %{name: "idle_unseen", required: false, type: %{kind: :boolean}},
         %{name: "uncommitted_changes", required: false, type: %{kind: :boolean}},
         %{name: "checkout", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "CheckoutState"}}},
+        %{name: "expected_branch", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "branched_from", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "BranchPoint"}}},
         %{name: "last_message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "recent_messages", required: false, type: %{kind: :list, item: %{kind: :ref, name: "RecentMessage"}}},
@@ -1189,6 +1223,20 @@ defmodule Styra.Protocol do
       ]
     },
 
+    # The branch and commit a Session's own branch was created from, recorded
+    # when Styra created it.
+    #
+    # The commit is the one the branch was actually made at, not the one its
+    # origin points to now: an origin branch moves on, and what the Session's
+    # branch has that it did not is measured from here.
+    "BranchPoint" => %{
+      kind: :struct,
+      fields: [
+        %{name: "branch", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "commit", required: true, type: %{kind: :string}}
+      ]
+    },
+
     "FileEditReport" => %{
       kind: :struct,
       fields: [
@@ -1315,20 +1363,6 @@ defmodule Styra.Protocol do
       ]
     },
 
-    # The branch and commit a Session's own branch was created from, recorded
-    # when Styra created it.
-    #
-    # The commit is the one the branch was actually made at, not the one its
-    # origin points to now: an origin branch moves on, and what the Session's
-    # branch has that it did not is measured from here.
-    "BranchPoint" => %{
-      kind: :struct,
-      fields: [
-        %{name: "branch", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
-        %{name: "commit", required: true, type: %{kind: :string}}
-      ]
-    },
-
     # Where integration landed a Session's work: the squash commit it made on
     # the branch the Session's own branch was made from — see
     # `crate::protocol::Request::IntegrateSession`.
@@ -1415,18 +1449,17 @@ defmodule Styra.Protocol do
       ]
     },
 
-    # Where an interaction's agent was working, in Git's terms, as of the last
-    # time it stopped working.
+    # Where an interaction's agent is working, in Git's terms.
     #
     # Read from Git rather than from the name Styra gave the checkout. A Session
     # records the checkout it was *given* (see `styra_server::worktree::Checkout`),
-    # which is set once and says what Styra made; this says what is actually
+    # including changes made by retargeting; this says what is actually
     # there now — the agent may have switched branches, or the Workspace may be
     # the operator's own checkout that Styra never made anything for.
     #
-    # Read when the interaction goes idle and not after, for the reason
-    # `InteractionSummary::uncommitted_changes` is: the answer costs a `git`
-    # process, and it only changes while an agent is running.
+    # Located at launch and when the interaction goes idle or changes directory.
+    # Live interactions also refresh the branch during polling, at most once
+    # every two seconds, to detect switches made by the agent or operator.
     "CheckoutState" => %{
       kind: :struct,
       fields: [
@@ -1968,6 +2001,9 @@ defmodule Styra.Protocol do
     "edit_report",
     "session_integration_result",
     "rebase_session",
+    "retarget_session",
+    "session_branch_history",
+    "restore_session_branch",
     "session_rebase_status",
     "health",
     "create_workspace",
@@ -2578,6 +2614,44 @@ defmodule Styra.Protocol do
 
     @doc "`rebase_session/1`, raising on a request the server would refuse."
     def rebase_session!(data), do: Styra.Protocol.build!("rebase_session", data)
+
+    @doc ~S"""
+    Fork the interaction branch and replay its commits onto another local branch.
+
+    Fields of `data`:
+
+      * `id    `  string
+      * `target`  string
+    """
+    def retarget_session(data), do: Styra.Protocol.build("retarget_session", data)
+
+    @doc "`retarget_session/1`, raising on a request the server would refuse."
+    def retarget_session!(data), do: Styra.Protocol.build!("retarget_session", data)
+
+    @doc ~S"""
+    Previous branches, oldest first. Their Git refs are retained.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def session_branch_history(data), do: Styra.Protocol.build("session_branch_history", data)
+
+    @doc "`session_branch_history/1`, raising on a request the server would refuse."
+    def session_branch_history!(data), do: Styra.Protocol.build!("session_branch_history", data)
+
+    @doc ~S"""
+    Return the worktree to a branch saved by retargeting, without rebasing it.
+
+    Fields of `data`:
+
+      * `id    `  string
+      * `branch`  string
+    """
+    def restore_session_branch(data), do: Styra.Protocol.build("restore_session_branch", data)
+
+    @doc "`restore_session_branch/1`, raising on a request the server would refuse."
+    def restore_session_branch!(data), do: Styra.Protocol.build!("restore_session_branch", data)
 
     @doc ~S"""
     Fields of `data`:
@@ -3408,6 +3482,7 @@ defmodule Styra.Protocol.Response do
 
   @spellings [
     {:rebase_started, "rebase_started"},
+    {:session_branch_history, "session_branch_history"},
     {:session_rebase_status, "session_rebase_status"},
     {:integration_started, "integration_started"},
     {:integration_message, "integration_message"},
@@ -3482,6 +3557,8 @@ defmodule Styra.Protocol.Response do
   end
 
   def rebase_started, do: "rebase_started"
+
+  def session_branch_history, do: "session_branch_history"
 
   def session_rebase_status, do: "session_rebase_status"
 

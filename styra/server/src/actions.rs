@@ -51,6 +51,7 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
         // diff, which the ledger would otherwise copy.
         | Request::GenerateEditReport { .. }
         | Request::EditReport { .. }
+        | Request::SessionBranchHistory { .. }
         | Request::SessionRebaseStatus { .. }
         | Request::SessionIntegrationResult { .. }
         | Request::InteractionActions { .. }
@@ -70,6 +71,8 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
         Request::RenameSession(request) => Scope::Session(&request.id),
         Request::SetSessionTags(request) => Scope::Session(&request.id),
         Request::CreateSessionWorktree { id }
+        | Request::RetargetSession { id, .. }
+        | Request::RestoreSessionBranch { id, .. }
         | Request::RebaseSession { id }
         | Request::IntegrateSession { id, .. }
         | Request::ConvertSessionProvider { id }

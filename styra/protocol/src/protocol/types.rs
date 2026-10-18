@@ -856,7 +856,7 @@ impl InteractionActivityReason {
 ///
 /// Read from Git rather than from the name Styra gave the checkout. A Session
 /// records the checkout it was *given* (see `styra_server::worktree::Checkout`),
-/// which is set once and says what Styra made; this says what is actually
+/// including changes made by retargeting; this says what is actually
 /// there now — the agent may have switched branches, or the Workspace may be
 /// the operator's own checkout that Styra never made anything for.
 ///
@@ -916,6 +916,13 @@ pub struct BranchPoint {
     pub branch: Option<String>,
     /// The commit the new branch started at.
     pub commit: String,
+}
+
+/// A previous interaction branch, retained when its worktree changes branches.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedBranch {
+    pub branch: String,
+    pub branched_from: Option<BranchPoint>,
 }
 
 impl CheckoutState {
