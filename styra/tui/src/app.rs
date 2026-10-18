@@ -1129,9 +1129,12 @@ impl App {
     }
 
     /// Put the selection on the last entry, where following leaves it, and
-    /// start its preview from the top.
+    /// start its preview from the top. The list scrolls to follow it again:
+    /// only here, with the newest entry selected, does incoming activity move
+    /// a viewport that navigation left alone.
     pub(crate) fn select_tail(&mut self) {
         self.timeline.select_tail();
+        self.timeline.keep_viewport = false;
         self.preview.scroll.reset();
         self.entry_log_follow_selection();
     }
@@ -1139,18 +1142,27 @@ impl App {
     // --- List navigation ----------------------------------------------------
     //
     // Where the selection lands is [`Timeline`]'s; the preview and entry-log
-    // pane both follow it, so a move resets their scroll positions. See
+    // pane both follow it, so a move resets their scroll positions. The list
+    // itself keeps its viewport unless the selection would leave it. See
     // [`Timeline::select_forward`] for what "moved" means.
 
     fn moved(&mut self, moved: bool) {
         self.timeline.max_lines_above_selection = None;
         self.timeline.anchor_selection = true;
-        self.timeline.list_row_offset = 0;
+        self.timeline.keep_viewport = true;
         self.timeline.list_scroll_delta = 0;
         if moved {
             self.preview.scroll.reset();
             self.entry_log_follow_selection();
         }
+    }
+
+    /// A filter change renumbers the rows the list shows, so the viewport it
+    /// rendered last no longer means anything; anchor afresh on the selection.
+    fn refiltered(&mut self, moved: bool) {
+        self.moved(moved);
+        self.timeline.keep_viewport = false;
+        self.timeline.list_row_offset = 0;
     }
 
     pub fn scroll_interaction_down(&mut self) {
@@ -1216,14 +1228,14 @@ impl App {
     /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
     pub fn toggle_minor(&mut self) {
         let moved = self.timeline.toggle_minor();
-        self.moved(moved);
+        self.refiltered(moved);
     }
 
     /// Toggle whether the main event list shows every event rather than only
     /// operator/agent messages.
     pub fn toggle_all_events(&mut self) {
         let moved = self.timeline.toggle_all_events();
-        self.moved(moved);
+        self.refiltered(moved);
     }
 
     /// Open the combined interaction/files layout with its entry preview

@@ -197,6 +197,11 @@ pub struct Timeline {
     /// Whether rendering should bring the selection back into view. Explicit
     /// viewport scrolling clears this until selection navigation resumes.
     pub anchor_selection: bool,
+    /// Whether a selection move should leave the viewport where it is,
+    /// scrolling only when the selected entry would otherwise be out of sight.
+    /// Navigating sets this; new entries arriving while the newest entry is
+    /// selected clear it, so following the tail scrolls as before.
+    pub keep_viewport: bool,
     /// Selection index used for the last rendered frame. Comparing it with
     /// `selected` distinguishes deliberate upward navigation from a live row
     /// merely changing height between frames.
@@ -219,6 +224,7 @@ impl Default for Timeline {
             list_row_offset: 0,
             list_scroll_delta: 0,
             anchor_selection: true,
+            keep_viewport: false,
             rendered_selection: None,
             max_lines_above_selection: None,
         }

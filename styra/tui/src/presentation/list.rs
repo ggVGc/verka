@@ -136,6 +136,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         requested_row_offset: app.timeline.list_row_offset,
         scroll_delta: app.timeline.list_scroll_delta,
         anchor_selection: app.timeline.anchor_selection,
+        keep_viewport: app.timeline.keep_viewport,
         moved_backward: app
             .timeline
             .rendered_selection
@@ -375,6 +376,59 @@ mod tests {
             "the command completion replaced a hidden row, so the viewport stays"
         );
         assert_eq!(ui.rows()[1], top, "the same entry is still at the top");
+    }
+
+    /// Moving between entries leaves the viewport alone while the selection
+    /// stays on screen — even onto its top row, where scrolloff used to pull
+    /// earlier entries into view — and so does activity arriving below an
+    /// entry other than the newest.
+    #[test]
+    fn moving_between_entries_does_not_scroll_the_conversation() {
+        let mut ui = TestUi::new(80, 16).unwrap();
+        let mut app = scrolled_conversation(&mut ui);
+        let anchored = app.timeline.list_offset;
+        let top = ui.rows()[1].clone();
+
+        while app.timeline.selected > anchored {
+            app.select_prev_line();
+            draw(&mut ui, &mut app);
+            assert_eq!(app.timeline.list_offset, anchored, "moving up");
+        }
+        app.select_next_line();
+        draw(&mut ui, &mut app);
+        assert_eq!(app.timeline.list_offset, anchored, "moving down");
+
+        app.push_event(AgentEvent::AgentMessage {
+            text: "step 12: one more".into(),
+        });
+        draw(&mut ui, &mut app);
+        assert_eq!(app.timeline.list_offset, anchored, "a new message below");
+        assert_eq!(ui.rows()[1], top, "the same entry is still at the top");
+    }
+
+    /// With the newest entry selected, a new message scrolls the view to it,
+    /// however the selection got there.
+    #[test]
+    fn a_new_message_scrolls_to_itself_when_the_newest_entry_is_selected() {
+        let mut ui = TestUi::new(80, 16).unwrap();
+        let mut app = scrolled_conversation(&mut ui);
+        app.select_prev_line();
+        app.select_next_line();
+        draw(&mut ui, &mut app);
+        let anchored = app.timeline.list_offset;
+
+        app.push_event(AgentEvent::AgentMessage {
+            text: "step 12: the newest".into(),
+        });
+        draw(&mut ui, &mut app);
+
+        assert!(app.timeline.list_offset > anchored, "the view followed");
+        assert!(
+            ui.rows()
+                .iter()
+                .any(|row| row.contains("step 12: the newest")),
+            "the new message is on screen"
+        );
     }
 
     /// The selection is what the viewport is anchored to, so following the

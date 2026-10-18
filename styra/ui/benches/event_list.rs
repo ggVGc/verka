@@ -132,6 +132,7 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
         requested_row_offset: 0,
         scroll_delta: 0,
         anchor_selection: true,
+        keep_viewport: false,
         moved_backward: false,
         max_lines_above_selection: None,
         protocol: Protocol::default(),

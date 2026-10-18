@@ -131,6 +131,10 @@ pub struct EventListView<'a> {
     /// Keep the selected entry on screen. Explicit viewport scrolling turns
     /// this off so the view can move independently of the selection.
     pub anchor_selection: bool,
+    /// With `anchor_selection`, leave the viewport at the requested anchor
+    /// while the selected entry's summary line is on screen, instead of
+    /// re-applying scrolloff: moving between entries does not scroll.
+    pub keep_viewport: bool,
     /// Whether an explicit move toward older entries permits scrolloff to
     /// reveal rows above the current viewport anchor. Live content updates do
     /// not set this: a row changing height must not look like navigation.
@@ -379,6 +383,21 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     };
     let (offset, row_offset) = if let Some(maximum) = view.max_lines_above_selection {
         selection_top_anchor(position, &mut items, maximum)
+    } else if let Some(kept) = view
+        .keep_viewport
+        .then_some(anchored_position)
+        .flatten()
+        .and_then(|selected| {
+            kept_anchor(
+                view.requested_offset,
+                view.requested_row_offset,
+                selected,
+                &mut items,
+                viewport_height,
+            )
+        })
+    {
+        kept
     } else if view.anchor_selection {
         (
             list_offset_with_scrolloff(
@@ -447,6 +466,26 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         effective_offset: offset + state.offset(),
         effective_row_offset: row_offset,
     }
+}
+
+/// The requested anchor, if the selected entry's summary line is visible from
+/// it; `None` when the view has to move to show the selection.
+fn kept_anchor(
+    offset: usize,
+    row_offset: usize,
+    selected: usize,
+    heights: &mut impl Heights,
+    viewport_height: usize,
+) -> Option<(usize, usize)> {
+    if offset >= heights.len() || selected < offset {
+        return None;
+    }
+    let row_offset = row_offset.min(heights.height(offset).saturating_sub(1));
+    if selected == offset {
+        return (row_offset == 0).then_some((offset, 0));
+    }
+    let rows_above = heights.total(offset..selected).saturating_sub(row_offset);
+    (rows_above < viewport_height).then_some((offset, row_offset))
 }
 
 /// The latest viewport anchor that leaves no more than `maximum_lines` before
@@ -2215,6 +2254,7 @@ mod tests {
             requested_row_offset: 0,
             scroll_delta,
             anchor_selection,
+            keep_viewport: false,
             moved_backward: false,
             max_lines_above_selection: None,
             protocol: Protocol::default(),
@@ -2372,6 +2412,7 @@ mod tests {
             requested_row_offset: 0,
             scroll_delta: 0,
             anchor_selection: true,
+            keep_viewport: false,
             moved_backward: false,
             max_lines_above_selection: None,
             protocol: Protocol::default(),
@@ -2685,13 +2726,11 @@ mod tests {
 
         for line in &wrapped {
             for (index, span) in line.spans.iter().enumerate() {
-                let beside_border = [index.wrapping_sub(1), index + 1]
-                    .iter()
-                    .any(|&neighbour| {
-                        line.spans
-                            .get(neighbour)
-                            .is_some_and(|span| span.content.as_ref() == "│")
-                    });
+                let beside_border = [index.wrapping_sub(1), index + 1].iter().any(|&neighbour| {
+                    line.spans
+                        .get(neighbour)
+                        .is_some_and(|span| span.content.as_ref() == "│")
+                });
                 if beside_border && span.content.trim().is_empty() {
                     assert_eq!(span.style.bg, None, "padding in {line:?}");
                 }
