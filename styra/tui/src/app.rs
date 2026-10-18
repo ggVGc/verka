@@ -418,6 +418,9 @@ pub enum Request {
     /// The window is the operator's to configure, so the event loop — which
     /// holds the configuration — runs it rather than the key handler.
     OpenShell,
+    /// Launch a project command from the Workspace directory in a terminal.
+    /// The event loop runs it using the configured terminal opener.
+    ProjectAction(styra_protocol::ProjectAction),
     /// Open a host shell in the directory the interaction is working in, in a
     /// terminal window of its own. Like [`Request::OpenShell`] the window is
     /// configured, so the event loop runs it.

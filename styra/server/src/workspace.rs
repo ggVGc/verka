@@ -398,6 +398,9 @@ pub fn change_launch(
             meta.launch.mounts.retain(|candidate| candidate != &mount);
         }
         WorkspaceLaunchChange::Replace(launch) => meta.launch = launch,
+        WorkspaceLaunchChange::SetCommand { action, command } => {
+            *meta.launch.command_mut(action) = command.filter(|command| !command.trim().is_empty())
+        }
     }
     // `ignore_workspace` says "ignore the layer below me", and a Workspace
     // policy has no layer below it.
@@ -568,6 +571,8 @@ mod tests {
             // A Workspace policy has no layer below it to ignore, so this is
             // dropped rather than stored as a contradiction.
             ignore_workspace: true,
+            run: Some("cargo run --release".into()),
+            test: None,
         };
         let stored = change_launch(
             &store,
@@ -588,6 +593,29 @@ mod tests {
         .unwrap();
         assert!(!stored.grants_writable_workspace());
         assert_eq!(stored.templates, launch.templates, "the rest is untouched");
+
+        let stored = change_launch(
+            &store,
+            &workspace.id,
+            WorkspaceLaunchChange::SetCommand {
+                action: crate::protocol::ProjectAction::Test,
+                command: Some("cargo nextest run".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(stored.test.as_deref(), Some("cargo nextest run"));
+        assert_eq!(stored.run, launch.run, "the other action is untouched");
+        // A blank command is no command: the templates' default applies again.
+        let stored = change_launch(
+            &store,
+            &workspace.id,
+            WorkspaceLaunchChange::SetCommand {
+                action: crate::protocol::ProjectAction::Test,
+                command: Some("  ".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(stored.test, None);
 
         // The access bump the picker relies on rewrites `workspace.json`;
         // it is not allowed to drop the policy.

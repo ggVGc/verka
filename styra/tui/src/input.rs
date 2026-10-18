@@ -18,7 +18,7 @@ use crate::link_menu::LinkAction;
 use crate::preferences;
 use crate::session::{self, Attachment};
 use styra_diff::Outcome;
-use styra_protocol::{CompletionState, Contract, LogEntry};
+use styra_protocol::{CompletionState, Contract, LogEntry, ProjectAction};
 use styra_server::Client;
 
 /// Keys for the event list's `/` search prompt. It is modal — every printable
@@ -258,6 +258,32 @@ fn delete_path_part(path: &mut String) {
         path.truncate(1);
     } else {
         path.truncate(parent_end);
+    }
+}
+
+/// Keys for the driva view's command prompt. Modal, like the mount prompt:
+/// a shell command is made of the characters that are shortcuts elsewhere.
+pub fn handle_command_prompt_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => launch::cancel_command_prompt(app),
+        KeyCode::Enter => launch::confirm_command_prompt(app),
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some((_, text)) = app.launch.command_prompt.as_mut() {
+                let kept = text.trim_end().rfind(' ').map_or(0, |space| space + 1);
+                text.truncate(kept);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some((_, text)) = app.launch.command_prompt.as_mut() {
+                text.pop();
+            }
+        }
+        KeyCode::Char(ch) if !ch.is_control() => {
+            if let Some((_, text)) = app.launch.command_prompt.as_mut() {
+                text.push(ch);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -541,6 +567,8 @@ pub fn handle_list_key(
     }
     match app.view {
         View::Events => match key {
+            k if EVENTS_RUN.matches(k) => app.ask(Request::ProjectAction(ProjectAction::Run)),
+            k if EVENTS_TEST.matches(k) => app.ask(Request::ProjectAction(ProjectAction::Test)),
             k if GLOBAL_TAGS.matches(k) => edit_current_interaction_tags(app, client),
             k if EVENTS_LINKS.matches(k) => app.highlight_first_link(),
             k if EVENTS_SEARCH.matches(k) => app.search.open(),
@@ -765,6 +793,12 @@ pub fn handle_list_key(
                 }
             }
             k if DRIVA_ADD_MOUNT.matches(k) => launch::open_prompt(app),
+            k if DRIVA_RUN_COMMAND.matches(k) => {
+                launch::open_command_prompt(app, ProjectAction::Run)
+            }
+            k if DRIVA_TEST_COMMAND.matches(k) => {
+                launch::open_command_prompt(app, ProjectAction::Test)
+            }
             k if DRIVA_REMOVE_MOUNT.matches(k) => launch::remove_selected_mount(app),
             // Mirrors `D` in the launch picker: keep this policy as the one a
             // brand-new client starts from, rather than only this session's.

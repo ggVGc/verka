@@ -18,7 +18,7 @@ pub use types::{
     Direction, DrivaOptions, EditReport, EditReportFile, FileEditReport, FileLocation, Integration,
     IntegrationResult, InteractionActivity, InteractionActivityReason, InteractionEnd,
     InteractionQuery, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
-    LogLevel, ModelSummary, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
+    LogLevel, ModelSummary, MountOrigin, ProjectAction, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
     RebaseStatus, RecentMessage, SandboxProcess, SavedBranch, SessionOrigin, SessionSummary,
     TemplateSummary, TurnDiff, VariableOrigin, WorkspaceSummary, WorktreeCleanup, WorktreeSession,
     WorktreeSummary, WORKTREES_DIR,
@@ -174,6 +174,12 @@ pub enum WorkspaceLaunchChange {
     AddMounts(Vec<LaunchMount>),
     RemoveMount(LaunchMount),
     Replace(LaunchPolicy),
+    /// State the Workspace's command for a [`ProjectAction`]; `None` leaves it
+    /// to the templates' default.
+    SetCommand {
+        action: ProjectAction,
+        command: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +229,20 @@ pub struct SessionInfo {
 pub struct ShellInfo {
     pub tmux: PathBuf,
     pub socket: PathBuf,
+}
+
+/// A [`ProjectAction`] started in a live session's sandbox: the tmux session
+/// running it, beside the session's shell on the same server, for a client to
+/// attach a terminal to. Its window stays open after the command exits, until
+/// someone dismisses it, so a failure can still be read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectActionSession {
+    pub tmux: PathBuf,
+    pub socket: PathBuf,
+    /// The tmux session to attach to.
+    pub session: String,
+    /// The shell command it runs, as resolved.
+    pub command: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -660,6 +680,18 @@ pub enum Request {
     Shell {
         id: String,
     },
+    /// Start a project command in the live session's sandbox, replacing the
+    /// same action's previous run if it is still going.
+    StartProjectAction {
+        id: String,
+        action: ProjectAction,
+        /// The command to run instead of the one the session's own launch
+        /// policy, its Workspace, or its templates state — the client's own
+        /// interaction-level override, which it may have changed since the
+        /// launch.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+    },
     /// Parse the session's most recent agent message under the contract its
     /// last typed turn was sent with, and return the typed value.
     ///
@@ -822,6 +854,7 @@ pub enum Response {
     ProviderRaw(ProviderRaw),
     AudioTranscript(String),
     Shell(ShellInfo),
+    ProjectActionStarted(ProjectActionSession),
     Answer(Answer),
     QuotaLog(Vec<QuotaEvent>),
     InteractionActions(Vec<ActionRecord>),
@@ -1113,6 +1146,7 @@ mod tests {
                     writable: true,
                 }],
                 ignore_workspace: false,
+                ..LaunchPolicy::default()
             },
             create_worktree: false,
             checkout_from: None,
@@ -1234,6 +1268,7 @@ mod tests {
                 writable: false,
             }],
             ignore_workspace: false,
+            ..LaunchPolicy::default()
         };
         let request = Request::ChangeWorkspaceLaunch {
             workspace_id: "w-1".into(),

@@ -418,6 +418,15 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "start_project_action", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}},
+            %{name: "action", required: true, type: %{kind: :ref, name: "ProjectAction"}},
+            %{name: "command", required: false, type: %{kind: :optional, inner: %{kind: :string}}}
+          ]
+        }},
         %{name: "turn_answer", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -511,6 +520,7 @@ defmodule Styra.Protocol do
         %{name: "provider_raw", payload: %{kind: :newtype, type: %{kind: :ref, name: "ProviderRaw"}}},
         %{name: "audio_transcript", payload: %{kind: :newtype, type: %{kind: :string}}},
         %{name: "shell", payload: %{kind: :newtype, type: %{kind: :ref, name: "ShellInfo"}}},
+        %{name: "project_action_started", payload: %{kind: :newtype, type: %{kind: :ref, name: "ProjectActionSession"}}},
         %{name: "answer", payload: %{kind: :newtype, type: %{kind: :ref, name: "Answer"}}},
         %{name: "quota_log", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "QuotaEvent"}}}},
         %{name: "interaction_actions", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "ActionRecord"}}}},
@@ -710,7 +720,14 @@ defmodule Styra.Protocol do
         %{name: "set_templates", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :string}}}},
         %{name: "add_mounts", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :ref, name: "LaunchMount"}}}},
         %{name: "remove_mount", payload: %{kind: :newtype, type: %{kind: :ref, name: "LaunchMount"}}},
-        %{name: "replace", payload: %{kind: :newtype, type: %{kind: :ref, name: "LaunchPolicy"}}}
+        %{name: "replace", payload: %{kind: :newtype, type: %{kind: :ref, name: "LaunchPolicy"}}},
+        %{name: "set_command", payload: %{
+          kind: :struct,
+          fields: [
+            %{name: "action", required: true, type: %{kind: :ref, name: "ProjectAction"}},
+            %{name: "command", required: true, type: %{kind: :optional, inner: %{kind: :string}}}
+          ]
+        }}
       ]
     },
 
@@ -767,6 +784,24 @@ defmodule Styra.Protocol do
         %{name: "skip_done", required: false, type: %{kind: :boolean}},
         %{name: "skip_stopped", required: false, type: %{kind: :boolean}},
         %{name: "keep", required: false, type: %{kind: :list, item: %{kind: :string}}}
+      ]
+    },
+
+    # A project command an operator starts from a client against a live
+    # interaction, the way an IDE's run and test buttons work: it runs in the
+    # interaction's own sandbox, in a terminal of its own, beside the agent.
+    #
+    # What each one runs is a shell command resolved in layers, most specific
+    # first: the interaction's `LaunchPolicy`, the Workspace's, and finally the
+    # default of the Driva templates the interaction was launched with (the
+    # `rust` template's is `cargo run` and `cargo test`).
+    "ProjectAction" => %{
+      kind: :enum,
+      tagging: %{style: :external},
+      plain: true,
+      variants: [
+        %{name: "run", payload: %{kind: :unit}},
+        %{name: "test", payload: %{kind: :unit}}
       ]
     },
 
@@ -878,7 +913,9 @@ defmodule Styra.Protocol do
         %{name: "writable_workspace", required: false, type: %{kind: :optional, inner: %{kind: :boolean}}},
         %{name: "templates", required: false, type: %{kind: :list, item: %{kind: :string}}},
         %{name: "mounts", required: false, type: %{kind: :list, item: %{kind: :ref, name: "LaunchMount"}}},
-        %{name: "ignore_workspace", required: false, type: %{kind: :boolean}}
+        %{name: "ignore_workspace", required: false, type: %{kind: :boolean}},
+        %{name: "run", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "test", required: false, type: %{kind: :optional, inner: %{kind: :string}}}
       ]
     },
 
@@ -915,7 +952,9 @@ defmodule Styra.Protocol do
         %{name: "environment", required: false, type: %{kind: :list, item: %{kind: :ref, name: "AttributedVariable"}}},
         %{name: "interactive", required: false, type: %{kind: :boolean}},
         %{name: "new_session", required: false, type: %{kind: :boolean}},
-        %{name: "writable_mounts", required: false, type: %{kind: :ref, name: "WritableMountMode"}}
+        %{name: "writable_mounts", required: false, type: %{kind: :ref, name: "WritableMountMode"}},
+        %{name: "template_run", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "template_test", required: false, type: %{kind: :optional, inner: %{kind: :string}}}
       ]
     },
 
@@ -1106,6 +1145,20 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "tmux", required: true, type: %{kind: :string, path: true}},
         %{name: "socket", required: true, type: %{kind: :string, path: true}}
+      ]
+    },
+
+    # A `ProjectAction` started in a live session's sandbox: the tmux session
+    # running it, beside the session's shell on the same server, for a client to
+    # attach a terminal to. Its window stays open after the command exits, until
+    # someone dismisses it, so a failure can still be read.
+    "ProjectActionSession" => %{
+      kind: :struct,
+      fields: [
+        %{name: "tmux", required: true, type: %{kind: :string, path: true}},
+        %{name: "socket", required: true, type: %{kind: :string, path: true}},
+        %{name: "session", required: true, type: %{kind: :string}},
+        %{name: "command", required: true, type: %{kind: :string}}
       ]
     },
 
@@ -2057,6 +2110,7 @@ defmodule Styra.Protocol do
     "stored_session",
     "provider_raw",
     "shell",
+    "start_project_action",
     "turn_answer",
     "quota_log",
     "interaction_actions",
@@ -3356,6 +3410,21 @@ defmodule Styra.Protocol do
     def shell!(data), do: Styra.Protocol.build!("shell", data)
 
     @doc ~S"""
+    Start a project command in the live session's sandbox, replacing the
+    same action's previous run if it is still going.
+
+    Fields of `data`:
+
+      * `id     `  string
+      * `action `  ProjectAction
+      * `command`  string|null  (optional)
+    """
+    def start_project_action(data), do: Styra.Protocol.build("start_project_action", data)
+
+    @doc "`start_project_action/1`, raising on a request the server would refuse."
+    def start_project_action!(data), do: Styra.Protocol.build!("start_project_action", data)
+
+    @doc ~S"""
     Parse the session's most recent agent message under the contract its
     last typed turn was sent with, and return the typed value.
 
@@ -3526,6 +3595,7 @@ defmodule Styra.Protocol.Response do
     {:provider_raw, "provider_raw"},
     {:audio_transcript, "audio_transcript"},
     {:shell, "shell"},
+    {:project_action_started, "project_action_started"},
     {:answer, "answer"},
     {:quota_log, "quota_log"},
     {:interaction_actions, "interaction_actions"},
@@ -3648,6 +3718,8 @@ defmodule Styra.Protocol.Response do
   def audio_transcript, do: "audio_transcript"
 
   def shell, do: "shell"
+
+  def project_action_started, do: "project_action_started"
 
   def answer, do: "answer"
 
@@ -3819,7 +3891,8 @@ defmodule Styra.Protocol.WorkspaceLaunchChange do
     {:set_templates, "set_templates"},
     {:add_mounts, "add_mounts"},
     {:remove_mount, "remove_mount"},
-    {:replace, "replace"}
+    {:replace, "replace"},
+    {:set_command, "set_command"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -3855,6 +3928,12 @@ defmodule Styra.Protocol.WorkspaceLaunchChange do
   def remove_mount, do: "remove_mount"
 
   def replace, do: "replace"
+
+  @doc ~S"""
+  State the Workspace's command for a `ProjectAction`; `None` leaves it
+  to the templates' default.
+  """
+  def set_command, do: "set_command"
 end
 
 defmodule Styra.Protocol.CompletionState do
@@ -3928,6 +4007,52 @@ defmodule Styra.Protocol.CompletionState do
   to `Self::Active`, and it cannot be resumed.
   """
   def sealed, do: "sealed"
+end
+
+defmodule Styra.Protocol.ProjectAction do
+  @moduledoc ~S"""
+  Wire spellings of `ProjectAction`.
+
+  A project command an operator starts from a client against a live
+  interaction, the way an IDE's run and test buttons work: it runs in the
+  interaction's own sandbox, in a terminal of its own, beside the agent.
+
+  What each one runs is a shell command resolved in layers, most specific
+  first: the interaction's `LaunchPolicy`, the Workspace's, and finally the
+  default of the Driva templates the interaction was launched with (the
+  `rust` template's is `cargo run` and `cargo test`).
+  """
+
+  @spellings [
+    {:run, "run"},
+    {:test, "test"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  def run, do: "run"
+
+  def test, do: "test"
 end
 
 defmodule Styra.Protocol.Contract do

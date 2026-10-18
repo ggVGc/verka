@@ -96,6 +96,8 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_LINKS: [Key::ch('f')]
         => Action::EventsLinks;
     EVENTS_COPY: [Key::ch('y')] => Action::EventsCopy;
+    EVENTS_RUN: [Key::ch('E')] => Action::EventsRun;
+    EVENTS_TEST: [Key::ctrl('e')] => Action::EventsTest;
 }
 
 bindings! { READING = "Raw, messages, log, quota, processes, and transcript";
@@ -148,6 +150,8 @@ bindings! { DRIVA = "Details (Workspace, interaction, and launch policy)";
     DRIVA_TEMPLATES: [Key::ch('T')] => Action::DrivaTemplates;
     DRIVA_ADD_MOUNT: [Key::ch('m')] => Action::DrivaAddMount;
     DRIVA_GIT_CHECKOUT: [Key::ch('G')] => Action::DrivaGitCheckout;
+    DRIVA_RUN_COMMAND: [Key::ch('c')] => Action::DrivaRunCommand;
+    DRIVA_TEST_COMMAND: [Key::ch('C')] => Action::DrivaTestCommand;
     DRIVA_REMOVE_MOUNT: [Key::ch('x')] => Action::DrivaRemoveMount;
     DRIVA_IGNORE_WORKSPACE: [Key::ch('I')]
         => Action::DrivaIgnoreWorkspace;

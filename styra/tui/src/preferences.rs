@@ -185,6 +185,7 @@ mod tests {
                     writable: false,
                 }],
                 ignore_workspace: false,
+                ..LaunchPolicy::default()
             },
         };
 

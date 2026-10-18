@@ -408,6 +408,15 @@ M.types.Request = {
         { name = "id", required = true, type = { kind = "string" } },
       },
     } },
+    { name = "start_project_action", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+        { name = "action", required = true, type = { kind = "ref", name = "ProjectAction" } },
+        { name = "command", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+      },
+    } },
     { name = "turn_answer", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -501,6 +510,7 @@ M.types.Response = {
     { name = "provider_raw", payload = { kind = "newtype", type = { kind = "ref", name = "ProviderRaw" } } },
     { name = "audio_transcript", payload = { kind = "newtype", type = { kind = "string" } } },
     { name = "shell", payload = { kind = "newtype", type = { kind = "ref", name = "ShellInfo" } } },
+    { name = "project_action_started", payload = { kind = "newtype", type = { kind = "ref", name = "ProjectActionSession" } } },
     { name = "answer", payload = { kind = "newtype", type = { kind = "ref", name = "Answer" } } },
     { name = "quota_log", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "QuotaEvent" } } } },
     { name = "interaction_actions", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "ActionRecord" } } } },
@@ -701,6 +711,13 @@ M.types.WorkspaceLaunchChange = {
     { name = "add_mounts", payload = { kind = "newtype", type = { kind = "list", item = { kind = "ref", name = "LaunchMount" } } } },
     { name = "remove_mount", payload = { kind = "newtype", type = { kind = "ref", name = "LaunchMount" } } },
     { name = "replace", payload = { kind = "newtype", type = { kind = "ref", name = "LaunchPolicy" } } },
+    { name = "set_command", payload = {
+      kind = "struct",
+      fields = {
+        { name = "action", required = true, type = { kind = "ref", name = "ProjectAction" } },
+        { name = "command", required = true, type = { kind = "optional", inner = { kind = "string" } } },
+      },
+    } },
   },
 }
 
@@ -757,6 +774,24 @@ M.types.InteractionQuery = {
     { name = "skip_done", required = false, type = { kind = "boolean" } },
     { name = "skip_stopped", required = false, type = { kind = "boolean" } },
     { name = "keep", required = false, type = { kind = "list", item = { kind = "string" } } },
+  },
+}
+
+--- A project command an operator starts from a client against a live
+--- interaction, the way an IDE's run and test buttons work: it runs in the
+--- interaction's own sandbox, in a terminal of its own, beside the agent.
+---
+--- What each one runs is a shell command resolved in layers, most specific
+--- first: the interaction's `LaunchPolicy`, the Workspace's, and finally the
+--- default of the Driva templates the interaction was launched with (the
+--- `rust` template's is `cargo run` and `cargo test`).
+M.types.ProjectAction = {
+  kind = "enum",
+  tagging = { style = "external" },
+  plain = true,
+  variants = {
+    { name = "run", payload = { kind = "unit" } },
+    { name = "test", payload = { kind = "unit" } },
   },
 }
 
@@ -869,6 +904,8 @@ M.types.LaunchPolicy = {
     { name = "templates", required = false, type = { kind = "list", item = { kind = "string" } } },
     { name = "mounts", required = false, type = { kind = "list", item = { kind = "ref", name = "LaunchMount" } } },
     { name = "ignore_workspace", required = false, type = { kind = "boolean" } },
+    { name = "run", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "test", required = false, type = { kind = "optional", inner = { kind = "string" } } },
   },
 }
 
@@ -906,6 +943,8 @@ M.types.DrivaOptions = {
     { name = "interactive", required = false, type = { kind = "boolean" } },
     { name = "new_session", required = false, type = { kind = "boolean" } },
     { name = "writable_mounts", required = false, type = { kind = "ref", name = "WritableMountMode" } },
+    { name = "template_run", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "template_test", required = false, type = { kind = "optional", inner = { kind = "string" } } },
   },
 }
 
@@ -1096,6 +1135,20 @@ M.types.ShellInfo = {
   fields = {
     { name = "tmux", required = true, type = { kind = "string", path = true } },
     { name = "socket", required = true, type = { kind = "string", path = true } },
+  },
+}
+
+--- A `ProjectAction` started in a live session's sandbox: the tmux session
+--- running it, beside the session's shell on the same server, for a client to
+--- attach a terminal to. Its window stays open after the command exits, until
+--- someone dismisses it, so a failure can still be read.
+M.types.ProjectActionSession = {
+  kind = "struct",
+  fields = {
+    { name = "tmux", required = true, type = { kind = "string", path = true } },
+    { name = "socket", required = true, type = { kind = "string", path = true } },
+    { name = "session", required = true, type = { kind = "string" } },
+    { name = "command", required = true, type = { kind = "string" } },
   },
 }
 
@@ -1975,7 +2028,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "integrate_session", "generate_integration_message", "generate_edit_report", "edit_report", "session_integration_result", "rebase_session", "retarget_session", "session_branch_history", "restore_session_branch", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff", "shutdown" }
+M.enums.Request = { "integrate_session", "generate_integration_message", "generate_edit_report", "edit_report", "session_integration_result", "rebase_session", "retarget_session", "session_branch_history", "restore_session_branch", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "start_project_action", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   INTEGRATE_SESSION = "integrate_session",
@@ -2040,6 +2093,7 @@ M.Request = {
   STORED_SESSION = "stored_session",
   PROVIDER_RAW = "provider_raw",
   SHELL = "shell",
+  START_PROJECT_ACTION = "start_project_action",
   TURN_ANSWER = "turn_answer",
   QUOTA_LOG = "quota_log",
   INTERACTION_ACTIONS = "interaction_actions",
@@ -2049,7 +2103,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "rebase_started", "session_branch_history", "session_rebase_status", "integration_started", "integration_message", "edit_report", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff" }
+M.enums.Response = { "rebase_started", "session_branch_history", "session_rebase_status", "integration_started", "integration_message", "edit_report", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "project_action_started", "answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff" }
 --- Wire spellings of `Response`.
 M.Response = {
   REBASE_STARTED = "rebase_started",
@@ -2097,6 +2151,7 @@ M.Response = {
   PROVIDER_RAW = "provider_raw",
   AUDIO_TRANSCRIPT = "audio_transcript",
   SHELL = "shell",
+  PROJECT_ACTION_STARTED = "project_action_started",
   ANSWER = "answer",
   QUOTA_LOG = "quota_log",
   INTERACTION_ACTIONS = "interaction_actions",
@@ -2127,7 +2182,7 @@ M.Provider = {
   CLAUDE = "claude",
 }
 
-M.enums.WorkspaceLaunchChange = { "set_network", "set_writable_workspace", "set_templates", "add_mounts", "remove_mount", "replace" }
+M.enums.WorkspaceLaunchChange = { "set_network", "set_writable_workspace", "set_templates", "add_mounts", "remove_mount", "replace", "set_command" }
 --- Wire spellings of `WorkspaceLaunchChange`.
 M.WorkspaceLaunchChange = {
   SET_NETWORK = "set_network",
@@ -2136,6 +2191,7 @@ M.WorkspaceLaunchChange = {
   ADD_MOUNTS = "add_mounts",
   REMOVE_MOUNT = "remove_mount",
   REPLACE = "replace",
+  SET_COMMAND = "set_command",
 }
 
 M.enums.CompletionState = { "active", "completed", "abandoned", "sealed" }
@@ -2145,6 +2201,13 @@ M.CompletionState = {
   COMPLETED = "completed",
   ABANDONED = "abandoned",
   SEALED = "sealed",
+}
+
+M.enums.ProjectAction = { "run", "test" }
+--- Wire spellings of `ProjectAction`.
+M.ProjectAction = {
+  RUN = "run",
+  TEST = "test",
 }
 
 M.enums.Contract = { "text", "lines", "files", "json" }
@@ -3315,6 +3378,17 @@ end
 ---   id  string
 function M.request.shell(data)
   return M.build("shell", data)
+end
+
+--- Start a project command in the live session's sandbox, replacing the
+--- same action's previous run if it is still going.
+---
+--- Fields of `data`:
+---   id       string
+---   action   ProjectAction
+---   command  string|null  (optional)
+function M.request.start_project_action(data)
+  return M.build("start_project_action", data)
 end
 
 --- Parse the session's most recent agent message under the contract its

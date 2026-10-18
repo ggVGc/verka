@@ -394,9 +394,25 @@ pub struct DrivaOptions {
     /// overlay.
     #[serde(default)]
     pub writable_mounts: WritableMountMode,
+    /// The default command for the "run" [`ProjectAction`], from the selected
+    /// templates. Used when neither the interaction nor its Workspace states
+    /// one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_run: Option<String>,
+    /// The templates' default command for the "test" [`ProjectAction`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_test: Option<String>,
 }
 
 impl DrivaOptions {
+    /// The selected templates' default command for `action`, if any states one.
+    pub fn template_command(&self, action: ProjectAction) -> Option<&str> {
+        match action {
+            ProjectAction::Run => self.template_run.as_deref(),
+            ProjectAction::Test => self.template_test.as_deref(),
+        }
+    }
+
     /// The mounts alone, for the questions that only care about what the
     /// sandbox holds and not about who asked for it.
     pub fn plain_mounts(&self) -> Vec<Mount> {
@@ -607,6 +623,15 @@ pub struct LaunchPolicy {
     /// Meaningless on a Workspace's own policy, which has nothing below it.
     #[serde(alias = "standalone", skip_serializing_if = "is_false")]
     pub ignore_workspace: bool,
+    /// The shell command the "run" [`ProjectAction`] starts. `None` inherits —
+    /// from the Workspace's policy on an overlay, and from the selected
+    /// templates' own default on the Workspace's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    /// The shell command the "test" [`ProjectAction`] starts, inherited the
+    /// same way as `run`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test: Option<String>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -623,6 +648,24 @@ impl LaunchPolicy {
             && self.templates.is_empty()
             && self.mounts.is_empty()
             && !self.ignore_workspace
+            && self.run.is_none()
+            && self.test.is_none()
+    }
+
+    /// The command this layer states for `action`, if it states one.
+    pub fn command(&self, action: ProjectAction) -> Option<&str> {
+        match action {
+            ProjectAction::Run => self.run.as_deref(),
+            ProjectAction::Test => self.test.as_deref(),
+        }
+    }
+
+    /// The slot holding this layer's command for `action`.
+    pub fn command_mut(&mut self, action: ProjectAction) -> &mut Option<String> {
+        match action {
+            ProjectAction::Run => &mut self.run,
+            ProjectAction::Test => &mut self.test,
+        }
     }
 
     /// The single policy a launch runs under: the Workspace's `base` with one
@@ -653,6 +696,10 @@ impl LaunchPolicy {
             templates: base.templates.clone(),
             mounts: base.mounts.clone(),
             ignore_workspace: false,
+            // Unlike a sandbox grant a command never touches the sandbox, so
+            // stating one is all an overlay can do: it replaces the Workspace's.
+            run: overlay.run.clone().or_else(|| base.run.clone()),
+            test: overlay.test.clone().or_else(|| base.test.clone()),
         };
         for name in &overlay.templates {
             merged.templates.retain(|existing| existing != name);
@@ -694,6 +741,33 @@ impl LaunchPolicy {
 fn same_target(left: &LaunchMount, right: &LaunchMount) -> bool {
     left.destination.as_ref().unwrap_or(&left.source)
         == right.destination.as_ref().unwrap_or(&right.source)
+}
+
+/// A project command an operator starts from a client against a live
+/// interaction, the way an IDE's run and test buttons work: it runs in the
+/// interaction's own sandbox, in a terminal of its own, beside the agent.
+///
+/// What each one runs is a shell command resolved in layers, most specific
+/// first: the interaction's [`LaunchPolicy`], the Workspace's, and finally the
+/// default of the Driva templates the interaction was launched with (the
+/// `rust` template's is `cargo run` and `cargo test`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAction {
+    Run,
+    Test,
+}
+
+impl ProjectAction {
+    pub const ALL: [Self; 2] = [Self::Run, Self::Test];
+
+    /// The action's name, which is also its wire spelling.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::Test => "test",
+        }
+    }
 }
 
 /// A Driva execution template the server can offer, named and described, so a
@@ -1629,6 +1703,7 @@ mod tests {
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/corpus", None, false)],
             ignore_workspace: false,
+            ..LaunchPolicy::default()
         };
         let overlay = LaunchPolicy {
             templates: vec!["browser".into()],
@@ -1662,6 +1737,7 @@ mod tests {
             templates: vec!["rust".into(), "browser".into()],
             mounts: vec![mount("/srv/corpus", Some("/mnt/corpus"), false)],
             ignore_workspace: false,
+            ..LaunchPolicy::default()
         };
         let overlay = LaunchPolicy {
             network: Some(false),
@@ -1669,6 +1745,7 @@ mod tests {
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/other", Some("/mnt/corpus"), true)],
             ignore_workspace: false,
+            ..LaunchPolicy::default()
         };
 
         let merged = LaunchPolicy::merge(&base, &overlay);
@@ -1711,6 +1788,7 @@ mod tests {
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/corpus", None, false)],
             ignore_workspace: false,
+            ..LaunchPolicy::default()
         };
         let overlay = LaunchPolicy {
             templates: vec!["browser".into()],
@@ -1748,6 +1826,7 @@ mod tests {
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/corpus", None, false)],
             ignore_workspace: false,
+            ..LaunchPolicy::default()
         };
         assert!(LaunchPolicy::default().is_empty());
         assert_eq!(LaunchPolicy::merge(&base, &LaunchPolicy::default()), base);

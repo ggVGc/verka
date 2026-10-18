@@ -134,6 +134,12 @@ access = "write"
 # destination is omitted, the canonical source path is used inside too.
 ```
 
+A template may also name the shell commands that run and test the kind of
+project it is for, with `run = "..."` and `test = "..."`. Driva never runs them
+itself; they are defaults for a client's run and test actions (Styra's `E` and
+`Ctrl+E`). The built-in `rust` template offers `cargo run` and `cargo test`. Like
+other scalar settings, a later template's command wins.
+
 The library exposes the backend-independent `ExecutionRequest` and `Isolation`
 interface. `validate_request` resolves host sources and rejects invalid or
 conflicting grants; `execute` validates before dispatching to a backend.

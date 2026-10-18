@@ -22,6 +22,8 @@ pub(crate) enum Action {
     GlobalLauncher,
     GlobalShell,
     GlobalDirectory,
+    EventsRun,
+    EventsTest,
     GlobalDiff,
     GlobalDiffFullscreen,
     DiffConversation,
@@ -112,6 +114,8 @@ pub(crate) enum Action {
     DrivaTemplates,
     DrivaAddMount,
     DrivaGitCheckout,
+    DrivaRunCommand,
+    DrivaTestCommand,
     DrivaRemoveMount,
     DrivaIgnoreWorkspace,
     DrivaPromote,
@@ -319,6 +323,8 @@ impl Action {
             Self::GlobalLauncher => "choose agent, model and effort for an idle agent turn",
             Self::GlobalShell => "open session shell in a new terminal",
             Self::GlobalDirectory => "open a terminal in the interaction's working directory",
+            Self::EventsRun => "run the project from the Workspace directory in a new terminal",
+            Self::EventsTest => "test the project from the Workspace directory in a new terminal",
             Self::GlobalDiff => {
                 "diff the checkout in the preview pane, at the selected file or reference"
             }
@@ -427,6 +433,8 @@ impl Action {
             Self::DrivaTemplates => "choose Driva templates",
             Self::DrivaAddMount => "add a mount",
             Self::DrivaGitCheckout => "set this Workspace's Git checkout",
+            Self::DrivaRunCommand => "set the run command (E), in the focused layer",
+            Self::DrivaTestCommand => "set the test command (Ctrl+E), in the focused layer",
             Self::DrivaRemoveMount => "remove selected mount",
             Self::DrivaIgnoreWorkspace => "this interaction adds to / ignores the Workspace policy",
             Self::DrivaPromote => "move this interaction's policy up into the Workspace's",

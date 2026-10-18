@@ -173,6 +173,11 @@ pub struct TemplateConfig {
     pub new_session: Option<bool>,
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    /// The shell command that runs the project this template is for, offered
+    /// to a client as its "run" action. Not executed by Driva itself.
+    pub run: Option<String>,
+    /// The shell command that tests the project, offered as the "test" action.
+    pub test: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -276,6 +281,12 @@ impl TemplateConfig {
             self.new_session = later.new_session;
         }
         self.environment.extend(later.environment);
+        if later.run.is_some() {
+            self.run = later.run;
+        }
+        if later.test.is_some() {
+            self.test = later.test;
+        }
     }
 }
 

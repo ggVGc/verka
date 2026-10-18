@@ -90,6 +90,7 @@ fn message_paste_active(app: &App) -> bool {
         && app.insert.is_none()
         && app.git_repository_prompt.is_none()
         && app.launch.prompt.is_none()
+        && app.launch.command_prompt.is_none()
         && app.tag_picker.is_none()
         && !app.diff_focused()
         && !app.search.typing()
@@ -111,6 +112,7 @@ fn action_menu_available(app: &App) -> bool {
         && app.insert.is_none()
         && app.git_repository_prompt.is_none()
         && app.launch.prompt.is_none()
+        && app.launch.command_prompt.is_none()
         && app.tag_picker.is_none()
         && !app.diff_focused()
         && !app.search.typing()
@@ -1502,6 +1504,37 @@ fn run_rounds(
                     app.diff_interaction_focus = false;
                     app.view = View::CheckoutDiff;
                 }
+                Request::ProjectAction(action) => {
+                    let Some(directory) = app
+                        .workspace
+                        .host_path
+                        .clone()
+                        .or_else(|| app.workspace.root_or_current_directory())
+                    else {
+                        app.show_error("could not determine the Workspace directory");
+                        continue;
+                    };
+                    let result = crate::terminal::project_command(
+                        &directory,
+                        &app.launch.effective(),
+                        action,
+                    )
+                    .and_then(|command| {
+                        let program =
+                            crate::terminal::open_project_action(&directory, &command, config)?;
+                        Ok((program, command))
+                    });
+                    match result {
+                        Ok((program, command)) => app.show_action_message(format!(
+                            "{}: {command} — opened in {program}",
+                            action.name()
+                        )),
+                        Err(error) => app.show_error(format!(
+                            "could not {} the project: {error:#}",
+                            action.name()
+                        )),
+                    }
+                }
                 Request::GenerateEditReport => edit_reports.start(app, client),
                 Request::OpenShell => {
                     match crate::terminal::open_shell(client, &app.session_id, config) {
@@ -1874,6 +1907,7 @@ fn run_rounds(
             && app.retarget_prompt.is_none()
             && app.integration_prompt.is_none()
             && app.launch.prompt.is_none()
+            && app.launch.command_prompt.is_none()
             && !app.search.typing()
             // The diff owns the keyboard; `?` is not one of its keys.
             && !app.diff_focused()
@@ -2064,6 +2098,11 @@ fn run_rounds(
         // path such as `git@host:group/project` is input rather than keys.
         if app.git_repository_prompt.is_some() {
             input::handle_git_repository_prompt_key(app, client, key);
+            continue;
+        }
+        // The project command prompt owns typed characters too.
+        if app.launch.command_prompt.is_some() {
+            input::handle_command_prompt_key(app, key);
             continue;
         }
         // So is the Driva view's mount prompt: what is typed into it is part
@@ -2501,6 +2540,29 @@ mod tests {
         assert!(action_menu_available(&app));
         app.integration_prompt = Some(String::new());
         assert!(!action_menu_available(&app));
+    }
+
+    #[test]
+    fn project_command_prompts_own_spaces_and_question_marks() {
+        for action in styra_protocol::ProjectAction::ALL {
+            let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
+            app.view = View::Driva;
+            app.focus = Focus::List;
+            crate::launch::open_command_prompt(&mut app, action);
+            assert!(!action_menu_available(&app));
+            for character in "cargo run -- --help ?".chars() {
+                input::handle_command_prompt_key(
+                    &mut app,
+                    crossterm::event::KeyEvent::from(KeyCode::Char(character)),
+                );
+            }
+            assert_eq!(
+                app.launch.command_prompt.as_ref().unwrap().1,
+                "cargo run -- --help ?"
+            );
+            app.focus = Focus::Input;
+            assert!(!message_paste_active(&app));
+        }
     }
 
     #[test]

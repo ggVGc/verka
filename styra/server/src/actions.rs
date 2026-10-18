@@ -91,7 +91,8 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
         | Request::SetSessionCompleted { id, .. }
         | Request::CloseInteraction { id }
         | Request::LoadInteraction { id }
-        | Request::Shell { id } => Scope::Session(id),
+        | Request::Shell { id }
+        | Request::StartProjectAction { id, .. } => Scope::Session(id),
         Request::CleanWorktrees {
             workspace_id: Some(id),
         } => Scope::Workspace(id),

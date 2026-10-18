@@ -1,5 +1,7 @@
 description = "Rust/Cargo"
 path = ["~/.rustup", "~/.cargo/bin"]
+run = "cargo run"
+test = "cargo test"
 
 # The binaries on PATH are rustup shims: without these they look for their
 # toolchain under the sandbox's HOME and fail with "rustup could not choose a

@@ -65,12 +65,31 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
                 .completion
                 .as_ref()
                 .map(|completion| (completion.labels.as_slice(), completion.selected)),
+            command_prompt: app
+                .launch
+                .command_prompt
+                .as_ref()
+                .map(|(action, text)| (*action, text.as_str())),
             driva: app.launch.driva.as_ref(),
             planned: app.launch.planned,
             requested_scroll: app.launch.scroll.offset,
         },
         workspace,
         activity: DrivaActivity { status },
+        project_commands: styra_protocol::ProjectAction::ALL.map(|action| {
+            let directory = app
+                .workspace
+                .host_path
+                .clone()
+                .or_else(|| app.workspace.root_or_current_directory());
+            match directory {
+                Some(directory) => {
+                    crate::terminal::project_command(&directory, &app.launch.effective(), action)
+                        .unwrap_or_else(|error| error.to_string())
+                }
+                None => "Workspace directory unavailable".into(),
+            }
+        }),
         selection_name: app.selection.name(),
         session_id: &app.session_id,
         session_name: app.interactions.name(&app.session_id),

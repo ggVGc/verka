@@ -31,7 +31,8 @@ use ratatui::Frame;
 use std::path::{Path, PathBuf};
 use styra_protocol::{
     AttributedMount, BranchPoint, CheckoutState, DrivaOptions, FloorKind, LaunchMount,
-    LaunchPolicy, Mount, MountAccess, MountOrigin, VariableOrigin, WritableMountMode,
+    LaunchPolicy, Mount, MountAccess, MountOrigin, ProjectAction, VariableOrigin,
+    WritableMountMode,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -146,6 +147,8 @@ pub struct DrivaLaunch<'a> {
     pub prompt: Option<&'a str>,
     /// The paths `Tab` steps through in the prompt, and the one it is on.
     pub completion: Option<(&'a [String], Option<usize>)>,
+    /// The open prompt for a project action's command, and what is typed.
+    pub command_prompt: Option<(ProjectAction, &'a str)>,
     pub driva: Option<&'a DrivaOptions>,
     pub planned: bool,
     pub requested_scroll: u16,
@@ -181,6 +184,8 @@ pub struct DrivaView<'a> {
     pub launch: DrivaLaunch<'a>,
     pub workspace: DrivaWorkspace,
     pub activity: DrivaActivity,
+    /// Effective host commands, resolved independently of the agent's sandbox.
+    pub project_commands: [String; 2],
     pub selection_name: String,
     pub session_id: &'a str,
     pub session_name: Option<&'a str>,
@@ -234,6 +239,16 @@ pub fn render(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
     inner.y = inner.y.saturating_add(tabs.height);
     inner.height = inner.height.saturating_sub(tabs.height);
 
+    // Keep the commands visible even when metadata scrolls or the sandbox tab
+    // is selected. These actions run independently of the agent's lifecycle.
+    let commands = Rect {
+        height: inner.height.min(2),
+        ..inner
+    };
+    frame.render_widget(Paragraph::new(project_action_lines(app)), commands);
+    inner.y = inner.y.saturating_add(commands.height);
+    inner.height = inner.height.saturating_sub(commands.height);
+
     if app.tab == DetailsTab::Sandbox {
         return render_sandbox(frame, app, options, inner);
     }
@@ -244,6 +259,7 @@ pub fn render(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
     if !app.can_edit_launch() && !app.mounts_editable {
         let feedback = render_overview(frame, app, inner);
         render_prompt(frame, app, area);
+        render_command_prompt(frame, app, area);
         render_git_repository_prompt(frame, app, area);
         return feedback;
     }
@@ -278,6 +294,7 @@ pub fn render(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
     );
     frame.render_widget(Paragraph::new(hints), hint_area);
     render_prompt(frame, app, area);
+    render_command_prompt(frame, app, area);
     render_git_repository_prompt(frame, app, area);
     feedback
 }
@@ -1426,6 +1443,16 @@ fn pane_rows(app: &DrivaView, scope: LaunchScope) -> Vec<Line<'static>> {
             policy.templates.join(", ")
         },
     ));
+    // Commands never touch the sandbox, so like the mounts they stay editable
+    // on a live interaction.
+    for action in ProjectAction::ALL {
+        rows.push(setting_line(
+            mounts_style,
+            false,
+            action.name(),
+            &scope_command_label(app, scope, action),
+        ));
+    }
 
     if policy.mounts.is_empty() {
         rows.push(setting_line(
@@ -1446,6 +1473,58 @@ fn pane_rows(app: &DrivaView, scope: LaunchScope) -> Vec<Line<'static>> {
         ));
     }
     app.workspace.abbreviate(rows)
+}
+
+/// The current commands and the keys which launch them from the interaction view.
+fn project_action_lines(app: &DrivaView) -> Vec<Line<'static>> {
+    ProjectAction::ALL
+        .into_iter()
+        .map(|action| {
+            let label = match action {
+                ProjectAction::Run => "run (E)",
+                ProjectAction::Test => "test (Ctrl+E)",
+            };
+            detail_field_line(label, &effective_command_label(app, action))
+        })
+        .collect()
+}
+
+fn effective_command_label(app: &DrivaView, action: ProjectAction) -> String {
+    let index = match action {
+        ProjectAction::Run => 0,
+        ProjectAction::Test => 1,
+    };
+    app.project_commands[index].clone()
+}
+
+/// What one layer says about a project action's command, as that layer alone,
+/// with what an unstated answer falls through to.
+fn scope_command_label(app: &DrivaView, scope: LaunchScope, action: ProjectAction) -> String {
+    if let Some(command) = app.launch.policy(scope).command(action) {
+        return command.to_owned();
+    }
+    let below = match scope {
+        LaunchScope::Workspace => None,
+        LaunchScope::Interaction if app.launch.interaction.ignore_workspace => None,
+        LaunchScope::Interaction => app.launch.workspace.command(action),
+    };
+    let template = app
+        .launch
+        .driva
+        .and_then(|options| options.template_command(action));
+    match (below, template) {
+        (Some(command), _) => format!("not stated — inherits {command}"),
+        (None, Some(command)) => format!("not stated — templates run {command}"),
+        (None, None) => format!("none — {} sets one", command_key(action)),
+    }
+}
+
+/// The details view's key for editing `action`'s command.
+fn command_key(action: ProjectAction) -> &'static str {
+    match action {
+        ProjectAction::Run => "c",
+        ProjectAction::Test => "C",
+    }
 }
 
 /// What one layer says about networking, as that layer alone.
@@ -1575,6 +1654,10 @@ fn hint_lines(app: &DrivaView) -> Vec<Line<'static>> {
         sep(),
         key("x remove".into(), true),
         sep(),
+        key("c run".into(), true),
+        sep(),
+        key("C test".into(), true),
+        sep(),
         key("T templates".into(), !fixed),
         sep(),
         key("w network".into(), !fixed),
@@ -1654,6 +1737,25 @@ fn render_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
     if let Some((choices, selected)) = app.launch.completion {
         text_prompt::render_choices(frame, rect, area, choices, selected);
     }
+}
+
+/// The prompt editing a project action's command, for the focused layer.
+fn render_command_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
+    let Some((action, text)) = app.launch.command_prompt else {
+        return;
+    };
+    let prompt = TextPrompt::new(
+        format!(
+            " {} command · run by sh in the Workspace directory · Enter save · empty inherits · Esc cancel ",
+            action.name()
+        ),
+        text,
+    )
+    .bottom(Span::styled(
+        format!(" for {} ", app.launch.scope.phrase()),
+        Style::default().fg(theme::ACCENT),
+    ));
+    text_prompt::render(frame, &prompt, area);
 }
 
 /// The durable Workspace Git checkout, which is intentionally not an extra
@@ -1793,6 +1895,7 @@ mod tests {
                 interaction_cursor: 0,
                 prompt: None,
                 completion: None,
+                command_prompt: None,
                 driva: None,
                 planned: false,
                 requested_scroll: 0,
@@ -1819,6 +1922,12 @@ mod tests {
                     DrivaStatus::Idle
                 },
             },
+            project_commands: ProjectAction::ALL.map(|action| {
+                LaunchPolicy::merge(workspace, interaction)
+                    .command(action)
+                    .unwrap_or("not configured")
+                    .to_owned()
+            }),
             selection_name: "codex".into(),
             session_id: "s1",
             session_name: None,
@@ -1842,6 +1951,80 @@ mod tests {
             .flat_map(|line| line.spans.iter())
             .find(|span| span.content.contains(needle))
             .unwrap_or_else(|| panic!("no span reads {needle:?} in {lines:?}"))
+    }
+
+    #[test]
+    fn current_commands_stay_visible_on_both_options_tabs_without_a_sandbox() {
+        let policy = LaunchPolicy::default();
+        let mut app = view(false, &policy, &policy);
+        app.mounts_editable = false;
+        app.project_commands = [
+            "cargo run --release".into(),
+            "cargo test --workspace".into(),
+        ];
+        for tab in [DetailsTab::Details, DetailsTab::Sandbox] {
+            app.tab = tab;
+            let backend = ratatui::backend::TestBackend::new(90, 24);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| {
+                    render(frame, &app, frame.area());
+                })
+                .unwrap();
+            let screen: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(screen.contains("cargo run --release"));
+            assert!(screen.contains("cargo test --workspace"));
+        }
+    }
+
+    /// Each layer says what it states, or what an unstated command falls
+    /// through to; the summary names the layer the effective one comes from.
+    #[test]
+    fn a_project_command_names_the_layer_it_comes_from() {
+        let workspace = LaunchPolicy {
+            test: Some("cargo nextest run".into()),
+            ..LaunchPolicy::default()
+        };
+        let interaction = LaunchPolicy {
+            run: Some("cargo run --release".into()),
+            ..LaunchPolicy::default()
+        };
+        let options = DrivaOptions {
+            template_run: Some("cargo run".into()),
+            template_test: Some("cargo test".into()),
+            ..DrivaOptions::default()
+        };
+        let mut app = view(true, &workspace, &interaction);
+        app.launch.driva = Some(&options);
+
+        assert_eq!(
+            effective_command_label(&app, ProjectAction::Run),
+            "cargo run --release"
+        );
+        assert_eq!(
+            effective_command_label(&app, ProjectAction::Test),
+            "cargo nextest run"
+        );
+        assert_eq!(
+            scope_command_label(&app, LaunchScope::Interaction, ProjectAction::Test),
+            "not stated — inherits cargo nextest run"
+        );
+        assert_eq!(
+            scope_command_label(&app, LaunchScope::Workspace, ProjectAction::Run),
+            "not stated — templates run cargo run"
+        );
+
+        app.launch.driva = None;
+        assert_eq!(
+            scope_command_label(&app, LaunchScope::Workspace, ProjectAction::Run),
+            "none — c sets one"
+        );
     }
 
     /// On an idle interaction the keys that cannot act are still shown —

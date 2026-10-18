@@ -2,6 +2,7 @@
 //!
 //! Every call is a JSON exchange over a Unix domain socket with the daemon.
 
+use crate::protocol::{ProjectAction, ProjectActionSession};
 use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, EditReport, EditReportFile,
     Health, LaunchPolicy,
@@ -823,6 +824,24 @@ impl Client {
         }
     }
 
+    /// Start a project action in a live session's sandbox. `command` replaces
+    /// what the session's launch policy, Workspace, and templates would run.
+    pub fn start_project_action(
+        &self,
+        id: &str,
+        action: ProjectAction,
+        command: Option<String>,
+    ) -> Result<ProjectActionSession> {
+        match self.request(Request::StartProjectAction {
+            id: id.to_owned(),
+            action,
+            command,
+        })? {
+            Response::ProjectActionStarted(value) => Ok(value),
+            other => unexpected("project_action_started", other),
+        }
+    }
+
     /// Ask the server to shut down.
     pub fn shutdown(&self) -> Result<()> {
         match &self.transport {
@@ -969,6 +988,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::StoredSession { .. } => "stored_session",
         Request::ProviderRaw { .. } => "provider_raw",
         Request::Shell { .. } => "shell",
+        Request::StartProjectAction { .. } => "start_project_action",
         Request::TurnAnswer { .. } => "turn_answer",
         Request::QuotaLog => "quota_log",
         Request::InteractionActions { .. } => "interaction_actions",

@@ -25,7 +25,9 @@ use crate::activity::Status;
 use crate::app::{App, Request};
 use crate::mount;
 use styra_protocol::agent::Selection;
-use styra_protocol::{DrivaOptions, LaunchMount, LaunchPolicy, WorkspaceLaunchChange};
+use styra_protocol::{
+    DrivaOptions, LaunchMount, LaunchPolicy, ProjectAction, WorkspaceLaunchChange,
+};
 
 /// Which of the two policy layers the Driva view's keys are editing.
 ///
@@ -88,6 +90,9 @@ pub struct Launch {
     /// The paths `Tab` is stepping through in that prompt, until another key
     /// settles on one.
     pub completion: Option<mount::Completion>,
+    /// The open prompt editing a project action's command in the focused
+    /// layer, and what has been typed into it.
+    pub command_prompt: Option<(ProjectAction, String)>,
     /// The Driva policy of the live session, or — before one has launched — the
     /// policy the next interaction would be launched under. `None` until either
     /// is known, as on a replayed journal, which has no sandbox to describe and
@@ -498,6 +503,53 @@ pub fn toggle_ignore_workspace(app: &mut App) {
     });
 }
 
+/// Open the prompt that edits `action`'s command in the focused layer,
+/// starting from what that layer states now.
+///
+/// Unlike the rest of the policy this is editable on a live interaction: a
+/// command changes nothing about the sandbox, and is resolved when it is run.
+pub fn open_command_prompt(app: &mut App, action: ProjectAction) {
+    if app.workspace_launch_pending > 0 {
+        return app.show_warning("the Workspace launch policy is still saving");
+    }
+    let current = app
+        .launch
+        .policy(app.launch.scope)
+        .command(action)
+        .unwrap_or_default()
+        .to_owned();
+    app.launch.command_prompt = Some((action, current));
+}
+
+pub fn cancel_command_prompt(app: &mut App) {
+    app.launch.command_prompt = None;
+}
+
+/// Store what the command prompt holds in the focused layer. Blank clears the
+/// layer's command, so it inherits again.
+pub fn confirm_command_prompt(app: &mut App) {
+    let Some((action, text)) = app.launch.command_prompt.take() else {
+        return;
+    };
+    let command = Some(text.trim().to_owned()).filter(|command| !command.is_empty());
+    let scope = app.launch.scope;
+    let message = match &command {
+        Some(command) => format!("{} runs {command} for {}", action.name(), scope.subject()),
+        None => format!(
+            "{} inherits its command again for {}",
+            action.name(),
+            scope.subject()
+        ),
+    };
+    match scope {
+        LaunchScope::Workspace => {
+            workspace_change(app, WorkspaceLaunchChange::SetCommand { action, command })
+        }
+        LaunchScope::Interaction => *app.launch.interaction.command_mut(action) = command,
+    }
+    app.show_action_message(message);
+}
+
 /// Adopt the templates the picker came back with.
 #[cfg(test)]
 pub fn set_templates(app: &mut App, chosen: Vec<String>) {
@@ -785,6 +837,7 @@ mod tests {
                 writable: false,
             }],
             ignore_workspace: false,
+            ..LaunchPolicy::default()
         }
     }
 
@@ -944,6 +997,52 @@ mod tests {
         toggle_scope(&mut app);
         assert_eq!(app.launch.scope, LaunchScope::Interaction);
         assert!(app.notices.is_empty());
+    }
+
+    /// Commands are editable on a live interaction, since they change nothing
+    /// about its sandbox: this interaction's is kept by the client, the
+    /// Workspace's goes to the server, and a blank one inherits again.
+    #[test]
+    fn a_project_command_is_set_in_the_focused_layer_even_while_running() {
+        let type_command = |app: &mut App, action, text: &str| {
+            open_command_prompt(app, action);
+            app.launch.command_prompt.as_mut().unwrap().1 = text.into();
+            confirm_command_prompt(app);
+            assert!(app.launch.command_prompt.is_none());
+        };
+        let mut app = running();
+
+        type_command(&mut app, ProjectAction::Run, " cargo run --bin styra ");
+        assert_eq!(
+            app.launch.interaction.run.as_deref(),
+            Some("cargo run --bin styra")
+        );
+        assert_eq!(app.take_request(), None);
+
+        // Reopening starts from what the layer states.
+        open_command_prompt(&mut app, ProjectAction::Run);
+        assert_eq!(
+            app.launch.command_prompt,
+            Some((ProjectAction::Run, "cargo run --bin styra".into()))
+        );
+        cancel_command_prompt(&mut app);
+
+        type_command(&mut app, ProjectAction::Run, "  ");
+        assert_eq!(app.launch.interaction.run, None);
+
+        toggle_scope(&mut app);
+        type_command(&mut app, ProjectAction::Test, "cargo nextest run");
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ChangeWorkspaceLaunch {
+                change: WorkspaceLaunchChange::SetCommand {
+                    action: ProjectAction::Test,
+                    command: Some("cargo nextest run".into()),
+                },
+                clear_interaction: false,
+            })
+        );
+        assert_eq!(app.launch.interaction.test, None);
     }
 
     /// A mount the Workspace already grants identically needs no overlay, and

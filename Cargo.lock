@@ -3322,6 +3322,7 @@ dependencies = [
  "clap",
  "cpal",
  "crossterm 0.28.1",
+ "driva",
  "hound",
  "libc",
  "protocol",

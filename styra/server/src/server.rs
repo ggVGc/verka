@@ -1,5 +1,6 @@
 //! Styra's Unix-socket server and server-owned interaction manager.
 
+use crate::protocol::{ProjectAction, ProjectActionSession};
 use crate::actions::{ActionLog, Scope};
 use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::interaction::{
@@ -3700,6 +3701,87 @@ impl ServerState {
         }
     }
 
+    /// Start `action` in a live interaction's sandbox, as a tmux session of its
+    /// own on the same server as its shell, and say how to attach to it.
+    ///
+    /// The command is resolved now rather than at launch: unlike the sandbox
+    /// policy it changes nothing about the sandbox, so the Workspace's current
+    /// answer is the one that counts. Only the templates' default is the
+    /// launch's, since those templates are what the sandbox was built from.
+    ///
+    /// A previous run of the same action is killed first: running again is
+    /// what an operator presses the key for once they have changed something,
+    /// and two copies of a server fighting over one port helps nobody.
+    fn start_project_action(
+        &self,
+        id: &str,
+        action: ProjectAction,
+        command: Option<String>,
+    ) -> Result<ProjectActionSession> {
+        let interaction = self.interaction(id)?;
+        let workspace = crate::workspace::get(&self.inner.store_root, &interaction.workspace_id)?;
+        let launch = LaunchPolicy::merge(&workspace.launch, &interaction.launch);
+        let command = project_command(action, command.as_deref(), &launch, &interaction.driva)
+            .with_context(|| {
+                format!(
+                    "no {} command is set for this interaction; state one in the details view, \
+                     or launch with a template that has one",
+                    action.name()
+                )
+            })?;
+        let shell = self.shell(id)?;
+        let session = action.name();
+        // The tmux client is the host's, but every variable it carries would be
+        // copied into the new session's environment by tmux's
+        // `update-environment`; without them the command sees the sandbox's
+        // own environment, exactly as the session shell does.
+        let tmux = |args: &[&std::ffi::OsStr]| {
+            let mut tmux = std::process::Command::new(&shell.tmux);
+            tmux.env_clear()
+                .arg("-S")
+                .arg(&shell.socket)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped());
+            tmux
+        };
+        // `=` matches the name exactly, where tmux would otherwise take any
+        // session it starts. Failing just means there was no previous run.
+        let target = format!("={session}");
+        tmux(&["kill-session".as_ref(), "-t".as_ref(), target.as_ref()])
+            .output()
+            .context("running tmux to replace the previous run")?;
+        let output = tmux(&[
+            "new-session".as_ref(),
+            "-d".as_ref(),
+            "-s".as_ref(),
+            session.as_ref(),
+            "-c".as_ref(),
+            interaction.driva.working_directory.as_os_str(),
+            "/bin/sh".as_ref(),
+            "-c".as_ref(),
+            PROJECT_ACTION_SCRIPT.as_ref(),
+            format!("styra-{session}").as_ref(),
+            command.as_ref(),
+        ])
+        .output()
+        .context("running tmux to start the project action")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "tmux could not start the {} command: {}",
+                action.name(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(ProjectActionSession {
+            tmux: shell.tmux,
+            socket: shell.socket,
+            session: session.to_owned(),
+            command,
+        })
+    }
+
     /// Parse a session's most recent agent message as a typed answer.
     ///
     /// A live interaction is answered from the updates it has already
@@ -4492,6 +4574,13 @@ impl ServerState {
                 }))
             }
             Request::Shell { id } => Ok(Response::Shell(self.shell(&id)?)),
+            Request::StartProjectAction {
+                id,
+                action,
+                command,
+            } => Ok(Response::ProjectActionStarted(
+                self.start_project_action(&id, action, command)?,
+            )),
             Request::TurnAnswer { id, contract } => {
                 Ok(Response::Answer(self.turn_answer(&id, contract)?))
             }
@@ -4922,6 +5011,38 @@ fn claude_project_directory_name(cwd: &Path) -> String {
         .collect()
 }
 
+/// What a project action's tmux session runs: the command, under a shell of
+/// its own, followed by its exit status and a pause. Without the pause a quick
+/// command — a failing build, say — would take its window with it before
+/// anyone could read why. `$1` is the command, passed as an argument rather
+/// than spliced in, so nothing in it needs quoting.
+const PROJECT_ACTION_SCRIPT: &str = r#"printf '$ %s\n\n' "$1"
+/bin/sh -c "$1"
+status=$?
+printf '\n[exited with status %s — press Enter to close]' "$status"
+read -r _"#;
+
+/// The command `action` runs: the client's own override, else what the merged
+/// launch policy states, else the templates' default. Blank answers count as
+/// unstated, so clearing a layer's command falls through to the next.
+fn project_command(
+    action: ProjectAction,
+    requested: Option<&str>,
+    launch: &LaunchPolicy,
+    driva: &DrivaOptions,
+) -> Option<String> {
+    [
+        requested,
+        launch.command(action),
+        driva.template_command(action),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|command| !command.is_empty())
+    .map(str::to_owned)
+}
+
 /// Resolve and merge the named Driva templates against a `driva.toml` in the
 /// operator's workspace, if any (falling back to Driva's built-ins), in the
 /// order given: later names take precedence on conflicting settings, mirroring
@@ -5115,6 +5236,55 @@ fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The interaction's own override wins, then the merged launch policy, then
+    /// the templates' default; a blank command at any layer is no answer.
+    #[test]
+    fn a_project_command_resolves_from_the_most_specific_layer_that_states_one() {
+        let driva = DrivaOptions {
+            template_run: Some("cargo run".into()),
+            template_test: Some("cargo test".into()),
+            ..DrivaOptions::default()
+        };
+        let workspace = LaunchPolicy {
+            run: Some("cargo run --release".into()),
+            ..LaunchPolicy::default()
+        };
+        let resolve = |requested: Option<&str>, launch: &LaunchPolicy, action| {
+            project_command(action, requested, launch, &driva)
+        };
+
+        assert_eq!(
+            resolve(None, &workspace, ProjectAction::Run).as_deref(),
+            Some("cargo run --release")
+        );
+        assert_eq!(
+            resolve(None, &workspace, ProjectAction::Test).as_deref(),
+            Some("cargo test")
+        );
+        assert_eq!(
+            resolve(
+                Some("  cargo run -- --help "),
+                &workspace,
+                ProjectAction::Run
+            )
+            .as_deref(),
+            Some("cargo run -- --help")
+        );
+        assert_eq!(
+            resolve(Some(" "), &LaunchPolicy::default(), ProjectAction::Run).as_deref(),
+            Some("cargo run")
+        );
+        assert_eq!(
+            project_command(
+                ProjectAction::Test,
+                None,
+                &LaunchPolicy::default(),
+                &DrivaOptions::default()
+            ),
+            None
+        );
+    }
     use crate::client::Client;
     use crate::git::Git as _;
     use crate::protocol::{AttributedMount, MountOrigin};
@@ -7958,6 +8128,7 @@ mod tests {
                 writable: false,
             }],
             ignore_workspace: false,
+            ..LaunchPolicy::default()
         };
         let updated = match state
             .handle(Request::ChangeWorkspaceLaunch {

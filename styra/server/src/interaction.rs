@@ -103,11 +103,15 @@ pub struct ResolvedTemplate {
     pub network: bool,
     /// Static Driva capabilities this template's command requires.
     pub capabilities: Vec<driva::Capability>,
+    /// The templates' default commands for the run and test project actions.
+    pub run: Option<String>,
+    pub test: Option<String>,
 }
 
 impl ResolvedTemplate {
     pub fn resolve(template: driva::TemplateConfig) -> Result<Self> {
         let capabilities = template.capabilities.clone();
+        let (run, test) = (template.run.clone(), template.test.clone());
         let mut mounts: Vec<Mount> = template
             .mounts
             .into_iter()
@@ -128,6 +132,8 @@ impl ResolvedTemplate {
             environment,
             network: template.network.unwrap_or(false),
             capabilities,
+            run,
+            test,
         })
     }
 }
@@ -173,6 +179,14 @@ pub fn capture_driva_options(
         interactive: request.interactive,
         new_session: request.new_session,
         writable_mounts: request.writable_mounts,
+        template_run: spec
+            .template
+            .as_ref()
+            .and_then(|template| template.run.clone()),
+        template_test: spec
+            .template
+            .as_ref()
+            .and_then(|template| template.test.clone()),
     })
 }
 
@@ -1963,6 +1977,8 @@ mod tests {
             environment: BTreeMap::from([(OsString::from("TERM"), OsString::from("dumb"))]),
             network: false,
             capabilities: Vec::new(),
+            run: None,
+            test: None,
         });
 
         let options = capture(&spec).unwrap();
@@ -2007,6 +2023,8 @@ mod tests {
             environment: BTreeMap::from([(OsString::from("PAGER"), OsString::from("cat"))]),
             network: false,
             capabilities: Vec::new(),
+            run: None,
+            test: None,
         });
 
         let options = capture(&spec).unwrap();

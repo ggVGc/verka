@@ -140,6 +140,7 @@ where `Space` keeps its own link menu.
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
+| `E` / `Ctrl+E` (main interaction view) | run / test the project from the Workspace directory, in the configured terminal; see "Run and test actions" |
 | `a` / `A` / `Ctrl+V` | live interactions / sessions in this Workspace / Workspaces |
 | `v` | choose a Workspace with live interactions (typed at) and open the live list at its first; over the grid, the grid narrows to the highlighted Workspace, Enter keeps it and Esc restores the grid; `Ctrl-N` starts a new interaction in the highlighted Workspace |
 | `V` | as `v`, but every Workspace with an interaction the live list shows under its completion, stopped and tag filters; always opens the live list |
@@ -469,6 +470,7 @@ switches focused layer; `j`/`k` selects a mount.
 | `U` | promote this interaction's additions into Workspace policy |
 | `D` | save this interaction's additions as new-client defaults |
 | `G` | set the Workspace Git checkout; submit an empty path to clear it |
+| `c` / `C` | set the run / test command; submit an empty command to inherit again |
 
 In the mount prompt, `Ctrl+W` removes the final path component. `Tab` and
 `Shift+Tab` step down and up through a list of the paths under the one typed
@@ -484,6 +486,23 @@ live sandboxes are immutable, with one exception: while the interaction is idle,
 new mounts, resuming the same conversation. The rest of the policy stays fixed
 until the interaction is stopped (`S`); its settings and keys stay on screen,
 dimmed, to show they are disabled rather than gone.
+
+## Run and test actions
+
+In the main interaction view, `E` (execute) runs the project and `Ctrl+E` tests
+it. The configured command runs with `sh` on the host from the Workspace
+directory, in the configured terminal. No running interaction is required.
+When the command exits, the window shows its exit status and stays open until
+you press `Enter`. Each invocation opens a new terminal.
+
+The command comes from the first layer that states one: this interaction's own
+setting, then the Workspace policy, then the default of the selected Driva templates. The `rust` template's defaults are `cargo run`
+and `cargo test`, and a project's `driva.toml` template can name its own with
+`run = "..."` and `test = "..."`. Set the command for the focused layer in the
+details view with `c` (run) and `C` (test). The details summary shows the
+command that applies and which layer it comes from. Commands do not change the
+sandbox, so you can edit them while an interaction is live, and the next run
+uses the new command.
 
 ## Git checkout association and linked worktrees
 
