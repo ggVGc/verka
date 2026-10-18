@@ -1236,7 +1236,7 @@ fn run_rounds(
                 Request::NewSession => return Ok(RunOutcome::NewSession),
                 // Naming the branch asks the model for a topic and the checkout
                 // copies the repository out, which together take long enough to
-                // look like a hang. `W` and `Ctrl-Enter` differ only in what the
+                // look like a hang. `Ctrl+W` and `Ctrl-Enter` differ only in what the
                 // checkout is made for: a Session already running, which has to be
                 // restarted into it — carrying the message, if `Ctrl-Enter` sent
                 // one — or one that the first prompt launches there.

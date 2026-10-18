@@ -209,10 +209,15 @@ mod tests {
     #[test]
     fn a_selected_message_previews_the_diff_of_its_turn() {
         let app = app_with_two_turns();
-        let screen = test_support::screen_sized(&app, 120, 30);
-        let (preview_x, _) = screen.find("turn diff · C: command");
-        let (diff_x, _) = screen.find("delay * 2");
-        assert!(diff_x > preview_x, "the diff is in the preview pane");
+        let (width, height) = (120, 30);
+        let screen = test_support::screen_sized(&app, width, height);
+        let (_, preview_y) = screen.find("turn diff · C: command");
+        let (diff_x, diff_y) = screen.find("delay * 2");
+        assert!(
+            (width / 2 + 1..width - 1).contains(&diff_x)
+                && (preview_y + 1..height - 2).contains(&diff_y),
+            "the diff is inside the preview pane"
+        );
         assert!(screen.all().contains("src/retry.rs"));
         // The next message's work belongs to its own turn.
         assert!(!screen.all().contains("new_name"));
@@ -394,12 +399,14 @@ mod tests {
         ));
         app.select_first();
         app.preview.show();
-        let screen = test_support::screen_sized(&app, 120, 30);
-        let (preview_x, _) = screen.find("turn diff · C: command");
-        let (path_x, _) = screen.find("ws:src/retry.rs");
+        let (width, height) = (120, 30);
+        let screen = test_support::screen_sized(&app, width, height);
+        let (_, preview_y) = screen.find("turn diff · C: command");
+        let (path_x, path_y) = screen.find("ws:src/retry.rs");
         assert!(
-            path_x > preview_x,
-            "the shortened path is in the preview pane"
+            (width / 2 + 1..width - 1).contains(&path_x)
+                && (preview_y + 1..height - 2).contains(&path_y),
+            "the shortened path is inside the preview pane"
         );
     }
 

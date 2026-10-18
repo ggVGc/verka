@@ -405,7 +405,7 @@ pub enum Request {
     NextWorkingInteraction,
     /// Return to the blank start screen without stopping the current interaction.
     NewSession,
-    /// Give a Session a Git branch and linked workspace of its own: `W` asks
+    /// Give a Session a Git branch and linked workspace of its own: `Ctrl+W` asks
     /// it for the Session being viewed, and `Ctrl-Enter` for the one its
     /// `message` is about to start or continue. Either way the checkout is
     /// made before the agent runs in it, so both wait behind the same notice.

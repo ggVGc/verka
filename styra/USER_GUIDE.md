@@ -128,9 +128,9 @@ where `Space` keeps its own link menu.
 
 | Key | Use |
 | --- | --- |
-| `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send it in a new Git workspace and branch (later in a Session, as `W` does, then sends; refused while the agent is mid-turn) / insert editor newline |
+| `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send it in a new Git workspace and branch (later in a Session, as `Ctrl+W` does, then sends; refused while the agent is mid-turn) / insert editor newline |
 | `Ctrl+R` (message editor) | start/stop recording and insert its transcript |
-| `W` (existing session) | create and associate a linked workspace and branch, then restart the interaction in it; reports when one already exists |
+| `Ctrl+W` (existing session) | create and associate a linked workspace and branch, then restart the interaction in it; reports when one already exists |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `Ctrl+N` (message editor) | add another box to the message after the current one and type in it; the boxes are sent together, each as its own paragraph |
 | `Esc` (several boxes) | choose between the boxes: `j`/`k` move, `Enter`/`i` type in the chosen box, `d` deletes it, `Ctrl+N` adds one after it, `Esc` again leaves the editor with the boxes kept |
@@ -256,7 +256,7 @@ interaction's stream logs the commit's id and subject, or why it could not be
 made — a missing Git identity or a refusing hook, say. A clean checkout, or a
 workspace that is not in a repository, commits nothing. `Ctrl+G` turns it on
 or off for the interaction you are attached to. The Session remembers your
-choice, which overrides the default from then on — including after `W` moves
+choice, which overrides the default from then on — including after `Ctrl+W` moves
 the Session into a worktree. The footer shows `^G auto-commit` while it is on.
 Whatever `git status` sees is committed, so if you turn it on in a checkout you
 edit yourself, your changes are committed alongside the agent's.
@@ -514,7 +514,7 @@ These are related but independent Workspace features:
 | Feature | How it is enabled | What a future interaction receives |
 | --- | --- | --- |
 | **Git checkout association** | When the TUI creates a Workspace, it finds the nearest enclosing checkout and records its canonical root automatically. | The checkout is mounted read-only at its host path; its Git metadata/common directory is writable, so Git can operate on that checkout. |
-| **Linked worktrees** | Send any message with `Ctrl+Enter` (or press `W`). | A branch and linked checkout of its own, mounted writable at `/tmp/styra/workspace`, plus the repository's shared Git metadata. |
+| **Linked worktrees** | Send any message with `Ctrl+Enter` (or press `Ctrl+W`). | A branch and linked checkout of its own, mounted writable at `/tmp/styra/workspace`, plus the repository's shared Git metadata. |
 
 The automatic repository association is visible in Workspace metadata. Press `d`, then
 `G`, to replace it; enter any path inside the checkout and Styra stores its
@@ -658,7 +658,7 @@ the Workspace directory — so a second agent, or a fresh conversation about the
 same half-finished change, needs no new branch and no copying. The blank screen
 stands in the checkout and the footer names it. Send that first prompt with
 `Ctrl+Enter` instead to say you wanted a branch of its own after all, and with
-`W` afterwards to give a Session that started in the Workspace directory a
+`Ctrl+W` afterwards to give a Session that started in the Workspace directory a
 checkout later. Nothing is duplicated: both Sessions write to one working tree,
 which is the point when they are meant to collaborate and worth knowing when
 they are not.

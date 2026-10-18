@@ -108,7 +108,7 @@ a malformed complete record is reported as an error.
 
 Linked worktrees are off by default. Send a message with `Ctrl+Enter` to
 create the Session's branch and worktree as part of that submission. On a
-first prompt the Session launches there; later on, or with `W` when there is
+first prompt the Session launches there; later on, or with `Ctrl+W` when there is
 no message to send, the existing Session gets its linked worktree and branch
 and the interaction is restarted into that checkout — carrying the message,
 if there is one — so it is where the agent works and what the footer names

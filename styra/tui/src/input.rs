@@ -1177,10 +1177,10 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
 /// Ctrl-Enter is a distinct submission: it creates the Session's branch and
 /// linked workspace as it sends the message, with no standing option to leak
 /// into a later Session. On a first prompt the Session launches there; on a
-/// later message the running interaction is moved there first, as `W` does.
+/// later message the running interaction is moved there first, as `Ctrl+W` does.
 ///
 /// Such a send is handed to the event loop rather than made here, the same
-/// request `W` makes for a Session that already exists: branching blocks long
+/// request `Ctrl+W` makes for a Session that already exists: branching blocks long
 /// enough to need the notice only the loop can paint.
 fn creates_worktree(app: &App, key: KeyEvent) -> bool {
     EDITOR_SEND_IN_BRANCH.matches(key)
@@ -2195,7 +2195,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// `Ctrl-Enter` asks for the same thing `W` does, carrying the prompt the
+    /// `Ctrl-Enter` asks for the same thing `Ctrl+W` does, carrying the prompt the
     /// new checkout is for, so both wait behind the event loop's one notice.
     #[test]
     fn control_enter_hands_the_first_prompt_to_the_worktree_request() {
@@ -2285,11 +2285,11 @@ mod tests {
     }
 
     #[test]
-    fn uppercase_w_requests_a_worktree_for_an_existing_session() {
+    fn control_w_requests_a_worktree_for_an_existing_session() {
         let root = tree("session-worktree");
         let mut app = app(&root);
         app.enter_list();
-        // `W` only means anything for a session that exists; the guard on the
+        // `Ctrl+W` only means anything for a session that exists; the guard on the
         // key reads the id the list is sitting on.
         app.session_id = "session-1".into();
         let client = Client::new(root.join("missing.sock"));
@@ -2300,7 +2300,7 @@ mod tests {
             &mut app,
             &client,
             &mut live,
-            KeyEvent::new(KeyCode::Char('W'), KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
             &mut pending_fold,
             &root.join("preferences.toml"),
         );
