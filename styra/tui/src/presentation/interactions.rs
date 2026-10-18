@@ -119,6 +119,12 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
                 .checkout
                 .as_ref()
                 .map(|checkout| checkout.branch.as_deref().unwrap_or("detached head")),
+            expected_branch: interaction.expected_branch.as_deref().filter(|expected| {
+                interaction
+                    .checkout
+                    .as_ref()
+                    .is_some_and(|checkout| checkout.branch.as_deref() != Some(*expected))
+            }),
             status,
             selected: interaction.id == cursor,
             loading: loading == Some(interaction.id.as_str()),

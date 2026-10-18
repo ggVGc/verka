@@ -78,6 +78,8 @@ pub enum InteractionRow<'a> {
         /// interaction is not associated with a Git checkout; a detached
         /// checkout is passed as the descriptive text `detached head`.
         branch: Option<&'a str>,
+        /// Assigned branch when the checkout has switched away from it.
+        expected_branch: Option<&'a str>,
         status: InteractionStatus,
         selected: bool,
         loading: bool,
@@ -473,6 +475,7 @@ fn row_item(
         provider,
         model,
         branch,
+        expected_branch,
         status,
         selected,
         loading,
@@ -565,8 +568,19 @@ fn row_item(
             Style::default().fg(theme::MUTED_TEXT),
         ));
     }
-    // A row under a worktree heading has its branch said by the heading.
-    if let Some(branch) = branch.filter(|_| *level == 0) {
+    if let Some(expected) = expected_branch {
+        main.push(Span::styled(
+            format!(
+                " · branch changed: {expected} → {}",
+                branch.unwrap_or("detached head")
+            ),
+            Style::default()
+                .fg(theme::UNCOMMITTED)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    // Nested rows still show a switched branch even beneath a worktree heading.
+    if let Some(branch) = branch.filter(|_| *level == 0 && expected_branch.is_none()) {
         main.push(Span::styled(
             format!(" · {branch}"),
             Style::default().fg(theme::ACCENT),
@@ -754,6 +768,7 @@ mod tests {
             provider: "codex",
             model: "gpt-5",
             branch: None,
+            expected_branch: None,
             status: InteractionStatus::Stopped(StopTone::Paused),
             selected: false,
             loading: false,
@@ -765,6 +780,33 @@ mod tests {
             completion: CompletionState::Active,
             tags: &[],
             last_message,
+        }
+    }
+
+    #[test]
+    fn a_switched_branch_is_visible_under_a_worktree_heading() {
+        for actual in ["other", "detached head"] {
+            let mut switched = row("task", 0, None);
+            if let InteractionRow::Interaction {
+                level,
+                branch,
+                expected_branch,
+                ..
+            } = &mut switched
+            {
+                *level = 1;
+                *branch = Some(actual);
+                *expected_branch = Some("assigned");
+            }
+            let view = InteractionNavigator {
+                rows: vec![switched],
+                ..many_rows(0)
+            };
+            let screen = rendered(&view);
+            assert!(
+                screen.contains(&format!("branch changed: assigned → {actual}")),
+                "{screen}"
+            );
         }
     }
 
@@ -805,6 +847,7 @@ mod tests {
                     provider: "codex",
                     model: "gpt-5",
                     branch: Some("fix"),
+                    expected_branch: None,
                     status: InteractionStatus::Running { events: 2 },
                     selected: true,
                     loading: false,
@@ -846,6 +889,7 @@ mod tests {
             provider: "claude",
             model: "sonnet",
             branch: Some("feature"),
+            expected_branch: None,
             status: InteractionStatus::Idle,
             selected: false,
             loading: false,
@@ -1023,6 +1067,7 @@ mod tests {
                 provider: "claude",
                 model: "sonnet",
                 branch: None,
+                expected_branch: None,
                 status: InteractionStatus::Stopped(StopTone::Paused),
                 selected: false,
                 loading: false,
@@ -1061,6 +1106,7 @@ mod tests {
                 provider: "claude",
                 model: "sonnet",
                 branch: None,
+                expected_branch: None,
                 status: InteractionStatus::IdleFailed,
                 selected: false,
                 loading: false,
@@ -1101,6 +1147,7 @@ mod tests {
                 provider: "claude",
                 model: "sonnet",
                 branch: None,
+                expected_branch: None,
                 status: InteractionStatus::Idle,
                 selected: false,
                 loading: false,
@@ -1138,6 +1185,7 @@ mod tests {
                     provider: "claude",
                     model: "sonnet",
                     branch: None,
+                    expected_branch: None,
                     status: InteractionStatus::Idle,
                     selected: index == selected,
                     loading: false,

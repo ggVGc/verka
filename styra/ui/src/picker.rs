@@ -1268,6 +1268,7 @@ mod tests {
             activity_since_ms: 0,
             idle_unseen: false,
             uncommitted_changes: false,
+            expected_branch: None,
             checkout: None,
             branched_from: None,
             last_message: None,

@@ -193,6 +193,10 @@ loaded once the cursor rests on it, so the list can be crossed without waiting
 for every row on the way; the row being loaded says so, and any other key acts
 on it as soon as it arrives. When an interaction is associated with a Git
 checkout, its row also names the checked-out branch (or says `detached head`).
+For live interactions, the branch is checked at most once every two seconds
+while the client polls. If it differs from the branch assigned to the Session,
+the row highlights `branch changed: assigned → actual`, including beneath a
+worktree heading. Switching back clears the warning.
 A branched interaction is listed beneath the one it was branched from, as in
 the session picker. Branching (`B`) lists the new interaction straight away,
 stopped as `branched, not started`, until a message resumes it.

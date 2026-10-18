@@ -245,17 +245,12 @@ impl GoneIdle {
     }
 }
 
-/// What Git says about the checkout an interaction works in, as it stood when
-/// the interaction last stopped working: the branch and worktree the agent was
-/// in, and whether it left work uncommitted there.
+/// What Git says about the checkout an interaction works in, and whether the
+/// interaction left work uncommitted there.
 ///
-/// Read at that moment and held, rather than answered when a client asks,
-/// because each question costs a `git` process: a navigator listing a dozen
-/// interactions several times a second would spawn one per interaction per
-/// refresh to learn something that only changes while an agent is running.
-/// The agent has stopped by the time this is read, so the answers stay true
-/// for as long as anyone is looking at them — until the operator commits or
-/// switches branches, which is what they were being told to consider.
+/// Uncommitted work is read at idle and held. The branch is also checked
+/// during client polling, at most once every two seconds, because either the
+/// agent or the operator can switch it without ending a turn.
 ///
 /// The branch is read from Git rather than taken from the name Styra gave the
 /// checkout: an agent can `git checkout` its way somewhere else, and a
@@ -273,6 +268,7 @@ struct WorkingTree {
     checkout: Mutex<PathBuf>,
     uncommitted: AtomicBool,
     state: Mutex<Option<CheckoutState>>,
+    branch_checked: Mutex<Instant>,
     /// Whether a delayed re-reading is already on its way, so an operator
     /// moving in and out of an interaction queues one `git` process rather
     /// than one per visit.
@@ -301,6 +297,7 @@ impl WorkingTree {
             checkout: Mutex::new(checkout),
             uncommitted: AtomicBool::new(false),
             state: Mutex::new(None),
+            branch_checked: Mutex::new(Instant::now()),
             rechecking: AtomicBool::new(false),
             snapshotting: Mutex::new(()),
         };
@@ -448,6 +445,21 @@ impl WorkingTree {
     }
 
     fn checkout_state(&self) -> Option<CheckoutState> {
+        // A branch can change mid-turn or in another terminal. Only ask for
+        // the branch here: refreshing the index/diff on every poll is costly.
+        let mut checked = self
+            .branch_checked
+            .lock()
+            .expect("branch check lock poisoned");
+        if checked.elapsed() >= Duration::from_secs(2) {
+            *checked = Instant::now();
+            let mut state = self.state.lock().expect("checkout state lock poisoned");
+            if let Some(state) = state.as_mut() {
+                if let Ok(branch) = self.git.current_branch(&state.worktree) {
+                    state.branch = branch;
+                }
+            }
+        }
         self.state
             .lock()
             .expect("checkout state lock poisoned")
@@ -913,9 +925,11 @@ impl ManagedInteraction {
             // operator cannot act on a checkout the agent is still writing to.
             uncommitted_changes: activity == InteractionActivity::Pending
                 && self.working_tree.uncommitted(),
-            // Reported whatever the interaction is doing: see
-            // `InteractionSummary::checkout`. Where the work is happening is
-            // still the answer while the agent is working on it.
+            expected_branch: journal::read_session_checkout(&self.session_path)
+                .ok()
+                .flatten()
+                .map(|checkout| checkout.branch),
+            // Keep reporting the checkout while a turn runs, refreshing its branch.
             checkout: self.working_tree.checkout_state(),
             branched_from: stored
                 .as_ref()
@@ -3270,6 +3284,8 @@ impl ServerState {
             tags: branched.tags.clone(),
             workspace_id: branched.workspace_id.clone(),
             selection: branched.selection.clone(),
+            expected_branch: journal::read_session_checkout(&branched.path)?
+                .map(|checkout| checkout.branch),
             checkout,
             branched_from: branched.branched_from.clone(),
             workspace: host,
@@ -5681,6 +5697,66 @@ mod tests {
         assert_eq!(tree.checkout_state(), None);
     }
 
+    #[test]
+    fn polling_detects_branch_switches_without_an_idle_transition() {
+        let directory = tempfile::tempdir().unwrap();
+        let run = |path: &Path, args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(path)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(directory.path(), &["init", "-b", "main"]);
+        run(
+            directory.path(),
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+        );
+        let linked = directory.path().join("linked");
+        run(
+            directory.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "assigned",
+                linked.to_str().unwrap(),
+            ],
+        );
+
+        for (path, original) in [(directory.path(), "main"), (linked.as_path(), "assigned")] {
+            let tree = WorkingTree::new(Arc::new(crate::git::SystemGit), path.to_owned());
+            run(path, &["checkout", "-B", "other"]);
+            assert_eq!(
+                tree.checkout_state().unwrap().branch.as_deref(),
+                Some(original),
+                "polls within two seconds use the cache"
+            );
+            for target in ["other", "--detach", original] {
+                if target != "other" {
+                    run(path, &["checkout", target]);
+                }
+                *tree.branch_checked.lock().unwrap() = Instant::now() - Duration::from_secs(3);
+                let expected = (target != "--detach").then_some(target);
+                assert_eq!(tree.checkout_state().unwrap().branch.as_deref(), expected);
+            }
+        }
+    }
+
     /// Where the work is happening, unlike the work left behind beside it, is
     /// known before the agent has done anything: the directory is the one the
     /// launch resolved, and Git can be asked about it straight away. So it is
@@ -6470,6 +6546,7 @@ mod tests {
                 activity_since_ms: 1,
                 idle_unseen: false,
                 uncommitted_changes: false,
+                expected_branch: None,
                 checkout: None,
                 branched_from: None,
                 last_message: None,
@@ -7928,6 +8005,7 @@ mod tests {
                 activity_since_ms: 1,
                 idle_unseen: false,
                 uncommitted_changes: false,
+                expected_branch: None,
                 checkout: None,
                 branched_from: None,
                 last_message: None,
@@ -7986,6 +8064,7 @@ mod tests {
                 activity_since_ms: 1,
                 idle_unseen: false,
                 uncommitted_changes: false,
+                expected_branch: None,
                 checkout: None,
                 branched_from: None,
                 last_message: None,

@@ -852,8 +852,7 @@ impl InteractionActivityReason {
     }
 }
 
-/// Where an interaction's agent was working, in Git's terms, as of the last
-/// time it stopped working.
+/// Where an interaction's agent is working, in Git's terms.
 ///
 /// Read from Git rather than from the name Styra gave the checkout. A Session
 /// records the checkout it was *given* (see `styra_server::worktree::Checkout`),
@@ -861,9 +860,9 @@ impl InteractionActivityReason {
 /// there now — the agent may have switched branches, or the Workspace may be
 /// the operator's own checkout that Styra never made anything for.
 ///
-/// Read when the interaction goes idle and not after, for the reason
-/// [`InteractionSummary::uncommitted_changes`] is: the answer costs a `git`
-/// process, and it only changes while an agent is running.
+/// Located at launch and when the interaction goes idle or changes directory.
+/// Live interactions also refresh the branch during polling, at most once
+/// every two seconds, to detect switches made by the agent or operator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckoutState {
     /// Root of the working tree the agent's workspace sits in.
@@ -1085,10 +1084,8 @@ pub struct InteractionSummary {
     /// all.
     #[serde(default)]
     pub uncommitted_changes: bool,
-    /// The branch and worktree the agent was working in, as Git had them when
-    /// this interaction last stopped working — see [`CheckoutState`]. `None`
-    /// for a workspace that is not in a repository at all, and before the
-    /// interaction has gone idle even once.
+    /// The branch and worktree the agent is working in — see [`CheckoutState`].
+    /// `None` for a workspace that is not in a repository at all.
     ///
     /// Unlike [`Self::uncommitted_changes`] this is still reported while a
     /// turn runs. It is a statement about where the work is happening rather
@@ -1097,6 +1094,11 @@ pub struct InteractionSummary {
     /// details view empty its Git rows every time the operator said anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<CheckoutState>,
+    /// The branch assigned to this Session's checkout. Kept separate from
+    /// the observed branch so clients can flag a switch, including detached HEAD.
+    /// `None` when Styra has not assigned a branch to the Session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_branch: Option<String>,
     /// Where the Session's own branch was created from — see
     /// [`BranchPoint`]. `None` for a Session Styra made no branch for, and for
     /// one whose branch predates this being recorded.

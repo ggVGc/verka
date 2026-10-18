@@ -393,6 +393,7 @@ mod tests {
             activity_since_ms: 7,
             idle_unseen: true,
             uncommitted_changes: false,
+            expected_branch: None,
             checkout: Some(crate::protocol::CheckoutState {
                 worktree: PathBuf::from("/tmp/worktrees/project-session"),
                 repository: PathBuf::from("/tmp/project"),
