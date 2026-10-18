@@ -2229,6 +2229,14 @@ fn run_rounds(
                     KeyCode::Up => app
                         .interactions
                         .cursor_previous(&session_id, workspace_id.as_deref()),
+                    KeyCode::PageDown => {
+                        app.interactions
+                            .cursor_page(&session_id, workspace_id.as_deref(), true)
+                    }
+                    KeyCode::PageUp => {
+                        app.interactions
+                            .cursor_page(&session_id, workspace_id.as_deref(), false)
+                    }
                     KeyCode::Backspace => {
                         app.interactions
                             .type_filter(None, &session_id, workspace_id.as_deref())
@@ -2324,6 +2332,16 @@ fn run_rounds(
                 k if keys::INTERACTIONS_FIRST.matches(k) => {
                     app.interactions
                         .cursor_first(&session_id, app.workspace.id.as_deref());
+                    continue;
+                }
+                k if keys::INTERACTIONS_PAGE_DOWN.matches(k) => {
+                    app.interactions
+                        .cursor_page(&session_id, app.workspace.id.as_deref(), true);
+                    continue;
+                }
+                k if keys::INTERACTIONS_PAGE_UP.matches(k) => {
+                    app.interactions
+                        .cursor_page(&session_id, app.workspace.id.as_deref(), false);
                     continue;
                 }
                 k if keys::INTERACTIONS_LAST.matches(k) => {

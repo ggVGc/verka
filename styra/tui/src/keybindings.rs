@@ -233,6 +233,8 @@ bindings! { INTERACTIONS = "Interactions";
     INTERACTIONS_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)]
         => Action::InteractionsNext;
     INTERACTIONS_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::InteractionsPrev;
+    INTERACTIONS_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::InteractionsPageDown;
+    INTERACTIONS_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::InteractionsPageUp;
     INTERACTIONS_FIRST: [Key::ch('g')] => Action::InteractionsFirst;
     INTERACTIONS_LAST: [Key::ch('G')] => Action::InteractionsLast;
     INTERACTIONS_NEXT_WORKSPACE: [Key::ch('J')]

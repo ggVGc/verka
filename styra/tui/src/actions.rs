@@ -170,6 +170,8 @@ pub(crate) enum Action {
     EditorMountNeither,
     InteractionsNext,
     InteractionsPrev,
+    InteractionsPageDown,
+    InteractionsPageUp,
     InteractionsFirst,
     InteractionsLast,
     InteractionsNextWorkspace,
@@ -491,6 +493,8 @@ impl Action {
                 "move the cursor down; the rested-on interaction becomes current"
             }
             Self::InteractionsPrev => "move the cursor up",
+            Self::InteractionsPageDown => "move the cursor a page down",
+            Self::InteractionsPageUp => "move the cursor a page up",
             Self::InteractionsFirst => "move the cursor to the first visible interaction",
             Self::InteractionsLast => "move the cursor to the last visible interaction",
             Self::InteractionsNextWorkspace => "first interaction of the next Workspace, in All",

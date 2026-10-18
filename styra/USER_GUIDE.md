@@ -164,7 +164,8 @@ from it becomes the first history entry of the Session it starts.
 Sending a message to a stopped or viewed Session automatically attempts native
 provider resume. In the main interaction view, `T` edits the current
 interaction's tags. `a` opens the live-interaction list; there, `w` switches
-current/all-Workspace scope, `j`/`k` selects, `g`/`G` jumps to the first/last
+current/all-Workspace scope, `j`/`k` selects, `PgUp`/`PgDn` moves ten interactions
+at a time, `g`/`G` jumps to the first/last
 visible interaction, `T` edits the selected
 interaction's tags, `C` / `Z` marks it completed / abandoned and stops it (also
 available directly in the event view), and `c` shows or hides those rows
@@ -178,7 +179,7 @@ to a stopped one in the same Workspace — the nearest row in the list each time
 It leaves the Workspace only when nothing unfinished is left in it.
 `/` filters the list as you type —
 case-insensitively, by name, tag, branch, provider, or Workspace name. The
-arrows still move the cursor while you type. `Enter` opens the interaction under
+arrows and `PgUp`/`PgDn` still move the cursor while you type. `Enter` opens the interaction under
 the cursor, and `Esc` clears the filter (a second `Esc` closes the list).
 `Ctrl+T` opens a list of the tags on current live interactions to choose a tag
 filter instead: require a tag with `Space`, or exclude it with `-` (either also

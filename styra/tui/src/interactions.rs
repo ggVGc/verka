@@ -705,6 +705,24 @@ impl LiveInteractions {
         }
     }
 
+    /// Page through the displayed interactions, keeping the usual cursor
+    /// settle and stopping at either end of the filtered list.
+    pub fn cursor_page(&mut self, current: &str, workspace_id: Option<&str>, down: bool) {
+        let visible = self.display_indices(workspace_id);
+        let position = visible
+            .iter()
+            .position(|index| self.items[*index].id == self.cursor(current));
+        let target = match position {
+            Some(position) if down => position.saturating_add(styra_ui::fuzzy_list::PAGE),
+            Some(position) => position.saturating_sub(styra_ui::fuzzy_list::PAGE),
+            None => 0,
+        }
+        .min(visible.len().saturating_sub(1));
+        if let Some(index) = visible.get(target) {
+            self.move_cursor_to(self.items[*index].id.clone(), current);
+        }
+    }
+
     pub fn cursor_first(&mut self, current: &str, workspace_id: Option<&str>) {
         if let Some(index) = self.display_indices(workspace_id).first() {
             self.move_cursor_to(self.items[*index].id.clone(), current);
@@ -1479,6 +1497,60 @@ pub(crate) mod tests {
         let mut interaction = interaction(id, InteractionActivity::Stopped);
         interaction.completed = CompletionState::Completed;
         interaction
+    }
+
+    #[test]
+    fn paging_follows_filtered_display_order_and_stops_at_the_ends() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            (0..50)
+                .map(|index| {
+                    let mut item =
+                        interaction(&format!("item-{index:02}"), InteractionActivity::Pending);
+                    if index % 2 == 0 {
+                        item.tags.push("keep".into());
+                    }
+                    item
+                })
+                .collect(),
+            vec![],
+        );
+        live.set_tag_filter(vec!["keep".into()], "item-00", None);
+
+        live.cursor_page("item-00", None, true);
+        assert_eq!(live.cursor("item-00"), "item-20");
+        assert!(live.pending("item-00").is_some());
+        assert!(live.due("item-00").is_none());
+        live.cursor_page("item-00", None, true);
+        assert_eq!(live.cursor("item-00"), "item-40");
+        for _ in 0..3 {
+            live.cursor_page("item-00", None, true);
+            assert_eq!(live.cursor("item-00"), "item-48");
+        }
+        live.cursor_page("item-00", None, false);
+        assert_eq!(live.cursor("item-00"), "item-28");
+        for _ in 0..4 {
+            live.cursor_page("item-00", None, false);
+        }
+        assert_eq!(live.cursor("item-00"), "item-00");
+        assert!(live.pending("item-00").is_none());
+    }
+
+    #[test]
+    fn paging_handles_an_absent_cursor_and_an_empty_list() {
+        let mut live = LiveInteractions::default();
+        for down in [true, false] {
+            live.cursor_page("missing", None, down);
+            assert!(live.pending("missing").is_none());
+            live.open(
+                vec![interaction("only", InteractionActivity::Pending)],
+                vec![],
+            );
+            live.cursor_page("missing", None, down);
+            assert_eq!(live.cursor("missing"), "only");
+            live.close();
+            live = LiveInteractions::default();
+        }
     }
 
     #[test]
