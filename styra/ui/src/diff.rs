@@ -89,7 +89,7 @@ fn diff_body_lines_fading(
             flush(&mut lines, &mut hunk, &language);
             in_hunk = true;
             next = hunk_range(line).map(|(old, _, new, _)| (old, new));
-            lines.push(header(line, theme::ACCENT));
+            lines.push(hunk_separator(line));
         } else if !in_hunk || is_file_marker(line) {
             // Everything between a file header and its first hunk describes
             // the file rather than changing it. A diff with neither header —
@@ -197,6 +197,24 @@ fn header(line: &str, color: Color) -> Line<'static> {
         line.replace('\t', "    "),
         Style::default().fg(color),
     ))
+}
+
+/// Keep the hunk's context, with a dashed rule marking the gap in the file.
+/// Coordinates are still used for numbering, but are not shown in the cut.
+fn hunk_separator(line: &str) -> Line<'static> {
+    let rest = line.trim_start_matches('@');
+    let (inside, context) = rest.split_once("@@").unwrap_or((rest, ""));
+    let context = if context.trim().is_empty() && hunk_range(line).is_none() {
+        inside.trim()
+    } else {
+        context.trim()
+    };
+    let label = if context.is_empty() {
+        "┄┄┄".to_owned()
+    } else {
+        format!("┄┄┄ {context}")
+    };
+    header(&label, theme::ACCENT)
 }
 
 /// The highlighter's name for the language of `path`: its extension, or for
@@ -360,6 +378,21 @@ mod tests {
     }
 
     #[test]
+    fn hunk_cuts_show_context_without_coordinates() {
+        for compact in [false, true] {
+            let lines = diff_body_lines(
+                "@@ -805,6 +847,7 @@ mod tests {\n+added\n@@ -900 +943 @@\n+next",
+                None,
+                compact,
+            );
+            assert_eq!(text(&lines[0]), "┄┄┄ mod tests {");
+            assert_eq!(text(&lines[1]), "847 +added");
+            assert_eq!(text(&lines[2]), "┄┄┄");
+            assert_eq!(text(&lines[3]), "943 +next");
+        }
+    }
+
+    #[test]
     fn signs_are_green_and_red_and_the_code_is_highlighted() {
         let lines = diff_body_lines(
             "@@ edit @@\n-fn old() -> u32 { 1 }\n+fn new() -> u32 { 2 }",
@@ -396,7 +429,7 @@ mod tests {
         assert_eq!(lines[2].width(), 30);
         assert_eq!(
             lines[0].width(),
-            "@@ edit @@".len(),
+            "┄┄┄ edit".chars().count(),
             "headers are left alone"
         );
         let rows = Paragraph::new(lines)
@@ -476,7 +509,7 @@ mod tests {
             texts,
             [
                 "lib/example.ex",
-                "@@",
+                "┄┄┄",
                 "+message = \"\"\"",
                 "+hello",
                 "+",
@@ -506,10 +539,10 @@ mod tests {
             texts,
             [
                 "notes.txt",
-                "@@",
+                "┄┄┄",
                 "+plain words here",
                 "src/a.rs",
-                "@@",
+                "┄┄┄",
                 "+let x = \"s\";"
             ]
         );
@@ -531,12 +564,7 @@ mod tests {
         let compact: Vec<String> = diff_body_lines(diff, None, true).iter().map(text).collect();
         assert_eq!(
             compact,
-            [
-                "f.rs",
-                "@@ -1,3 +1,3 @@",
-                "2 -fn gone() {}",
-                "2 +fn added() {}"
-            ],
+            ["f.rs", "┄┄┄", "2 -fn gone() {}", "2 +fn added() {}"],
             "the hidden context still counts toward the numbers"
         );
     }
@@ -553,13 +581,13 @@ mod tests {
         assert_eq!(
             texts,
             [
-                "@@ -8,3 +8,4 @@",
+                "┄┄┄",
                 " 8  a",
                 " 9 -b",
                 " 9 +c",
                 "10 +d",
                 "11  e",
-                "@@ edit @@",
+                "┄┄┄ edit",
                 "   +f",
             ],
             "a hunk with no position leaves the column blank"
@@ -572,7 +600,7 @@ mod tests {
             .iter()
             .map(text)
             .collect();
-        assert_eq!(texts, ["@@ edit @@", "-a", "+b"]);
+        assert_eq!(texts, ["┄┄┄ edit", "-a", "+b"]);
     }
 
     #[test]
