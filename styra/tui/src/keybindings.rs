@@ -35,7 +35,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_WORKSPACE_JUMP: [Key::ch('v')] ("not in raw") => Action::GlobalWorkspaceJump;
     GLOBAL_WORKSPACE_JUMP_LISTED: [Key::ch('V')] => Action::GlobalWorkspaceJumpListed;
     GLOBAL_WORKTREES: [Key::ch('w')] ("not in details") => Action::GlobalWorktrees;
-    GLOBAL_SESSION_WORKTREE: [Key::ch('W')] ("existing session")
+    GLOBAL_SESSION_WORKTREE: [Key::ctrl('W')] ("existing session")
         => Action::GlobalSessionWorktree;
     GLOBAL_TAGS: [Key::ch('T')] => Action::GlobalTags;
     GLOBAL_REBASE: [Key::ctrl('b')] => Action::GlobalRebase;
