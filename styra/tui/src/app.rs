@@ -954,6 +954,11 @@ impl App {
     pub fn set_view(&mut self, view: View) {
         if self.view != view {
             self.clear_link_highlight();
+            if view == View::CheckoutDiff {
+                if let Some(diff) = self.checkout_diff.as_mut() {
+                    diff.show_files();
+                }
+            }
             self.view = view;
         }
     }

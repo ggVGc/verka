@@ -2660,7 +2660,10 @@ mod tests {
         );
         assert_eq!(app.view, View::CheckoutDiff);
         assert!(!app.diff_preview);
-        assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
+        let diff = app.checkout_diff.as_ref().unwrap();
+        assert!(diff.per_file);
+        assert_eq!(diff.scroll.offset, 0);
+        assert_eq!(diff.combined_scroll.offset, 10);
         press_list_key(
             &mut app,
             &root,

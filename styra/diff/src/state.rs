@@ -88,6 +88,13 @@ pub struct CheckoutDiff {
 }
 
 impl CheckoutDiff {
+    /// Show the file list, retaining the combined diff's scroll position.
+    pub fn show_files(&mut self) {
+        if !self.per_file {
+            self.apply(Action::ToggleFiles);
+        }
+    }
+
     /// Focus a changed file, optionally at a working-tree line present in a
     /// hunk. An unmatched location leaves the view untouched.
     pub fn jump_to(&mut self, path: &Path, line: Option<u32>) -> Result<(), String> {
