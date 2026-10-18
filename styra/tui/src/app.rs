@@ -312,6 +312,8 @@ pub struct App {
     /// Selected file in the Files view and whether it aggregates the session;
     /// see [`FilesView`].
     pub files: FilesView,
+    /// Preview visibility to restore when leaving file selection.
+    files_preview_open: Option<bool>,
     /// The typed answer last fetched for this session, and the selection
     /// within it; see [`AnswerView`].
     pub answer: AnswerView,
@@ -601,6 +603,7 @@ impl App {
             diff_conversation: false,
             entry_log: EntryLog::default(),
             files: FilesView::default(),
+            files_preview_open: None,
             answer: AnswerView::default(),
             link_highlight: None,
             link_menu: None,
@@ -638,6 +641,9 @@ impl App {
     /// state, which the replacement rebuilds from the server.
     pub fn take_operator_state(&mut self) -> OperatorState {
         self.close_integration_prompt();
+        if self.view == View::Files {
+            self.set_view(View::Events);
+        }
         OperatorState {
             interactions: std::mem::take(&mut self.interactions),
             integration_drafts: std::mem::take(&mut self.integration_drafts),
@@ -920,10 +926,10 @@ impl App {
     /// [`RawView::enter`]'s.
     pub fn toggle_raw(&mut self) {
         if self.view == View::Raw {
-            self.view = View::Events;
+            self.set_view(View::Events);
             return;
         }
-        self.view = View::Raw;
+        self.set_view(View::Raw);
         let line = (!self.timeline.follow)
             .then(|| {
                 self.timeline
@@ -939,11 +945,26 @@ impl App {
     /// stays separate because entering the raw view also has to line its
     /// selection up with the event list's.
     pub fn toggle_view(&mut self, view: View) {
-        self.view = if self.view == view {
+        self.set_view(if self.view == view {
             View::Events
         } else {
             view
-        };
+        });
+    }
+
+    /// Change views, restoring the preview choice after file selection ends.
+    pub fn set_view(&mut self, view: View) {
+        if self.view == view {
+            return;
+        }
+        if let Some(open) = self.files_preview_open.take() {
+            self.preview.open = open;
+        }
+        if view == View::Files {
+            self.files_preview_open = Some(self.preview.open);
+            self.preview.show();
+        }
+        self.view = view;
     }
 
     /// Toggle the entry-log pane below the event list. Opening it returns to
@@ -951,7 +972,7 @@ impl App {
     /// to the pane. The cursor starts on the pane's last, newest entry, which
     /// is what the preview then shows.
     pub fn toggle_entry_log(&mut self) {
-        self.view = View::Events;
+        self.set_view(View::Events);
         self.processes_pane = false;
         let len = self.entry_log_len();
         self.entry_log.toggle(len);
@@ -963,7 +984,7 @@ impl App {
     /// list, which keeps the navigation keys: the pane is for watching, and
     /// the full-screen view is where its rows are selected.
     pub fn toggle_processes_pane(&mut self) {
-        self.view = View::Events;
+        self.set_view(View::Events);
         self.processes_pane = !self.processes_pane;
         if self.processes_pane && self.entry_log.open {
             let len = self.entry_log_len();
@@ -1261,12 +1282,7 @@ impl App {
     /// Open the combined interaction/files layout with its entry preview
     /// visible, or return to the ordinary event list when already open.
     pub fn toggle_files(&mut self) {
-        if self.view == View::Files {
-            self.view = View::Events;
-        } else {
-            self.view = View::Files;
-            self.preview.show();
-        }
+        self.toggle_view(View::Files);
     }
 
     // --- Typed turn answers ---------------------------------------------------
@@ -1276,7 +1292,7 @@ impl App {
     /// Workspace list is only fetched on request.
     pub fn toggle_overview(&mut self) {
         if self.view == View::Overview {
-            self.view = View::Events;
+            self.set_view(View::Events);
         } else {
             self.ask(Request::Overview);
         }
@@ -1286,9 +1302,9 @@ impl App {
     /// session's recorded contract; or leave it when already there.
     pub fn toggle_answer(&mut self) {
         if self.view == View::Answer {
-            self.view = View::Events;
+            self.set_view(View::Events);
         } else {
-            self.view = View::Answer;
+            self.set_view(View::Answer);
             self.ask(Request::Answer { contract: None });
         }
     }
@@ -1351,7 +1367,7 @@ impl App {
     /// link. The selection is kept in timeline coordinates, so it remains
     /// correct as messages wrap or link destinations are toggled.
     pub fn highlight_first_link(&mut self) {
-        self.view = View::Events;
+        self.set_view(View::Events);
         let start = self.timeline.selected;
         self.link_highlight = self
             .find_link_from(start, 0)
@@ -1446,7 +1462,7 @@ impl App {
                 &text[start..end],
                 contract,
             )));
-            self.view = View::Answer;
+            self.set_view(View::Answer);
         } else if is_web_address(&destination) {
             self.ask(Request::OpenUrl(destination));
         } else if let Some((_, path, _)) = self.highlighted_link_target() {
@@ -3803,6 +3819,31 @@ mod tests {
         assert!(!app.preview.open);
         app.toggle_files();
         assert_eq!(app.view, View::Events);
+    }
+
+    #[test]
+    fn files_view_restores_preview_visibility_on_exit() {
+        for open in [false, true] {
+            let mut screen = app();
+            screen.preview.open = open;
+            for _ in 0..2 {
+                screen.toggle_files();
+                assert!(screen.preview.open);
+                screen.toggle_files();
+                assert_eq!(screen.view, View::Events);
+                assert_eq!(screen.preview.open, open);
+            }
+
+            screen.toggle_files();
+            screen.toggle_view(View::Messages);
+            assert_eq!(screen.preview.open, open);
+
+            screen.toggle_files();
+            let state = screen.take_operator_state();
+            let mut next = app();
+            next.adopt(state);
+            assert_eq!(next.preview.open, open);
+        }
     }
 
     #[test]

@@ -562,7 +562,7 @@ fn narrow_navigator_to_jump(app: &mut App) {
 /// not settle and load until the operator pressed another.
 fn open_interactions_in_workspace(app: &mut App, client: &Client, target: &str) -> Result<()> {
     let workspaces = client.list_workspaces()?;
-    app.view = crate::app::View::Events;
+    app.set_view(crate::app::View::Events);
     app.focus = Focus::List;
     app.interactions.show(workspaces);
     let session_id = app.session_id.clone();
@@ -620,7 +620,7 @@ fn load_cursored_interaction(
     make_interaction_current(app, live, client, standing_launch, interaction);
     if let Some(overview) = overview {
         app.overview = overview;
-        app.view = crate::app::View::Overview;
+        app.set_view(crate::app::View::Overview);
         // The Workspace the jump chose is now the one on screen.
         if app.overview.workspace.as_deref() == app.workspace.id.as_deref() {
             app.overview.workspace = None;
@@ -676,7 +676,7 @@ fn make_interaction_current(
             {
                 next.show_workspace(&workspace);
             }
-            next.view = crate::app::View::Events;
+            next.set_view(crate::app::View::Events);
             next.focus = Focus::List;
             *app = next;
             *live = next_live;
@@ -710,7 +710,7 @@ pub fn open_interaction_navigator(
         return;
     }
     let workspaces = client.list_workspaces().unwrap_or_default();
-    app.view = crate::app::View::Events;
+    app.set_view(crate::app::View::Events);
     app.focus = Focus::List;
     app.interactions.open(interactions, workspaces);
 }
@@ -946,7 +946,7 @@ fn run_rounds(
                     // deleted one) behind the list: it lands on the interaction
                     // view, where `q` is still the way out.
                     let Some(choice) = choice? else {
-                        app.view = crate::app::View::Events;
+                        app.set_view(crate::app::View::Events);
                         app.focus = Focus::List;
                         continue;
                     };
@@ -1093,7 +1093,7 @@ fn run_rounds(
                         continue;
                     }
                     let workspaces = client.list_workspaces()?;
-                    app.view = crate::app::View::Events;
+                    app.set_view(crate::app::View::Events);
                     app.focus = Focus::List;
                     app.interactions.show(workspaces);
                 }
@@ -1142,7 +1142,7 @@ fn run_rounds(
                     }
                     app.interactions.close();
                     app.overview.open();
-                    app.view = crate::app::View::Overview;
+                    app.set_view(crate::app::View::Overview);
                     app.focus = Focus::List;
                 }
                 // Loaded outright, as `n` does. A load that fails leaves the
@@ -1150,7 +1150,7 @@ fn run_rounds(
                 // than only in the log.
                 Request::ShowInteraction(id) => {
                     if id == app.session_id {
-                        app.view = crate::app::View::Events;
+                        app.set_view(crate::app::View::Events);
                         continue;
                     }
                     let Some(interaction) = app.interactions.current(&id).cloned() else {
@@ -1172,7 +1172,7 @@ fn run_rounds(
                         continue;
                     };
                     make_interaction_current(app, live, client, standing_launch, interaction);
-                    app.view = crate::app::View::Overview;
+                    app.set_view(crate::app::View::Overview);
                     if app.session_id == id {
                         app.enter_input();
                     } else {
@@ -1220,7 +1220,7 @@ fn run_rounds(
                             overview.open();
                         }
                         app.overview = overview;
-                        app.view = crate::app::View::Overview;
+                        app.set_view(crate::app::View::Overview);
                     }
                 }
                 Request::NextWorkingInteraction => {
@@ -1481,9 +1481,9 @@ fn run_rounds(
                     app.diff_preview = !fullscreen;
                     app.diff_interaction_focus = false;
                     if fullscreen {
-                        app.view = View::CheckoutDiff;
+                        app.set_view(View::CheckoutDiff);
                     } else if !matches!(app.view, View::Events | View::Files) {
-                        app.view = View::Events;
+                        app.set_view(View::Events);
                     }
                 }
                 Request::ShowDiff(target) => {
@@ -1493,7 +1493,7 @@ fn run_rounds(
                     app.diff_preview = true;
                     app.diff_interaction_focus = false;
                     if !matches!(app.view, View::Events | View::Files) {
-                        app.view = View::Events;
+                        app.set_view(View::Events);
                     }
                 }
                 Request::ShowDiffFullscreen(target) => {
@@ -1502,7 +1502,7 @@ fn run_rounds(
                     diff_refreshed = Instant::now();
                     app.diff_preview = false;
                     app.diff_interaction_focus = false;
-                    app.view = View::CheckoutDiff;
+                    app.set_view(View::CheckoutDiff);
                 }
                 Request::ProjectAction(action) => {
                     let Some(directory) = app

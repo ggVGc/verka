@@ -154,7 +154,7 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
     if key.code == KeyCode::Char('D') && !typing_filter {
         app.diff_preview = false;
         app.diff_interaction_focus = false;
-        app.view = View::CheckoutDiff;
+        app.set_view(View::CheckoutDiff);
         return;
     }
     let outcome = match app.checkout_diff.as_mut() {
@@ -166,7 +166,7 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
         Outcome::Handled | Outcome::Ignored => {}
         Outcome::Close => {
             if app.view == View::CheckoutDiff {
-                app.view = View::Events;
+                app.set_view(View::Events);
             } else {
                 app.diff_preview = false;
                 app.diff_interaction_focus = false;
@@ -451,7 +451,7 @@ pub fn handle_list_key(
             if app.link_highlight.is_some() {
                 return app.clear_link_highlight();
             }
-            app.view = View::Events;
+            app.set_view(View::Events);
             return;
         }
         k if GLOBAL_INTERRUPT.matches(k) => {
@@ -2097,6 +2097,24 @@ mod tests {
                 &root.join("preferences.toml"),
             );
             assert_eq!(app.view, View::Events, "Esc from {view:?}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn leaving_file_selection_restores_the_preview() {
+        let root = tree("files-preview-restore");
+        for open in [false, true] {
+            for exit in [KeyCode::Char('F'), KeyCode::Char('f'), KeyCode::Esc] {
+                let mut app = app(&root);
+                app.preview.open = open;
+                press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('F')));
+                assert_eq!(app.view, View::Files);
+                assert!(app.preview.open);
+                press_list_key(&mut app, &root, KeyEvent::from(exit));
+                assert_eq!(app.view, View::Events);
+                assert_eq!(app.preview.open, open);
+            }
         }
         let _ = std::fs::remove_dir_all(root);
     }
