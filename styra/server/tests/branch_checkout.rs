@@ -159,6 +159,14 @@ fn branching_a_session_forks_the_checkout_it_works_in() {
     // And it starts where the source's work had got to, not at the repository's
     // own head — which is the whole point of continuing that conversation.
     assert_eq!(git(&path, &["rev-parse", "HEAD"]), source_head);
+    // Diff mode has a durable baseline before this branch is ever resumed.
+    let snapshots = journal::read_snapshots(&branched.path).unwrap();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].turn, Some(2));
+    assert_eq!(
+        client.snapshot_base(&branched.id).unwrap(),
+        Some(git(&path, &["rev-parse", "HEAD^{tree}"]))
+    );
     assert_eq!(
         std::fs::read_to_string(path.join("picker.rs")).unwrap(),
         "filtered\n"

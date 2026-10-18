@@ -18,3 +18,4 @@ clap.workspace = true
 crossterm.workspace = true
 ratatui.workspace = true
 styra-ui.workspace = true
+tempfile.workspace = true

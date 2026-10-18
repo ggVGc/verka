@@ -1,28 +1,24 @@
-//! An interaction's checkout diffed against the commit its branch was made
-//! at: what `d` shows inside Styra, in the view `styra-diff` provides, and
-//! `d` opens it in the preview pane and `D` opens it fullscreen.
+//! An interaction's checkout diffed against its first recorded snapshot.
 
 use styra_diff::DiffTarget;
 use styra_protocol::InteractionSummary;
+use styra_server::Client;
 
-/// The diff `interaction` has to offer, as the server last reported it, or
-/// why it has none. One outside a repository has no checkout, and one Styra
-/// made no branch for has nowhere recorded to measure from; neither is
-/// guessed at.
-pub fn target(interaction: &InteractionSummary) -> Result<DiffTarget, &'static str> {
+/// Resolve the durable baseline when diff mode opens, including any work
+/// that was uncommitted when the first snapshot was recorded.
+pub fn target(client: &Client, interaction: &InteractionSummary) -> anyhow::Result<DiffTarget> {
     let checkout = interaction
         .checkout
         .as_ref()
-        .ok_or("this interaction has no Git checkout to diff")?;
-    let branched_from = interaction
-        .branched_from
-        .as_ref()
-        .ok_or("no recorded start commit to diff this checkout against")?;
+        .ok_or_else(|| anyhow::anyhow!("this interaction has no Git checkout to diff"))?;
+    let base = client.snapshot_base(&interaction.id)?.ok_or_else(|| {
+        anyhow::anyhow!("this interaction has no recorded snapshot to diff against")
+    })?;
     Ok(DiffTarget {
         worktree: checkout.worktree.clone(),
         branch: checkout.branch.clone(),
-        base_branch: branched_from.branch.clone(),
-        base: branched_from.commit.clone(),
-        branch_point: true,
+        base_branch: Some("first snapshot".into()),
+        base,
+        branch_point: false,
     })
 }

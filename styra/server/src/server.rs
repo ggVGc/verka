@@ -482,31 +482,13 @@ fn snapshot_turn_diff(
     let Some(snapshots) = journal::turn_snapshots(session_path, turn)? else {
         return Ok(None);
     };
-    let directory = if session_path.is_dir() {
-        session_path
-    } else {
-        session_path.parent().unwrap_or(session_path)
-    };
-    let tree = |snapshot: &journal::Snapshot| -> Result<String> {
-        let diff = snapshot
-            .diff
-            .as_ref()
-            .map(|relative| {
-                let path = directory.join(relative);
-                std::fs::read(&path).with_context(|| format!("reading {}", path.display()))
-            })
-            .transpose()?;
-        git.snapshot_tree(
-            &snapshot.checkout,
-            snapshot.commit.as_deref(),
-            diff.as_deref(),
-        )
-        .with_context(|| format!("rebuilding snapshot {}", snapshot.sequence))
-    };
     let (checkout, from, to, ended) = match &snapshots {
-        journal::TurnSnapshots::Ended(start, end) => {
-            (&end.checkout, tree(start)?, tree(end)?, true)
-        }
+        journal::TurnSnapshots::Ended(start, end) => (
+            &end.checkout,
+            snapshot_tree(git, session_path, start)?,
+            snapshot_tree(git, session_path, end)?,
+            true,
+        ),
         // Read as a snapshot would be taken now, without recording one.
         journal::TurnSnapshots::Running(last) => {
             let state = checkout_now(git, &last.checkout)?.with_context(|| {
@@ -519,11 +501,78 @@ fn snapshot_turn_diff(
                     state.diff.as_deref(),
                 )
                 .context("reading the checkout as it is now")?;
-            (&last.checkout, tree(last)?, now, false)
+            (
+                &last.checkout,
+                snapshot_tree(git, session_path, last)?,
+                now,
+                false,
+            )
         }
     };
     let diff = git.tree_diff(checkout, &from, &to)?;
     Ok(Some(TurnDiff { diff, ended }))
+}
+
+/// Rebuild a durable snapshot without changing the checkout or its index.
+fn snapshot_tree(
+    git: &dyn crate::git::Git,
+    session_path: &Path,
+    snapshot: &journal::Snapshot,
+) -> Result<String> {
+    let directory = if session_path.is_dir() {
+        session_path
+    } else {
+        session_path.parent().unwrap_or(session_path)
+    };
+    let diff = snapshot
+        .diff
+        .as_ref()
+        .map(|relative| {
+            let path = directory.join(relative);
+            std::fs::read(&path).with_context(|| format!("reading {}", path.display()))
+        })
+        .transpose()?;
+    git.snapshot_tree(
+        &snapshot.checkout,
+        snapshot.commit.as_deref(),
+        diff.as_deref(),
+    )
+    .with_context(|| format!("rebuilding snapshot {}", snapshot.sequence))
+}
+
+fn snapshot_base(git: &dyn crate::git::Git, session_path: &Path) -> Result<Option<String>> {
+    journal::read_snapshots(session_path)?
+        .first()
+        .map(|snapshot| snapshot_tree(git, session_path, snapshot))
+        .transpose()
+}
+
+/// Record the initial checkout before the provider can change it. Existing
+/// Sessions keep their original baseline when resumed.
+fn ensure_initial_snapshot(
+    git: &dyn crate::git::Git,
+    session_path: &Path,
+    checkout: &Path,
+    protocol: crate::event::Protocol,
+) -> Result<()> {
+    if journal::read_snapshots(session_path)?.is_empty() {
+        if let Some(state) = checkout_now(git, checkout)? {
+            let turn = journal::replay(session_path, protocol)?
+                .iter()
+                .filter(|event| matches!(event, crate::event::AgentEvent::UserMessage { .. }))
+                .count() as u64
+                + 1;
+            journal::append_snapshot(
+                session_path,
+                journal::SnapshotState {
+                    moment: journal::SnapshotMoment::BeforeMessage,
+                    turn: Some(turn),
+                    ..state
+                },
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// The checkout's commit and uncommitted work as a snapshot would record them,
@@ -1993,6 +2042,33 @@ impl ServerState {
         }
     }
 
+    /// Create a durable Session, prepare its checkout and any inherited history,
+    /// then record its initial snapshot before returning it to a caller.
+    fn create_session_record(
+        &self,
+        workspace_id: &str,
+        profile: &crate::agent::Profile,
+        selection: &Selection,
+        name: Option<String>,
+        prepare: impl FnOnce(&mut Journal, &str) -> Result<PathBuf>,
+    ) -> Result<(Journal, String, PathBuf)> {
+        let (mut journal, id) = Journal::create_in_workspace(
+            &self.inner.store_root,
+            workspace_id,
+            profile,
+            selection,
+            name,
+        )?;
+        let checkout = prepare(&mut journal, &id)?;
+        ensure_initial_snapshot(
+            self.inner.git.as_ref(),
+            journal.path(),
+            &checkout,
+            profile.protocol,
+        )?;
+        Ok((journal, id, checkout))
+    }
+
     fn create_session(&self, request: CreateSession) -> Result<SessionInfo> {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
@@ -2044,63 +2120,65 @@ impl ServerState {
             .context("tmux is required for Styra session shells")?;
         let base = launch_base(&workspace, template.as_ref())?;
         let tooling_mounts = tooling_mounts(&profile, &tmux, &base)?;
-        let (journal, id) = Journal::create_in_workspace(
-            &self.inner.store_root,
+        let (journal, id, checkout) = self.create_session_record(
             &request.workspace_id,
             &profile,
             &selection,
             name.clone(),
+            |journal, id| {
+                // The directory this interaction will actually work in, ready before
+                // the agent is: its own checkout when the Workspace makes worktrees,
+                // the Workspace directory itself otherwise. A checkout is named after
+                // the work its first prompt describes — the topic resolved above — so
+                // the branch it leaves behind is recognisable in the operator's own
+                // `git branch`.
+                let checkout = match (&inherited_checkout, &worktrees) {
+                    // A shared checkout is written down for this Session too, so it
+                    // answers for the directory it works in on its own rather than
+                    // through the Session it was started from — which may be closed,
+                    // renamed, or given a checkout of its own later.
+                    // A source whose own worktree was cleaned up has the branch and no
+                    // directory, and sharing it means checking that branch out again —
+                    // both Sessions then work in the one checkout, as sharing means.
+                    (Some(inherited), worktrees) => {
+                        let path = match (&inherited.path, worktrees) {
+                            (Some(path), _) => path.clone(),
+                            (None, Some(worktrees)) => worktrees.restore(&inherited.branch)?,
+                            (None, None) => anyhow::bail!(
+                                "the Session to share a checkout with works on branch {}, whose checkout was removed, and this Workspace is not inside a Git working tree",
+                                inherited.branch
+                            ),
+                        };
+                        journal::store_session_checkout(
+                            journal.path(),
+                            &inherited.with_worktree(path.clone()),
+                        )?;
+                        path
+                    }
+                    (None, Some(worktrees)) => {
+                        let made = self.new_session_worktree(
+                            &request.workspace_id,
+                            worktrees,
+                            id,
+                            topic.as_ref().map(Topic::branch),
+                            request.checkout_from.as_deref(),
+                        )?;
+                        // Written down here, while the name and the branch are known
+                        // first-hand, rather than left to be recognised later from
+                        // the shape of a directory name.
+                        journal::store_session_checkout(journal.path(), &made)?;
+                        made.path.expect("a checkout just made has its directory")
+                    }
+                    (None, None) => workspace.clone(),
+                };
+                Ok(checkout)
+            },
         )?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = journal_path
             .parent()
             .unwrap_or(&self.inner.store_root)
             .join("diagnostics.log");
-        // The directory this interaction will actually work in, ready before
-        // the agent is: its own checkout when the Workspace makes worktrees,
-        // the Workspace directory itself otherwise. A checkout is named after
-        // the work its first prompt describes — the topic resolved above — so
-        // the branch it leaves behind is recognisable in the operator's own
-        // `git branch`.
-        let checkout = match (&inherited_checkout, &worktrees) {
-            // A shared checkout is written down for this Session too, so it
-            // answers for the directory it works in on its own rather than
-            // through the Session it was started from — which may be closed,
-            // renamed, or given a checkout of its own later.
-            // A source whose own worktree was cleaned up has the branch and no
-            // directory, and sharing it means checking that branch out again —
-            // both Sessions then work in the one checkout, as sharing means.
-            (Some(inherited), worktrees) => {
-                let path = match (&inherited.path, worktrees) {
-                    (Some(path), _) => path.clone(),
-                    (None, Some(worktrees)) => worktrees.restore(&inherited.branch)?,
-                    (None, None) => anyhow::bail!(
-                        "the Session to share a checkout with works on branch {}, whose checkout was removed, and this Workspace is not inside a Git working tree",
-                        inherited.branch
-                    ),
-                };
-                journal::store_session_checkout(
-                    &journal_path,
-                    &inherited.with_worktree(path.clone()),
-                )?;
-                path
-            }
-            (None, Some(worktrees)) => {
-                let made = self.new_session_worktree(
-                    &request.workspace_id,
-                    worktrees,
-                    &id,
-                    topic.as_ref().map(Topic::branch),
-                    request.checkout_from.as_deref(),
-                )?;
-                // Written down here, while the name and the branch are known
-                // first-hand, rather than left to be recognised later from
-                // the shape of a directory name.
-                journal::store_session_checkout(&journal_path, &made)?;
-                made.path.expect("a checkout just made has its directory")
-            }
-            (None, None) => workspace.clone(),
-        };
         let spec = InteractionSpec {
             profile,
             resume_provider_session_id: None,
@@ -2749,6 +2827,19 @@ impl ServerState {
             }
             return Err(error);
         }
+        // A Session that moved before it stopped is resumed standing where it
+        // moved to, so that is the directory its working tree starts at: the
+        // seeded updates put the client's working-directory row there, and a
+        // tree left at the Session's own checkout would spend the whole of the
+        // next turn naming the branch of a directory nobody is in.
+        let resumed_in =
+            seeded_working_directory(&seeded_updates).unwrap_or_else(|| checkout.clone());
+        ensure_initial_snapshot(
+            self.inner.git.as_ref(),
+            &summary.path,
+            &resumed_in,
+            spec.profile.protocol,
+        )?;
         let backend = Box::new(backend);
         let (interaction, receiver) =
             Interaction::spawn(spec, backend, journal, request.id.clone(), diagnostics)?;
@@ -2759,13 +2850,6 @@ impl ServerState {
             .iter()
             .filter(|sequenced| matches!(sequenced.update, InteractionUpdate::Event(_)))
             .count();
-        // A Session that moved before it stopped is resumed standing where it
-        // moved to, so that is the directory its working tree starts at: the
-        // seeded updates put the client's working-directory row there, and a
-        // tree left at the Session's own checkout would spend the whole of the
-        // next turn naming the branch of a directory nobody is in.
-        let resumed_in =
-            seeded_working_directory(&seeded_updates).unwrap_or_else(|| checkout.clone());
         let updates = Arc::new(Mutex::new(seeded_updates));
         let activity = Arc::new(CurrentActivity::new());
         let idle = Arc::new(IdleNotice::new(true));
@@ -3188,49 +3272,54 @@ impl ServerState {
         } else {
             summary.name.clone()
         };
-        let (mut journal, new_id) = Journal::create_in_workspace(
-            &self.inner.store_root,
+        let (_, new_id, _) = self.create_session_record(
             &summary.workspace_id,
             &profile,
             &selection,
             branch_name.clone(),
-        )?;
-        let directory = journal
-            .path()
-            .parent()
-            .context("a freshly created session journal has a parent directory")?
-            .to_path_buf();
-        // The checkout the transcript was just written for. Made before any
-        // history is copied, so a branch that cannot be given the working tree
-        // it was promised fails with nothing but an empty Session behind it.
-        // The source's topic comes along: the sibling is about the same work,
-        // and `git branch` should say so.
-        if let (Some(worktrees), Some(source_checkout)) = (&worktrees, &source_checkout) {
-            let topic = source_checkout
-                .path
-                .as_deref()
-                .and_then(|path| crate::worktree::topic_of(path, id));
-            let checkout = worktrees.fork(&new_id, topic.as_deref(), &source_checkout.branch)?;
-            journal::store_session_checkout(&directory, &checkout)?;
-        }
-        // The marker goes in twice. Once before the copied history: it is the
-        // branch's first line, so reading the new Session from the top starts
-        // with where its conversation came from. And once after it, at the
-        // branch point itself, so the log also shows where the inherited
-        // history ends and this Session's own begins — clients mute what
-        // precedes the last such marker.
-        journal.record_branch(crate::event::BranchDirection::From, id)?;
-        let source_protocol = journal::read_session_meta(&summary.path)?.protocol;
-        journal.copy_branch_from(&summary.path, source_protocol, at_ms, history)?;
-        journal.record_branch(crate::event::BranchDirection::From, id)?;
-        journal::store_provider_session_id(&directory, &new_native_id)?;
-        journal::store_session_origin(
-            &directory,
-            SessionOrigin {
-                session_id: id.to_owned(),
-                provider: from_provider,
-                at_ms,
-                history,
+            |journal, new_id| {
+                let directory = journal
+                    .path()
+                    .parent()
+                    .context("a freshly created session journal has a parent directory")?
+                    .to_path_buf();
+                // The checkout the transcript was just written for. Made before any
+                // history is copied, so a branch that cannot be given the working tree
+                // it was promised fails with nothing but an empty Session behind it.
+                // The source's topic comes along: the sibling is about the same work,
+                // and `git branch` should say so.
+                if let (Some(worktrees), Some(source_checkout)) = (&worktrees, &source_checkout) {
+                    let topic = source_checkout
+                        .path
+                        .as_deref()
+                        .and_then(|path| crate::worktree::topic_of(path, id));
+                    let checkout =
+                        worktrees.fork(new_id, topic.as_deref(), &source_checkout.branch)?;
+                    journal::store_session_checkout(&directory, &checkout)?;
+                }
+                // The marker goes in twice. Once before the copied history: it is the
+                // branch's first line, so reading the new Session from the top starts
+                // with where its conversation came from. And once after it, at the
+                // branch point itself, so the log also shows where the inherited
+                // history ends and this Session's own begins — clients mute what
+                // precedes the last such marker.
+                journal.record_branch(crate::event::BranchDirection::From, id)?;
+                let source_protocol = journal::read_session_meta(&summary.path)?.protocol;
+                journal.copy_branch_from(&summary.path, source_protocol, at_ms, history)?;
+                journal.record_branch(crate::event::BranchDirection::From, id)?;
+                journal::store_provider_session_id(&directory, &new_native_id)?;
+                journal::store_session_origin(
+                    &directory,
+                    SessionOrigin {
+                        session_id: id.to_owned(),
+                        provider: from_provider,
+                        at_ms,
+                        history,
+                    },
+                )?;
+                let branched = self.stored_summary(new_id)?;
+                let (host, _) = self.stored_workspace_mount(&branched)?;
+                Ok(host)
             },
         )?;
         self.record_source_branch(id, &summary.path, &new_id)?;
@@ -4006,6 +4095,7 @@ impl ServerState {
             | Request::InteractionActions { id }
             | Request::InteractionProcesses { id }
             | Request::InteractionDriva { id }
+            | Request::SnapshotBase { id }
             | Request::SnapshotTurnDiff { id, .. } => Some(id.as_str()),
             _ => match crate::actions::scope(&request) {
                 Scope::Session(id) => Some(id),
@@ -4027,6 +4117,13 @@ impl ServerState {
             }
         }
         match request {
+            Request::SnapshotBase { id } => {
+                let summary = self.stored_summary(&id)?;
+                Ok(Response::SnapshotBase(snapshot_base(
+                    self.inner.git.as_ref(),
+                    &summary.path,
+                )?))
+            }
             Request::SnapshotTurnDiff { id, turn } => {
                 let summary = self.stored_summary(&id)?;
                 Ok(Response::SnapshotTurnDiff(snapshot_turn_diff(
@@ -5665,6 +5762,109 @@ mod tests {
         std::fs::create_dir_all(&bare).unwrap();
         let outside = WorkingTree::new(crate::git::FakeGit::shared(), bare);
         assert_eq!(outside.commit("Anything").unwrap(), None, "no repository");
+    }
+
+    #[test]
+    fn session_creation_snapshots_the_prepared_checkout_after_inherited_history() {
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path().join("store");
+        let host = root.path().join("workspace");
+        let checkout = root.path().join("checkout");
+        std::fs::create_dir_all(&host).unwrap();
+        std::fs::create_dir_all(&checkout).unwrap();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&checkout);
+        git.set_uncommitted_changes(&checkout, true);
+        let state = ServerState::with_git(git.clone(), store.clone());
+        let workspace = crate::workspace::create(&store, &host, None).unwrap();
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
+
+        let (journal, id, prepared_checkout) = state
+            .create_session_record(&workspace.id, &profile, &selection, None, |journal, _| {
+                journal.record_user_message("inherited turn")?;
+                Ok(checkout.clone())
+            })
+            .unwrap();
+
+        assert_eq!(prepared_checkout, checkout);
+        assert_eq!(
+            state.stored_summary(&id).unwrap().workspace_id,
+            workspace.id
+        );
+        let snapshots = journal::read_snapshots(journal.path()).unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].checkout, checkout);
+        assert_eq!(snapshots[0].turn, Some(2));
+        assert!(snapshots[0].diff.is_some());
+        assert!(snapshot_base(git.as_ref(), journal.path())
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn initial_snapshot_is_recorded_once_and_keeps_its_dirty_baseline() {
+        let root = tempfile::tempdir().unwrap();
+        let host = root.path().join("checkout");
+        let session = root.path().join("session");
+        std::fs::create_dir_all(&host).unwrap();
+        std::fs::create_dir_all(&session).unwrap();
+        Journal::create(&session).unwrap();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        git.set_uncommitted_changes(&host, true);
+        assert_eq!(snapshot_base(git.as_ref(), &session).unwrap(), None);
+        ensure_initial_snapshot(
+            git.as_ref(),
+            &session,
+            &host,
+            crate::event::Protocol::CodexJsonl,
+        )
+        .unwrap();
+        let snapshots = journal::read_snapshots(&session).unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].turn, Some(1));
+        assert!(snapshots[0].diff.is_some());
+        let tree = WorkingTree::new(git.clone(), host.clone());
+        assert_eq!(
+            tree.snapshot(&session, journal::SnapshotMoment::BeforeMessage, 1)
+                .unwrap(),
+            None
+        );
+        let base = snapshot_base(git.as_ref(), &session).unwrap().unwrap();
+        assert!(base.contains("fake diff of"), "{base}");
+
+        git.commit_all(&host, "later work").unwrap();
+        ensure_initial_snapshot(
+            git.as_ref(),
+            &session,
+            &host,
+            crate::event::Protocol::CodexJsonl,
+        )
+        .unwrap();
+        assert_eq!(journal::read_snapshots(&session).unwrap(), snapshots);
+        tree.snapshot(&session, journal::SnapshotMoment::TurnEnded, 1)
+            .unwrap();
+        assert!(
+            snapshot_turn_diff(git.as_ref(), &session, 1)
+                .unwrap()
+                .unwrap()
+                .ended
+        );
+        assert_eq!(snapshot_base(git.as_ref(), &session).unwrap(), Some(base));
+
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let other_session = root.path().join("other-session");
+        std::fs::create_dir_all(&other_session).unwrap();
+        ensure_initial_snapshot(
+            git.as_ref(),
+            &other_session,
+            &outside,
+            crate::event::Protocol::CodexJsonl,
+        )
+        .unwrap();
+        assert_eq!(snapshot_base(git.as_ref(), &other_session).unwrap(), None);
     }
 
     /// A snapshot names the commit and carries a diff only when there is

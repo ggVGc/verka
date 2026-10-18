@@ -11,7 +11,6 @@ use std::path::Path;
 
 use crate::activity::Status;
 use crate::app::{App, Request, View};
-use crate::checkout_diff;
 use crate::insert;
 use crate::launch;
 use crate::link_menu::LinkAction;
@@ -1212,43 +1211,40 @@ fn open_diff_file(app: &mut App) {
     }
 }
 
-/// Ask for a diff of the interaction's checkout against the commit its branch
-/// was made at, in the preview pane or fullscreen. An interaction with
-/// nothing to diff says why instead (see [`checkout_diff::target`]).
+/// Ask the event loop to open the checkout against its first snapshot.
 fn ask_for_diff(app: &mut App, fullscreen: bool) {
     let Some(interaction) = app.interactions.current(&app.session_id) else {
         return app.show_warning("no interaction to diff");
     };
-    match checkout_diff::target(interaction) {
-        Ok(target) => {
-            let location = if app.link_highlight.is_some() {
-                match app.highlighted_link_target() {
-                    Some((_, Ok(path), line)) => Some((path, line)),
-                    Some((_, Err(reason), _)) => return app.show_warning(reason),
-                    None => return app.show_warning("selected link names no file to diff"),
-                }
-            } else if app.view == View::Files {
-                match app.selected_file_path() {
-                    Some(path) => Some((path, None)),
-                    None => return app.show_warning("no file selected to diff"),
-                }
-            } else {
-                None
-            };
-            if let Some((path, line)) = location {
-                app.ask(Request::ShowDiffAt {
-                    target,
-                    path,
-                    line,
-                    fullscreen,
-                });
-            } else if fullscreen {
-                app.ask(Request::ShowDiffFullscreen(target));
-            } else {
-                app.ask(Request::ShowDiff(target));
-            }
+    if interaction.checkout.is_none() {
+        return app.show_error("this interaction has no Git checkout to diff");
+    }
+    let id = interaction.id.clone();
+    let location = if app.link_highlight.is_some() {
+        match app.highlighted_link_target() {
+            Some((_, Ok(path), line)) => Some((path, line)),
+            Some((_, Err(reason), _)) => return app.show_warning(reason),
+            None => return app.show_warning("selected link names no file to diff"),
         }
-        Err(reason) => app.show_error(reason),
+    } else if app.view == View::Files {
+        match app.selected_file_path() {
+            Some(path) => Some((path, None)),
+            None => return app.show_warning("no file selected to diff"),
+        }
+    } else {
+        None
+    };
+    if let Some((path, line)) = location {
+        app.ask(Request::ShowDiffAt {
+            id,
+            path,
+            line,
+            fullscreen,
+        });
+    } else if fullscreen {
+        app.ask(Request::ShowDiffFullscreen(id));
+    } else {
+        app.ask(Request::ShowDiff(id));
     }
 }
 
@@ -2510,7 +2506,7 @@ mod tests {
         assert_eq!(
             app.take_request(),
             Some(Request::ShowDiffAt {
-                target: diffable_target(),
+                id: "styra-7".into(),
                 path: root.join("notes.txt"),
                 line: None,
                 fullscreen: false,
@@ -2527,7 +2523,7 @@ mod tests {
         assert_eq!(
             app.take_request(),
             Some(Request::ShowDiffAt {
-                target: diffable_target(),
+                id: "styra-7".into(),
                 path: root.join("notes.txt"),
                 line: Some(3),
                 fullscreen: true,
@@ -2536,11 +2532,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// `d` diffs the checkout the interaction works in against the commit its
-    /// branch was made at — not the origin branch's name, which has moved on —
-    /// and carries both branch names along for the view to say what it shows.
+    /// `d` asks the event loop to resolve the first snapshot of this Session.
     #[test]
-    fn d_asks_for_a_diff_of_the_checkout_against_its_start_commit() {
+    fn d_asks_for_a_diff_of_the_checkout_against_its_first_snapshot() {
         let root = tree("diff-checkout");
         let mut app = app_with_diffable_interaction(&root);
 
@@ -2548,7 +2542,7 @@ mod tests {
 
         assert_eq!(
             app.take_request(),
-            Some(Request::ShowDiff(diffable_target()))
+            Some(Request::ShowDiff("styra-7".into()))
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2567,7 +2561,7 @@ mod tests {
 
         assert_eq!(
             app.take_request(),
-            Some(Request::ShowDiffFullscreen(diffable_target()))
+            Some(Request::ShowDiffFullscreen("styra-7".into()))
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -3009,10 +3003,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Without a recorded start commit there is nothing to diff against, so
-    /// nothing is opened rather than a guess at a base.
+    /// A Session needs no branch point to open its snapshot diff.
     #[test]
-    fn d_without_a_start_commit_asks_for_nothing() {
+    fn d_without_a_start_commit_requests_a_snapshot_diff() {
         let root = tree("diff-no-branch-point");
         let mut app = app(&root);
         app.enter_list();
@@ -3030,7 +3023,10 @@ mod tests {
 
         press_d(&mut app, &root);
 
-        assert_eq!(app.take_request(), None);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ShowDiff("styra-7".into()))
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

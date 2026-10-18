@@ -731,12 +731,17 @@ pub enum Request {
     InteractionDriva {
         id: String,
     },
+    /// Rebuild the first recorded snapshot as a Git tree for checkout diff mode.
+    SnapshotBase {
+        id: String,
+    },
     /// What one operator turn changed in the checkout, read from the
     /// snapshots taken as it started and as it ended — everything, whoever
     /// wrote it, rather than what the agent reported writing.
     ///
-    /// Every interaction working in a Git checkout is snapshotted as each
-    /// turn ends and before each operator message is sent. A snapshot names
+    /// Every interaction working in a Git checkout has an initial snapshot
+    /// recorded before the provider starts, then as each turn ends and before
+    /// each operator message is sent. A snapshot names
     /// the commit checked out and, when `git status` reports anything, carries
     /// the diff from that commit to the working tree, untracked files
     /// included. The turn-end snapshot is taken after any auto-commit of the
@@ -865,6 +870,8 @@ pub enum Response {
     /// `None` when the turn has no snapshots to compare: it ran outside a
     /// Git checkout, a snapshot of it failed, or it predates snapshots.
     SnapshotTurnDiff(Option<TurnDiff>),
+    /// The first snapshot tree, or `None` when the Session has no snapshots.
+    SnapshotBase(Option<String>),
 }
 
 /// Response envelope returned for every syntactically valid connection.

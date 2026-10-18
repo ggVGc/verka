@@ -1465,11 +1465,23 @@ fn run_rounds(
                     }
                 }
                 Request::ShowDiffAt {
-                    target,
+                    id,
                     path,
                     line,
                     fullscreen,
                 } => {
+                    let Some(interaction) = app.interactions.items.iter().find(|row| row.id == id)
+                    else {
+                        app.show_error("no interaction to diff");
+                        continue;
+                    };
+                    let target = match crate::checkout_diff::target(client, interaction) {
+                        Ok(target) => target,
+                        Err(error) => {
+                            app.show_error(format!("could not open snapshot diff: {error:#}"));
+                            continue;
+                        }
+                    };
                     let mut diff = styra_diff::CheckoutDiff::read(target);
                     if let Err(reason) = diff.jump_to(&path, line) {
                         app.show_warning(reason);
@@ -1486,7 +1498,19 @@ fn run_rounds(
                         app.set_view(View::Events);
                     }
                 }
-                Request::ShowDiff(target) => {
+                Request::ShowDiff(id) => {
+                    let Some(interaction) = app.interactions.items.iter().find(|row| row.id == id)
+                    else {
+                        app.show_error("no interaction to diff");
+                        continue;
+                    };
+                    let target = match crate::checkout_diff::target(client, interaction) {
+                        Ok(target) => target,
+                        Err(error) => {
+                            app.show_error(format!("could not open snapshot diff: {error:#}"));
+                            continue;
+                        }
+                    };
                     app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
                     edit_reports.load(app, client);
                     diff_refreshed = Instant::now();
@@ -1496,7 +1520,19 @@ fn run_rounds(
                         app.set_view(View::Events);
                     }
                 }
-                Request::ShowDiffFullscreen(target) => {
+                Request::ShowDiffFullscreen(id) => {
+                    let Some(interaction) = app.interactions.items.iter().find(|row| row.id == id)
+                    else {
+                        app.show_error("no interaction to diff");
+                        continue;
+                    };
+                    let target = match crate::checkout_diff::target(client, interaction) {
+                        Ok(target) => target,
+                        Err(error) => {
+                            app.show_error(format!("could not open snapshot diff: {error:#}"));
+                            continue;
+                        }
+                    };
                     app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
                     edit_reports.load(app, client);
                     diff_refreshed = Instant::now();

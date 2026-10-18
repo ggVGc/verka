@@ -5,10 +5,10 @@
 use crate::protocol::{ProjectAction, ProjectActionSession};
 use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, EditReport, EditReportFile,
-    Health, LaunchPolicy,
-    LoadedInteraction, ModelSummary, PlanSession, QueuedMessage, RenameSession, RenameWorkspace,
-    Request, Response, ResumeSession, SendMessage, SessionInfo, SetSessionTags, ShellInfo,
-    StoredSession, TemplateSummary, TurnDiff, Updates, WireResponse, WorkspaceLaunchChange,
+    Health, LaunchPolicy, LoadedInteraction, ModelSummary, PlanSession, QueuedMessage,
+    RenameSession, RenameWorkspace, Request, Response, ResumeSession, SendMessage, SessionInfo,
+    SetSessionTags, ShellInfo, StoredSession, TemplateSummary, TurnDiff, Updates, WireResponse,
+    WorkspaceLaunchChange,
 };
 use crate::protocol::{
     CompletionState, ComposerState, InteractionQuery, InteractionSummary, SessionSummary,
@@ -749,6 +749,14 @@ impl Client {
         }
     }
 
+    /// The first recorded snapshot rebuilt as a Git tree, including its uncommitted work.
+    pub fn snapshot_base(&self, id: &str) -> Result<Option<String>> {
+        match self.request(Request::SnapshotBase { id: id.to_owned() })? {
+            Response::SnapshotBase(value) => Ok(value),
+            other => unexpected("snapshot_base", other),
+        }
+    }
+
     /// What one operator turn changed in the checkout according to its
     /// snapshots — so far, for one still running — or `None` when it has no
     /// snapshots to compare.
@@ -994,6 +1002,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::InteractionActions { .. } => "interaction_actions",
         Request::InteractionProcesses { .. } => "interaction_processes",
         Request::InteractionDriva { .. } => "interaction_driva",
+        Request::SnapshotBase { .. } => "snapshot_base",
         Request::SnapshotTurnDiff { .. } => "snapshot_turn_diff",
         Request::Shutdown => "shutdown",
     }

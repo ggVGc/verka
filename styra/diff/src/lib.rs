@@ -1,5 +1,5 @@
-//! A Git working tree diffed against a commit — in Styra, an interaction's
-//! checkout against the commit its branch was made at — read, kept, and drawn
+//! A Git working tree diffed against a commit or snapshot tree — in Styra,
+//! an interaction's checkout against its first snapshot — read, kept, and drawn
 //! as a scrolling view.
 //!
 //! Styra opens the view with `d`; the `styra-diff` program opens it on its

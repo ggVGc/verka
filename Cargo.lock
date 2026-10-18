@@ -2849,6 +2849,7 @@ dependencies = [
  "crossterm 0.28.1",
  "ratatui",
  "styra-ui",
+ "tempfile",
 ]
 
 [[package]]

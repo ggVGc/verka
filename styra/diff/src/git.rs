@@ -9,16 +9,30 @@ use crate::DiffTarget;
 /// shown alongside what has. Colour and external drivers are turned off: the
 /// view styles the diff itself, and needs Git's plain format to.
 pub fn diff(worktree: &Path, base: &str) -> Result<String, String> {
-    git(
+    // Compare the complete working tree, including untracked files present
+    // in a snapshot, without changing what the operator has staged.
+    let scratch = tempfile::tempdir().map_err(|error| format!("creating diff index: {error}"))?;
+    let index = scratch.path().join("index");
+    let current = git(
+        worktree,
+        &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+    )?;
+    if Path::new(&current).exists() {
+        std::fs::copy(&current, &index).map_err(|error| format!("copying diff index: {error}"))?;
+    }
+    git_with_index(worktree, &["add", "--all", "--", ":/"], Some(&index))?;
+    git_with_index(
         worktree,
         &[
             "diff",
+            "--cached",
             "--no-color",
             "--no-ext-diff",
             "--find-renames",
             base,
             "--",
         ],
+        Some(&index),
     )
 }
 
@@ -80,8 +94,16 @@ pub fn target(directory: &Path, base: Option<&str>) -> Result<DiffTarget, String
 /// Run `git` in `directory`, returning what it printed or what went wrong.
 /// Only a diff's output is kept verbatim; anything else is one trimmed line.
 fn git(directory: &Path, args: &[&str]) -> Result<String, String> {
+    git_with_index(directory, args, None)
+}
+
+fn git_with_index(directory: &Path, args: &[&str], index: Option<&Path>) -> Result<String, String> {
     let command = args[0];
-    let output = Command::new("git")
+    let mut invocation = Command::new("git");
+    if let Some(index) = index {
+        invocation.env("GIT_INDEX_FILE", index);
+    }
+    let output = invocation
         .arg("-C")
         .arg(directory)
         .args(args)
@@ -217,6 +239,46 @@ mod tests {
         assert!(target(&root, Some("no-such-branch"))
             .unwrap_err()
             .starts_with("git merge-base failed"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn snapshot_trees_include_untracked_work_and_preserve_the_real_index() {
+        let root = repository("styra-diff-snapshot-tree");
+        std::fs::write(root.join("tracked.txt"), "committed\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "start"]);
+        std::fs::write(root.join("tracked.txt"), "initial dirty\n").unwrap();
+        std::fs::write(root.join("untracked.txt"), "initial untracked\n").unwrap();
+        git(&root, &["add", "."]);
+        let base = git(&root, &["write-tree"]);
+        git(&root, &["reset", "--mixed", "HEAD"]);
+        let index = std::fs::read(root.join(".git/index")).unwrap();
+
+        assert!(diff(&root, &base).unwrap().is_empty());
+        std::fs::write(root.join("untracked.txt"), "changed\n").unwrap();
+        std::fs::write(root.join("added.txt"), "new\n").unwrap();
+        let shown = diff(&root, &base).unwrap();
+        assert!(shown.contains("-initial untracked"), "{shown}");
+        assert!(shown.contains("+changed"), "{shown}");
+        assert!(shown.contains("+new"), "{shown}");
+        assert!(!shown.contains("tracked.txt b/tracked.txt"), "{shown}");
+        assert_eq!(std::fs::read(root.join(".git/index")).unwrap(), index);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_snapshot_tree_can_be_diffed_without_any_checkout_commit() {
+        let root = repository("styra-diff-snapshot-unborn");
+        std::fs::write(root.join("file.txt"), "initial\n").unwrap();
+        git(&root, &["add", "."]);
+        let base = git(&root, &["write-tree"]);
+        git(&root, &["rm", "--cached", "file.txt"]);
+        assert!(diff(&root, &base).unwrap().is_empty());
+        std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+        let shown = diff(&root, &base).unwrap();
+        assert!(shown.contains("-initial"), "{shown}");
+        assert!(shown.contains("+changed"), "{shown}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

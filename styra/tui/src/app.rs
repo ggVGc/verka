@@ -429,13 +429,13 @@ pub enum Request {
     OpenDirectory,
     /// Read the checkout diff into the preview pane. Reading it runs `git`,
     /// so the event loop does it rather than the key handler.
-    ShowDiff(styra_diff::DiffTarget),
+    ShowDiff(String),
     /// Read the checkout diff into the fullscreen view.
-    ShowDiffFullscreen(styra_diff::DiffTarget),
+    ShowDiffFullscreen(String),
     /// Open the diff at the selected file or file reference, when it occurs
     /// in the checkout's changes.
     ShowDiffAt {
-        target: styra_diff::DiffTarget,
+        id: String,
         path: PathBuf,
         line: Option<u32>,
         fullscreen: bool,

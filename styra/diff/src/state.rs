@@ -22,7 +22,7 @@ pub struct DiffTarget {
     /// The branch the base was taken from, for saying so; `None` when there
     /// was none, as with a head detached at the time.
     pub base_branch: Option<String>,
-    /// The commit diffed against.
+    /// The commit or snapshot tree diffed against.
     pub base: String,
     /// Whether [`Self::base`] is the commit the checkout's branch was made at
     /// — the branch it was made from having moved on since — rather than
