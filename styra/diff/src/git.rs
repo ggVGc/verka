@@ -40,23 +40,33 @@ pub fn diff(worktree: &Path, base: &str) -> Result<String, String> {
 /// names them: a local branch by its name, a remote one with its remote's,
 /// and a tag as `tag: v1.2`. A remote's `HEAD` only repeats one of its
 /// branches and is left out. Only ever a decoration, so a repository that
-/// cannot say has none rather than an error.
+/// cannot say has none rather than an error. For a snapshot tree, names refer
+/// to branch tips and tags with exactly the same tree contents.
 pub fn names_at(worktree: &Path, commit: &str) -> Vec<String> {
+    // Snapshot baselines are trees, not commits. Match their exact contents
+    // against ref tips; a snapshot with uncommitted changes must not inherit
+    // the decorations of the commit it was captured from.
+    let tree = git(worktree, &["cat-file", "-t", commit]).as_deref() == Ok("tree");
     let points_at = format!("--points-at={commit}");
-    let refs = git(
-        worktree,
-        &[
-            "for-each-ref",
-            &points_at,
-            "--format=%(refname)",
-            "refs/heads",
-            "refs/remotes",
-            "refs/tags",
-        ],
-    );
+    let mut args = vec!["for-each-ref"];
+    if !tree {
+        args.push(&points_at);
+    }
+    args.extend([
+        "--format=%(refname) %(tree) %(*tree)",
+        "refs/heads",
+        "refs/remotes",
+        "refs/tags",
+    ]);
+    let refs = git(worktree, &args);
     refs.unwrap_or_default()
         .lines()
-        .filter_map(|name| {
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.next()?;
+            if tree && !fields.any(|value| value == commit) {
+                return None;
+            }
             if let Some(branch) = name.strip_prefix("refs/heads/") {
                 Some(branch.to_owned())
             } else if let Some(tag) = name.strip_prefix("refs/tags/") {
@@ -309,6 +319,23 @@ mod tests {
             ["release", "origin/main", "tag: v1", "tag: v1-annotated"]
         );
         assert_eq!(names_at(&root, "HEAD"), ["main", "tag: v2"]);
+        let tree = git(&root, &["rev-parse", "HEAD^{tree}"]);
+        // Both commits are empty, so both generations have the same tree.
+        assert_eq!(
+            names_at(&root, &tree),
+            [
+                "main",
+                "release",
+                "origin/main",
+                "tag: v1",
+                "tag: v1-annotated",
+                "tag: v2"
+            ]
+        );
+        std::fs::write(root.join("dirty.txt"), "snapshot-only work\n").unwrap();
+        git(&root, &["add", "."]);
+        let dirty_tree = git(&root, &["write-tree"]);
+        assert!(names_at(&root, &dirty_tree).is_empty());
         assert!(names_at(&root, "not-a-commit").is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }

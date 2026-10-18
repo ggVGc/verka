@@ -37,8 +37,7 @@ pub struct CheckoutDiffView<'a> {
     /// The commit the diff is measured from.
     pub base_commit: &'a str,
     /// The branches and tags at that commit, as `git log --decorate` names
-    /// them. The branches the header already names, checked out or base,
-    /// are not repeated.
+    /// them, or whose tip trees exactly match a snapshot baseline.
     pub base_names: &'a [String],
     /// Whether that commit is where the checked-out branch started, which the
     /// header says, rather than just a commit to compare with.
@@ -896,19 +895,22 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
         commit.to_owned(),
         Style::default().fg(theme::ACCENT),
     ));
-    let names: Vec<_> = view
-        .base_names
-        .iter()
-        .filter(|name| ![view.branch, view.base_branch].contains(&Some(name.as_str())))
-        .collect();
-    if !names.is_empty() {
+    if !view.base_commit.is_empty() {
         let muted = Style::default().fg(theme::MUTED_TEXT);
         comparison.push(Span::styled(" (", muted));
-        for (position, name) in names.into_iter().enumerate() {
+        if view.base_names.is_empty() {
+            comparison.push(Span::styled("no branch tip or tag", muted));
+        }
+        for (position, name) in view.base_names.iter().enumerate() {
             if position > 0 {
                 comparison.push(Span::styled(", ", muted));
             }
-            comparison.push(Span::styled(name.clone(), Style::default().fg(theme::TEXT)));
+            let label = if name.starts_with("tag: ") {
+                name.clone()
+            } else {
+                format!("branch tip: {name}")
+            };
+            comparison.push(Span::styled(label, Style::default().fg(theme::TEXT)));
         }
         comparison.push(Span::styled(")", muted));
     }
@@ -1847,7 +1849,9 @@ index 1111111..2222222 100644
     fn the_header_names_both_sides_and_where_they_were_read() {
         let (output, _) = screen(Ok(DIFF), Some("main"), 0);
         assert!(
-            output.contains("styra/rename  against  main at 4bf5c35d01  (where"),
+            output.contains(
+                "styra/rename  against  main at 4bf5c35d01 (no branch tip or tag)  (where"
+            ),
             "{output}"
         );
         assert!(output.contains("/state/worktrees/styra-7"), "{output}");
@@ -2151,10 +2155,11 @@ index 1111111..2222222 100644
         assert!(!output.contains("where the branch started"), "{output}");
         assert!(output.contains("no changes"), "{output}");
         assert!(!output.contains("since the branch was made"), "{output}");
+        assert!(output.contains("no branch tip or tag"), "{output}");
     }
 
     /// The branches and tags at the base commit follow it, as `git log`
-    /// decorates a commit — less the branches the header already names.
+    /// decorates a commit, including the current branch when it is at the base.
     #[test]
     fn the_names_at_the_base_commit_follow_it() {
         let names = [
@@ -2163,7 +2168,7 @@ index 1111111..2222222 100644
             "tag: v1.2".into(),
             "origin/main".into(),
         ];
-        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(180, 16)).unwrap();
         let frame = terminal
             .draw(|frame| {
                 render(
@@ -2189,7 +2194,7 @@ index 1111111..2222222 100644
             .collect::<String>();
         assert!(
             output.contains(
-                "against  main at 4bf5c35d01 (tag: v1.2, origin/main)  (where the branch started)"
+                "against  main at 4bf5c35d01 (branch tip: main, branch tip: styra/rename, tag: v1.2, branch tip: origin/main)  (where the branch started)"
             ),
             "{output}"
         );

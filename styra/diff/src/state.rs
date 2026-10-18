@@ -156,6 +156,7 @@ impl CheckoutDiff {
     /// renderer to hold to what now fits. Reports whether the diff changed.
     pub fn refresh(&mut self) -> bool {
         let diff = crate::git::diff(&self.target.worktree, &self.target.base);
+        self.base_names = crate::git::names_at(&self.target.worktree, &self.target.base);
         if diff == self.diff {
             return false;
         }
@@ -517,6 +518,9 @@ mod tests {
         diff.scroll.offset = 3;
 
         assert!(!diff.refresh());
+        git(&root, &["tag", "baseline"]);
+        assert!(!diff.refresh());
+        assert!(diff.base_names.iter().any(|name| name == "tag: baseline"));
         std::fs::write(root.join("a.txt"), "two\n").unwrap();
         assert!(diff.refresh());
 
