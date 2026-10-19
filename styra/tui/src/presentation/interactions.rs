@@ -56,20 +56,6 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             rows.push(InteractionRow::Workspace(Cow::Owned(name)));
         }
         heading = Some(interaction.workspace_id.clone());
-        // The order has put a headed worktree's rows, and then the worktrees
-        // integrated into it, right after its heading — see `DisplayRow`.
-        if let Some(worktree) = &row.heading {
-            let name = interaction
-                .workspace
-                .file_name()
-                .unwrap_or(interaction.workspace.as_os_str())
-                .to_string_lossy();
-            rows.push(InteractionRow::Directory {
-                name,
-                level: row.level.saturating_sub(1),
-                into: worktree.into.clone().map(Cow::Owned),
-            });
-        }
         let name_of = |id: &str| {
             app.interactions
                 .name(id)
@@ -84,8 +70,8 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             .unwrap_or_else(|| Cow::Borrowed(styra_ui::picker::short_id(&interaction.id)));
         rows.push(InteractionRow::Interaction {
             name,
-            level: row.level,
-            depth: row.depth,
+            level: 0,
+            depth: 0,
             branched_from: row
                 .branched_from
                 .as_deref()

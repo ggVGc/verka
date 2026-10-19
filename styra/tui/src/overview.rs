@@ -300,11 +300,11 @@ mod tests {
             InteractionActivity::Pending,
             InteractionActivity::Background,
         ]);
-        assert_eq!(ids(&interactions), ["100-tile", "97-tile", "98-tile"]);
+        assert_eq!(ids(&interactions), ["100-tile", "98-tile", "97-tile"]);
     }
 
     #[test]
-    fn working_tiles_precede_idle_tiles_in_existing_order() {
+    fn tiles_follow_creation_order_regardless_of_activity() {
         let interactions = fleet(&[
             InteractionActivity::Pending,
             InteractionActivity::Background,
@@ -313,12 +313,12 @@ mod tests {
         ]);
         assert_eq!(
             ids(&interactions),
-            ["99-tile", "98-tile", "100-tile", "97-tile"]
+            ["100-tile", "99-tile", "98-tile", "97-tile"]
         );
     }
 
     #[test]
-    fn newly_idle_tiles_follow_working_tiles() {
+    fn newly_idle_tiles_keep_their_creation_order() {
         let mut interactions = fleet(&[
             InteractionActivity::Pending,
             InteractionActivity::Running,
@@ -328,7 +328,7 @@ mod tests {
         interactions.items[2].idle_unseen = true;
         assert_eq!(
             ids(&interactions),
-            ["99-tile", "98-tile", "100-tile", "97-tile"]
+            ["100-tile", "99-tile", "98-tile", "97-tile"]
         );
     }
 
