@@ -1114,6 +1114,38 @@ mod tests {
         assert!(fixture.path().exists());
     }
 
+    /// Diff mode measures from where the branch would be integrated, so a
+    /// rebase onto an advanced source moves the base to the new source.
+    #[test]
+    fn the_diff_base_follows_the_integration_target_through_a_rebase() {
+        let fixture = Fixture::new();
+        let initial = git(&fixture.host, &["rev-parse", "HEAD"]);
+        fixture.feature();
+        std::fs::write(fixture.host.join("upstream"), "upstream").unwrap();
+        SystemGit
+            .commit_all(&fixture.host, "advanced source")
+            .unwrap();
+        let advanced = git(&fixture.host, &["rev-parse", "HEAD"]);
+        let base = |fixture: &Fixture| fixture.state.diff_base(&fixture.id).unwrap().unwrap();
+        assert_eq!(
+            base(&fixture),
+            crate::protocol::DiffBase {
+                base: initial,
+                branch: Some("main".into()),
+            }
+        );
+
+        fixture.state.start_rebase(&fixture.id).unwrap();
+        assert!(wait_for_rebase(&fixture).succeeded);
+        assert_eq!(
+            base(&fixture),
+            crate::protocol::DiffBase {
+                base: advanced,
+                branch: Some("main".into()),
+            }
+        );
+    }
+
     struct Fixture {
         _directory: tempfile::TempDir,
         host: PathBuf,

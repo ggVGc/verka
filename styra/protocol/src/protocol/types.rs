@@ -208,6 +208,17 @@ pub struct TurnDiff {
     pub ended: bool,
 }
 
+/// What checkout diff mode compares with: see
+/// [`crate::protocol::Request::DiffBase`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffBase {
+    /// The commit or snapshot tree to diff the working tree against.
+    pub base: String,
+    /// The branch the interaction will be integrated into, `base` being its
+    /// merge base with the checkout; `None` when `base` is the first snapshot.
+    pub branch: Option<String>,
+}
+
 /// One process running inside a live interaction's sandbox, as the host's
 /// `/proc` describes it at the moment of asking.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

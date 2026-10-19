@@ -15,13 +15,13 @@ mod types;
 pub use types::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
     BranchHistory, BranchPoint, CheckoutState, CleanedWorktree, CompletionState, Contract,
-    Direction, DrivaOptions, EditReport, EditReportFile, FileEditReport, FileLocation, Integration,
-    IntegrationResult, InteractionActivity, InteractionActivityReason, InteractionEnd,
+    DiffBase, Direction, DrivaOptions, EditReport, EditReportFile, FileEditReport, FileLocation,
+    Integration, IntegrationResult, InteractionActivity, InteractionActivityReason, InteractionEnd,
     InteractionQuery, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
-    LogLevel, ModelSummary, MountOrigin, ProjectAction, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
-    RebaseStatus, RecentMessage, SandboxProcess, SavedBranch, SessionOrigin, SessionSummary,
-    TemplateSummary, TurnDiff, VariableOrigin, WorkspaceSummary, WorktreeCleanup, WorktreeSession,
-    WorktreeSummary, WORKTREES_DIR,
+    LogLevel, ModelSummary, MountOrigin, ProjectAction, QueuedMessage, QuotaEvent, QuotaStatus,
+    RawLine, RebaseStatus, RecentMessage, SandboxProcess, SavedBranch, SessionOrigin,
+    SessionSummary, TemplateSummary, TurnDiff, VariableOrigin, WorkspaceSummary, WorktreeCleanup,
+    WorktreeSession, WorktreeSummary, WORKTREES_DIR,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -731,8 +731,12 @@ pub enum Request {
     InteractionDriva {
         id: String,
     },
-    /// Rebuild the first recorded snapshot as a Git tree for checkout diff mode.
-    SnapshotBase {
+    /// What checkout diff mode compares the working tree with: where the
+    /// interaction's branch would be integrated — the merge base of its
+    /// checkout and the branch it targets, which a rebase moves on — or, for
+    /// a checkout with no target branch, its first snapshot rebuilt as a Git
+    /// tree, uncommitted work at the time included.
+    DiffBase {
         id: String,
     },
     /// What one operator turn changed in the checkout, read from the
@@ -870,8 +874,8 @@ pub enum Response {
     /// `None` when the turn has no snapshots to compare: it ran outside a
     /// Git checkout, a snapshot of it failed, or it predates snapshots.
     SnapshotTurnDiff(Option<TurnDiff>),
-    /// The first snapshot tree, or `None` when the Session has no snapshots.
-    SnapshotBase(Option<String>),
+    /// `None` when the Session has neither a target branch nor snapshots.
+    DiffBase(Option<DiffBase>),
 }
 
 /// Response envelope returned for every syntactically valid connection.

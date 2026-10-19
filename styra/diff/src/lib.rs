@@ -1,6 +1,6 @@
 //! A Git working tree diffed against a commit or snapshot tree — in Styra,
-//! an interaction's checkout against its first snapshot — read, kept, and drawn
-//! as a scrolling view.
+//! an interaction's checkout against where its branch will be integrated —
+//! read, kept, and drawn as a scrolling view.
 //!
 //! Styra opens the view with `d`; the `styra-diff` program opens it on its
 //! own, over any repository. Both drive the same [`CheckoutDiff`] with the

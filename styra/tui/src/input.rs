@@ -1217,7 +1217,7 @@ fn open_diff_file(app: &mut App) {
     }
 }
 
-/// Ask the event loop to open the checkout against its first snapshot.
+/// Ask the event loop to open the checkout against where it will be integrated.
 fn ask_for_diff(app: &mut App, fullscreen: bool) {
     let Some(interaction) = app.interactions.current(&app.session_id) else {
         return app.show_warning("no interaction to diff");
@@ -2567,9 +2567,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// `d` asks the event loop to resolve the first snapshot of this Session.
+    /// `d` asks the event loop to resolve this Session's diff base.
     #[test]
-    fn d_asks_for_a_diff_of_the_checkout_against_its_first_snapshot() {
+    fn d_asks_for_a_diff_of_the_checkout() {
         let root = tree("diff-checkout");
         let mut app = app_with_diffable_interaction(&root);
 

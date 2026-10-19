@@ -457,7 +457,7 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
-        %{name: "snapshot_base", payload: %{
+        %{name: "diff_base", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
           fields: [
@@ -534,7 +534,7 @@ defmodule Styra.Protocol do
         %{name: "interaction_processes", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :list, item: %{kind: :ref, name: "SandboxProcess"}}}}},
         %{name: "interaction_driva", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}},
         %{name: "snapshot_turn_diff", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "TurnDiff"}}}},
-        %{name: "snapshot_base", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :string}}}}
+        %{name: "diff_base", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "DiffBase"}}}}
       ]
     },
 
@@ -1242,6 +1242,16 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "diff", required: true, type: %{kind: :string}},
         %{name: "ended", required: true, type: %{kind: :boolean}}
+      ]
+    },
+
+    # What checkout diff mode compares with: see
+    # `crate::protocol::Request::DiffBase`.
+    "DiffBase" => %{
+      kind: :struct,
+      fields: [
+        %{name: "base", required: true, type: %{kind: :string}},
+        %{name: "branch", required: true, type: %{kind: :optional, inner: %{kind: :string}}}
       ]
     },
 
@@ -2123,7 +2133,7 @@ defmodule Styra.Protocol do
     "interaction_actions",
     "interaction_processes",
     "interaction_driva",
-    "snapshot_base",
+    "diff_base",
     "snapshot_turn_diff",
     "shutdown"
   ]
@@ -3506,16 +3516,20 @@ defmodule Styra.Protocol do
     def interaction_driva!(data), do: Styra.Protocol.build!("interaction_driva", data)
 
     @doc ~S"""
-    Rebuild the first recorded snapshot as a Git tree for checkout diff mode.
+    What checkout diff mode compares the working tree with: where the
+    interaction's branch would be integrated — the merge base of its
+    checkout and the branch it targets, which a rebase moves on — or, for
+    a checkout with no target branch, its first snapshot rebuilt as a Git
+    tree, uncommitted work at the time included.
 
     Fields of `data`:
 
       * `id`  string
     """
-    def snapshot_base(data), do: Styra.Protocol.build("snapshot_base", data)
+    def diff_base(data), do: Styra.Protocol.build("diff_base", data)
 
-    @doc "`snapshot_base/1`, raising on a request the server would refuse."
-    def snapshot_base!(data), do: Styra.Protocol.build!("snapshot_base", data)
+    @doc "`diff_base/1`, raising on a request the server would refuse."
+    def diff_base!(data), do: Styra.Protocol.build!("diff_base", data)
 
     @doc ~S"""
     What one operator turn changed in the checkout, read from the
@@ -3623,7 +3637,7 @@ defmodule Styra.Protocol.Response do
     {:interaction_processes, "interaction_processes"},
     {:interaction_driva, "interaction_driva"},
     {:snapshot_turn_diff, "snapshot_turn_diff"},
-    {:snapshot_base, "snapshot_base"}
+    {:diff_base, "diff_base"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -3764,9 +3778,9 @@ defmodule Styra.Protocol.Response do
   def snapshot_turn_diff, do: "snapshot_turn_diff"
 
   @doc ~S"""
-  The first snapshot tree, or `None` when the Session has no snapshots.
+  `None` when the Session has neither a target branch nor snapshots.
   """
-  def snapshot_base, do: "snapshot_base"
+  def diff_base, do: "diff_base"
 end
 
 defmodule Styra.Protocol.WireResponse do

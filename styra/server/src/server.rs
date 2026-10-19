@@ -1645,6 +1645,34 @@ impl ServerState {
         Ok(Some(checkout))
     }
 
+    /// What checkout diff mode compares with. A checkout with a branch to
+    /// integrate into is measured from its merge base with that branch, as
+    /// integration measures it, so a rebase moves the base along; one without
+    /// is measured from its first snapshot.
+    fn diff_base(&self, id: &str) -> Result<Option<crate::protocol::DiffBase>> {
+        let summary = self.stored_summary(id)?;
+        let checkout = self.session_checkout(&summary.path, &summary.workspace_id, id)?;
+        if let Some(checkout) = checkout {
+            let target = checkout
+                .branched_from
+                .as_ref()
+                .and_then(|point| point.branch.as_deref())
+                .filter(|branch| *branch != checkout.branch);
+            if let (Some(path), Some(target)) = (checkout.path.as_deref(), target) {
+                if path.exists() {
+                    if let Some(tip) = self.inner.git.local_branch_commit(path, target)? {
+                        return Ok(Some(crate::protocol::DiffBase {
+                            base: self.inner.git.merge_base(path, &tip, "HEAD")?,
+                            branch: Some(target.to_owned()),
+                        }));
+                    }
+                }
+            }
+        }
+        Ok(snapshot_base(self.inner.git.as_ref(), &summary.path)?
+            .map(|base| crate::protocol::DiffBase { base, branch: None }))
+    }
+
     /// Resolve a checkout another Session asked to share with a new one.
     ///
     /// The durable Session id is the authority: clients never send a host
@@ -4095,7 +4123,7 @@ impl ServerState {
             | Request::InteractionActions { id }
             | Request::InteractionProcesses { id }
             | Request::InteractionDriva { id }
-            | Request::SnapshotBase { id }
+            | Request::DiffBase { id }
             | Request::SnapshotTurnDiff { id, .. } => Some(id.as_str()),
             _ => match crate::actions::scope(&request) {
                 Scope::Session(id) => Some(id),
@@ -4117,13 +4145,7 @@ impl ServerState {
             }
         }
         match request {
-            Request::SnapshotBase { id } => {
-                let summary = self.stored_summary(&id)?;
-                Ok(Response::SnapshotBase(snapshot_base(
-                    self.inner.git.as_ref(),
-                    &summary.path,
-                )?))
-            }
+            Request::DiffBase { id } => Ok(Response::DiffBase(self.diff_base(&id)?)),
             Request::SnapshotTurnDiff { id, turn } => {
                 let summary = self.stored_summary(&id)?;
                 Ok(Response::SnapshotTurnDiff(snapshot_turn_diff(
