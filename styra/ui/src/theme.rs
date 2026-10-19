@@ -169,6 +169,9 @@ pub const DIFF_MAP_ADDED: Color = palette::GREEN_TINT_BRIGHT;
 pub const DIFF_MAP_REMOVED: Color = palette::RED_TINT_BRIGHT;
 /// Red mixed into removed lines' syntax colors.
 pub const DIFF_REMOVED_FOREGROUND_TINT: Color = palette::RED_FG;
+/// The dashed cut between a diff's hunks: a cool hue the warm syntax colors
+/// never use, so the gap reads apart from the code around it.
+pub const DIFF_HUNK_CUT: Color = palette::SOFT_CYAN;
 /// Behind a diff's file headers, so each file's patch opens under a bar.
 pub const DIFF_FILE_HEADER_BACKGROUND: Color = palette::DARK_GRAY;
 /// The rules either side of a diff's file headers: the header bar's grey, a

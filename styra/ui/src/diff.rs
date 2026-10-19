@@ -65,7 +65,7 @@ fn diff_body_lines_fading(
     context_fade: u16,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let mut file_name_rows = Vec::new();
+    let mut bright_rows = Vec::new();
     let mut language = path.and_then(language_of);
     let mut hunk: Vec<(&str, Option<u32>)> = Vec::new();
     let mut in_hunk = false;
@@ -86,12 +86,13 @@ fn diff_body_lines_fading(
                 .map(|(_, path)| path)
                 .unwrap_or(rest);
             language = language_of(named).or(language);
-            file_name_rows.push(lines.len());
+            bright_rows.push(lines.len());
             lines.push(header(if compact { named } else { line }, theme::ACCENT));
         } else if line.starts_with("@@") {
             flush(&mut lines, &mut hunk, &language);
             in_hunk = true;
             next = hunk_range(line).map(|(old, _, new, _)| (old, new));
+            bright_rows.push(lines.len());
             lines.push(hunk_separator(line));
         } else if !in_hunk || is_file_marker(line) {
             // Everything between a file header and its first hunk describes
@@ -106,7 +107,7 @@ fn diff_body_lines_fading(
             } else if !compact {
                 flush(&mut lines, &mut hunk, &language);
                 if line.starts_with("--- ") || line.starts_with("+++ ") {
-                    file_name_rows.push(lines.len());
+                    bright_rows.push(lines.len());
                 }
                 lines.push(header(line, theme::TEXT));
             }
@@ -134,13 +135,11 @@ fn diff_body_lines_fading(
         }
     }
     flush(&mut lines, &mut hunk, &language);
-    // Keep additions and file names at full brightness; subdue context and
-    // other metadata.
+    // Keep additions, file names and hunk cuts at full brightness; subdue
+    // context and other metadata.
     for (index, line) in lines.iter_mut().enumerate() {
         // Not even dimmed, as a named colour would be, at no fade at all.
-        if context_fade > 0
-            && line.style.bg.is_none()
-            && file_name_rows.binary_search(&index).is_err()
+        if context_fade > 0 && line.style.bg.is_none() && bright_rows.binary_search(&index).is_err()
         {
             for span in &mut line.spans {
                 span.style = faded_style(span.style, context_fade);
@@ -202,7 +201,9 @@ fn header(line: &str, color: Color) -> Line<'static> {
     ))
 }
 
-/// Keep the hunk's context, with a dashed rule marking the gap in the file.
+/// Mark the gap in the file with the hunk's context, or a dashed rule where
+/// it has none, in bold so the cut stands out from the code either side of
+/// it. The diff view runs dashes on after it to the edge of the panel.
 /// Coordinates are still used for numbering, but are not shown in the cut.
 fn hunk_separator(line: &str) -> Line<'static> {
     let rest = line.trim_start_matches('@');
@@ -213,11 +214,15 @@ fn hunk_separator(line: &str) -> Line<'static> {
         context.trim()
     };
     let label = if context.is_empty() {
-        "┄┄┄".to_owned()
+        "┄┄┄"
     } else {
-        format!("┄┄┄ {context}")
+        context
     };
-    header(&label, theme::ACCENT)
+    let mut line = header(label, theme::DIFF_HUNK_CUT);
+    for span in &mut line.spans {
+        span.style = span.style.add_modifier(Modifier::BOLD);
+    }
+    line
 }
 
 /// The highlighter's name for the language of `path`: its extension, or for
@@ -394,7 +399,7 @@ mod tests {
                 None,
                 compact,
             );
-            assert_eq!(text(&lines[0]), "┄┄┄ mod tests {");
+            assert_eq!(text(&lines[0]), "mod tests {");
             assert_eq!(text(&lines[1]), "847 +added");
             assert_eq!(text(&lines[2]), "┄┄┄");
             assert_eq!(text(&lines[3]), "943 +next");
@@ -438,7 +443,7 @@ mod tests {
         assert_eq!(lines[2].width(), 30);
         assert_eq!(
             lines[0].width(),
-            "┄┄┄ edit".chars().count(),
+            "edit".chars().count(),
             "headers are left alone"
         );
         let rows = Paragraph::new(lines)
@@ -596,7 +601,7 @@ mod tests {
                 " 9 +c",
                 "10 +d",
                 "11  e",
-                "┄┄┄ edit",
+                "edit",
                 "   +f",
             ],
             "a hunk with no position leaves the column blank"
@@ -609,7 +614,7 @@ mod tests {
             .iter()
             .map(text)
             .collect();
-        assert_eq!(texts, ["┄┄┄ edit", "-a", "+b"]);
+        assert_eq!(texts, ["edit", "-a", "+b"]);
     }
 
     #[test]

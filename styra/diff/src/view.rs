@@ -622,6 +622,11 @@ fn render_split(
                             .is_some_and(|line| is_file_header(line))
                         {
                             header_bar(line, usize::from(area.width))
+                        } else if source_lines
+                            .get(index)
+                            .is_some_and(|line| is_hunk_header(line))
+                        {
+                            hunk_rule(line, usize::from(area.width))
                         } else {
                             line
                         }
@@ -1032,6 +1037,10 @@ fn is_file_header(line: &str) -> bool {
     line.starts_with("diff --git ")
 }
 
+fn is_hunk_header(line: &str) -> bool {
+    line.starts_with("@@")
+}
+
 fn rendered_patch(text: &str, tint: Tint, word_highlights: bool) -> Vec<Line<'static>> {
     let mut lines = diff_block_lines_fading(text, None, false, tint.fade());
     if word_highlights {
@@ -1064,6 +1073,7 @@ fn patch_lines(
         Vec::new()
     };
     let headers: Vec<bool> = text.lines().map(is_file_header).collect();
+    let hunks: Vec<bool> = text.lines().map(is_hunk_header).collect();
     plan(text, &removed)
         .into_iter()
         .filter_map(|row| match row {
@@ -1071,6 +1081,8 @@ fn patch_lines(
                 let line = rendered.get_mut(index)?.take()?;
                 Some(if headers[index] {
                     header_bar(line, width)
+                } else if hunks[index] {
+                    hunk_rule(line, width)
                 } else {
                     line
                 })
@@ -1093,6 +1105,27 @@ fn header_bar(mut line: Line<'static>, width: usize) -> Line<'static> {
     let pad = width.saturating_sub(line.width());
     if pad > 0 {
         line.spans.push(Span::styled(" ".repeat(pad), background));
+    }
+    line
+}
+
+/// A hunk's cut with its dashes run on to the edge of the panel, so the gap
+/// between hunks reads as a break across the whole diff.
+fn hunk_rule(mut line: Line<'static>, width: usize) -> Line<'static> {
+    let Some(last) = line.spans.last() else {
+        return line;
+    };
+    let style = last.style;
+    // A cut with context keeps a space between its text and the run.
+    let gap = if last.content.ends_with('┄') {
+        ""
+    } else {
+        " "
+    };
+    let pad = width.saturating_sub(line.width() + gap.len());
+    if pad > 0 {
+        line.spans
+            .push(Span::styled(format!("{gap}{}", "┄".repeat(pad)), style));
     }
     line
 }
@@ -2273,6 +2306,9 @@ index 1111111..2222222 100644
             }),
             "rules run edge to edge"
         );
+        // Each hunk's cut runs the width of the panel.
+        let cut = "┄".repeat(78);
+        let cut = cut.as_str();
         assert_eq!(
             body(false),
             [
@@ -2281,7 +2317,7 @@ index 1111111..2222222 100644
                 "index 1111111..2222222 100644",
                 "--- a/src/a.rs",
                 "+++ b/src/a.rs",
-                "┄┄┄",
+                cut,
                 "1  fn a() {}",
                 "2 -fn b() {}",
                 "2 +fn c() {}",
@@ -2289,13 +2325,13 @@ index 1111111..2222222 100644
                 "▁",
                 "[diff --git a/b.txt b/b.txt]",
                 "▔",
-                "┄┄┄",
+                cut,
                 "1 +kept",
                 "1 -gone",
                 "▁",
                 "[diff --git a/c.txt b/c.txt]",
                 "▔",
-                "┄┄┄",
+                cut,
                 "1 -x",
                 "1 +y",
             ]
