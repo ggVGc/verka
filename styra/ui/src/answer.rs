@@ -269,6 +269,7 @@ mod tests {
         let lines = crate::event_list::message_rows(
             &event,
             None,
+            Default::default(),
             80,
             Protocol::CodexJsonl,
             crate::markdown::LinkDisplay::Compact,

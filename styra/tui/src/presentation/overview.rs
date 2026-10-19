@@ -4,6 +4,7 @@ use crate::activity::{IdleReason, Status};
 use crate::app::App;
 use std::borrow::Cow;
 use std::time::Duration;
+use styra_protocol::event::AgentEvent;
 use styra_protocol::{InteractionActivity, InteractionSummary};
 use styra_ui::overview::{OverviewMessage, OverviewTile, OverviewView};
 
@@ -77,21 +78,24 @@ fn tile<'a>(app: &'a App, interaction: &'a InteractionSummary, now_ms: u64) -> O
         uncommitted: interaction.uncommitted_changes,
         tags: &interaction.tags,
         protocol: interaction.selection.provider.protocol(),
-        messages: messages(interaction),
+        messages: messages(app, interaction),
     }
 }
 
 /// The conversation's tail, or just the agent's last message from a server
-/// too old to send more.
-fn messages(interaction: &InteractionSummary) -> Vec<OverviewMessage<'_>> {
+/// too old to send more. A branch marker leads where the event list's does,
+/// resolved live from the roster.
+fn messages<'a>(app: &'a App, interaction: &'a InteractionSummary) -> Vec<OverviewMessage<'a>> {
     if interaction.recent_messages.is_empty() {
         return interaction
             .last_message
             .as_deref()
             .map(|text| OverviewMessage {
-                from_operator: false,
-                text,
+                event: AgentEvent::AgentMessage {
+                    text: text.to_owned(),
+                },
                 contract: None,
+                branch: Default::default(),
             })
             .into_iter()
             .collect();
@@ -99,10 +103,13 @@ fn messages(interaction: &InteractionSummary) -> Vec<OverviewMessage<'_>> {
     interaction
         .recent_messages
         .iter()
-        .map(|message| OverviewMessage {
-            from_operator: message.from_operator,
-            text: &message.text,
-            contract: message.contract,
+        .map(|message| {
+            let event = message.event();
+            OverviewMessage {
+                branch: super::list::branch_link(app, &event),
+                event,
+                contract: message.contract,
+            }
         })
         .collect()
 }

@@ -12,8 +12,8 @@ use crate::protocol::{
     Answer, CheckoutState, CleanedWorktree, CompletionState, Contract, DrivaOptions,
     InteractionActivity, InteractionActivityReason, InteractionQuery, InteractionSummary,
     InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, ModelSummary, QueuedMessage,
-    RecentMessage, SendMessage, SessionOrigin, SessionSummary, TemplateSummary, WorktreeCleanup,
-    WorktreeSession, WorktreeSummary,
+    RecentBranch, RecentMessage, SendMessage, SessionOrigin, SessionSummary, TemplateSummary,
+    WorktreeCleanup, WorktreeSession, WorktreeSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
@@ -1281,7 +1281,8 @@ impl ManagedInteraction {
     }
 }
 
-/// The last messages from either side in `updates`, oldest first.
+/// The last messages from either side in `updates`, oldest first, with the
+/// branch markers between them.
 fn recent_messages(updates: &[SequencedUpdate]) -> Vec<RecentMessage> {
     /// More than the tallest overview tile shows lines.
     const LIMIT: usize = 24;
@@ -1294,6 +1295,7 @@ fn recent_messages(updates: &[SequencedUpdate]) -> Vec<RecentMessage> {
                     from_operator: false,
                     text: clipped(text),
                     contract: None,
+                    branch: None,
                 })
             }
             InteractionUpdate::Event(crate::event::AgentEvent::UserMessage { text }) => {
@@ -1305,8 +1307,22 @@ fn recent_messages(updates: &[SequencedUpdate]) -> Vec<RecentMessage> {
                     from_operator: true,
                     text: clipped(written),
                     contract,
+                    branch: None,
                 })
             }
+            InteractionUpdate::Event(crate::event::AgentEvent::Branched {
+                direction,
+                session,
+                ..
+            }) => Some(RecentMessage {
+                from_operator: false,
+                text: String::new(),
+                contract: None,
+                branch: Some(RecentBranch {
+                    direction: *direction,
+                    session: session.clone(),
+                }),
+            }),
             _ => None,
         })
         .take(LIMIT)
@@ -5976,6 +5992,7 @@ mod tests {
 
     /// Both sides of the conversation, oldest first and as written, with the
     /// tool traffic between them left out and the operator's message unframed.
+    /// A branch marker is kept, by the other Session's id alone.
     #[test]
     fn recent_messages_are_the_conversations_tail() {
         let mut updates = Vec::new();
@@ -5997,6 +6014,14 @@ mod tests {
                 text: "It raced **the clock**.\n".into(),
             }),
         );
+        push_sequenced(
+            &mut updates,
+            InteractionUpdate::Event(crate::event::AgentEvent::Branched {
+                direction: crate::event::BranchDirection::To,
+                session: "retry-backoff".into(),
+                name: Some("Retry backoff".into()),
+            }),
+        );
         assert_eq!(
             recent_messages(&updates),
             [
@@ -6004,11 +6029,22 @@ mod tests {
                     from_operator: true,
                     text: "Fix the\nflaky test".into(),
                     contract: Some(Contract::Text),
+                    branch: None,
                 },
                 RecentMessage {
                     from_operator: false,
                     text: "It raced **the clock**.".into(),
                     contract: None,
+                    branch: None,
+                },
+                RecentMessage {
+                    from_operator: false,
+                    text: String::new(),
+                    contract: None,
+                    branch: Some(RecentBranch {
+                        direction: crate::event::BranchDirection::To,
+                        session: "retry-backoff".into(),
+                    }),
                 },
             ]
         );

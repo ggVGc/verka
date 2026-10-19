@@ -1546,7 +1546,8 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "from_operator", required: false, type: %{kind: :boolean}},
         %{name: "text", required: true, type: %{kind: :string}},
-        %{name: "contract", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Contract"}}}
+        %{name: "contract", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Contract"}}},
+        %{name: "branch", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "RecentBranch"}}}
       ]
     },
 
@@ -1905,6 +1906,17 @@ defmodule Styra.Protocol do
         %{name: "quota", payload: %{kind: :newtype, type: %{kind: :ref, name: "QuotaEvent"}}},
         %{name: "working_directory_changed", payload: %{kind: :newtype, type: %{kind: :string, path: true}}},
         %{name: "ended", payload: %{kind: :newtype, type: %{kind: :ref, name: "InteractionEnd"}}}
+      ]
+    },
+
+    # A branch marker in `InteractionSummary::recent_messages`: which way the
+    # link points and the other Session's id. Its name is left for the client to
+    # resolve live, as for the marker itself.
+    "RecentBranch" => %{
+      kind: :struct,
+      fields: [
+        %{name: "direction", required: true, type: %{kind: :ref, name: "BranchDirection"}},
+        %{name: "session", required: true, type: %{kind: :string}}
       ]
     },
 

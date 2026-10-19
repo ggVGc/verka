@@ -2,7 +2,9 @@
 //! the whole fleet can be watched at once instead of one row at a time.
 
 use crate::chrome::StopTone;
-use crate::event_list::{faded_style, message_rows};
+#[cfg(doc)]
+use crate::event_list::EventEntry;
+use crate::event_list::{faded_style, message_rows, BranchLink};
 use crate::interactions::{status_marker, InteractionStatus};
 use crate::markdown::LinkDisplay;
 use crate::search::{self, SearchView};
@@ -52,11 +54,15 @@ pub struct OverviewTile<'a> {
     pub messages: Vec<OverviewMessage<'a>>,
 }
 
+/// One entry of a tile's conversation, drawn as the interaction's own event
+/// list draws it.
 pub struct OverviewMessage<'a> {
-    pub from_operator: bool,
-    pub text: &'a str,
+    /// A message from either side, or a branch marker.
+    pub event: AgentEvent,
     /// The answer shape an operator message asked for, if it asked for one.
     pub contract: Option<Contract>,
+    /// For a branch marker, where it leads, as [`EventEntry::branch`].
+    pub branch: BranchLink<'a>,
 }
 
 pub struct OverviewView<'a> {
@@ -366,8 +372,9 @@ fn render_tile(
     let mut used = 0;
     for message in tile.messages.iter().rev() {
         let rows = message_rows(
-            &message_event(message),
+            &message.event,
             message.contract.as_ref(),
+            message.branch.clone(),
             usize::from(inner.width.max(1)),
             tile.protocol,
             links,
@@ -408,15 +415,6 @@ fn fade(frame: &mut Frame, area: Rect) {
             let style = faded_style(Style::default().fg(fg), UNSELECTED_FADE);
             cell.set_style(style);
         }
-    }
-}
-
-fn message_event(message: &OverviewMessage<'_>) -> AgentEvent {
-    let text = message.text.to_owned();
-    if message.from_operator {
-        AgentEvent::UserMessage { text }
-    } else {
-        AgentEvent::AgentMessage { text }
     }
 }
 
@@ -487,6 +485,22 @@ mod tests {
             tags: &[],
             protocol: Protocol::default(),
             messages: Vec::new(),
+        }
+    }
+
+    fn operator(text: &str) -> OverviewMessage<'static> {
+        OverviewMessage {
+            event: AgentEvent::UserMessage { text: text.into() },
+            contract: None,
+            branch: BranchLink::default(),
+        }
+    }
+
+    fn agent(text: &str) -> OverviewMessage<'static> {
+        OverviewMessage {
+            event: AgentEvent::AgentMessage { text: text.into() },
+            contract: None,
+            branch: BranchLink::default(),
         }
     }
 
@@ -623,11 +637,7 @@ mod tests {
         working.branch = Some("styra/fix");
         working.elapsed = Some("2m14s".into());
         working.tags = &tags;
-        working.messages = vec![OverviewMessage {
-            from_operator: false,
-            text: "The checks are green.",
-            contract: None,
-        }];
+        working.messages = vec![agent("The checks are green.")];
         let mut waiting = tile("write the docs", InteractionStatus::Idle);
         waiting.newly_idle = true;
         let view = OverviewView {
@@ -659,10 +669,12 @@ mod tests {
         talking.messages = ["oldest", "older", "fix the checkout", "newer", "newest"]
             .into_iter()
             .enumerate()
-            .map(|(index, text)| OverviewMessage {
-                from_operator: index == 2,
-                text,
-                contract: None,
+            .map(|(index, text)| {
+                if index == 2 {
+                    operator(text)
+                } else {
+                    agent(text)
+                }
             })
             .collect();
         let view = OverviewView {
@@ -692,15 +704,10 @@ mod tests {
         let mut talking = tile("talking", InteractionStatus::Idle);
         talking.messages = vec![
             OverviewMessage {
-                from_operator: true,
-                text: "List the flaky tests",
                 contract: Some(Contract::Lines),
+                ..operator("List the flaky tests")
             },
-            OverviewMessage {
-                from_operator: false,
-                text: "Two **flaky** tests:\n\n- `checkout`\n- `refund`",
-                contract: None,
-            },
+            agent("Two **flaky** tests:\n\n- `checkout`\n- `refund`"),
         ];
         let view = OverviewView {
             running_only: false,
@@ -870,16 +877,64 @@ mod tests {
         assert!(!screen.contains("one"), "{screen}");
     }
 
+    /// A branch marker in the conversation reads as it does in the event
+    /// list: by the live name and state of where it leads, not the name it
+    /// was written with.
+    #[test]
+    fn a_tile_shows_the_branch_markers_in_its_conversation() {
+        use crate::chrome::StopTone;
+        use crate::interactions::InteractionState;
+        use styra_protocol::event::BranchDirection;
+        use styra_protocol::CompletionState;
+        let mut talking = tile("talking", InteractionStatus::Idle);
+        talking.messages = vec![
+            agent("Split the retry work off."),
+            OverviewMessage {
+                event: AgentEvent::Branched {
+                    direction: BranchDirection::To,
+                    session: "4f1c-session-id".into(),
+                    name: Some("stale snapshot".into()),
+                },
+                contract: None,
+                branch: BranchLink {
+                    name: Some("Retry backoff"),
+                    state: Some(InteractionState {
+                        status: InteractionStatus::Stopped(StopTone::Paused),
+                        stop_reason: Some("paused".into()),
+                        rate_limited: None,
+                        newly_idle: false,
+                        completion: CompletionState::Active,
+                    }),
+                    message: Some("Backoff now doubles."),
+                },
+            },
+        ];
+        let view = OverviewView {
+            running_only: false,
+            workspace_scope: None,
+            tiles: vec![talking],
+            selected: 0,
+            links: LinkDisplay::Compact,
+            search: SearchView::default(),
+        };
+        let (screen, _) = draw(&view, 60, 14);
+        assert!(screen.contains("« Split the retry work off."), "{screen}");
+        assert!(
+            screen.contains("Branch to:  ■  Retry backoff · paused"),
+            "{screen}"
+        );
+        assert!(screen.contains("« Backoff now doubles."), "{screen}");
+        assert!(!screen.contains("stale snapshot"), "{screen}");
+        let row = |text: &str| screen.lines().position(|line| line.contains(text));
+        assert!(row("Split the retry") < row("Branch to:"), "{screen}");
+    }
+
     /// A search marks matching words across every tile — names, places and
     /// messages alike — and shows its prompt along the bottom of the grid.
     #[test]
     fn a_search_marks_matches_in_every_tile() {
         let mut fixing = tile("fix retry_backoff", InteractionStatus::Idle);
-        fixing.messages = vec![OverviewMessage {
-            from_operator: false,
-            text: "Moved it to src/retry.rs",
-            contract: None,
-        }];
+        fixing.messages = vec![agent("Moved it to src/retry.rs")];
         let mut other = tile("write the docs", InteractionStatus::Idle);
         other.branch = Some("styra/retry-docs");
         let view = OverviewView {

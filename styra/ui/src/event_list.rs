@@ -1193,12 +1193,15 @@ fn entry_item_slice(
     ListItem::new(rows)
 }
 
-/// The rows a conversation message is drawn as in the event list, expanded
-/// as its conversation-only mode shows it, for a view that shows messages
-/// outside the list. Uncapped: what to cut is up to the view.
+/// The rows a conversation entry — a message or a branch marker — is drawn
+/// as in the event list, expanded as its conversation-only mode shows it, for
+/// a view that shows the conversation outside the list. `branch` is where a
+/// marker leads, as [`EventEntry::branch`]. Uncapped: what to cut is up to
+/// the view.
 pub fn message_rows(
     event: &AgentEvent,
     contract: Option<&Contract>,
+    branch: BranchLink<'_>,
     width: usize,
     protocol: Protocol,
     links: LinkDisplay,
@@ -1212,7 +1215,7 @@ pub fn message_rows(
         contract,
         selected: false,
         link_highlight: None,
-        branch: Default::default(),
+        branch,
         branch_provider_switch: None,
         inherited: false,
     };

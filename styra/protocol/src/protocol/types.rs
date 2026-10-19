@@ -985,6 +985,43 @@ pub struct RecentMessage {
     /// The answer shape an operator message asked for, if it asked for one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contract: Option<Contract>,
+    /// Set when this is not a message but the conversation's
+    /// [`AgentEvent::Branched`] marker, which a view draws as the event list
+    /// draws it. [`Self::text`] is then empty and [`Self::from_operator`]
+    /// false, so a client too old to know of this reads an empty agent
+    /// message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<RecentBranch>,
+}
+
+/// A branch marker in [`InteractionSummary::recent_messages`]: which way the
+/// link points and the other Session's id. Its name is left for the client to
+/// resolve live, as for the marker itself.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecentBranch {
+    pub direction: crate::event::BranchDirection,
+    /// The other Session's host id.
+    pub session: String,
+}
+
+impl RecentMessage {
+    /// The event this entry stands for, as the interaction's own event list
+    /// has it.
+    pub fn event(&self) -> AgentEvent {
+        if let Some(branch) = &self.branch {
+            return AgentEvent::Branched {
+                direction: branch.direction,
+                session: branch.session.clone(),
+                name: None,
+            };
+        }
+        let text = self.text.clone();
+        if self.from_operator {
+            AgentEvent::UserMessage { text }
+        } else {
+            AgentEvent::AgentMessage { text }
+        }
+    }
 }
 
 /// The branch and commit a Session's own branch was created from, recorded
@@ -1202,8 +1239,9 @@ pub struct InteractionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
     /// The tail of the conversation, oldest first: the latest messages from
-    /// the operator and the agent, each as written so a view can render it as
-    /// the interaction's own event list does, and long ones clipped. A view
+    /// the operator and the agent and the branch markers between them, each
+    /// as written so a view can render it as the interaction's own event list
+    /// does, and long ones clipped. A view
     /// with room for more than one line can show how the conversation got
     /// there. Empty before anything was
     /// said, and from a server too old to report it.

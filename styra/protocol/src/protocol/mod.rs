@@ -19,7 +19,7 @@ pub use types::{
     Integration, IntegrationResult, InteractionActivity, InteractionActivityReason, InteractionEnd,
     InteractionQuery, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
     LogLevel, ModelSummary, MountOrigin, ProjectAction, QueuedMessage, QuotaEvent, QuotaStatus,
-    RawLine, RebaseStatus, RecentMessage, SandboxProcess, SavedBranch, SessionOrigin,
+    RawLine, RebaseStatus, RecentBranch, RecentMessage, SandboxProcess, SavedBranch, SessionOrigin,
     SessionSummary, TemplateSummary, TurnDiff, VariableOrigin, WorkspaceSummary, WorktreeCleanup,
     WorktreeSession, WorktreeSummary, WORKTREES_DIR,
 };
