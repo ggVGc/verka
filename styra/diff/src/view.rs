@@ -201,20 +201,11 @@ impl<'a> Directory<'a> {
         for child in &self.children {
             match child {
                 Node::File(index, name, change) => {
-                    let color = match change {
-                        FileChange::Added | FileChange::Copied => theme::SUCCESS,
-                        FileChange::Deleted => theme::ERROR,
-                        FileChange::Moved => theme::DIRECTORY_NAME,
-                        _ => theme::WARNING,
-                    };
                     rows.push((
                         Some(*index),
                         Line::from(vec![
                             Span::raw(format!("{indent}{name}")),
-                            Span::styled(
-                                format!(" [{}]", change.marker()),
-                                Style::default().fg(color),
-                            ),
+                            change_marker(*change),
                         ]),
                     ));
                 }
@@ -438,6 +429,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                 view.hide_removed,
                 side_by_side,
                 view.requested_scroll,
+                view.per_file,
             )
         })
         .unwrap_or(view.requested_scroll);
@@ -451,6 +443,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                 body,
                 requested,
                 view.horizontal_scroll,
+                view.per_file,
             )
         } else {
             let mut lines = match shown {
@@ -465,6 +458,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                     view.tint,
                     view.word_highlights,
                     width,
+                    view.per_file,
                 ),
                 Err(error) => vec![Line::from(Span::styled(
                     format!("  {error}"),
@@ -522,9 +516,10 @@ fn render_split(
     area: Rect,
     scroll: u16,
     pan: u16,
+    per_file: bool,
 ) -> (u16, u16, u16) {
     use crate::split::{aligned, Cell, SplitRow};
-    let plan = aligned(text);
+    let plan = aligned(text, per_file);
     let source_lines: Vec<_> = text.lines().collect();
     let rendered = rendered_patch(text, tint, word_highlights);
     let gutter = plan
@@ -704,6 +699,7 @@ fn render_thumbnail(
         viewport,
         SECTIONS,
         side_by_side,
+        true,
     );
     for section in 0..SECTIONS {
         let y = inner.y + section as u16;
@@ -868,6 +864,7 @@ fn thumbnail_viewport(
         viewport,
         height,
         false,
+        false,
     )
 }
 
@@ -879,6 +876,7 @@ fn thumbnail_viewport_layout(
     viewport: usize,
     height: usize,
     side_by_side: bool,
+    per_file: bool,
 ) -> Vec<bool> {
     let mut visible = vec![false; height];
     if height == 0 {
@@ -886,7 +884,7 @@ fn thumbnail_viewport_layout(
     }
     let (extent, positions) = thumbnail_line_positions(patch);
     let total = file_lines.unwrap_or(extent).max(extent).max(1);
-    for row in crate::split::source_rows(patch, hide_removed, side_by_side)
+    for row in crate::split::source_rows(patch, hide_removed, side_by_side, per_file)
         .into_iter()
         .skip(scroll)
         .take(viewport)
@@ -900,20 +898,22 @@ fn thumbnail_viewport_layout(
     visible
 }
 
-/// Keep the selected file's explanation visible while its patch scrolls.
+/// The same change marker beside a filename in the tree and patch title.
+fn change_marker(change: FileChange) -> Span<'static> {
+    let color = match change {
+        FileChange::Added | FileChange::Copied => theme::SUCCESS,
+        FileChange::Deleted => theme::ERROR,
+        FileChange::Moved => theme::DIRECTORY_NAME,
+        _ => theme::WARNING,
+    };
+    Span::styled(
+        format!(" [{}]", change.marker()),
+        Style::default().fg(color),
+    )
+}
+
+/// Keep the selected filename visible while its patch scrolls.
 fn file_info(file: &FileDiff<'_>) -> Line<'static> {
-    let source = file
-        .patch
-        .lines()
-        .take_while(|line| !line.starts_with("@@"))
-        .find_map(|line| {
-            line.strip_prefix("rename from ")
-                .or_else(|| line.strip_prefix("copy from "))
-        });
-    let mut description = file.change().label().to_owned();
-    if let Some(source) = source {
-        description.push_str(&format!(" from {source}"));
-    }
     Line::from(vec![
         Span::styled(
             format!(" {}", file.path),
@@ -921,10 +921,7 @@ fn file_info(file: &FileDiff<'_>) -> Line<'static> {
                 .fg(theme::TEXT)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!(" · {description}"),
-            Style::default().fg(theme::ADDITIONAL_INFO),
-        ),
+        change_marker(file.change()),
     ])
 }
 
@@ -1002,22 +999,58 @@ pub(crate) enum Row {
     RuleBelow,
 }
 
-/// The rows `text` is drawn as: a row for each of its lines, less the
-/// removed ones when they are hidden, and each file's header set between two
+/// The rows `text` is drawn as: Git index and path markers are omitted, as
+/// are removed lines when hidden, and each file's header is set between two
 /// rules — the one above only when something is drawn above it.
-pub(crate) fn rows(text: &str, hide_removed: bool) -> Vec<Row> {
+pub(crate) fn rows(text: &str, hide_removed: bool, per_file: bool) -> Vec<Row> {
     let removed = if hide_removed {
         removed_rows(text)
     } else {
         Vec::new()
     };
-    plan(text, &removed)
+    file_view_rows(text, plan(text, &removed), per_file)
+}
+
+/// Keep the full patch for highlighting and source positions, but omit its
+/// repeated Git header when the selected file already has a title.
+fn file_view_rows(text: &str, rows: Vec<Row>, per_file: bool) -> Vec<Row> {
+    if !per_file {
+        return rows;
+    }
+    let lines: Vec<_> = text.lines().collect();
+    let first_hunk = lines.iter().position(|line| line.starts_with("@@"));
+    rows.into_iter()
+        .filter(|row| match *row {
+            Row::Line(index) => first_hunk.map_or_else(
+                || {
+                    let line = lines[index];
+                    !["diff --git ", "index ", "--- ", "+++ "]
+                        .iter()
+                        .any(|prefix| line.starts_with(prefix))
+                },
+                |hunk| index >= hunk,
+            ),
+            Row::RuleAbove | Row::RuleBelow => false,
+        })
+        .collect()
 }
 
 /// [`rows`], given which lines are `removed` and to be left out.
 fn plan(text: &str, removed: &[bool]) -> Vec<Row> {
     let mut rows = Vec::new();
+    let mut in_hunk = false;
     for (index, line) in text.lines().enumerate() {
+        if is_file_header(line) {
+            in_hunk = false;
+        } else if is_hunk_header(line) {
+            in_hunk = true;
+        } else if !in_hunk
+            && ["index ", "--- ", "+++ "]
+                .iter()
+                .any(|prefix| line.starts_with(prefix))
+        {
+            continue;
+        }
         if removed.get(index).copied().unwrap_or(false) {
             continue;
         }
@@ -1046,6 +1079,19 @@ fn rendered_patch(text: &str, tint: Tint, word_highlights: bool) -> Vec<Line<'st
     if word_highlights {
         styra_ui::diff::highlight_words(text, &mut lines);
     }
+    // Keep raw metadata available to highlighting and source navigation;
+    // only the displayed file separator uses the resolved path.
+    let mut files = crate::files::file_diffs(text).into_iter();
+    for (index, source) in text.lines().enumerate() {
+        if is_file_header(source) {
+            if let (Some(file), Some(line)) = (files.next(), lines.get_mut(index)) {
+                line.spans = vec![Span::styled(
+                    file.path.to_owned(),
+                    Style::default().fg(theme::ACCENT),
+                )];
+            }
+        }
+    }
     lines
 }
 
@@ -1058,6 +1104,7 @@ fn patch_lines(
     tint: Tint,
     word_highlights: bool,
     width: usize,
+    per_file: bool,
 ) -> Vec<Line<'static>> {
     // The diff is drawn a row for each of its lines.
     let mut rendered: Vec<_> = rendered_patch(text, tint, word_highlights)
@@ -1074,7 +1121,7 @@ fn patch_lines(
     };
     let headers: Vec<bool> = text.lines().map(is_file_header).collect();
     let hunks: Vec<bool> = text.lines().map(is_hunk_header).collect();
-    plan(text, &removed)
+    file_view_rows(text, plan(text, &removed), per_file)
         .into_iter()
         .filter_map(|row| match row {
             Row::Line(index) => {
@@ -1338,8 +1385,61 @@ index 1111111..2222222 100644
 ";
 
     #[test]
+    fn file_view_shows_the_title_and_hunks_without_git_headers() {
+        for side_by_side in [false, true] {
+            let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut view = CheckoutDiffView::unread(Block::bordered());
+                    view.diff = Ok(DIFF);
+                    view.per_file = true;
+                    view.side_by_side = side_by_side;
+                    let measured = render(frame, &view, frame.area());
+                    assert_eq!(measured.side_by_side, side_by_side);
+                })
+                .unwrap();
+            let output: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(output.contains("src/a.rs [M]"), "{output}");
+            assert!(output.contains("┄┄┄"), "{output}");
+            assert!(output.contains("fn c() {}"), "{output}");
+            for metadata in ["diff --git", "index 1111111", "--- a/", "+++ b/"] {
+                assert!(!output.contains(metadata), "{output}");
+            }
+        }
+        let (combined, _) = screen(Ok(DIFF), None, 0);
+        assert!(combined.contains("src/a.rs"), "{combined}");
+        for metadata in ["diff --git", "index 1111111", "--- a/", "+++ b/"] {
+            assert!(!combined.contains(metadata), "{combined}");
+        }
+    }
+
+    #[test]
+    fn file_view_retains_changes_without_hunks() {
+        for detail in [
+            "Binary files a/image.png and b/image.png differ",
+            "old mode 100644\nnew mode 100755",
+            "similarity index 100%\nrename from old\nrename to new",
+        ] {
+            let text = format!("diff --git a/old b/new\n{detail}\n");
+            let shown = patch_lines(&text, false, Tint::Full, true, 80, true);
+            let shown = shown
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(shown, detail);
+        }
+    }
+
+    #[test]
     fn hiding_removals_keeps_added_indicators_and_original_line_numbers() {
-        let lines = patch_lines(DIFF, true, Tint::Full, true, 80);
+        let lines = patch_lines(DIFF, true, Tint::Full, true, 80, false);
         let text = lines
             .iter()
             .map(|line| {
@@ -1354,7 +1454,8 @@ index 1111111..2222222 100644
         assert!(text.contains("1  fn a()"), "{text}");
         assert!(text.contains("2 +fn c()"), "{text}");
         assert!(text.contains("3 +fn d()"), "{text}");
-        assert!(text.contains("--- a/src/a.rs"), "{text}");
+        assert!(!text.contains("--- a/src/a.rs"), "{text}");
+        assert!(text.contains("src/a.rs"), "{text}");
         assert_eq!(
             lines
                 .iter()
@@ -1362,7 +1463,7 @@ index 1111111..2222222 100644
                 .count(),
             2
         );
-        assert!(patch_lines(DIFF, false, Tint::Full, true, 80)
+        assert!(patch_lines(DIFF, false, Tint::Full, true, 80, false)
             .iter()
             .any(|line| line.style.bg == Some(theme::DIFF_REMOVED_BACKGROUND)));
     }
@@ -1780,7 +1881,7 @@ index 1111111..2222222 100644
         assert!(output.contains("E: describe edits again · e: hide edit report"));
         assert_eq!(with, without - 2, "a line of description and its rule");
         let description = output.find("Replaces b").unwrap();
-        assert!(output.find("src/a.rs · edited").unwrap() < description);
+        assert!(output.find("src/a.rs [M]").unwrap() < description);
         assert!(description < output.find("fn c()").unwrap(), "{output}");
 
         let (output, _) = report_screen(&described("an earlier patch"), true);
@@ -1875,7 +1976,7 @@ index 1111111..2222222 100644
     }
 
     #[test]
-    fn file_list_shows_markers_and_explains_the_selected_change() {
+    fn file_list_and_title_use_the_same_change_markers() {
         let text = "diff --git a/a b/a\nnew file mode 100644\n\
             diff --git a/b b/b\ndeleted file mode 100644\n\
             diff --git a/old b/c\nsimilarity index 100%\nrename from old\nrename to c\n\
@@ -1884,13 +1985,10 @@ index 1111111..2222222 100644
         for label in ["a [A]", "b [D]", "c [R]", "d [R+]"] {
             assert!(output.contains(label), "{output}");
         }
-        assert!(output.contains("a · added"), "{output}");
+        assert!(output.contains("│ a [A]"), "{output}");
         let ((output, _), _) = file_screen(Ok(text), Some("main"), u16::MAX, true, 3);
-        assert!(
-            output.contains("d · moved with edits from old2"),
-            "{output}"
-        );
-        assert!(!output.contains("a · added"), "{output}");
+        assert!(output.contains("│ d [R+]"), "{output}");
+        assert!(!output.contains("│ a [A]"), "{output}");
         let ((output, _), _) = filtered_screen(
             Ok(text),
             Some("main"),
@@ -1902,12 +2000,26 @@ index 1111111..2222222 100644
                 ..Default::default()
             },
         );
-        assert!(output.contains("c · moved from old"), "{output}");
+        assert!(output.contains("│ c [R]"), "{output}");
         let files = filtered_file_diffs(text, Some("c"));
         let rows = file_tree_rows(&files, true);
         assert_eq!(rows[0].0, Some(2));
         assert_eq!(rows[0].1.to_string(), "c [R]");
         assert_eq!(rows[0].1.spans[1].style.fg, Some(theme::DIRECTORY_NAME));
+        for (_, file) in filtered_file_diffs(text, None) {
+            let tree = file_tree_rows(
+                &[(
+                    0,
+                    FileDiff {
+                        path: file.path,
+                        patch: file.patch,
+                    },
+                )],
+                true,
+            );
+            let title = file_info(&file);
+            assert_eq!(title.spans[1], tree[0].1.spans[1]);
+        }
     }
 
     /// The tree fits its longest row, with a little room after it, but a
@@ -1973,7 +2085,7 @@ index 1111111..2222222 100644
                 })
                 .unwrap()
         };
-        let (selected, other) = (row("b [D]"), row("a [A]"));
+        let (selected, other) = (row("› b [D]"), row("  a [A]"));
         // The marker, the name, and the change marker's bracket.
         for x in [1, 3, 5] {
             assert_eq!(buffer[(x, selected)].bg, theme::SELECTION_BACKGROUND);
@@ -2312,24 +2424,21 @@ index 1111111..2222222 100644
         assert_eq!(
             body(false),
             [
-                "[diff --git a/src/a.rs b/src/a.rs]",
+                "[src/a.rs]",
                 "▔",
-                "index 1111111..2222222 100644",
-                "--- a/src/a.rs",
-                "+++ b/src/a.rs",
                 cut,
                 "1  fn a() {}",
                 "2 -fn b() {}",
                 "2 +fn c() {}",
                 "3 +fn d() {}",
                 "▁",
-                "[diff --git a/b.txt b/b.txt]",
+                "[b.txt]",
                 "▔",
                 cut,
                 "1 +kept",
                 "1 -gone",
                 "▁",
-                "[diff --git a/c.txt b/c.txt]",
+                "[c.txt]",
                 "▔",
                 cut,
                 "1 -x",
@@ -2338,10 +2447,7 @@ index 1111111..2222222 100644
         );
         let hidden = body(true);
         assert_eq!(hidden.len(), body(false).len() - 3, "{hidden:?}");
-        assert_eq!(
-            hidden[13..16],
-            ["1 +kept", "▁", "[diff --git a/c.txt b/c.txt]"]
-        );
+        assert_eq!(hidden[10..13], ["1 +kept", "▁", "[c.txt]"]);
     }
 
     /// `t` switches the unchanged rows between faded as everywhere else and
@@ -2525,7 +2631,7 @@ mod split_tests {
         let mut terminal = Terminal::new(TestBackend::new(101, 8)).unwrap();
         terminal
             .draw(|frame| {
-                render_split(frame, patch, Tint::Full, true, frame.area(), 0, 0);
+                render_split(frame, patch, Tint::Full, true, frame.area(), 0, 0, false);
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
@@ -2554,7 +2660,7 @@ mod split_tests {
         let mut terminal = Terminal::new(TestBackend::new(101, 4)).unwrap();
         terminal
             .draw(|frame| {
-                render_split(frame, &patch, Tint::Full, true, frame.area(), 0, 32);
+                render_split(frame, &patch, Tint::Full, true, frame.area(), 0, 32, false);
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
@@ -2621,7 +2727,7 @@ mod split_tests {
                 }
             }
         }
-        let lines = patch_lines(patch, true, Tint::Half, true, 80);
+        let lines = patch_lines(patch, true, Tint::Half, true, 80, false);
         assert!(lines
             .iter()
             .flat_map(|l| &l.spans)
@@ -2639,7 +2745,7 @@ mod split_tests {
         let mut terminal = Terminal::new(TestBackend::new(81, 3)).unwrap();
         let frame = terminal
             .draw(|frame| {
-                render_split(frame, &patch, Tint::Full, true, frame.area(), 0, 30);
+                render_split(frame, &patch, Tint::Full, true, frame.area(), 0, 30, false);
             })
             .unwrap();
         let changed: Vec<_> = frame

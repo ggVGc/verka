@@ -128,10 +128,11 @@ impl CheckoutDiff {
             })?,
             None => 0,
         };
-        let offset = crate::split::source_rows(file.patch, self.hide_removed, self.rendered_side)
-            .iter()
-            .position(|shown| matches!(shown, Row::Line(index) if *index == row))
-            .unwrap_or(0);
+        let offset =
+            crate::split::source_rows(file.patch, self.hide_removed, self.rendered_side, true)
+                .iter()
+                .position(|shown| matches!(shown, Row::Line(index) if *index == row))
+                .unwrap_or(0);
         if !self.per_file {
             std::mem::swap(&mut self.scroll, &mut self.combined_scroll);
             self.combined_side = self.rendered_side;
@@ -285,9 +286,10 @@ impl CheckoutDiff {
                             !hidden,
                             false,
                             self.scroll.clamped(),
+                            self.per_file,
                         )
                     } else {
-                        keep_top(text, hidden, self.scroll.clamped())
+                        keep_top(text, hidden, self.scroll.clamped(), self.per_file)
                     };
                 }
                 self.rendered_side = false;
@@ -301,9 +303,10 @@ impl CheckoutDiff {
                                 !hidden,
                                 false,
                                 self.combined_scroll.clamped(),
+                                false,
                             )
                         } else {
-                            keep_top(text, hidden, self.combined_scroll.clamped())
+                            keep_top(text, hidden, self.combined_scroll.clamped(), false)
                         };
                     }
                     self.combined_side = false;
@@ -373,7 +376,8 @@ impl CheckoutDiff {
     /// headers. A file the diff deletes is not there to open.
     pub fn location(&self) -> Result<(PathBuf, Option<u32>), String> {
         let text = self.shown_text().ok_or("no diff to open a file from")?;
-        let rows = crate::split::source_rows(text, self.hide_removed, self.rendered_side);
+        let rows =
+            crate::split::source_rows(text, self.hide_removed, self.rendered_side, self.per_file);
         let top = line_at(&rows, usize::from(self.scroll.clamped())).ok_or("no file to open")?;
         let (file, line) = position(text, top).ok_or("no file to open")?;
         let path = self.target.worktree.join(file);
@@ -445,9 +449,9 @@ impl CheckoutDiff {
 /// The offset that keeps what is at the top of `text`'s rows there once its
 /// removed lines are shown again, if `hidden`, or hidden: the line at the
 /// top, or the first after it that stays, with a rule above it kept too.
-fn keep_top(text: &str, hidden: bool, top: u16) -> u16 {
-    let before = rows(text, hidden);
-    let after = rows(text, !hidden);
+fn keep_top(text: &str, hidden: bool, top: u16, per_file: bool) -> u16 {
+    let before = rows(text, hidden, per_file);
+    let after = rows(text, !hidden, per_file);
     let top = usize::from(top);
     let offset = match line_at(&before, top) {
         Some(line) => {
@@ -533,7 +537,12 @@ mod tests {
         };
         let location = |diff: &CheckoutDiff| {
             let text = diff.shown_text().unwrap();
-            let plan = crate::split::source_rows(text, diff.hide_removed, diff.rendered_side);
+            let plan = crate::split::source_rows(
+                text,
+                diff.hide_removed,
+                diff.rendered_side,
+                diff.per_file,
+            );
             position(
                 text,
                 line_at(&plan, usize::from(diff.scroll.clamped())).unwrap(),
@@ -580,13 +589,13 @@ mod tests {
         assert!(diff.per_file);
         assert_eq!(diff.selected_file, 1);
         assert_eq!(diff.combined_scroll.offset, 2);
-        let shown = rows(diff.shown_text().unwrap(), false);
+        let shown = rows(diff.shown_text().unwrap(), false, true);
         let row = line_at(&shown, usize::from(diff.scroll.clamped())).unwrap();
         assert_eq!(diff.shown_text().unwrap().lines().nth(row), Some("+end"));
 
         diff.hide_removed = true;
         diff.jump_to(Path::new("/w/b.txt"), Some(11)).unwrap();
-        let shown = rows(diff.shown_text().unwrap(), true);
+        let shown = rows(diff.shown_text().unwrap(), true, true);
         let row = line_at(&shown, usize::from(diff.scroll.clamped())).unwrap();
         assert_eq!(diff.shown_text().unwrap().lines().nth(row), Some("+new"));
         diff.jump_to(Path::new("/w/b.txt"), Some(10)).unwrap();
@@ -682,9 +691,9 @@ mod tests {
         std::fs::write(root.join("a.rs"), "").unwrap();
         let mut diff = two_files();
         diff.target.worktree = root.clone();
-        // Rows: 0 a.rs's header, 1 its rule, 2-4 its metadata and hunk,
-        // 5 " keep" (10), 6 "-old", 7 "+new" (11), 8 " after" (12), 9 the
-        // rule above gone.rs's header, 10 that header.
+        // Rows: 0 a.rs's header, 1 its rule, 2 its hunk, 3 " keep" (10),
+        // 4 "-old", 5 "+new" (11), 6 " after" (12), 7 the rule above
+        // gone.rs's header, 8 that header. Git path markers are hidden.
         let text = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n\
                     @@ -10,3 +10,3 @@\n keep\n-old\n+new\n after\n\
                     diff --git a/gone.rs b/gone.rs\n--- a/gone.rs\n+++ /dev/null\n\
@@ -692,7 +701,7 @@ mod tests {
         assert_eq!(
             removed_rows(text).len(),
             text.lines().count(),
-            "the view draws a row for each line"
+            "removal flags retain raw source indices"
         );
         diff.diff = Ok(text.into());
         let a = root.join("a.rs");
@@ -701,21 +710,21 @@ mod tests {
         diff.scroll.offset = 1;
         assert_eq!(
             diff.location(),
-            Ok((a.clone(), None)),
-            "a rule is its file's"
+            Ok((a.clone(), Some(10))),
+            "the rule anchors to the first visible hunk"
         );
-        diff.scroll.offset = 5;
+        diff.scroll.offset = 3;
         assert_eq!(diff.location(), Ok((a.clone(), Some(10))));
-        diff.scroll.offset = 6;
+        diff.scroll.offset = 4;
         assert_eq!(diff.location(), Ok((a.clone(), Some(11))), "where -old was");
         diff.hide_removed = true;
         assert_eq!(
             diff.location(),
             Ok((a.clone(), Some(11))),
-            "+new, row 6 of those shown"
+            "+new, row 4 of those shown"
         );
         diff.hide_removed = false;
-        for top in [9, 10] {
+        for top in [7, 8] {
             diff.scroll.offset = top;
             assert_eq!(
                 diff.location(),
@@ -732,7 +741,7 @@ mod tests {
             "the per-file view opens its selected file"
         );
         diff.apply(Action::Up);
-        assert_eq!(diff.location(), Ok((a, None)));
+        assert_eq!(diff.location(), Ok((a, Some(10))));
         let _ = std::fs::remove_dir_all(&root);
     }
 

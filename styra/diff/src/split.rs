@@ -31,7 +31,7 @@ impl SplitRow {
     }
 }
 
-pub(crate) fn aligned(text: &str) -> Vec<SplitRow> {
+pub(crate) fn aligned(text: &str, per_file: bool) -> Vec<SplitRow> {
     let mut result = Vec::new();
     let mut old = 0;
     let mut new = 0;
@@ -53,7 +53,7 @@ pub(crate) fn aligned(text: &str) -> Vec<SplitRow> {
         right.clear();
     }
     let lines: Vec<_> = text.lines().collect();
-    for row in rows(text, false) {
+    for row in rows(text, false, per_file) {
         let Row::Line(index) = row else {
             flush(&mut result, &mut left, &mut right);
             result.push(SplitRow::Shared(row));
@@ -123,11 +123,14 @@ pub(crate) fn aligned(text: &str) -> Vec<SplitRow> {
     result
 }
 
-pub(crate) fn source_rows(text: &str, hidden: bool, split: bool) -> Vec<Row> {
+pub(crate) fn source_rows(text: &str, hidden: bool, split: bool, per_file: bool) -> Vec<Row> {
     if split {
-        aligned(text).into_iter().map(SplitRow::source).collect()
+        aligned(text, per_file)
+            .into_iter()
+            .map(SplitRow::source)
+            .collect()
     } else {
-        rows(text, hidden)
+        rows(text, hidden, per_file)
     }
 }
 
@@ -138,11 +141,12 @@ pub(crate) fn remap(
     next_hidden: bool,
     after: bool,
     top: u16,
+    per_file: bool,
 ) -> u16 {
     if before == after && hidden == next_hidden {
         return top;
     }
-    let previous = source_rows(text, hidden, before);
+    let previous = source_rows(text, hidden, before, per_file);
     let Some(mut source) = previous.get(usize::from(top)).copied() else {
         return u16::MAX;
     };
@@ -156,9 +160,11 @@ pub(crate) fn remap(
             .find(|row| matches!(row, Row::Line(_)))
             .unwrap_or(source);
     }
-    let next = source_rows(text, next_hidden, after);
+    let next = source_rows(text, next_hidden, after, per_file);
     let exact = if after {
-        aligned(text).iter().position(|row| row.contains(source))
+        aligned(text, per_file)
+            .iter()
+            .position(|row| row.contains(source))
     } else {
         next.iter().position(|row| *row == source)
     };
@@ -186,7 +192,7 @@ mod tests {
     #[test]
     fn unequal_changes_align_without_crossing_context_or_hunks() {
         let text = "diff --git a/a b/a\n@@ -10,4 +20,5 @@\n keep\n-old\n+new\n+extra\n after\n@@ -50 +60 @@\n-last\n+end\n";
-        let pairs: Vec<_> = aligned(text)
+        let pairs: Vec<_> = aligned(text, false)
             .into_iter()
             .filter_map(|row| match row {
                 SplitRow::Pair(a, b) => Some((a.map(|c| c.number), b.map(|c| c.number))),
@@ -208,7 +214,7 @@ mod tests {
     #[test]
     fn annotations_do_not_pair_with_code_or_advance_numbers() {
         let text = "@@ -1 +1,2 @@\n-old\n\\ No newline at end of file\n+new\n+extra\n\\ No newline at end of file\n";
-        let pairs: Vec<_> = aligned(text)
+        let pairs: Vec<_> = aligned(text, false)
             .into_iter()
             .filter_map(|r| match r {
                 SplitRow::Pair(a, b) => Some((a.map(|c| c.index), b.map(|c| c.index))),
@@ -229,10 +235,10 @@ mod tests {
     #[test]
     fn layout_switches_anchor_both_halves_and_later_file_rules() {
         let text = "diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/b b/b\n@@ -1 +1 @@\n-before\n+after\n";
-        let unified = rows(text, false);
-        let split = aligned(text);
+        let unified = rows(text, false, false);
+        let split = aligned(text, false);
         for (top, row) in unified.iter().enumerate() {
-            let target = remap(text, false, false, false, true, top as u16);
+            let target = remap(text, false, false, false, true, top as u16, false);
             if let Row::Line(_) = row {
                 assert!(split[usize::from(target)].contains(*row));
             } else {
@@ -243,14 +249,14 @@ mod tests {
             .iter()
             .position(|row| row.contains(Row::Line(2)))
             .unwrap();
-        let target = remap(text, false, true, false, false, top as u16);
+        let target = remap(text, false, true, false, false, top as u16, false);
         assert_eq!(unified[usize::from(target)], Row::Line(3));
     }
 
     #[test]
     fn metadata_only_files_remain_full_width() {
         let text = "diff --git a/a b/b\nsimilarity index 100%\nrename from a\nrename to b\ndiff --git a/c b/c\nBinary files a/c and b/c differ\n";
-        assert!(aligned(text)
+        assert!(aligned(text, false)
             .iter()
             .all(|row| matches!(row, SplitRow::Shared(_))));
     }
