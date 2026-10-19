@@ -13,6 +13,7 @@ enum Command {
     /// Done to the view itself.
     View(Action),
     /// Clear a standing file filter, or else close the view.
+    ClearFilterOrClose,
     Close,
     OpenFile,
     GenerateReport,
@@ -176,11 +177,12 @@ pub const BINDINGS: &[Binding] = &[
         "go to the bottom",
         Command::View(Action::Last),
     ),
+    bind(&[KeyCode::Char('d')], "d", "close the diff", Command::Close),
     bind(
         &[KeyCode::Esc],
         "Esc",
         "clear the file filter, or close the diff",
-        Command::Close,
+        Command::ClearFilterOrClose,
     ),
 ];
 
@@ -228,8 +230,8 @@ impl CheckoutDiff {
                 self.apply(action);
                 Outcome::Handled
             }
-            Command::Close if self.clear_filter() => Outcome::Handled,
-            Command::Close => Outcome::Close,
+            Command::ClearFilterOrClose if self.clear_filter() => Outcome::Handled,
+            Command::ClearFilterOrClose | Command::Close => Outcome::Close,
             Command::OpenFile => Outcome::OpenFile,
             Command::GenerateReport => Outcome::GenerateReport,
         }
@@ -274,6 +276,12 @@ mod tests {
         assert_eq!(press(&mut diff, KeyCode::Esc), Outcome::Handled);
         assert_eq!(diff.search.query(), None);
         assert_eq!(press(&mut diff, KeyCode::Esc), Outcome::Close);
+
+        assert_eq!(press(&mut diff, KeyCode::Char('/')), Outcome::Handled);
+        assert_eq!(press(&mut diff, KeyCode::Char('d')), Outcome::Handled);
+        assert_eq!(diff.search.query(), Some("d"));
+        assert_eq!(press(&mut diff, KeyCode::Enter), Outcome::Handled);
+        assert_eq!(press(&mut diff, KeyCode::Char('d')), Outcome::Close);
     }
 
     #[test]
@@ -294,7 +302,8 @@ mod tests {
             press(&mut diff, KeyCode::Char('E')),
             Outcome::GenerateReport
         );
-        for key in ['q', 'd', 'i', 'y', '?'] {
+        assert_eq!(press(&mut diff, KeyCode::Char('d')), Outcome::Close);
+        for key in ['q', 'i', 'y', '?'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Outcome::Ignored);
         }
         let control_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);

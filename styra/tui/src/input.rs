@@ -158,7 +158,13 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
     }
     let outcome = match app.checkout_diff.as_mut() {
         Some(diff) => diff.handle_key(key),
-        None if key.code == KeyCode::Esc => Outcome::Close,
+        None if matches!(key.code, KeyCode::Esc | KeyCode::Char('d'))
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            Outcome::Close
+        }
         None => Outcome::Ignored,
     };
     match outcome {
@@ -3017,14 +3023,14 @@ mod tests {
     }
 
     /// Apart from the message and quit shortcuts, global keys do nothing in the diff,
-    /// and Esc is the one way back to events.
+    /// and d or Esc returns to events.
     #[test]
-    fn only_esc_leaves_the_diff_view() {
+    fn d_and_esc_close_the_diff_view() {
         let root = tree("diff-exclusive");
         let mut app = app_with_diffable_interaction(&root);
         app.view = View::CheckoutDiff;
 
-        for character in "dDlawnAQPXe".chars() {
+        for character in "DlawnAQPXe".chars() {
             press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char(character)));
             assert_eq!(app.view, View::CheckoutDiff, "{character} left the diff");
             assert_eq!(app.take_request(), None, "{character} asked for something");
@@ -3034,9 +3040,27 @@ mod tests {
                 "{character} moved the focus"
             );
         }
-        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Esc));
-
-        assert_eq!(app.view, View::Events);
+        for loaded in [false, true] {
+            for code in [KeyCode::Char('d'), KeyCode::Esc] {
+                for view in [View::Events, View::Files, View::CheckoutDiff] {
+                    app.view = view;
+                    app.diff_preview = view != View::CheckoutDiff;
+                    app.checkout_diff =
+                        loaded.then(|| styra_diff::CheckoutDiff::read(diffable_target()));
+                    press_list_key(&mut app, &root, KeyEvent::from(code));
+                    assert_eq!(
+                        app.view,
+                        if view == View::CheckoutDiff {
+                            View::Events
+                        } else {
+                            view
+                        }
+                    );
+                    assert!(!app.diff_visible());
+                    assert_eq!(app.take_request(), None);
+                }
+            }
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
