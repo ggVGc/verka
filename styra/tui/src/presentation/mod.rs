@@ -160,7 +160,7 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         } else if suffix == Some("diff") {
             app.diff_focused()
         } else {
-            app.focus == Focus::List && !app.diff_focused()
+            app.focus == Focus::List && !app.diff_focused() && shares_screen(app)
         },
         workspace: app.workspace.name.clone(),
         worktree,
@@ -183,6 +183,18 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         suffix: suffix.map(str::to_owned),
         session: app.interactions.name(&app.session_id).map(str::to_owned),
     }
+}
+
+/// Whether the main panel has a neighbour that could own the keys instead.
+/// Alone on the event view — the composer is a modal, drawn only while
+/// typing — there is nothing to tell it apart from, so the thick selection
+/// border would only linger.
+fn shares_screen(app: &App) -> bool {
+    app.view != View::Events
+        || app.entry_log.open
+        || app.processes_pane
+        || app.preview.open
+        || app.diff_visible()
 }
 
 pub(crate) fn launcher_view(
@@ -943,7 +955,7 @@ mod tests {
         // to say the title no longer opens with the program's name — but the
         // footer renders the host's working directory, so it also failed in
         // any checkout whose path happened to contain the word.
-        assert!(title.starts_with("┏ codex · "), "{title}");
+        assert!(title.starts_with("┌ codex · "), "{title}");
         assert!(title.contains("running"), "{title}");
     }
 
@@ -958,7 +970,7 @@ mod tests {
         // agent, and a bare `(x, y)` says that only by arithmetic over the
         // border and the title's leading pad.
         assert!(
-            screen.title().starts_with("┏ payments · codex · "),
+            screen.title().starts_with("┌ payments · codex · "),
             "{}",
             screen.title()
         );
@@ -970,7 +982,19 @@ mod tests {
         app.workspace.name = Some("payments".into());
         app.interactions.note_name("s1", Some("Fix retries".into()));
         let title = test_support::screen(&app).title();
-        assert!(title.starts_with("┏ payments · Fix retries · "), "{title}");
+        assert!(title.starts_with("┌ payments · Fix retries · "), "{title}");
+    }
+
+    #[test]
+    fn lone_event_list_has_no_selection_border() {
+        let mut app = test_support::app("s1");
+        assert_eq!(app.focus, Focus::List);
+        assert!(!panel_chrome(&app, None).focused);
+        assert!(test_support::screen(&app).locate("┏").is_none());
+
+        app.preview.open = true;
+        assert!(panel_chrome(&app, None).focused);
+        assert!(test_support::screen(&app).title().starts_with('┏'));
     }
 
     fn interaction_with_checkout(id: &str, checkout: Option<CheckoutState>) -> InteractionSummary {
