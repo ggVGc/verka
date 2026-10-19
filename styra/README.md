@@ -265,7 +265,7 @@ conversation, `d` and `D` jump to its patch. References with a line number jump
 to that line when it appears in a changed hunk (including context). If the file
 or line has no matching change, a notice explains why and the current view stays open.
 `s` toggles unified and side-by-side layouts independently of `f` (combined or
-per-file). Side-by-side shows the base on the left and working tree on the
+per-file). Side-by-side shows the working tree on the left and the base on the
 right, with aligned changes, separate line numbers, and linked scrolling.
 `←`/`→` pan both sides while keeping the line numbers fixed. It temporarily
 uses unified layout when the patch area is narrower than 81 columns or `r`

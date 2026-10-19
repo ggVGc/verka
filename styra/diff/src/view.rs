@@ -631,15 +631,16 @@ fn render_split(
                 };
                 frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
             }
-            SplitRow::Pair(left, right) => {
-                draw_cell(frame, left, Rect::new(area.x, y, left_width, 1));
+            // The working tree goes on the left and the base on the right.
+            SplitRow::Pair(old, new) => {
+                draw_cell(frame, new, Rect::new(area.x, y, left_width, 1));
                 frame.render_widget(
                     Paragraph::new(muted("│")),
                     Rect::new(area.x + left_width, y, 1, 1),
                 );
                 draw_cell(
                     frame,
-                    right,
+                    old,
                     Rect::new(area.x + left_width + 1, y, area.width - left_width - 1, 1),
                 );
             }
@@ -2497,14 +2498,14 @@ mod split_tests {
                 .map(|x| buffer[(x, y)].symbol())
                 .collect::<String>()
         };
-        assert!(row(3).starts_with("10 -old"), "{}", row(3));
-        assert!(row(3).contains("│20 +new"), "{}", row(3));
-        assert!(row(4).contains("│21 +extra"));
-        assert_eq!(buffer[(49, 3)].bg, theme::DIFF_REMOVED_BACKGROUND);
-        assert_eq!(buffer[(100, 3)].bg, theme::DIFF_ADDED_BACKGROUND);
-        assert_ne!(buffer[(49, 4)].bg, theme::DIFF_REMOVED_BACKGROUND);
-        assert!(row(5).starts_with("11  keep"));
-        assert!(row(5).contains("│22  keep"));
+        assert!(row(3).starts_with("20 +new"), "{}", row(3));
+        assert!(row(3).contains("│10 -old"), "{}", row(3));
+        assert!(row(4).starts_with("21 +extra"));
+        assert_eq!(buffer[(49, 3)].bg, theme::DIFF_ADDED_BACKGROUND);
+        assert_eq!(buffer[(100, 3)].bg, theme::DIFF_REMOVED_BACKGROUND);
+        assert_ne!(buffer[(100, 4)].bg, theme::DIFF_REMOVED_BACKGROUND);
+        assert!(row(5).starts_with("22  keep"));
+        assert!(row(5).contains("│11  keep"));
     }
 
     #[test]
@@ -2522,8 +2523,8 @@ mod split_tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let row: String = (0..101).map(|x| buffer[(x, 1)].symbol()).collect();
-        assert!(row.starts_with("123 xxxx"), "{row}");
-        assert!(row.contains("│456 yyyy"), "{row}");
+        assert!(row.starts_with("456 yyyy"), "{row}");
+        assert!(row.contains("│123 xxxx"), "{row}");
         assert_eq!(buffer[(50, 1)].symbol(), "│");
     }
 
