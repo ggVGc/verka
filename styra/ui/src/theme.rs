@@ -169,6 +169,9 @@ pub const DIFF_MAP_ADDED: Color = palette::GREEN_TINT_BRIGHT;
 pub const DIFF_MAP_REMOVED: Color = palette::RED_TINT_BRIGHT;
 /// Red mixed into removed lines' syntax colors.
 pub const DIFF_REMOVED_FOREGROUND_TINT: Color = palette::RED_FG;
+/// What edited words on a removed line are lifted toward, so their faded,
+/// red-tinted text still reads over [`DIFF_WORD_REMOVED_BACKGROUND`].
+pub const DIFF_WORD_REMOVED_FOREGROUND_LIFT: Color = palette::WHITE;
 /// The dashed cut between a diff's hunks: a cool hue the warm syntax colors
 /// never use, so the gap reads apart from the code around it.
 pub const DIFF_HUNK_CUT: Color = palette::SOFT_CYAN;

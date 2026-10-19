@@ -241,7 +241,15 @@ fn overlay(line: &mut Line<'static>, source: &str, changed: &[bool], background:
             mask.push((changed, if c == ' ' { '·' } else { c }));
         }
     }
-    let emphasis = |style: Style| style.bg(background);
+    // Removed text is faded and tinted red, which sinks into the red fill;
+    // lift the edited words partway back so they stay legible.
+    let emphasis = |style: Style| {
+        if background == theme::DIFF_WORD_REMOVED_BACKGROUND {
+            blended_style(style, theme::DIFF_WORD_REMOVED_FOREGROUND_LIFT, 4).bg(background)
+        } else {
+            style.bg(background)
+        }
+    };
     let mut offset = 0;
     let mut spans = Vec::new();
     for (index, span) in std::mem::take(&mut line.spans).into_iter().enumerate() {
@@ -351,7 +359,13 @@ mod tests {
                 })
                 .unwrap();
             let original_style = original[index].spans.last().unwrap().style;
-            assert_eq!(word.style.fg, original_style.fg);
+            if word.style.bg == Some(theme::DIFF_WORD_REMOVED_BACKGROUND) {
+                let lifted =
+                    blended_style(original_style, theme::DIFF_WORD_REMOVED_FOREGROUND_LIFT, 4);
+                assert_eq!(word.style.fg, lifted.fg);
+            } else {
+                assert_eq!(word.style.fg, original_style.fg);
+            }
             assert_eq!(word.style.add_modifier, original_style.add_modifier);
             assert_eq!(word.style.sub_modifier, original_style.sub_modifier);
         }
