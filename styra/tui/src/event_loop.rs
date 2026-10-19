@@ -2412,7 +2412,17 @@ fn run_rounds(
                 }
                 _ => {}
             }
-            // Every other key acts on the row under the cursor, so a move
+            // Unbound keys leave the navigator and its pending cursor alone.
+            // Events and global shortcuts still act on the selected row.
+            let mapped = [keys::Window::Interactions, keys::Window::Events]
+                .into_iter()
+                .flat_map(keys::Window::actions)
+                .any(|binding| binding.matches(key))
+                || keys::EVENTS_FOLD_PREFIX.matches(key);
+            if !mapped {
+                continue;
+            }
+            // Every other mapped key acts on the row under the cursor, so a move
             // still waiting out its settle is completed first rather than
             // abandoned.
             load_cursored_interaction(app, live, client, standing_launch);
@@ -2965,6 +2975,41 @@ mod tests {
 
         fn shutdown(&self) -> anyhow::Result<()> {
             Ok(())
+        }
+    }
+
+    #[test]
+    fn only_mapped_keys_dismiss_the_interaction_navigator() {
+        for (code, stays_open) in [
+            (KeyCode::Char('b'), true),
+            (KeyCode::F(12), true),
+            (KeyCode::Left, true),
+            (KeyCode::Enter, false),
+            (KeyCode::Esc, false),
+            (KeyCode::Char('a'), false),
+        ] {
+            let mut app = App::new(
+                styra_protocol::agent::Selection::parse("codex").unwrap(),
+                "s1",
+            );
+            app.enter_list();
+            app.interactions.show(Vec::new());
+            let mut terminal = styra_ui::TestUi::new(100, 30).unwrap();
+            terminal.script([Event::Key(crossterm::event::KeyEvent::from(code))]);
+            let result = run(
+                &mut terminal,
+                &mut app,
+                &Client::in_process(std::sync::Arc::new(Unreachable::default())),
+                &mut Attachment::Detached,
+                RunContext {
+                    standing_launch: &LaunchPolicy::default(),
+                    preferences_path: &std::env::temp_dir()
+                        .join("styra-event-loop-no-preferences.toml"),
+                    config: &crate::config::Defaults,
+                },
+            );
+            assert!(result.is_err(), "the input script should be exhausted");
+            assert_eq!(app.interactions.open, stays_open, "{code:?}");
         }
     }
 
