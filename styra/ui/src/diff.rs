@@ -17,6 +17,9 @@
 //! in the new one. A hunk whose header gives no position — Claude's snippets,
 //! where the host could not place them — leaves the column blank.
 
+mod words;
+pub use words::highlight_words;
+
 use crate::event_list::{blended_style, faded_style};
 use crate::markdown::syntax_highlighted_code_lines;
 use crate::theme;
@@ -326,10 +329,16 @@ fn tinted(row: Line<'static>, line: &str) -> Line<'static> {
 pub fn fill_changed_rows(lines: &mut [Line<'static>], width: usize) {
     for line in lines {
         let Some(background) = line
-            .spans
-            .iter()
-            .rev()
-            .find_map(|span| span.style.bg)
+            .style
+            .bg
+            .or_else(|| {
+                line.spans
+                    .iter()
+                    .filter_map(|span| span.style.bg)
+                    .find(|bg| {
+                        [theme::DIFF_ADDED_BACKGROUND, theme::DIFF_REMOVED_BACKGROUND].contains(bg)
+                    })
+            })
             .filter(|bg| {
                 [theme::DIFF_ADDED_BACKGROUND, theme::DIFF_REMOVED_BACKGROUND].contains(bg)
             })

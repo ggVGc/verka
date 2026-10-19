@@ -729,6 +729,12 @@ fn draw_main(
 }
 
 pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback) {
+    if let (Some((side_by_side, horizontal_scroll)), Some(diff)) =
+        (feedback.diff_layout, &mut app.checkout_diff)
+    {
+        diff.rendered_side = side_by_side;
+        diff.horizontal_scroll = horizontal_scroll;
+    }
     if let Some(offset) = feedback.diff_file_list_offset {
         if let Some(diff) = &mut app.checkout_diff {
             diff.file_list_offset = offset;
@@ -1248,6 +1254,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn checkout_diff_layout_feedback_reaches_the_host() {
+        let mut app = test_support::app("s1");
+        let mut diff = styra_diff::CheckoutDiff::read(styra_diff::DiffTarget {
+            worktree: "/no-such-styra-diff-checkout".into(),
+            branch: None,
+            base_branch: None,
+            base: "HEAD".into(),
+            branch_point: false,
+        });
+        diff.diff = Ok("diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new\n".into());
+        diff.side_by_side = true;
+        app.checkout_diff = Some(diff);
+        app.view = View::CheckoutDiff;
+        for (width, split) in [(120, true), (80, false), (120, true)] {
+            let mut ui = styra_ui::TestUi::new(width, 25).unwrap();
+            let feedback = draw_application(&mut ui, &app).unwrap();
+            assert_eq!(feedback.diff_layout.unwrap().0, split);
+            apply_feedback(&mut app, &feedback);
+            assert_eq!(app.checkout_diff.as_ref().unwrap().rendered_side, split);
+            assert!(app.checkout_diff.as_ref().unwrap().side_by_side);
+        }
+    }
+
     /// The diff view says what it compares before it shows the diff.
     #[test]
     fn the_checkout_diff_names_both_branches_above_the_diff() {
@@ -1268,9 +1298,14 @@ mod tests {
             scroll: Default::default(),
             combined_scroll: Default::default(),
             per_file: false,
+            side_by_side: false,
+            rendered_side: false,
+            combined_side: false,
+            horizontal_scroll: 0,
             hide_removed: false,
             compact_dirs: true,
             tint: Default::default(),
+            word_highlights: true,
             selected_file: 0,
             file_list_offset: 0,
             search: Default::default(),

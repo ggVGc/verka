@@ -46,6 +46,9 @@ pub struct CheckoutDiffView<'a> {
     pub diff: Result<&'a str, &'a str>,
     pub requested_scroll: u16,
     pub per_file: bool,
+    pub side_by_side: bool,
+    pub rendered_side: bool,
+    pub horizontal_scroll: u16,
     /// Show the selected patch thumbnail beneath the file tree in fullscreen.
     pub thumbnail: bool,
     pub hide_removed: bool,
@@ -53,6 +56,7 @@ pub struct CheckoutDiffView<'a> {
     /// and a single subdirectory onto one row.
     pub compact_dirs: bool,
     pub tint: Tint,
+    pub word_highlights: bool,
     pub selected_file: usize,
     /// First visible row in the file tree, retained between frames.
     pub file_list_offset: usize,
@@ -81,10 +85,14 @@ impl<'a> CheckoutDiffView<'a> {
             diff: Err("no diff read yet"),
             requested_scroll: 0,
             per_file: false,
+            side_by_side: false,
+            rendered_side: false,
+            horizontal_scroll: 0,
             thumbnail: false,
             hide_removed: false,
             compact_dirs: true,
             tint: Tint::Full,
+            word_highlights: true,
             selected_file: 0,
             file_list_offset: 0,
             search: SearchView::default(),
@@ -125,6 +133,8 @@ impl Tint {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CheckoutDiffFeedback {
+    pub side_by_side: bool,
+    pub horizontal_scroll: u16,
     pub scroll: PreviewFeedback,
     pub file_list_offset: usize,
 }
@@ -136,6 +146,7 @@ impl Panel for CheckoutDiffView<'_> {
         PanelFeedback {
             scroll: measured.scroll,
             list_offset: Some(measured.file_list_offset),
+            diff_layout: Some((measured.side_by_side, measured.horizontal_scroll)),
         }
     }
 }
@@ -394,27 +405,82 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
     } else {
         view.diff
     };
-    let width = usize::from(body.width);
-    let mut lines = match shown {
-        Ok(text) if text.trim().is_empty() => vec![muted(if view.branch_point {
-            "  no changes since the branch was made"
+    let side_by_side = view.side_by_side && !view.hide_removed && body.width >= 81;
+    let mut body = body;
+    if view.side_by_side {
+        let [label, rest] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
+        let label_text = if view.hide_removed {
+            "unified · removed lines hidden".to_owned()
+        } else if !side_by_side {
+            "unified · side-by-side needs more width (81 columns)".to_owned()
         } else {
-            "  no changes"
-        })],
-        Ok(text) => patch_lines(text, view.hide_removed, view.tint, width),
-        Err(error) => vec![Line::from(Span::styled(
-            format!("  {error}"),
-            Style::default().fg(theme::ERROR),
-        ))],
-    };
-    fill_changed_rows(&mut lines, width);
-    let limit = u16::try_from(lines.len())
-        .unwrap_or(u16::MAX)
-        .saturating_sub(body.height);
-    frame.render_widget(
-        Paragraph::new(lines).scroll((view.requested_scroll.min(limit), 0)),
-        body,
-    );
+            let half = usize::from(body.width / 2);
+            let base = format!(
+                "Base · {}",
+                view.base_commit
+                    .get(..SHORT_COMMIT)
+                    .unwrap_or(view.base_commit)
+            );
+            format!("{base:<half$}│ Working tree")
+        };
+        frame.render_widget(Paragraph::new(muted(&label_text)), label);
+        body = rest;
+    }
+    let width = usize::from(body.width);
+    let requested = shown
+        .ok()
+        .map(|text| {
+            crate::split::remap(
+                text,
+                view.hide_removed,
+                view.rendered_side,
+                view.hide_removed,
+                side_by_side,
+                view.requested_scroll,
+            )
+        })
+        .unwrap_or(view.requested_scroll);
+    let (limit, effective, horizontal_scroll) =
+        if side_by_side && shown.is_ok_and(|text| !text.trim().is_empty()) {
+            render_split(
+                frame,
+                shown.unwrap(),
+                view.tint,
+                view.word_highlights,
+                body,
+                requested,
+                view.horizontal_scroll,
+            )
+        } else {
+            let mut lines = match shown {
+                Ok(text) if text.trim().is_empty() => vec![muted(if view.branch_point {
+                    "  no changes since the branch was made"
+                } else {
+                    "  no changes"
+                })],
+                Ok(text) => patch_lines(
+                    text,
+                    view.hide_removed,
+                    view.tint,
+                    view.word_highlights,
+                    width,
+                ),
+                Err(error) => vec![Line::from(Span::styled(
+                    format!("  {error}"),
+                    Style::default().fg(theme::ERROR),
+                ))],
+            };
+            fill_changed_rows(&mut lines, width);
+            let limit = u16::try_from(lines.len())
+                .unwrap_or(u16::MAX)
+                .saturating_sub(body.height);
+            frame.render_widget(
+                Paragraph::new(lines).scroll((requested.min(limit), 0)),
+                body,
+            );
+            (limit, requested.min(limit), view.horizontal_scroll)
+        };
     if let (Some(area), Some(file)) = (thumbnail_area, selected_file) {
         let file_lines = std::fs::File::open(view.worktree.join(file.path))
             .ok()
@@ -430,18 +496,156 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             file_lines,
             area,
             view.hide_removed,
-            usize::from(view.requested_scroll.min(limit)),
+            usize::from(effective),
             usize::from(body.height),
+            side_by_side,
         );
     }
     CheckoutDiffFeedback {
+        side_by_side,
+        horizontal_scroll,
         scroll: PreviewFeedback {
             limit,
-            effective_scroll: view.requested_scroll.min(limit),
+            effective_scroll: effective,
             viewport: body.height,
         },
         file_list_offset,
     }
+}
+
+/// Draw aligned rows with fixed gutters and one linked horizontal offset.
+fn render_split(
+    frame: &mut Frame,
+    text: &str,
+    tint: Tint,
+    word_highlights: bool,
+    area: Rect,
+    scroll: u16,
+    pan: u16,
+) -> (u16, u16, u16) {
+    use crate::split::{aligned, Cell, SplitRow};
+    let plan = aligned(text);
+    let source_lines: Vec<_> = text.lines().collect();
+    let rendered = rendered_patch(text, tint, word_highlights);
+    let gutter = plan
+        .iter()
+        .flat_map(|row| match row {
+            SplitRow::Pair(left, right) => [*left, *right],
+            _ => [None, None],
+        })
+        .flatten()
+        .filter_map(|cell| cell.number)
+        .max()
+        .unwrap_or(0)
+        .to_string()
+        .len() as u16
+        + 1;
+    let limit = u16::try_from(plan.len())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(area.height);
+    let effective = scroll.min(limit);
+    let left_width = area.width / 2;
+    let max_pan = plan
+        .iter()
+        .flat_map(|row| match row {
+            SplitRow::Pair(left, right) => [*left, *right],
+            _ => [None, None],
+        })
+        .flatten()
+        .filter_map(|cell| {
+            rendered.get(cell.index).map(|line| {
+                let old_gutter = if cell.number.is_some() {
+                    line.spans.first().map(Span::width).unwrap_or(0)
+                } else {
+                    0
+                };
+                line.width().saturating_sub(old_gutter)
+            })
+        })
+        .max()
+        .unwrap_or(0)
+        .saturating_sub(usize::from(
+            area.width.saturating_sub(left_width + 1 + gutter),
+        ));
+    let pan = pan.min(u16::try_from(max_pan).unwrap_or(u16::MAX));
+    let draw_cell = |frame: &mut Frame, cell: Option<Cell>, rect: Rect| {
+        let Some(cell) = cell else {
+            return;
+        };
+        let Some(mut line) = rendered.get(cell.index).cloned() else {
+            return;
+        };
+        let code = if cell.number.is_some() {
+            // The unified highlighter emits its line-number gutter as the first span.
+            if !line.spans.is_empty() {
+                line.spans.remove(0);
+            }
+            let number = format!(
+                "{:>width$} ",
+                cell.number.unwrap(),
+                width = usize::from(gutter - 1)
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    number,
+                    Style::default().fg(theme::INACTIVE).patch(line.style),
+                ))),
+                Rect::new(rect.x, rect.y, gutter, 1),
+            );
+            Rect::new(
+                rect.x + gutter,
+                rect.y,
+                rect.width.saturating_sub(gutter),
+                1,
+            )
+        } else {
+            rect
+        };
+        let style = line.style;
+        frame.render_widget(Block::default().style(style), code);
+        frame.render_widget(Paragraph::new(line).scroll((0, pan)), code);
+    };
+    for (offset, row) in plan
+        .iter()
+        .skip(usize::from(effective))
+        .take(usize::from(area.height))
+        .enumerate()
+    {
+        let y = area.y + offset as u16;
+        match *row {
+            SplitRow::Shared(row) => {
+                let line = match row {
+                    Row::Line(index) => {
+                        let line = rendered[index].clone();
+                        if source_lines
+                            .get(index)
+                            .is_some_and(|line| is_file_header(line))
+                        {
+                            header_bar(line, usize::from(area.width))
+                        } else {
+                            line
+                        }
+                    }
+                    Row::RuleAbove => rule('▁', usize::from(area.width)),
+                    Row::RuleBelow => rule('▔', usize::from(area.width)),
+                };
+                frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
+            }
+            SplitRow::Pair(left, right) => {
+                draw_cell(frame, left, Rect::new(area.x, y, left_width, 1));
+                frame.render_widget(
+                    Paragraph::new(muted("│")),
+                    Rect::new(area.x + left_width, y, 1, 1),
+                );
+                draw_cell(
+                    frame,
+                    right,
+                    Rect::new(area.x + left_width + 1, y, area.width - left_width - 1, 1),
+                );
+            }
+        }
+    }
+    (limit, effective, pan)
 }
 
 /// A map of edit positions across the whole file, including unchanged gaps.
@@ -454,6 +658,7 @@ fn render_thumbnail(
     hide_removed: bool,
     scroll: usize,
     viewport: usize,
+    side_by_side: bool,
 ) {
     let (extent, positions) = thumbnail_line_positions(patch);
     let total = file_lines.unwrap_or(extent).max(extent).max(1);
@@ -485,7 +690,15 @@ fn render_thumbnail(
         return;
     }
     let pixels = thumbnail_pixels(patch, file_lines, usize::from(inner.width), SECTIONS);
-    let visible = thumbnail_viewport(patch, file_lines, hide_removed, scroll, viewport, SECTIONS);
+    let visible = thumbnail_viewport_layout(
+        patch,
+        file_lines,
+        hide_removed,
+        scroll,
+        viewport,
+        SECTIONS,
+        side_by_side,
+    );
     for section in 0..SECTIONS {
         let y = inner.y + section as u16;
         for x in 0..inner.width {
@@ -632,6 +845,7 @@ fn thumbnail_line_positions(patch: &str) -> (usize, Vec<Option<usize>>) {
     (extent, positions)
 }
 
+#[cfg(test)]
 fn thumbnail_viewport(
     patch: &str,
     file_lines: Option<usize>,
@@ -640,13 +854,33 @@ fn thumbnail_viewport(
     viewport: usize,
     height: usize,
 ) -> Vec<bool> {
+    thumbnail_viewport_layout(
+        patch,
+        file_lines,
+        hide_removed,
+        scroll,
+        viewport,
+        height,
+        false,
+    )
+}
+
+fn thumbnail_viewport_layout(
+    patch: &str,
+    file_lines: Option<usize>,
+    hide_removed: bool,
+    scroll: usize,
+    viewport: usize,
+    height: usize,
+    side_by_side: bool,
+) -> Vec<bool> {
     let mut visible = vec![false; height];
     if height == 0 {
         return visible;
     }
     let (extent, positions) = thumbnail_line_positions(patch);
     let total = file_lines.unwrap_or(extent).max(extent).max(1);
-    for row in rows(patch, hide_removed)
+    for row in crate::split::source_rows(patch, hide_removed, side_by_side)
         .into_iter()
         .skip(scroll)
         .take(viewport)
@@ -797,12 +1031,26 @@ fn is_file_header(line: &str) -> bool {
     line.starts_with("diff --git ")
 }
 
+fn rendered_patch(text: &str, tint: Tint, word_highlights: bool) -> Vec<Line<'static>> {
+    let mut lines = diff_block_lines_fading(text, None, false, tint.fade());
+    if word_highlights {
+        styra_ui::diff::highlight_words(text, &mut lines);
+    }
+    lines
+}
+
 /// `text` drawn as its [`rows`], `width` wide. Removed lines are left out
 /// after rendering, so line numbers and syntax highlighting still follow the
 /// complete patch.
-fn patch_lines(text: &str, hide_removed: bool, tint: Tint, width: usize) -> Vec<Line<'static>> {
+fn patch_lines(
+    text: &str,
+    hide_removed: bool,
+    tint: Tint,
+    word_highlights: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
     // The diff is drawn a row for each of its lines.
-    let mut rendered: Vec<_> = diff_block_lines_fading(text, None, false, tint.fade())
+    let mut rendered: Vec<_> = rendered_patch(text, tint, word_highlights)
         .into_iter()
         .map(Some)
         .collect();
@@ -941,7 +1189,14 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
     } else {
         "f: per-file diffs · j/k: scroll · ↑/↓: scroll 10 · PgUp/PgDn: half-screen"
     };
-    lines.push(muted(navigation));
+    lines.push(muted(&format!(
+        "s: {} · {navigation}",
+        if view.side_by_side {
+            "unified · ←/→: pan"
+        } else {
+            "side-by-side"
+        }
+    )));
     if let Some(report) = view.report {
         let has = report.report.is_some() || report.pending;
         let toggle = match (view.per_file, has, report.hidden) {
@@ -974,8 +1229,13 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
         Tint::Full => "t: halve unchanged tint",
         Tint::Half => "t: full unchanged tint",
     };
+    let words = if view.word_highlights {
+        "w: words on"
+    } else {
+        "w: words off"
+    };
     lines.push(muted(&format!(
-        "v: edit file · {removed} · {tint}{directories}"
+        "v: edit file · {words} · {removed} · {tint}{directories}"
     )));
     if view.per_file {
         if let Some(query) = view.search.query {
@@ -1045,7 +1305,7 @@ index 1111111..2222222 100644
 
     #[test]
     fn hiding_removals_keeps_added_indicators_and_original_line_numbers() {
-        let lines = patch_lines(DIFF, true, Tint::Full, 80);
+        let lines = patch_lines(DIFF, true, Tint::Full, true, 80);
         let text = lines
             .iter()
             .map(|line| {
@@ -1068,7 +1328,7 @@ index 1111111..2222222 100644
                 .count(),
             2
         );
-        assert!(patch_lines(DIFF, false, Tint::Full, 80)
+        assert!(patch_lines(DIFF, false, Tint::Full, true, 80)
             .iter()
             .any(|line| line.style.bg == Some(theme::DIFF_REMOVED_BACKGROUND)));
     }
@@ -1148,6 +1408,7 @@ index 1111111..2222222 100644
                     false,
                     0,
                     100,
+                    false,
                 );
             })
             .unwrap();
@@ -1236,6 +1497,9 @@ index 1111111..2222222 100644
                             per_file: true,
                             thumbnail: true,
                             requested_scroll: scroll,
+                            side_by_side: false,
+                            rendered_side: false,
+                            horizontal_scroll: 0,
                             ..CheckoutDiffView::unread(Block::bordered())
                         },
                         frame.area(),
@@ -1393,11 +1657,15 @@ index 1111111..2222222 100644
                         branch_point: true,
                         diff,
                         requested_scroll: scroll,
+                        side_by_side: false,
+                        rendered_side: false,
+                        horizontal_scroll: 0,
                         per_file,
                         thumbnail: false,
                         hide_removed: false,
                         compact_dirs: true,
                         tint: Tint::Full,
+                        word_highlights: true,
                         selected_file,
                         file_list_offset: 0,
                         search,
@@ -1717,10 +1985,14 @@ index 1111111..2222222 100644
                             diff: Ok(&text),
                             requested_scroll: 0,
                             per_file: true,
+                            side_by_side: false,
+                            rendered_side: false,
+                            horizontal_scroll: 0,
                             thumbnail: false,
                             hide_removed: false,
                             compact_dirs: true,
                             tint: Tint::Full,
+                            word_highlights: true,
                             selected_file,
                             file_list_offset: offset,
                             search: Default::default(),
@@ -1909,10 +2181,14 @@ index 1111111..2222222 100644
                         diff: Ok(DIFF),
                         requested_scroll: 0,
                         per_file: false,
+                        side_by_side: false,
+                        rendered_side: false,
+                        horizontal_scroll: 0,
                         thumbnail: false,
                         hide_removed: false,
                         compact_dirs: true,
                         tint: Tint::Full,
+                        word_highlights: true,
                         selected_file: 0,
                         file_list_offset: 0,
                         search: Default::default(),
@@ -2198,5 +2474,148 @@ index 1111111..2222222 100644
             ),
             "{output}"
         );
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn split_paints_each_side_and_leaves_missing_cells_neutral() {
+        let patch = "diff --git a/a.rs b/a.rs\n@@ -10,2 +20,3 @@\n-old\n+new\n+extra\n keep\n";
+        let mut terminal = Terminal::new(TestBackend::new(101, 8)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_split(frame, patch, Tint::Full, true, frame.area(), 0, 0);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y| {
+            (0..101)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+        assert!(row(3).starts_with("10 -old"), "{}", row(3));
+        assert!(row(3).contains("│20 +new"), "{}", row(3));
+        assert!(row(4).contains("│21 +extra"));
+        assert_eq!(buffer[(49, 3)].bg, theme::DIFF_REMOVED_BACKGROUND);
+        assert_eq!(buffer[(100, 3)].bg, theme::DIFF_ADDED_BACKGROUND);
+        assert_ne!(buffer[(49, 4)].bg, theme::DIFF_REMOVED_BACKGROUND);
+        assert!(row(5).starts_with("11  keep"));
+        assert!(row(5).contains("│22  keep"));
+    }
+
+    #[test]
+    fn horizontal_scroll_keeps_gutters_and_divider_fixed() {
+        let patch = format!(
+            "@@ -123 +456 @@\n-{}tail\n+{}tail\n",
+            "x".repeat(80),
+            "y".repeat(80)
+        );
+        let mut terminal = Terminal::new(TestBackend::new(101, 4)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_split(frame, &patch, Tint::Full, true, frame.area(), 0, 32);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row: String = (0..101).map(|x| buffer[(x, 1)].symbol()).collect();
+        assert!(row.starts_with("123 xxxx"), "{row}");
+        assert!(row.contains("│456 yyyy"), "{row}");
+        assert_eq!(buffer[(50, 1)].symbol(), "│");
+    }
+
+    #[test]
+    fn narrow_and_hidden_removal_fallbacks_keep_the_requested_layout() {
+        let mut view = CheckoutDiffView::unread(Block::default());
+        view.diff = Ok("diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new\n");
+        view.side_by_side = true;
+        for (width, hidden, expected) in [
+            (81, false, true),
+            (80, false, false),
+            (81, true, false),
+            (81, false, true),
+            (0, false, false),
+        ] {
+            view.hide_removed = hidden;
+            let mut terminal = Terminal::new(TestBackend::new(width, 25)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let measured = render(frame, &view, frame.area());
+                    assert_eq!(measured.side_by_side, expected);
+                    let panel = Panel::render(&view, frame, frame.area());
+                    assert_eq!(panel.diff_layout.unwrap().0, expected);
+                })
+                .unwrap();
+            assert!(view.side_by_side);
+        }
+    }
+    #[test]
+    fn words_work_in_both_layouts_with_tint_and_removals_hidden() {
+        let patch = "@@ -1 +1 @@\n-let timeout = 30;\n+let timeout = 60;\n";
+        for split in [false, true] {
+            for words in [false, true] {
+                for tint in [Tint::Full, Tint::Half] {
+                    let mut terminal = Terminal::new(TestBackend::new(160, 24)).unwrap();
+                    let frame = terminal
+                        .draw(|frame| {
+                            let view = CheckoutDiffView {
+                                diff: Ok(patch),
+                                side_by_side: split,
+                                word_highlights: words,
+                                tint,
+                                ..CheckoutDiffView::unread(Block::default())
+                            };
+                            render(frame, &view, frame.area());
+                        })
+                        .unwrap();
+                    let cells: Vec<_> = frame
+                        .buffer
+                        .content
+                        .iter()
+                        .filter(|cell| cell.bg == theme::DIFF_WORD_ADDED_BACKGROUND)
+                        .collect();
+                    assert_eq!(cells.len(), usize::from(words));
+                    if words {
+                        assert_eq!(cells[0].symbol(), "6");
+                    }
+                }
+            }
+        }
+        let lines = patch_lines(patch, true, Tint::Half, true, 80);
+        assert!(lines
+            .iter()
+            .flat_map(|l| &l.spans)
+            .any(|s| s.content == "6" && s.style.bg == Some(theme::DIFF_WORD_ADDED_BACKGROUND)));
+        assert!(lines
+            .iter()
+            .flat_map(|l| &l.spans)
+            .all(|s| s.style.bg != Some(theme::DIFF_WORD_REMOVED_BACKGROUND)));
+    }
+
+    #[test]
+    fn panning_keeps_word_highlights_and_gutters_in_place() {
+        let padding = "a".repeat(45);
+        let patch = format!("@@ -12 +12 @@\n-let {padding} = 30;\n+let {padding} = 60;\n");
+        let mut terminal = Terminal::new(TestBackend::new(81, 3)).unwrap();
+        let frame = terminal
+            .draw(|frame| {
+                render_split(frame, &patch, Tint::Full, true, frame.area(), 0, 30);
+            })
+            .unwrap();
+        let changed: Vec<_> = frame
+            .buffer
+            .content
+            .iter()
+            .filter(|c| c.bg == theme::DIFF_WORD_ADDED_BACKGROUND)
+            .collect();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].symbol(), "6");
+        assert_eq!(frame.buffer[(0, 1)].symbol(), "1");
+        assert_eq!(frame.buffer[(1, 1)].symbol(), "2");
+        assert_eq!(frame.buffer[(41, 1)].symbol(), "1");
+        assert_eq!(frame.buffer[(42, 1)].symbol(), "2");
     }
 }

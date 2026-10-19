@@ -45,6 +45,24 @@ const fn bind(
 /// Every key the view answers, in the order a reference lists them.
 pub const BINDINGS: &[Binding] = &[
     bind(
+        &[KeyCode::Char('s')],
+        "s",
+        "toggle unified / side-by-side",
+        Command::View(Action::ToggleLayout),
+    ),
+    bind(
+        &[KeyCode::Left],
+        "←",
+        "pan both sides left (side-by-side)",
+        Command::View(Action::PanLeft),
+    ),
+    bind(
+        &[KeyCode::Right],
+        "→",
+        "pan both sides right (side-by-side)",
+        Command::View(Action::PanRight),
+    ),
+    bind(
         &[KeyCode::Char('/')],
         "/ (per-file view)",
         "filter diff files by name (Enter keeps filter, Esc clears)",
@@ -55,6 +73,12 @@ pub const BINDINGS: &[Binding] = &[
         "f",
         "toggle combined / per-file diffs",
         Command::View(Action::ToggleFiles),
+    ),
+    bind(
+        &[KeyCode::Char('w')],
+        "w",
+        "toggle word highlights",
+        Command::View(Action::ToggleWords),
     ),
     bind(
         &[KeyCode::Char('r')],
@@ -255,9 +279,10 @@ mod tests {
     #[test]
     fn view_keys_act_and_the_rest_go_to_the_host() {
         let mut diff = diff();
-        for key in ['r', 'f', 'j', 'c', 't', 'e'] {
+        for key in ['r', 'f', 'j', 'c', 't', 'e', 'w'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Outcome::Handled);
         }
+        assert!(!diff.word_highlights);
         assert!(diff.report.hidden);
         assert!(diff.hide_removed);
         assert!(diff.per_file);

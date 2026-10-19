@@ -102,6 +102,8 @@ pub struct RenderFeedback {
     pub navigator_offset: Option<usize>,
     /// First visible row in the checkout diff's file tree.
     pub diff_file_list_offset: Option<usize>,
+    /// Effective side-by-side layout and horizontal offset of the checkout diff.
+    pub diff_layout: Option<(bool, u16)>,
     /// How many tiles each row of the overview held, top to bottom, when it
     /// was drawn.
     pub overview_rows: Option<Vec<usize>>,
@@ -382,6 +384,7 @@ where
                 list_row_offset: None,
                 navigator_offset: None,
                 diff_file_list_offset: None,
+                diff_layout: None,
                 overview_rows: None,
             }
         })

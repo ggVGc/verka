@@ -264,6 +264,13 @@ With a file selected in the Files view or a file reference highlighted in the
 conversation, `d` and `D` jump to its patch. References with a line number jump
 to that line when it appears in a changed hunk (including context). If the file
 or line has no matching change, a notice explains why and the current view stays open.
+`s` toggles unified and side-by-side layouts independently of `f` (combined or
+per-file). Side-by-side shows the base on the left and working tree on the
+right, with aligned changes, separate line numbers, and linked scrolling.
+`←`/`→` pan both sides while keeping the line numbers fixed. It temporarily
+uses unified layout when the patch area is narrower than 81 columns or `r`
+hides removals, and restores the requested layout when space or removals return.
+Layout changes preserve the source location at the top of the view.
 The per-file list uses compact change markers: `A` added, `D` deleted, `M`
 edited, `R` moved, `R+` moved with edits, `C` copied, `C+` copied with edits,
 and `T` file mode changed. A fixed row above the selected patch explains its

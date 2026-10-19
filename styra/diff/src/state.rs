@@ -38,8 +38,12 @@ pub(crate) enum Action {
     /// Switch between the combined diff and one file's patch at a time.
     ToggleFiles,
     ToggleRemoved,
+    ToggleLayout,
+    PanLeft,
+    PanRight,
     /// Step the added and removed rows' bands through full, half, and none.
     CycleTint,
+    ToggleWords,
     /// Put the per-file view's edit report away, or bring it back.
     ToggleReport,
     /// Fold the file tree's directories that hold no files of their own and
@@ -77,9 +81,17 @@ pub struct CheckoutDiff {
     /// going back to it returns to the same place.
     pub combined_scroll: Scroll,
     pub per_file: bool,
+    /// Requested layout; temporarily unified when the patch area is narrow.
+    pub side_by_side: bool,
+    /// Layout used by the last frame, which defines the scroll coordinates.
+    pub rendered_side: bool,
+    /// Layout of the combined scroll saved while a single file is shown.
+    pub combined_side: bool,
+    pub horizontal_scroll: u16,
     pub hide_removed: bool,
     pub compact_dirs: bool,
     pub tint: Tint,
+    pub word_highlights: bool,
     pub selected_file: usize,
     pub file_list_offset: usize,
     pub search: Search,
@@ -116,12 +128,13 @@ impl CheckoutDiff {
             })?,
             None => 0,
         };
-        let offset = rows(file.patch, self.hide_removed)
+        let offset = crate::split::source_rows(file.patch, self.hide_removed, self.rendered_side)
             .iter()
             .position(|shown| matches!(shown, Row::Line(index) if *index == row))
             .unwrap_or(0);
         if !self.per_file {
             std::mem::swap(&mut self.scroll, &mut self.combined_scroll);
+            self.combined_side = self.rendered_side;
         }
         self.per_file = true;
         self.search.cancel();
@@ -148,9 +161,14 @@ impl CheckoutDiff {
             scroll: Scroll::default(),
             combined_scroll: Scroll::default(),
             per_file: false,
+            side_by_side: false,
+            rendered_side: false,
+            combined_side: false,
+            horizontal_scroll: 0,
             hide_removed: false,
             compact_dirs: true,
             tint: Tint::Full,
+            word_highlights: true,
             selected_file: 0,
             file_list_offset: 0,
             search: Default::default(),
@@ -214,10 +232,14 @@ impl CheckoutDiff {
             },
             requested_scroll: self.scroll.clamped(),
             per_file: self.per_file,
+            side_by_side: self.side_by_side,
+            rendered_side: self.rendered_side,
+            horizontal_scroll: self.horizontal_scroll,
             thumbnail: false,
             hide_removed: self.hide_removed,
             compact_dirs: self.compact_dirs,
             tint: self.tint,
+            word_highlights: self.word_highlights,
             selected_file: self.selected_file,
             file_list_offset: self.file_list_offset,
             search: self.search.view(),
@@ -228,6 +250,8 @@ impl CheckoutDiff {
 
     /// Keep what drawing the view measured, for the next keys to move by.
     pub fn note(&mut self, measured: CheckoutDiffFeedback) {
+        self.rendered_side = measured.side_by_side;
+        self.horizontal_scroll = measured.horizontal_scroll;
         self.scroll.offset = measured.scroll.effective_scroll;
         self.scroll.note_limit(measured.scroll.limit);
         self.scroll.note_viewport(measured.scroll.viewport);
@@ -244,6 +268,7 @@ impl CheckoutDiff {
             // where it was left.
             Action::ToggleFiles => {
                 self.per_file = !self.per_file;
+                std::mem::swap(&mut self.rendered_side, &mut self.combined_side);
                 std::mem::swap(&mut self.scroll, &mut self.combined_scroll);
                 if self.per_file {
                     self.scroll.reset();
@@ -251,20 +276,47 @@ impl CheckoutDiff {
             }
             Action::ToggleRemoved => {
                 let hidden = self.hide_removed;
-                let top = self.scroll.clamped();
-                if let Some(offset) = self.shown_text().map(|text| keep_top(text, hidden, top)) {
-                    self.scroll.offset = offset;
+                if let Some(text) = self.shown_text() {
+                    self.scroll.offset = if self.rendered_side {
+                        crate::split::remap(
+                            text,
+                            hidden,
+                            true,
+                            !hidden,
+                            false,
+                            self.scroll.clamped(),
+                        )
+                    } else {
+                        keep_top(text, hidden, self.scroll.clamped())
+                    };
                 }
+                self.rendered_side = false;
                 if self.per_file {
-                    let top = self.combined_scroll.clamped();
-                    if let Ok(offset) = self.diff.as_deref().map(|text| keep_top(text, hidden, top))
-                    {
-                        self.combined_scroll.offset = offset;
+                    if let Ok(text) = &self.diff {
+                        self.combined_scroll.offset = if self.combined_side {
+                            crate::split::remap(
+                                text,
+                                hidden,
+                                true,
+                                !hidden,
+                                false,
+                                self.combined_scroll.clamped(),
+                            )
+                        } else {
+                            keep_top(text, hidden, self.combined_scroll.clamped())
+                        };
                     }
+                    self.combined_side = false;
+                    self.combined_scroll.note_limit(u16::MAX);
                 }
                 self.hide_removed = !hidden;
+                self.scroll.note_limit(u16::MAX);
             }
+            Action::ToggleLayout => self.side_by_side = !self.side_by_side,
+            Action::PanLeft => self.horizontal_scroll = self.horizontal_scroll.saturating_sub(8),
+            Action::PanRight => self.horizontal_scroll = self.horizontal_scroll.saturating_add(8),
             // The selected file stays selected, and the list keeps it in view.
+            Action::ToggleWords => self.word_highlights = !self.word_highlights,
             Action::CycleTint => self.tint = self.tint.next(),
             Action::ToggleCompactDirs => self.compact_dirs = !self.compact_dirs,
             Action::ToggleReport => self.report.hidden = !self.report.hidden,
@@ -321,7 +373,7 @@ impl CheckoutDiff {
     /// headers. A file the diff deletes is not there to open.
     pub fn location(&self) -> Result<(PathBuf, Option<u32>), String> {
         let text = self.shown_text().ok_or("no diff to open a file from")?;
-        let rows = rows(text, self.hide_removed);
+        let rows = crate::split::source_rows(text, self.hide_removed, self.rendered_side);
         let top = line_at(&rows, usize::from(self.scroll.clamped())).ok_or("no file to open")?;
         let (file, line) = position(text, top).ok_or("no file to open")?;
         let path = self.target.worktree.join(file);
@@ -442,9 +494,14 @@ mod tests {
             scroll: Scroll::default(),
             combined_scroll: Scroll::default(),
             per_file: false,
+            side_by_side: false,
+            rendered_side: false,
+            combined_side: false,
+            horizontal_scroll: 0,
             hide_removed: false,
             compact_dirs: true,
             tint: Tint::Full,
+            word_highlights: true,
             selected_file: 0,
             file_list_offset: 0,
             search: Search::default(),
@@ -452,6 +509,63 @@ mod tests {
         };
         diff.scroll.note_limit(100);
         diff
+    }
+
+    #[test]
+    fn layout_changes_and_resizing_preserve_source_locations() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut diff = two_files();
+        diff.diff = Ok(format!(
+            "diff --git a/a.txt b/a.txt\n@@ -1,60 +1,60 @@\n{}",
+            (0..30)
+                .map(|i| format!("-old{i}\n+new{i}\n keep{i}\n"))
+                .collect::<String>()
+        ));
+        let draw = |diff: &mut CheckoutDiff, width| {
+            let mut terminal = Terminal::new(TestBackend::new(width, 16)).unwrap();
+            let mut feedback = CheckoutDiffFeedback::default();
+            terminal
+                .draw(|frame| {
+                    feedback = crate::render(frame, &diff.view(Block::default()), frame.area());
+                })
+                .unwrap();
+            diff.note(feedback);
+        };
+        let location = |diff: &CheckoutDiff| {
+            let text = diff.shown_text().unwrap();
+            let plan = crate::split::source_rows(text, diff.hide_removed, diff.rendered_side);
+            position(
+                text,
+                line_at(&plan, usize::from(diff.scroll.clamped())).unwrap(),
+            )
+            .unwrap()
+            .1
+        };
+        draw(&mut diff, 120);
+        diff.scroll.offset = 13;
+        let before = location(&diff);
+        diff.apply(Action::ToggleLayout);
+        draw(&mut diff, 120);
+        assert!(diff.rendered_side);
+        assert_eq!(location(&diff), before);
+        draw(&mut diff, 60);
+        assert!(!diff.rendered_side);
+        assert!(diff.side_by_side);
+        assert_eq!(location(&diff), before);
+        draw(&mut diff, 120);
+        assert!(diff.rendered_side);
+        assert_eq!(location(&diff), before);
+        diff.apply(Action::ToggleRemoved);
+        draw(&mut diff, 120);
+        assert!(!diff.rendered_side);
+        assert_eq!(location(&diff), before);
+        diff.apply(Action::ToggleRemoved);
+        draw(&mut diff, 120);
+        assert!(diff.rendered_side);
+        assert_eq!(location(&diff), before);
+        diff.jump_to(Path::new("/w/a.txt"), Some(41)).unwrap();
+        draw(&mut diff, 160);
+        assert_eq!(location(&diff), Some(41));
     }
 
     #[test]

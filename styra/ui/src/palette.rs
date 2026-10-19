@@ -78,6 +78,10 @@ pub const DARK_GREEN_TINT: Color = Color::Rgb(18, 28, 21);
 pub const FAINT_GREEN: Color = Color::Rgb(22, 38, 26);
 /// A red a tenth of the way up from [`NEAR_BLACK`]: only just red.
 pub const FAINT_RED: Color = Color::Rgb(42, 22, 24);
+/// Muted green that lifts edited words above the faint addition band.
+pub const EMPHASIS_GREEN: Color = Color::Rgb(48, 86, 59);
+/// Muted red that lifts edited words above the faint removal band.
+pub const EMPHASIS_RED: Color = Color::Rgb(104, 56, 62);
 /// Between [`NEAR_BLACK`] and [`DARK_GRAY`], closer to the former.
 pub const FAINT_GRAY: Color = Color::Rgb(28, 28, 28);
 /// [`AMBER_ORANGE`] an eighth of the way up from [`NEAR_BLACK`].

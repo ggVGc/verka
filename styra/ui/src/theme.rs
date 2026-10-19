@@ -160,6 +160,9 @@ pub const USER_MESSAGE_BACKGROUND: Color = palette::DARK_GREEN_TINT;
 /// Behind a diff's added and removed lines: a hint of [`SUCCESS`] and
 /// [`ERROR`], faint enough that the code's own colors still read over it.
 pub const DIFF_ADDED_BACKGROUND: Color = palette::FAINT_GREEN;
+/// Muted word fills provide contrast while preserving syntax colors.
+pub const DIFF_WORD_ADDED_BACKGROUND: Color = palette::EMPHASIS_GREEN;
+pub const DIFF_WORD_REMOVED_BACKGROUND: Color = palette::EMPHASIS_RED;
 pub const DIFF_REMOVED_BACKGROUND: Color = palette::FAINT_RED;
 /// Stronger, soft fills for the diff overview's contiguous edit sections.
 pub const DIFF_MAP_ADDED: Color = palette::GREEN_TINT_BRIGHT;

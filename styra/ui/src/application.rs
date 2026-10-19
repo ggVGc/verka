@@ -34,6 +34,7 @@ fn render_side_preview(
         SidePreview::CheckoutDiff(view) => {
             let measured = view.render(frame, area);
             feedback.diff_file_list_offset = measured.list_offset;
+            feedback.diff_layout = measured.diff_layout;
             (
                 PanelId::CheckoutDiff {
                     session: session_id.into(),
@@ -101,6 +102,8 @@ pub struct PanelFeedback {
     pub scroll: preview::PreviewFeedback,
     /// First visible row of a list the panel keeps beside its scrolling text.
     pub list_offset: Option<usize>,
+    /// Effective diff layout and horizontal offset, after width-dependent fallback.
+    pub diff_layout: Option<(bool, u16)>,
 }
 
 #[derive(Default)]
@@ -217,6 +220,7 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
         MainView::CheckoutDiff(panel) => {
             let measured = panel.render(frame, chunks[0]);
             feedback.diff_file_list_offset = measured.list_offset;
+            feedback.diff_layout = measured.diff_layout;
             note_preview_scroll(
                 &mut feedback,
                 PanelId::CheckoutDiff {

@@ -13,6 +13,7 @@ pub mod files;
 pub mod git;
 pub mod keys;
 pub mod report;
+mod split;
 mod state;
 mod view;
 
