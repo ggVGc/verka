@@ -1162,9 +1162,9 @@ fn first_live_where(
 }
 
 /// `visible` re-ordered so each Workspace's entries are contiguous, in the
-/// order the Workspaces themselves first appear. Within a Workspace those in
-/// its main checkout come first, and the rest are kept together by the
-/// directory they work in, in the order the directories first appear: the
+/// order the Workspaces themselves first appear. Within a Workspace they are
+/// kept together by the checkout they work in — the main checkout counting as
+/// one, like any worktree — in the order the checkouts first appear: the
 /// groups [`display_tree`] lays out under the navigator's Workspace and
 /// worktree headings, rather than the creation-sorted item order.
 fn grouped_by_workspace(
@@ -1180,14 +1180,28 @@ fn grouped_by_workspace(
     ordered.sort_by_cached_key(|index| {
         let interaction = &interactions[*index];
         let workspace = first(&|other| other.workspace_id == interaction.workspace_id);
-        let directory = if in_main_checkout(interaction, workspaces) {
-            None
-        } else {
-            first(&|other| other.workspace == interaction.workspace)
-        };
-        (workspace, directory)
+        let checkout = first(&|other| same_checkout(interaction, other, workspaces));
+        (workspace, checkout)
     });
     ordered
+}
+
+/// Whether `left` and `right` work in the same checkout of their Workspace:
+/// both in its main checkout, or both in the same worktree.
+fn same_checkout(
+    left: &InteractionSummary,
+    right: &InteractionSummary,
+    workspaces: &[WorkspaceSummary],
+) -> bool {
+    left.workspace_id == right.workspace_id
+        && match (
+            in_main_checkout(left, workspaces),
+            in_main_checkout(right, workspaces),
+        ) {
+            (true, true) => true,
+            (false, false) => left.workspace == right.workspace,
+            _ => false,
+        }
 }
 
 /// One entry of the list, placed where the navigator draws it.
@@ -1226,9 +1240,10 @@ pub struct WorktreeHeading {
 }
 
 /// `visible` laid out as [`DisplayRow`]s, in the order the navigator draws
-/// them: each Workspace's entries together, those in its main checkout first,
-/// then each worktree followed by the worktrees integrated into it, and within
-/// each checkout the branch tree — see [`branch_tree`].
+/// them: each Workspace's entries together, each checkout in the order it
+/// first appears — the main checkout unheaded, each worktree followed by the
+/// worktrees integrated into it — and within each checkout the branch tree —
+/// see [`branch_tree`].
 ///
 /// A worktree is headed when it holds more than one shown entry, or is
 /// integrated into, or integrates into, another worktree: an entry drawn among
@@ -1247,13 +1262,15 @@ fn display_tree(
     for group in ordered.chunk_by(|left, right| {
         interactions[*left].workspace_id == interactions[*right].workspace_id
     }) {
-        let (main, linked): (Vec<usize>, Vec<usize>) = group
+        // `grouped_by_workspace` keeps each checkout's entries together.
+        let worktrees: Vec<&[usize]> = group
+            .chunk_by(|left, right| {
+                same_checkout(&interactions[*left], &interactions[*right], workspaces)
+            })
+            .collect();
+        let main: Vec<bool> = worktrees
             .iter()
-            .partition(|index| in_main_checkout(&interactions[**index], workspaces));
-        branch_tree(interactions, &main, 0, None, &mut out);
-        // `grouped_by_workspace` keeps each worktree's entries together.
-        let worktrees: Vec<&[usize]> = linked
-            .chunk_by(|left, right| interactions[*left].workspace == interactions[*right].workspace)
+            .map(|rows| in_main_checkout(&interactions[rows[0]], workspaces))
             .collect();
         let branch = |rows: &[usize]| {
             rows.iter()
@@ -1267,9 +1284,15 @@ fn display_tree(
             .iter()
             .enumerate()
             .map(|(at, rows)| {
+                if main[at] {
+                    return None;
+                }
                 let into = into(rows)?;
-                (0..worktrees.len())
-                    .find(|other| *other != at && branch(worktrees[*other]).as_ref() == Some(&into))
+                (0..worktrees.len()).find(|other| {
+                    *other != at
+                        && !main[*other]
+                        && branch(worktrees[*other]).as_ref() == Some(&into)
+                })
             })
             .collect();
         let mut children = vec![Vec::new(); worktrees.len()];
@@ -1306,8 +1329,11 @@ fn display_tree(
                 }
                 placed[at] = true;
                 let rows = worktrees[at];
-                let headed =
-                    rows.len() > 1 || !children[at].is_empty() || integrates_into_worktree(rows);
+                // The main checkout is never headed: its entries stand at the root.
+                let headed = !main[at]
+                    && (rows.len() > 1
+                        || !children[at].is_empty()
+                        || integrates_into_worktree(rows));
                 let (level, heading) = if headed {
                     (nesting + 1, Some(WorktreeHeading { into: into(rows) }))
                 } else {
@@ -1917,19 +1943,21 @@ pub(crate) mod tests {
         let mut finished = in_worktree("finished", InteractionActivity::Stopped, "second");
         finished.completed = CompletionState::Completed;
         let mut live = LiveInteractions::default();
-        // Drawn as: main, first, second (finished).
+        // Drawn as: first-1, first-2, main, second (finished); in creation
+        // order first-2 would be the row just before the finished one.
         live.open(
             vec![
-                in_worktree("first", InteractionActivity::Pending, "first"),
-                finished,
+                in_worktree("first-1", InteractionActivity::Pending, "first"),
                 interaction("main", InteractionActivity::Pending),
+                in_worktree("first-2", InteractionActivity::Pending, "first"),
+                finished,
             ],
             vec![],
         );
 
         let next = live.select_past_hidden("finished", None).unwrap();
 
-        assert_eq!(next.id, "first");
+        assert_eq!(next.id, "main");
     }
 
     /// With no work left in its own Workspace, the move falls back to the
@@ -2446,9 +2474,9 @@ pub(crate) mod tests {
         assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
     }
 
-    /// Interactions working in the same worktree are drawn together under
-    /// its heading, after those in the Workspace's main checkout, so j/k walks
-    /// them in that order too, in either scope.
+    /// Interactions working in the same checkout are drawn together, each
+    /// checkout where its newest entry falls — the main checkout no different
+    /// from a worktree — so j/k walks them in that order too, in either scope.
     #[test]
     fn navigation_follows_the_directory_grouped_display_order() {
         let in_worktree = |id: &str| {
@@ -2482,17 +2510,17 @@ pub(crate) mod tests {
         };
         assert_eq!(
             ordered(&live),
-            ["main-1", "main-2", "feature-1", "feature-2", "other"]
+            ["feature-1", "feature-2", "main-1", "main-2", "other"]
         );
         assert_eq!(
-            live.next("main-2", Some("workspace")).unwrap().id,
-            "feature-1"
+            live.next("feature-2", Some("workspace")).unwrap().id,
+            "main-1"
         );
 
         live.toggle_workspace_scope();
         assert_eq!(
             ordered(&live),
-            ["main-1", "main-2", "feature-1", "feature-2"]
+            ["feature-1", "feature-2", "main-1", "main-2"]
         );
     }
 
@@ -2741,7 +2769,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             display(&live, Some("workspace")),
-            [("branch", 0), ("source", 0), ("sibling", 0)]
+            [("source", 0), ("sibling", 0), ("branch", 0)]
         );
     }
 
