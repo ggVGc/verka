@@ -12,11 +12,11 @@ use std::borrow::Cow;
 use styra_protocol::CompletionState;
 use unicode_width::UnicodeWidthStr;
 
-/// Three dots, the heavy one moving rightward one step per event and wrapping
+/// Three dots, the large one moving rightward one step per event and wrapping
 /// back to the left. It fills the whole status block, so a running row reads
 /// apart from every other state's single marker, and it holds still when the
 /// agent goes quiet.
-const RUNNING_INDICATOR: [&str; 3] = ["•··", "·•·", "··•"];
+const RUNNING_INDICATOR: [&str; 3] = ["●··", "·●·", "··●"];
 
 /// The spinner frame for a running turn that has seen `events` events. The
 /// navigator row and the conversation's running tail draw the same one.

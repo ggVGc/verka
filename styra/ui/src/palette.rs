@@ -92,8 +92,8 @@ pub const DARK_GRAY: Color = Color::Rgb(48, 48, 48);
 pub const RULE_GRAY: Color = Color::Rgb(68, 68, 68);
 /// [`PALE_PINK`] a fifth of the way up from [`NEAR_BLACK`].
 pub const PALE_PINK_TINT: Color = Color::Rgb(70, 61, 61);
-/// [`AMBER_YELLOW`] a fifth of the way up from [`NEAR_BLACK`].
-pub const AMBER_TINT: Color = Color::Rgb(65, 58, 35);
+/// [`AMBER_YELLOW`] a third of the way up from [`NEAR_BLACK`].
+pub const AMBER_TINT: Color = Color::Rgb(89, 79, 44);
 /// A green a fifth of the way up from [`NEAR_BLACK`].
 pub const GREEN_TINT: Color = Color::Rgb(30, 60, 34);
 /// [`MUTED_ROSE`] a fifth of the way up from [`NEAR_BLACK`].
@@ -109,8 +109,8 @@ pub const RED_FG: Color = Color::Rgb(255, 140, 140);
 pub const COMFORTABLE_RED: Color = Color::Rgb(240, 96, 96);
 /// [`PALE_PINK`] nearly half the way up from [`NEAR_BLACK`].
 pub const PALE_PINK_TINT_BRIGHT: Color = Color::Rgb(125, 107, 107);
-/// [`AMBER_YELLOW`] nearly half the way up from [`NEAR_BLACK`].
-pub const AMBER_TINT_BRIGHT: Color = Color::Rgb(113, 100, 53);
+/// [`AMBER_YELLOW`] three fifths of the way up from [`NEAR_BLACK`].
+pub const AMBER_TINT_BRIGHT: Color = Color::Rgb(145, 127, 64);
 /// A green nearly half the way up from [`NEAR_BLACK`].
 pub const GREEN_TINT_BRIGHT: Color = Color::Rgb(45, 110, 52);
 /// [`MUTED_ROSE`] nearly half the way up from [`NEAR_BLACK`].

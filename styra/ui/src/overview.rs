@@ -641,7 +641,7 @@ mod tests {
         let (screen, feedback) = draw(&view, 100, 14);
 
         assert_eq!(feedback.rows, vec![2], "{screen}");
-        assert!(screen.contains("·•· repair checkout"), "{screen}");
+        assert!(screen.contains("·●· repair checkout"), "{screen}");
         assert!(screen.contains("Payments · styra/fix"), "{screen}");
         assert!(screen.contains("running 2m14s"), "{screen}");
         assert!(screen.contains("#bug"), "{screen}");
