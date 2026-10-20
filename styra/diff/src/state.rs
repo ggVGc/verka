@@ -70,6 +70,9 @@ pub(crate) enum Action {
     /// Fold the file tree's directories that hold no files of their own and
     /// a single subdirectory onto one row, or give each its own again.
     ToggleCompactDirs,
+    /// Put a cursor on the line at the top of the patch shown, or take it
+    /// away. While it is there, the moving keys move it rather than the view.
+    ToggleLines,
     /// The next file in the per-file view; otherwise a line down.
     Down,
     /// The previous file in the per-file view; otherwise a line up.
@@ -119,6 +122,9 @@ pub struct CheckoutDiff {
     pub search: Search,
     /// What each file was edited for, once the host has had it described.
     pub report: ReportState,
+    /// The line the line cursor is on, by its place among the shown patch's
+    /// lines; `None` unless lines are being selected.
+    pub line_cursor: Option<usize>,
 }
 
 impl CheckoutDiff {
@@ -166,6 +172,8 @@ impl CheckoutDiff {
         self.search.cancel();
         self.selected_file = index;
         self.file_list_offset = 0;
+        // The cursor's line was counted in the patch shown before.
+        self.line_cursor = self.line_cursor.map(|_| row);
         self.scroll.offset = u16::try_from(offset).unwrap_or(u16::MAX);
         // The old viewport's limit belongs to a different patch. Let the
         // next render measure this one before clamping the requested row.
@@ -210,6 +218,7 @@ impl CheckoutDiff {
             file_list_offset: 0,
             search: Default::default(),
             report: ReportState::default(),
+            line_cursor: None,
         }
     }
 
@@ -250,6 +259,12 @@ impl CheckoutDiff {
             return false;
         }
         let selected = self.selected_path();
+        // The cursor follows its file's line rather than its place in the
+        // diff, which the new work may have moved.
+        let cursor = self.line_cursor.and_then(|line| {
+            let (path, number) = position(self.shown_text()?, line)?;
+            Some((path.to_owned(), number?))
+        });
         self.diff = diff;
         let files = self.visible_files();
         let kept = selected.and_then(|path| {
@@ -270,7 +285,20 @@ impl CheckoutDiff {
             }
             None => self.selected_file = 0,
         }
+        if self.line_cursor.is_some() {
+            self.line_cursor = cursor.and_then(|(path, number)| self.line_at_number(&path, number));
+        }
         true
+    }
+
+    /// Where line `number` of `path`'s new file is among the shown patch's
+    /// lines, if a hunk of it is shown.
+    fn line_at_number(&self, path: &str, number: u32) -> Option<usize> {
+        let text = self.shown_text()?;
+        let (start, file) = file_starts(text)
+            .into_iter()
+            .find(|(_, file)| file.path == path)?;
+        Some(start + crate::files::row_at_line(file.patch, number)?)
     }
 
     fn selected_path(&self) -> Option<String> {
@@ -316,6 +344,7 @@ impl CheckoutDiff {
             report: Some(&self.report),
             conversation: None,
             intro: None,
+            line_cursor: self.line_cursor,
         }
     }
 
@@ -330,21 +359,50 @@ impl CheckoutDiff {
     }
 
     pub(crate) fn apply(&mut self, action: Action) {
+        let lines = self.line_cursor.is_some();
         match action {
             Action::Search if self.per_file => {
+                self.line_cursor = None;
                 self.search.open();
                 self.update_search();
             }
             // Each file's patch opens at its top; the combined diff opens
-            // where it was left.
+            // where it was left. A line cursor goes along to the same line.
             Action::ToggleFiles => {
+                let cursor = self.cursor_in_diff();
                 self.per_file = !self.per_file;
                 std::mem::swap(&mut self.rendered_side, &mut self.combined_side);
                 std::mem::swap(&mut self.scroll, &mut self.combined_scroll);
                 if self.per_file {
                     self.scroll.reset();
                 }
+                self.line_cursor = None;
+                if let Some((file, line)) = cursor {
+                    self.place_cursor(file, line);
+                }
             }
+            Action::ToggleLines if lines => self.line_cursor = None,
+            Action::ToggleLines => {
+                self.line_cursor = self.shown_text().and_then(|text| {
+                    let rows = crate::split::source_rows(
+                        text,
+                        self.hide_removed,
+                        self.rendered_side,
+                        self.per_file,
+                    );
+                    line_at(&rows, usize::from(self.scroll.clamped()))
+                });
+            }
+            Action::Down | Action::ScrollDown if lines => self.move_cursor(1),
+            Action::Up | Action::ScrollUp if lines => self.move_cursor(-1),
+            Action::HalfPageDown | Action::FilesDown if lines => {
+                self.move_cursor(self.scroll.half_page() as isize)
+            }
+            Action::HalfPageUp | Action::FilesUp if lines => {
+                self.move_cursor(-(self.scroll.half_page() as isize))
+            }
+            Action::First if lines => self.move_cursor(isize::MIN),
+            Action::Last if lines => self.move_cursor(isize::MAX),
             Action::ToggleRemoved => {
                 let hidden = self.hide_removed;
                 if let Some(text) = self.shown_text() {
@@ -384,6 +442,8 @@ impl CheckoutDiff {
                 }
                 self.hide_removed = !hidden;
                 self.scroll.note_limit(u16::MAX);
+                // Off a removed line that is now hidden.
+                self.move_cursor(0);
             }
             Action::ToggleLayout => self.side_by_side = !self.side_by_side,
             Action::PanLeft => self.horizontal_scroll = self.horizontal_scroll.saturating_sub(8),
@@ -440,15 +500,25 @@ impl CheckoutDiff {
         true
     }
 
-    /// The file the view is on, and the line to open it at: the file whose
+    /// The file the view is on, and the line to open it at: the line
+    /// cursor's, when lines are being selected; otherwise the file whose
     /// patch the top visible row is in — the selected file, in the per-file
     /// view — and the new file's line at that row, if it is past the file's
     /// headers. A file the diff deletes is not there to open.
     pub fn location(&self) -> Result<(PathBuf, Option<u32>), String> {
         let text = self.shown_text().ok_or("no diff to open a file from")?;
-        let rows =
-            crate::split::source_rows(text, self.hide_removed, self.rendered_side, self.per_file);
-        let top = line_at(&rows, usize::from(self.scroll.clamped())).ok_or("no file to open")?;
+        let top = match self.line_cursor {
+            Some(line) => line,
+            None => {
+                let rows = crate::split::source_rows(
+                    text,
+                    self.hide_removed,
+                    self.rendered_side,
+                    self.per_file,
+                );
+                line_at(&rows, usize::from(self.scroll.clamped())).ok_or("no file to open")?
+            }
+        };
         let (file, line) = position(text, top).ok_or("no file to open")?;
         let root = self
             .root()
@@ -460,20 +530,106 @@ impl CheckoutDiff {
         Ok((path, line))
     }
 
+    /// What the view is on, for a message written about it: the file the
+    /// line cursor is in and the new file's line there, or else the per-file
+    /// view's file. `None` in the combined diff with no line selected, which
+    /// is on no file in particular. The path is the worktree's.
+    pub fn source(&self) -> Option<(&str, Option<u32>)> {
+        match self.line_cursor {
+            Some(line) => position(self.shown_text()?, line),
+            None if self.per_file => self.shown_file().map(|(_, file)| (file.path, None)),
+            None => None,
+        }
+    }
+
+    /// Leave line selection, saying whether lines were being selected: Esc
+    /// does that before it means anything else to the host.
+    pub(crate) fn leave_lines(&mut self) -> bool {
+        self.line_cursor.take().is_some()
+    }
+
+    /// Move the line cursor `step` lines down, or up when negative, through
+    /// the lines drawn, and scroll it into view. A step of zero only puts it
+    /// back on a drawn line and in view.
+    fn move_cursor(&mut self, step: isize) {
+        let (Some(cursor), Some(text)) = (self.line_cursor, self.shown_text()) else {
+            return;
+        };
+        let (hidden, side, per_file) = (self.hide_removed, self.rendered_side, self.per_file);
+        let drawn: Vec<(usize, usize)> = crate::split::source_rows(text, hidden, side, per_file)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(row, shown)| match shown {
+                Row::Line(line) => Some((row, line)),
+                Row::RuleAbove | Row::RuleBelow => None,
+            })
+            .collect();
+        let at = crate::split::row_of(text, hidden, side, per_file, cursor);
+        let last = drawn.len().saturating_sub(1);
+        let current = drawn.iter().position(|(row, _)| *row >= at).unwrap_or(last);
+        let Some(&(row, line)) = drawn.get(current.saturating_add_signed(step).min(last)) else {
+            return;
+        };
+        self.line_cursor = Some(line);
+        self.scroll.reveal(u16::try_from(row).unwrap_or(u16::MAX));
+    }
+
+    /// The file the line cursor is in, by its place in the whole diff, and
+    /// the cursor's line within that file's patch.
+    fn cursor_in_diff(&self) -> Option<(usize, usize)> {
+        let line = self.line_cursor?;
+        if self.per_file {
+            return self.shown_file().map(|(index, _)| (index, line));
+        }
+        file_starts(self.diff.as_ref().ok()?)
+            .into_iter()
+            .enumerate()
+            .find(|(_, (start, file))| (*start..start + file.patch.lines().count()).contains(&line))
+            .map(|(index, (start, _))| (index, line - start))
+    }
+
+    /// Put the line cursor on line `line` of file `file`'s patch, in the
+    /// whole diff or as that file's own, unless the file filter hides it.
+    fn place_cursor(&mut self, file: usize, line: usize) {
+        if self.per_file {
+            if !self.visible_files().iter().any(|(index, _)| *index == file) {
+                return;
+            }
+            self.selected_file = file;
+            self.scroll.note_limit(u16::MAX);
+            self.line_cursor = Some(line);
+        } else {
+            let start = self
+                .diff
+                .as_ref()
+                .ok()
+                .and_then(|text| file_starts(text).get(file).map(|(start, _)| *start));
+            let Some(start) = start else {
+                return;
+            };
+            self.line_cursor = Some(start + line);
+        }
+        self.move_cursor(0);
+    }
+
     /// The patch the view shows: the whole diff, or the selected file's in
     /// the per-file view — the first file shown when the selection is
     /// filtered out, as the view falls back to it.
     fn shown_text(&self) -> Option<&str> {
-        let text = self.diff.as_ref().ok()?;
         if !self.per_file {
-            return Some(text);
+            return self.diff.as_deref().ok();
         }
-        let files = filtered_file_diffs(text, self.search.query());
-        files
+        self.shown_file().map(|(_, file)| file.patch)
+    }
+
+    /// The per-file view's file, by its place in the whole diff.
+    fn shown_file(&self) -> Option<(usize, FileDiff<'_>)> {
+        let mut files = self.visible_files();
+        let shown = files
             .iter()
-            .find(|(index, _)| *index == self.selected_file)
-            .or_else(|| files.first())
-            .map(|(_, file)| file.patch)
+            .position(|(index, _)| *index == self.selected_file)
+            .unwrap_or(0);
+        (shown < files.len()).then(|| files.swap_remove(shown))
     }
 
     fn visible_files(&self) -> Vec<(usize, FileDiff<'_>)> {
@@ -540,6 +696,22 @@ fn keep_top(text: &str, hidden: bool, top: u16, per_file: bool) -> u16 {
         None => after.len(),
     };
     u16::try_from(offset).unwrap_or(u16::MAX)
+}
+
+/// Each file of `text` with the line its patch starts at among `text`'s.
+fn file_starts(text: &str) -> Vec<(usize, FileDiff<'_>)> {
+    let mut start = text
+        .lines()
+        .take_while(|line| !line.starts_with("diff --git "))
+        .count();
+    crate::files::file_diffs(text)
+        .into_iter()
+        .map(|file| {
+            let at = start;
+            start += file.patch.lines().count();
+            (at, file)
+        })
+        .collect()
 }
 
 /// The diff line at row `top`, or — on a rule — the first one after it.
@@ -704,6 +876,13 @@ mod tests {
             branch_point: true,
         });
         diff.scroll.offset = 3;
+        let added = diff
+            .diff
+            .as_ref()
+            .unwrap()
+            .lines()
+            .position(|line| line == "+two");
+        diff.line_cursor = added;
 
         assert!(!diff.refresh());
         git(&root, &["tag", "baseline"]);
@@ -715,6 +894,12 @@ mod tests {
         assert!(diff.diff.as_ref().unwrap().contains("a/a.txt"));
         assert_eq!(diff.selected_path().as_deref(), Some("b.txt"));
         assert_eq!(diff.scroll.offset, 3);
+        assert_ne!(diff.line_cursor, added, "a.txt's patch now comes first");
+        assert_eq!(
+            diff.source(),
+            Some(("b.txt", Some(1))),
+            "the cursor stays on b.txt"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -885,6 +1070,105 @@ mod tests {
         diff.apply(Action::ToggleRemoved);
         diff.apply(Action::ToggleFiles);
         assert_eq!(diff.scroll.offset, 10);
+    }
+
+    /// The line cursor starts on the line at the top, moves a drawn line at
+    /// a time — over rules, and over removed lines while they are hidden —
+    /// and is what `v` and a message start from.
+    #[test]
+    fn the_line_cursor_moves_over_drawn_lines() {
+        let mut diff = two_files();
+        // Lines: a.txt's header 0, hunk 1, "-a" 2, "+b" 3, b.txt's header 4,
+        // hunk 5, "-c" 6, "+d" 7. The headers' rules are rows of their own.
+        diff.scroll.note_viewport(4);
+        assert_eq!(diff.source(), None, "the combined diff is on no one file");
+        diff.scroll.offset = 1;
+        diff.apply(Action::ToggleLines);
+        assert_eq!(
+            diff.line_cursor,
+            Some(1),
+            "the hunk, below the rule at the top"
+        );
+        diff.apply(Action::Down);
+        assert_eq!(diff.line_cursor, Some(2));
+        assert_eq!(diff.source(), Some(("a.txt", Some(1))));
+        assert_eq!(diff.scroll.offset, 1, "still on screen");
+        diff.apply(Action::Down);
+        diff.apply(Action::Down);
+        assert_eq!(diff.line_cursor, Some(4), "b.txt's header, past the rule");
+        assert_eq!(diff.scroll.offset, 3, "scrolled to keep the cursor in view");
+        assert_eq!(diff.source(), Some(("b.txt", None)));
+        diff.apply(Action::Last);
+        assert_eq!(diff.line_cursor, Some(7));
+        assert_eq!(diff.source(), Some(("b.txt", Some(1))));
+
+        diff.apply(Action::Up);
+        assert_eq!(diff.line_cursor, Some(6), "-c");
+        diff.apply(Action::ToggleRemoved);
+        assert_eq!(diff.line_cursor, Some(7), "-c is hidden; +d is next");
+        diff.apply(Action::Up);
+        assert_eq!(diff.line_cursor, Some(5), "over -c");
+        diff.apply(Action::First);
+        assert_eq!(diff.line_cursor, Some(0));
+        assert_eq!(diff.scroll.offset, 0);
+
+        diff.apply(Action::ToggleLines);
+        assert_eq!(diff.line_cursor, None);
+        diff.apply(Action::Down);
+        assert_eq!(diff.scroll.offset, 1, "j scrolls again");
+    }
+
+    /// The cursor's row is marked in either layout, on the line it is on.
+    #[test]
+    fn the_line_cursor_is_drawn_on_its_line() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut diff = two_files();
+        diff.line_cursor = Some(7);
+        for side_by_side in [false, true] {
+            diff.side_by_side = side_by_side;
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|frame| {
+                    crate::render(frame, &diff.view(Block::default()), frame.area());
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let marked: Vec<String> = (0..30)
+                .filter(|y| buffer[(0, *y)].symbol() == "▌")
+                .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            assert_eq!(marked.len(), 1, "side by side: {side_by_side}");
+            assert!(marked[0].contains('d'), "{}", marked[0]);
+        }
+    }
+
+    /// Switching between the combined diff and the per-file view keeps the
+    /// cursor on its line, counted in whichever patch is shown.
+    #[test]
+    fn the_line_cursor_goes_between_the_combined_and_per_file_views() {
+        let mut diff = two_files();
+        diff.line_cursor = Some(7);
+        diff.apply(Action::ToggleFiles);
+        assert_eq!(diff.selected_file, 1);
+        assert_eq!(diff.line_cursor, Some(3), "+d in b.txt's own patch");
+        assert_eq!(diff.source(), Some(("b.txt", Some(1))));
+        diff.apply(Action::Up);
+        assert_eq!(diff.selected_file, 1, "j/k move the cursor, not the file");
+        assert_eq!(diff.line_cursor, Some(2));
+        diff.apply(Action::ToggleFiles);
+        assert_eq!(diff.line_cursor, Some(6));
+
+        diff.apply(Action::ToggleFiles);
+        assert!(diff.leave_lines());
+        assert!(!diff.leave_lines());
+        assert_eq!(
+            diff.source(),
+            Some(("b.txt", None)),
+            "the file being viewed"
+        );
+        diff.line_cursor = Some(1);
+        diff.apply(Action::Search);
+        assert_eq!(diff.line_cursor, None, "the filter may change the file");
     }
 
     #[test]

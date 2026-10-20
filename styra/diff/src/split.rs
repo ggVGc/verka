@@ -134,6 +134,27 @@ pub(crate) fn source_rows(text: &str, hidden: bool, split: bool, per_file: bool)
     }
 }
 
+/// The row diff line `line` is drawn on: side by side, the row it shares with
+/// its other half; where it is hidden, the row of the first line after it.
+pub(crate) fn row_of(text: &str, hidden: bool, split: bool, per_file: bool, line: usize) -> usize {
+    let source = Row::Line(line);
+    let exact = if split {
+        aligned(text, per_file)
+            .iter()
+            .position(|row| row.contains(source))
+    } else {
+        rows(text, hidden, per_file)
+            .iter()
+            .position(|row| *row == source)
+    };
+    exact.unwrap_or_else(|| {
+        let rows = source_rows(text, hidden, split, per_file);
+        rows.iter()
+            .position(|row| matches!(row, Row::Line(other) if *other >= line))
+            .unwrap_or(rows.len().saturating_sub(1))
+    })
+}
+
 pub(crate) fn remap(
     text: &str,
     hidden: bool,

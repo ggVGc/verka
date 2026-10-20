@@ -51,6 +51,9 @@ pub struct ModalInput<'a> {
     pub focused: usize,
     /// Whether the operator is choosing between boxes rather than typing.
     pub choosing: bool,
+    /// What the message is about, such as the diff's file and line it was
+    /// started from: noted under the boxes, as it is under the message sent.
+    pub source: Option<String>,
     /// What an empty buffer says instead, so the box explains itself.
     pub placeholder: &'a str,
     /// Whether the terminal cursor belongs in this box. Only the innermost
@@ -140,8 +143,14 @@ pub fn render(frame: &mut Frame, input: &ModalInput<'_>) {
     let inner = block.inner(area);
     let display = display(input, inner.width);
     // Keep the current box's last row in view: with one box that is the
-    // bottom, with several it may be one above the others.
-    let scroll = (display.cursor_row + 1).saturating_sub(inner.height);
+    // bottom, with several it may be one above the others. Below the last
+    // box, the source note too, as long as that leaves the cursor in view.
+    let bottom = if input.focused + 1 == input.parts.len() {
+        (display.lines.len() as u16).min(display.cursor_row + inner.height)
+    } else {
+        display.cursor_row + 1
+    };
+    let scroll = bottom.saturating_sub(inner.height);
     frame.render_widget(
         Paragraph::new(display.lines)
             .block(block)
@@ -227,6 +236,13 @@ pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
         }
         lines.extend(part_lines);
     }
+    if let Some(source) = &input.source {
+        lines.extend(wrapped_input_lines(
+            &format!("Source: {source}"),
+            width,
+            Style::default().fg(theme::ADDITIONAL_INFO),
+        ));
+    }
 
     InputDisplay {
         lines,
@@ -288,6 +304,7 @@ mod tests {
             parts,
             focused: parts.len() - 1,
             choosing: false,
+            source: None,
             placeholder: "type a message, Enter to send",
             cursor: true,
         }
@@ -359,6 +376,19 @@ mod tests {
         assert_eq!(choosing.lines.len(), 6);
         assert_eq!(choosing.lines[3].to_string(), "…");
         assert_eq!(choosing.cursor_row, 3);
+    }
+
+    /// The source is noted under the message, and the cursor stays in it.
+    #[test]
+    fn the_source_is_noted_under_the_message() {
+        let parts = ["look here".to_owned()];
+        let mut boxes = input(&parts, Vec::new());
+        boxes.source = Some("src/main.rs:12".into());
+        let display = display(&boxes, 40);
+        let rows: Vec<String> = display.lines.iter().map(|line| line.to_string()).collect();
+        assert_eq!(rows, ["look here", "Source: src/main.rs:12"]);
+        assert_eq!((display.cursor_col, display.cursor_row), (9, 0));
+        assert_eq!(height(&boxes, 40), 4);
     }
 
     #[test]

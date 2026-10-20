@@ -124,8 +124,8 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
 
 /// Keys for the checkout diff. The diff owns the keyboard while it is open:
 /// `styra-diff` answers every key, the same way its own program does, and
-/// `i` focuses the message box and `q` quits Styra unless the diff's filter
-/// is being typed.
+/// `i` starts a message about the file and line the diff is on and `q` quits
+/// Styra unless the diff's filter is being typed.
 /// `T` switches between the checkout's diff and the selected turn's. Tab
 /// hands navigation to the interaction when the diff is in a side pane, and
 /// fullscreen swaps the diff's header for the conversation's latest
@@ -150,7 +150,7 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
         return;
     }
     if GLOBAL_FOCUS_MESSAGE.matches(key) && !typing_filter {
-        app.enter_input();
+        app.enter_input_from_diff();
         return;
     }
     if key.code == KeyCode::Char('D') && !typing_filter {
@@ -2767,6 +2767,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// `i` starts a message about what the diff is on — the file it shows,
+    /// and the line cursor's line — and sending puts that under it.
+    #[test]
+    fn a_message_started_from_the_diff_notes_its_file_and_line() {
+        let root = tree("diff-message-source");
+        let mut app = app_with_diffable_interaction(&root);
+        app.view = View::CheckoutDiff;
+        let mut diff = styra_diff::CheckoutDiff::read(diffable_target());
+        diff.diff = Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n\
+                        diff --git a/b.txt b/b.txt\n@@ -4,2 +4,2 @@\n c\n-d\n+e\n"
+            .into());
+        diff.scroll.note_limit(100);
+        app.checkout_diff = Some(diff);
+        let press = |app: &mut App, character| {
+            press_list_key(app, &root, KeyEvent::from(KeyCode::Char(character)))
+        };
+
+        press(&mut app, 'i');
+        assert_eq!(app.focus, crate::app::Focus::Input);
+        assert_eq!(
+            app.message_source, None,
+            "the combined diff is on no one file"
+        );
+        app.enter_list();
+
+        press(&mut app, 'f');
+        press(&mut app, 'j');
+        press(&mut app, 'i');
+        assert_eq!(app.message_source.as_deref(), Some("b.txt"));
+        app.enter_list();
+        assert_eq!(app.message_source, None, "leaving the box forgets it");
+
+        press(&mut app, 'l');
+        press(&mut app, 'j');
+        press(&mut app, 'j');
+        assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 1);
+        press(&mut app, 'i');
+        assert_eq!(app.message_source.as_deref(), Some("b.txt:5"));
+        app.composer.char('x');
+        assert_eq!(app.take_message().as_deref(), Some("x\n\nSource: b.txt:5"));
+        assert_eq!(app.message_source, None);
+
+        app.enter_input();
+        assert_eq!(app.message_source, None, "a message started elsewhere");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn per_file_diff_navigation_and_scrolling_use_separate_keys() {
         let root = tree("diff-files");
@@ -2792,6 +2839,7 @@ mod tests {
                         file_list_offset: 0,
             search: Default::default(),
             report: Default::default(),
+            line_cursor: None,
         });
         let diff = app.checkout_diff.as_mut().unwrap();
         diff.scroll.note_limit(100);

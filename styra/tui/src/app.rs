@@ -309,6 +309,10 @@ pub struct App {
     /// Whether the fullscreen diff shows the conversation's latest messages
     /// where its header would be. Kept as the diff is left and opened again.
     pub diff_conversation: bool,
+    /// What the message being written is about, when it was started from the
+    /// diff: the file it was on, and the line the line cursor was on. Shown
+    /// under the message box, and put under the message when it is sent.
+    pub message_source: Option<String>,
     /// The entry-log pane below the event list: whether it is open, which of
     /// the two windows has the navigation keys, and where it is; see
     /// [`EntryLog`]. It is deliberately a pane state, not a [`View`]: it and
@@ -603,6 +607,7 @@ impl App {
             auto_commit: false,
             transcript: Scroll::default(),
             checkout_diff: None,
+            message_source: None,
             diff_preview: false,
             diff_turn: false,
             turn_diff: None,
@@ -1820,6 +1825,21 @@ impl App {
 
     pub fn enter_input(&mut self) {
         self.focus = Focus::Input;
+        self.message_source = None;
+    }
+
+    /// Start a message about what the diff on screen — the checkout's or the
+    /// turn's — is on: the file it shows, and the line cursor's line, if any
+    /// (see [`styra_diff::CheckoutDiff::source`]).
+    pub fn enter_input_from_diff(&mut self) {
+        self.enter_input();
+        self.message_source =
+            self.shown_diff()
+                .and_then(|diff| diff.source())
+                .map(|(path, line)| match line {
+                    Some(line) => format!("{path}:{line}"),
+                    None => path.to_owned(),
+                });
     }
 
     /// Leave the message box. Coming back to it means typing again, into
@@ -1827,6 +1847,7 @@ impl App {
     pub fn enter_list(&mut self) {
         self.focus = Focus::List;
         self.composer.stop_choosing();
+        self.message_source = None;
     }
 
     // --- Message editing -----------------------------------------------------
@@ -1835,10 +1856,15 @@ impl App {
     // one part of sending that is not — a sent message leaves the box, and the
     // rest of the client wants it.
 
-    /// Take the trimmed message for sending, clearing the buffer. Returns
-    /// `None` when the buffer holds only whitespace.
+    /// Take the trimmed message for sending, clearing the buffer, with a note
+    /// under it of what it was started from in the diff. Returns `None` when
+    /// the buffer holds only whitespace.
     pub fn take_message(&mut self) -> Option<String> {
-        self.composer.take()
+        let message = self.composer.take()?;
+        Some(match self.message_source.take() {
+            Some(source) => format!("{message}\n\nSource: {source}"),
+            None => message,
+        })
     }
 
     /// Ask the event loop for something this screen cannot do itself; see

@@ -77,6 +77,9 @@ pub struct CheckoutDiffView<'a> {
     /// started the turn a turn diff is of. Wrapped to the panel, and given
     /// no more than half of it.
     pub intro: Option<Vec<Line<'a>>>,
+    /// The line the line cursor is on, among the shown patch's lines; `None`
+    /// unless lines are being selected.
+    pub line_cursor: Option<usize>,
 }
 
 impl<'a> CheckoutDiffView<'a> {
@@ -108,6 +111,7 @@ impl<'a> CheckoutDiffView<'a> {
             report: None,
             conversation: None,
             intro: None,
+            line_cursor: None,
         }
     }
 }
@@ -509,6 +513,16 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             );
             (limit, requested.min(limit), view.horizontal_scroll)
         };
+    if let (Some(cursor), Ok(text)) = (view.line_cursor, shown) {
+        let row =
+            crate::split::row_of(text, view.hide_removed, side_by_side, view.per_file, cursor);
+        if let Some(y) = row
+            .checked_sub(usize::from(effective))
+            .filter(|y| *y < usize::from(body.height))
+        {
+            render_line_cursor(frame, Rect::new(body.x, body.y + y as u16, body.width, 1));
+        }
+    }
     if let (Some(area), Some(file)) = (thumbnail_area, selected_file) {
         let file_lines = (!view.worktree.as_os_str().is_empty())
             .then(|| std::fs::File::open(view.worktree.join(file.path)).ok())
@@ -541,6 +555,19 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         file_list_offset,
     }
 }
+
+/// Mark the line cursor's row: the editor's cursor-line band across it, and
+/// a bar at its edge that stays when the band is over a changed line's own.
+fn render_line_cursor(frame: &mut Frame, row: Rect) {
+    let buffer = frame.buffer_mut();
+    buffer.set_style(row, Style::default().bg(theme::SELECTION_BACKGROUND));
+    if let Some(cell) = buffer.cell_mut((row.x, row.y)) {
+        cell.set_symbol(LINE_CURSOR_MARKER).set_fg(theme::ACCENT);
+    }
+}
+
+/// Drawn over the first column of the line cursor's row.
+const LINE_CURSOR_MARKER: &str = "▌";
 
 /// Draw aligned rows with fixed gutters and one linked horizontal offset.
 fn render_split(
@@ -1253,10 +1280,17 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
     if let Ok(text) = view.diff {
         lines.push(stat_line(text));
     }
-    let navigation = if view.per_file {
+    let navigation = if view.line_cursor.is_some() {
+        "line selection · j/k: line · PgUp/PgDn: half-screen · g/G: first/last · l/Esc: leave"
+    } else if view.per_file {
         "f: combined diff · /: search · j/k: files · J/K: 5 files · ↑/↓: scroll 10 · PgUp/PgDn: half-screen"
     } else {
         "f: per-file diffs · j/k: scroll · ↑/↓: scroll 10 · PgUp/PgDn: half-screen"
+    };
+    let lines_key = if view.line_cursor.is_some() {
+        ""
+    } else {
+        "l: select lines · "
     };
     lines.push(muted(&format!(
         "s: {} · {navigation}",
@@ -1304,7 +1338,7 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
         "w: words off"
     };
     lines.push(muted(&format!(
-        "v: edit file · {words} · {removed} · {tint}{directories}"
+        "{lines_key}v: edit file · {words} · {removed} · {tint}{directories}"
     )));
     if view.per_file {
         if let Some(query) = view.search.query {
@@ -1877,6 +1911,7 @@ index 1111111..2222222 100644
                         report: None,
                         conversation: None,
                         intro: None,
+                        line_cursor: None,
                     },
                     frame.area(),
                 );
@@ -2217,6 +2252,7 @@ index 1111111..2222222 100644
                             report: None,
                             conversation: None,
                             intro: None,
+                            line_cursor: None,
                         },
                         frame.area(),
                     );
@@ -2526,6 +2562,7 @@ index 1111111..2222222 100644
                         report: None,
                         conversation: None,
                         intro: None,
+                        line_cursor: None,
                     },
                     frame.area(),
                 );

@@ -368,6 +368,7 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
         parts: composer.parts(),
         focused: composer.focused(),
         choosing: composer.choosing(),
+        source: app.message_source.clone(),
         placeholder: if app.session_id.is_empty() {
             "Enter to send · Ctrl+Enter to send in a new Git workspace"
         } else {
@@ -1355,6 +1356,7 @@ mod tests {
             file_list_offset: 0,
             search: Default::default(),
             report: Default::default(),
+            line_cursor: None,
         });
         app.view = View::CheckoutDiff;
 

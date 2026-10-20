@@ -67,11 +67,25 @@ impl Scroll {
         self.offset = self.clamped().saturating_sub(step);
     }
 
-    fn half_page(&self) -> u16 {
+    /// Half of what is on screen, or a page before the renderer has said.
+    pub fn half_page(&self) -> u16 {
         match self.viewport {
             0 => SCROLL_PAGE,
             viewport => (viewport / 2).max(1),
         }
+    }
+
+    /// Scroll just far enough that line `row` is on screen. Before the
+    /// renderer has said how tall that is, the row is put at the top.
+    pub fn reveal(&mut self, row: u16) {
+        let top = self.clamped();
+        self.offset = if row < top || self.viewport == 0 {
+            row
+        } else if row >= top.saturating_add(self.viewport) {
+            row + 1 - self.viewport
+        } else {
+            top
+        };
     }
 
     pub fn line_down(&mut self) {
@@ -105,5 +119,27 @@ mod tests {
         scroll.note_viewport(1);
         scroll.half_page_down();
         assert_eq!(scroll.offset, SCROLL_PAGE + 1, "always at least a line");
+    }
+
+    /// Revealing a row scrolls no further than it takes to bring it in.
+    #[test]
+    fn revealing_a_row_scrolls_just_enough() {
+        let mut scroll = Scroll::default();
+        scroll.note_limit(100);
+        scroll.reveal(30);
+        assert_eq!(scroll.offset, 30, "no viewport reported yet");
+        scroll.reveal(0);
+
+        scroll.note_viewport(10);
+        scroll.reveal(9);
+        assert_eq!(scroll.offset, 0);
+        scroll.reveal(10);
+        assert_eq!(scroll.offset, 1);
+        scroll.reveal(30);
+        assert_eq!(scroll.offset, 21);
+        scroll.reveal(25);
+        assert_eq!(scroll.offset, 21);
+        scroll.reveal(4);
+        assert_eq!(scroll.offset, 4);
     }
 }

@@ -290,6 +290,13 @@ messages. It runs in the background and is kept with the Session, so reopening
 the diff shows it again. The per-file view shows the selected file's
 description above its patch (`e` hides or shows it), noting when the file has
 changed since it was described.
+`l` (or `V`) in the diff selects lines: a cursor starts on the line at the top
+of the patch shown — one file's, or the combined diff — and `j`/`k`, PgUp/PgDn
+and `g`/`G` move it instead of the view; `l` or `Esc` leaves. `v` opens the
+editor at the cursor's line. `i` from the diff starts a message about what it is
+on: the per-file view's file, and the cursor's line when lines are selected. The
+message box notes that source under the message, and the message is sent with
+`Source: path` or `Source: path:line` under it.
 The Rust wire types are in `styra_server::api`, and the blocking client used by
 the TUI is `styra_server::Client`.
 

@@ -12,7 +12,8 @@ use crate::state::{Action, CheckoutDiff};
 enum Command {
     /// Done to the view itself.
     View(Action),
-    /// Clear a standing file filter, or else close the view.
+    /// Leave line selection, or clear a standing file filter, or else close
+    /// the view.
     ClearFilterOrClose,
     Close,
     OpenFile,
@@ -94,9 +95,15 @@ pub const BINDINGS: &[Binding] = &[
         Command::View(Action::ToggleCompactDirs),
     ),
     bind(
+        &[KeyCode::Char('l'), KeyCode::Char('V')],
+        "l / V",
+        "select lines: j/k move a line cursor, which v and a message start from",
+        Command::View(Action::ToggleLines),
+    ),
+    bind(
         &[KeyCode::Char('v')],
         "v",
-        "open the file at the top of the diff in the editor, at that line",
+        "open the file at the top of the diff, or at the line cursor, in the editor",
         Command::OpenFile,
     ),
     bind(
@@ -181,7 +188,7 @@ pub const BINDINGS: &[Binding] = &[
     bind(
         &[KeyCode::Esc],
         "Esc",
-        "clear the file filter, or close the diff",
+        "leave line selection, clear the file filter, or close the diff",
         Command::ClearFilterOrClose,
     ),
 ];
@@ -230,7 +237,9 @@ impl CheckoutDiff {
                 self.apply(action);
                 Outcome::Handled
             }
-            Command::ClearFilterOrClose if self.clear_filter() => Outcome::Handled,
+            Command::ClearFilterOrClose if self.leave_lines() || self.clear_filter() => {
+                Outcome::Handled
+            }
             Command::ClearFilterOrClose | Command::Close => Outcome::Close,
             Command::OpenFile => Outcome::OpenFile,
             Command::GenerateReport => Outcome::GenerateReport,
@@ -308,6 +317,23 @@ mod tests {
         }
         let control_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(diff.handle_key(control_r), Outcome::Ignored);
+    }
+
+    /// Esc leaves line selection before it clears a filter or closes, and
+    /// `l` or `V` leaves it as it entered.
+    #[test]
+    fn esc_leaves_line_selection_first() {
+        let mut diff = diff();
+        assert_eq!(press(&mut diff, KeyCode::Char('l')), Outcome::Handled);
+        assert_eq!(diff.line_cursor, Some(0));
+        assert_eq!(press(&mut diff, KeyCode::Char('j')), Outcome::Handled);
+        assert_eq!(diff.line_cursor, Some(1));
+        assert_eq!(press(&mut diff, KeyCode::Esc), Outcome::Handled);
+        assert_eq!(diff.line_cursor, None);
+        assert_eq!(press(&mut diff, KeyCode::Char('V')), Outcome::Handled);
+        assert_eq!(press(&mut diff, KeyCode::Char('V')), Outcome::Handled);
+        assert_eq!(diff.line_cursor, None);
+        assert_eq!(press(&mut diff, KeyCode::Esc), Outcome::Close);
     }
 
     /// A key answers to one command, so the table cannot shadow a row.
