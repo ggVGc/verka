@@ -280,8 +280,9 @@ is sent anyway.
 
 `A` opens the full Session list. In that list, `/` starts a case-insensitive
 filter over the Session name and first prompt; `Esc` abandons the filter. `c`
-shows or hides the Sessions marked completed or abandoned. `C` marks the
-selected Session completed and `Z` marks it abandoned — given up on rather than
+shows or hides the Sessions marked completed, abandoned, or sealed, which are
+visible by default. `C` marks the selected Session completed and `Z` marks it
+abandoned — given up on rather than
 finished; each key, pressed on a Session already marked that way, unmarks it.
 Neither touches a sealed Session. `n` leaves the list
 without resuming anything and starts a new Session in the Workspace whose list

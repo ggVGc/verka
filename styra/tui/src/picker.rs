@@ -61,9 +61,9 @@ pub enum SessionChoice {
 /// session, `n` to start a new one instead of resuming any of them, `s` to
 /// switch between ordering by last activity and by creation, `a` to toggle
 /// history older than a week, `c` to toggle showing Sessions the operator has
-/// marked completed (hidden by default, the same convention as the live
-/// interactions navigator), `C` to mark the selected Session completed or not,
-/// and `/` to filter by name or first prompt. Esc abandons an active search,
+/// marked completed, abandoned, or sealed (shown by default), `C` to mark the
+/// selected Session completed or not, and `/` to filter by name or first prompt.
+/// Esc abandons an active search,
 /// then backs out. When `current_id` is in the list, it opens selected even if
 /// another root or branch sorts above it.
 ///
@@ -95,7 +95,7 @@ pub fn run_session_picker(
     let mut all_sessions = sessions.to_vec();
     let now_ms = unix_now_ms();
     let mut showing_all = false;
-    let mut show_completed = false;
+    let mut show_completed = true;
     let mut filter: Option<String> = None;
     let mut searching = false;
     let mut sessions = picker_sessions(
