@@ -164,6 +164,20 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
         // The agent naming its own model settles the interaction's selection.
         // Keep it in the one selection that also opens the launcher, rather
         // than maintaining a second, status-line-only version of the model.
+        AgentEvent::ProviderChanged {
+            to, model, effort, ..
+        } => {
+            // Historical switches to another provider remain log entries;
+            // the last switch back to this provider settles its selection.
+            if to == app.selection.provider.as_str() {
+                app.selection.model = model.clone();
+                if let Ok(effort) = Effort::parse(effort) {
+                    app.selection.effort = effort;
+                }
+                app.model_reported = false;
+                app.effort_reported = false;
+            }
+        }
         AgentEvent::ThreadStarted { model, effort, .. }
         | AgentEvent::ModelChanged { model, effort } => {
             // A converted Session replays the agent it was converted from —

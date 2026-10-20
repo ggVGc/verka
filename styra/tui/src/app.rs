@@ -787,7 +787,7 @@ impl App {
             // this is not a choice it can offer — but it stays the answer for
             // any other way of asking.
             if live {
-                return self.show_warning("changing agent requires a new session");
+                return self.show_warning("stop the interaction before switching provider");
             }
             // A stopped Session's history is in its old agent's native format,
             // so moving it takes a conversion; a Session that was never
@@ -2901,8 +2901,8 @@ mod tests {
         app.confirm_launcher();
 
         assert_eq!(app.take_request(), Some(Request::ConvertProvider(chosen)));
-        // The conversion is the server's answer to give: this screen keeps
-        // showing the Session it is still on until the converted one opens.
+        // Keep showing the current selection until the server converts and
+        // restarts this same Session.
         assert_eq!(app.selection.provider, Provider::Codex);
     }
 
@@ -3157,6 +3157,31 @@ mod tests {
                 .model,
             "claude-opus-4-8"
         );
+    }
+
+    #[test]
+    fn replayed_provider_switch_settles_the_chosen_model_after_switching_back() {
+        let chosen = Selection::parse("claude:claude-opus-5/high").unwrap();
+        let mut app = App::new(chosen.clone(), "s-1");
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "old-thread".into(),
+            model: Some("claude-sonnet-5".into()),
+            effort: Some("max".into()),
+        });
+        app.push_event(AgentEvent::ProviderChanged {
+            from: "claude".into(),
+            to: "codex".into(),
+            model: "gpt-5.6-sol".into(),
+            effort: "low".into(),
+        });
+        assert_eq!(app.selection.provider, Provider::Claude);
+        app.push_event(AgentEvent::ProviderChanged {
+            from: "codex".into(),
+            to: "claude".into(),
+            model: chosen.model.clone(),
+            effort: chosen.effort.as_str().to_owned(),
+        });
+        assert_eq!(app.selection, chosen);
     }
 
     #[test]

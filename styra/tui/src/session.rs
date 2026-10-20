@@ -714,6 +714,7 @@ fn is_wire_backed(event: &styra_protocol::event::AgentEvent) -> bool {
         event,
         styra_protocol::event::AgentEvent::Branched { .. }
             | styra_protocol::event::AgentEvent::ModelChanged { .. }
+            | styra_protocol::event::AgentEvent::ProviderChanged { .. }
     )
 }
 

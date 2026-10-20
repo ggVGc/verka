@@ -58,6 +58,12 @@ pub struct ServerState {
 mod edit_report;
 #[path = "integration.rs"]
 mod integration;
+#[path = "native_transcripts.rs"]
+mod native_transcripts;
+use native_transcripts::{FilesystemTranscripts, NativeTranscripts};
+
+#[path = "provider_switch.rs"]
+mod provider_switch;
 #[path = "rebase.rs"]
 mod rebase;
 
@@ -67,6 +73,7 @@ struct ServerInner {
     /// spawns `git`; a test builds the same server around an in-memory Git and
     /// so exercises every launch path without a repository on disk.
     git: Arc<dyn crate::git::Git>,
+    native_transcripts: Arc<dyn NativeTranscripts>,
     /// The socket the server is bound to, removed on an explicit shutdown so
     /// the next client sees no stale socket to trip over. `None` for a server
     /// running in its client's process, which has no socket to clean up and no
@@ -888,6 +895,14 @@ fn ensure_branchable(id: &str, activity: InteractionActivity) -> Result<()> {
     anyhow::bail!(
         "session {id:?} is still working ({working}); wait for it to finish or stop it before branching"
     )
+}
+
+fn ensure_provider_switchable(activity: InteractionActivity) -> Result<()> {
+    anyhow::ensure!(
+        activity == InteractionActivity::Stopped,
+        "stop the interaction before switching provider"
+    );
+    Ok(())
 }
 
 /// Why the turn that just ended stopped, most specific answer first: a refused
@@ -2037,6 +2052,24 @@ impl ServerState {
         standalone_lock: Option<std::fs::File>,
         user_config: Option<PathBuf>,
     ) -> Self {
+        Self::with_backends(
+            git,
+            Arc::new(FilesystemTranscripts),
+            store_root,
+            socket,
+            standalone_lock,
+            user_config,
+        )
+    }
+
+    fn with_backends(
+        git: Arc<dyn crate::git::Git>,
+        native_transcripts: Arc<dyn NativeTranscripts>,
+        store_root: PathBuf,
+        socket: Option<PathBuf>,
+        standalone_lock: Option<std::fs::File>,
+        user_config: Option<PathBuf>,
+    ) -> Self {
         // With no socket to sit beside, the brokers go to the per-user runtime
         // directory when there is one and into the store otherwise, so a
         // standalone server still works on a host that has no runtime
@@ -2056,6 +2089,7 @@ impl ServerState {
                 quota: Arc::new(crate::quota::QuotaLog::open(&store_root)),
                 roster: crate::roster::Roster::open(&store_root),
                 git,
+                native_transcripts,
                 store_root,
                 socket,
                 control_root,
@@ -2691,31 +2725,11 @@ impl ServerState {
     }
 
     fn resume_session(&self, request: ResumeSession) -> Result<SessionInfo> {
-        let previous = self
-            .inner
-            .interactions
-            .lock()
-            .expect("server interaction lock poisoned")
-            .get(&request.id)
-            .cloned();
-        if let Some(previous) = previous {
-            if previous.activity.activity().accepting() {
-                anyhow::bail!("session {:?} already has a live interaction", request.id);
-            }
-            // Stopping marks an interaction stopped at once, but its sandbox
-            // leaves a moment later — and until it has, it is running the
-            // broker executable this launch is about to stage over (which
-            // fails as a busy text file) and holding the shell socket beside
-            // it. A resume straight after a stop is exactly what restarting
-            // an idle interaction under new mounts does, so wait it out here.
-            if !previous.interaction.shut_down() {
-                anyhow::bail!(
-                    "session {:?}'s previous agent has not exited yet; try again in a moment",
-                    request.id
-                );
-            }
-        }
+        provider_switch::resume(self, request)
+    }
 
+    /// Launch an already prepared Session using its existing identity and checkout.
+    fn resume_prepared_session(&self, request: ResumeSession) -> Result<SessionInfo> {
         let summary = self.stored_summary(&request.id)?;
         // Sealing is the operator's final word on a Session, and a Session
         // that could be resumed would not be finished with at all — the seal
@@ -2729,21 +2743,10 @@ impl ServerState {
                 request.id
             );
         }
-        // A resume revives the session on the selection the caller names, so a
-        // model or effort chosen while nothing was running is what comes back
-        // up. The agent is not open to the same choice: this hands the provider
-        // its own native transcript, and no other provider can read it — that
-        // is what converting a Session is for.
+        // A provider change above converted the native transcript in place.
+        // Model-only resumes use the requested selection directly.
         let stored_selection = summary.selection;
         let selection = match request.selection {
-            Some(selection) if selection.provider != stored_selection.provider => {
-                anyhow::bail!(
-                    "session {:?} holds a {} transcript and cannot be resumed as {}; convert the session instead",
-                    request.id,
-                    stored_selection.provider.as_str(),
-                    selection.provider.as_str()
-                )
-            }
             Some(selection) => {
                 crate::agent::validate_selection(&selection)?;
                 selection
@@ -3189,27 +3192,15 @@ impl ServerState {
         })
     }
 
-    /// Convert a stored Session's native transcript to the other interactive
-    /// provider, keeping its whole history. Sugar over [`Self::branch_session`]
-    /// for the common case, kept as its own operation so a caller does not
-    /// need to name the general one just to flip providers.
+    /// Convert the native transcript while retaining the durable Session and checkout.
+    fn switch_session_provider(&self, id: &str, selection: &Selection) -> Result<SessionSummary> {
+        provider_switch::switch(self, id, selection)
+    }
+
     fn convert_session_provider(&self, id: &str) -> Result<SessionSummary> {
         let summary = self.stored_summary(id)?;
-        let to_provider = other_interactive_provider(summary.selection.provider)?;
-        self.branch_session(
-            id,
-            None,
-            crate::protocol::BranchHistory::ThroughSelected,
-            Some(to_provider),
-            None,
-        )
-        .with_context(|| {
-            format!(
-                "converting session {id:?} from {} to {}",
-                summary.selection.provider.as_str(),
-                to_provider.as_str()
-            )
-        })
+        let provider = other_interactive_provider(summary.selection.provider)?;
+        self.switch_session_provider(id, &Selection::new(provider))
     }
 
     /// Branch a stored Session into a new sibling Session in the same
@@ -3278,9 +3269,10 @@ impl ServerState {
             .with_context(|| {
                 format!("session {id:?} has no stored provider session id; there is no native transcript to branch from")
             })?;
-        let source_path = find_native_session_file(from_provider, &provider_session_id)?;
-        let source = std::fs::read_to_string(&source_path)
-            .with_context(|| format!("reading {}", source_path.display()))?;
+        let source = self
+            .inner
+            .native_transcripts
+            .read(from_provider, &provider_session_id)?;
 
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
@@ -3305,10 +3297,11 @@ impl ServerState {
             .map(|cutoff| journal::operator_message_at(&summary.path, cutoff))
             .transpose()?
             .flatten();
-        let branched = branch_native_session(
+        native_transcripts::write_converted(
+            self.inner.native_transcripts.as_ref(),
             &source,
-            native_session_format(from_provider),
-            native_session_format(to_provider),
+            from_provider,
+            to_provider,
             &new_native_id,
             &cwd,
             BranchPoint {
@@ -3317,14 +3310,6 @@ impl ServerState {
                 selected_operator_message: selected_operator_message.as_deref(),
             },
         )?;
-
-        let destination = native_session_destination(to_provider, &new_native_id, &cwd)?;
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
-        }
-        std::fs::write(&destination, &branched)
-            .with_context(|| format!("writing {}", destination.display()))?;
 
         let profile = crate::agent::resolve_profile(&selection, &layout)?;
         let branch_name = if to_provider == from_provider {
@@ -4884,6 +4869,21 @@ fn replayed_host_working_directory(
 fn replayed_selection(updates: &[SequencedUpdate], stored: &Selection) -> Selection {
     let mut selection = stored.clone();
     for sequenced in updates {
+        if let InteractionUpdate::Event(crate::event::AgentEvent::ProviderChanged {
+            to,
+            model,
+            effort,
+            ..
+        }) = &sequenced.update
+        {
+            if to == stored.provider.as_str() {
+                selection.model = model.clone();
+                if let Ok(effort) = crate::agent::Effort::parse(effort) {
+                    selection.effort = effort;
+                }
+            }
+            continue;
+        }
         let (model, effort) = match &sequenced.update {
             InteractionUpdate::Event(crate::event::AgentEvent::ThreadStarted {
                 model,
@@ -4929,7 +4929,9 @@ fn push_sequenced(updates: &mut Vec<SequencedUpdate>, update: InteractionUpdate)
 fn is_wire_backed(event: &crate::event::AgentEvent) -> bool {
     !matches!(
         event,
-        crate::event::AgentEvent::Branched { .. } | crate::event::AgentEvent::ModelChanged { .. }
+        crate::event::AgentEvent::Branched { .. }
+            | crate::event::AgentEvent::ModelChanged { .. }
+            | crate::event::AgentEvent::ProviderChanged { .. }
     )
 }
 
@@ -5442,6 +5444,21 @@ mod tests {
     /// already doing — a second operator message inside one running turn —
     /// must not restart the clock, or the figure a client shows would fall
     /// back to zero without the work having begun again.
+    #[test]
+    fn provider_switch_requires_a_stopped_interaction() {
+        assert!(ensure_provider_switchable(InteractionActivity::Stopped).is_ok());
+        for activity in [
+            InteractionActivity::Running,
+            InteractionActivity::Background,
+            InteractionActivity::Pending,
+        ] {
+            assert!(ensure_provider_switchable(activity)
+                .unwrap_err()
+                .to_string()
+                .contains("stop the interaction"));
+        }
+    }
+
     #[test]
     fn the_activity_clock_restarts_only_when_the_activity_actually_changes() {
         let activity = CurrentActivity::new();
@@ -7951,10 +7968,8 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("can be viewed but not resumed"));
 
-        // A resume may name the model and effort to revive on, but not another
-        // agent: the stored transcript is the agent's own, so it is refused
-        // before anything is launched rather than resumed under the stored
-        // agent as though the choice had been honoured.
+        // Switching providers also needs a native transcript. A legacy journal
+        // without one fails before changing the stored selection.
         let error = state
             .resume_session(ResumeSession {
                 id: "0000000000001-1-1".into(),
@@ -7963,10 +7978,10 @@ mod tests {
             })
             .unwrap_err();
         assert!(
-            error.to_string().contains("cannot be resumed as claude"),
+            error.to_string().contains("no stored provider session id"),
             "{error:#}"
         );
-        assert!(error.to_string().contains("convert"), "{error:#}");
+
         // The same resume naming this agent's own catalog gets as far as the
         // native transcript this legacy journal does not have.
         let error = state
@@ -7981,14 +7996,13 @@ mod tests {
             "{error:#}"
         );
 
-        // Conversion needs the provider's native transcript just as resume
-        // does. A legacy Styra-only journal must fail without making a
-        // partially-created sibling session appear in the picker.
+        // Conversion also fails without changing the legacy Session when no
+        // native transcript is available.
         let error = state
             .convert_session_provider("0000000000001-1-1")
             .unwrap_err();
         assert!(
-            error.to_string().contains("converting session"),
+            error.to_string().contains("no stored provider session id"),
             "{error:#}"
         );
         assert!(
@@ -8189,6 +8203,20 @@ mod tests {
             effort: Some("medium".into()),
         }]);
         assert_eq!(replayed_selection(&converted, &stored), stored);
+
+        // Switching back must override model reports from an earlier run
+        // under this same provider, even before the new process starts.
+        let mut switched_back = own;
+        push_sequenced(
+            &mut switched_back,
+            InteractionUpdate::Event(crate::event::AgentEvent::ProviderChanged {
+                from: "codex".into(),
+                to: "claude".into(),
+                model: stored.model.clone(),
+                effort: stored.effort.as_str().to_owned(),
+            }),
+        );
+        assert_eq!(replayed_selection(&switched_back, &stored), stored);
     }
 
     #[test]

@@ -215,6 +215,7 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
         // interactive host writes.
         AgentEvent::Unknown { .. }
         | AgentEvent::ModelChanged { .. }
+        | AgentEvent::ProviderChanged { .. }
         | AgentEvent::Branched { .. }
         | AgentEvent::UserMessage { .. }
         | AgentEvent::TaskProgress { .. }

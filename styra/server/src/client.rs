@@ -286,11 +286,8 @@ impl Client {
         }
     }
 
-    /// Convert a stored Session's native transcript to the other interactive
-    /// provider's format and return the new sibling Session it was written
-    /// to. The source Session's history is untouched, but it is sealed: the
-    /// conversation continues under the new provider, and the source cannot
-    /// be resumed again.
+    /// Switch a stopped Session to the other provider, retaining its identity
+    /// and recording the change in its journal. Resume it to start the new agent.
     pub fn convert_session_provider(&self, id: &str) -> Result<SessionSummary> {
         match self.request(Request::ConvertSessionProvider { id: id.to_owned() })? {
             Response::SessionConverted(value) => Ok(value),

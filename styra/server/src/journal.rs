@@ -137,6 +137,11 @@ enum Record {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         effort: Option<String>,
     },
+    ProviderChange {
+        at_ms: u64,
+        from: String,
+        selection: Selection,
+    },
     /// A branch boundary, written into both sides when a Session is branched:
     /// the source gets a record naming the branch, the branch gets one naming
     /// the source. Like [`Record::ModelChange`] no provider puts this on the
@@ -223,6 +228,18 @@ impl Journal {
         })
     }
 
+    pub(crate) fn record_provider_change(
+        &mut self,
+        from: crate::agent::Provider,
+        selection: &Selection,
+    ) -> Result<()> {
+        self.write(&Record::ProviderChange {
+            at_ms: now_ms(),
+            from: from.as_str().to_owned(),
+            selection: selection.clone(),
+        })
+    }
+
     /// Seed a branch with the source journal's leading history. Agent records
     /// remember the protocol that produced them, so a provider-converted
     /// branch can replay its old lines and later append lines in its new
@@ -254,6 +271,7 @@ impl Journal {
                 Record::Agent { at_ms, .. }
                 | Record::User { at_ms, .. }
                 | Record::ModelChange { at_ms, .. }
+                | Record::ProviderChange { at_ms, .. }
                 | Record::Branch { at_ms, .. } => *at_ms,
             };
             if through_ms.is_some_and(|cutoff| at_ms > cutoff) {
@@ -276,12 +294,16 @@ impl Journal {
                 },
                 other @ (Record::User { .. }
                 | Record::ModelChange { .. }
+                | Record::ProviderChange { .. }
                 | Record::Branch { .. }) => other,
             };
             // A marker is a boundary, not an entry the operator could have
             // selected, so branching only the selected entry never resolves
             // to one.
-            let selectable = !matches!(record, Record::Branch { .. });
+            let selectable = !matches!(
+                record,
+                Record::Branch { .. } | Record::ProviderChange { .. }
+            );
             match history {
                 crate::protocol::BranchHistory::ThroughSelected => self.write(&record)?,
                 // A selected event's UI wire timestamp is exact for agent
@@ -1076,6 +1098,34 @@ pub fn store_session_completed(path: &Path, completed: CompletionState) -> Resul
     write_stored_session_meta(&directory, &stored)
 }
 
+/// Preserve each old wire line's decoder before changing the session protocol.
+pub(crate) fn prepare_provider_change(path: &Path, protocol: Protocol) -> Result<()> {
+    let temporary = path.join("provider-change");
+    let mut copied = Journal::create(&temporary)?;
+    copied.copy_branch_from(
+        path,
+        protocol,
+        None,
+        crate::protocol::BranchHistory::ThroughSelected,
+    )?;
+    std::fs::rename(copied.path(), path.join(JOURNAL_FILE))?;
+    std::fs::remove_dir(&temporary)?;
+    Ok(())
+}
+
+pub(crate) fn store_session_provider(
+    path: &Path,
+    selection: &Selection,
+    protocol: Protocol,
+    native_id: &str,
+) -> Result<()> {
+    let mut stored = read_stored_session_meta(path)?;
+    stored.agent.selection = selection.clone();
+    stored.agent.protocol = protocol;
+    stored.provider_session_id = Some(native_id.to_owned());
+    write_stored_session_meta(path, &stored)
+}
+
 /// Record the selection a Session is now running under, so an operator who
 /// switched models mid-session and later reopens it resumes on the model they
 /// chose rather than the one it launched with.
@@ -1263,6 +1313,16 @@ fn replay_records(path: &Path, protocol: Protocol, include_raw: bool) -> Result<
                 // current name live instead of trusting one baked in here.
                 name: None,
             }),
+            Ok(Record::ProviderChange {
+                from, selection, ..
+            }) => {
+                events.push(AgentEvent::ProviderChanged {
+                    from,
+                    to: selection.provider.as_str().to_owned(),
+                    model: selection.model,
+                    effort: selection.effort.as_str().to_owned(),
+                });
+            }
             Ok(Record::ModelChange { model, effort, .. }) => {
                 events.push(AgentEvent::ModelChanged { model, effort })
             }
@@ -1323,7 +1383,7 @@ pub fn operator_message_at(path: &Path, cutoff: u64) -> Result<Option<String>> {
             }
             // A marker is not an entry the operator could have selected, so it
             // does not displace the message before it.
-            Record::Branch { .. } => {}
+            Record::Branch { .. } | Record::ProviderChange { .. } => {}
             _ => break,
         }
     }
@@ -1360,7 +1420,9 @@ pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
             // The raw view is the wire; a model change is a host-side record
             // with no line of its own, and the control request it produces is
             // journaled separately when the provider takes one.
-            Ok(Record::ModelChange { .. }) | Ok(Record::Branch { .. }) => {}
+            Ok(Record::ModelChange { .. })
+            | Ok(Record::ProviderChange { .. })
+            | Ok(Record::Branch { .. }) => {}
             // A record too damaged to parse still holds whatever was written
             // to the journal, and [`replay`] surfaces it as a `Malformed`
             // event, so it keeps a line here too: the raw view is where an

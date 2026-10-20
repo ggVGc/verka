@@ -281,6 +281,13 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         effort: Option<String>,
     },
+    /// The host restarted this conversation under another provider.
+    ProviderChanged {
+        from: String,
+        to: String,
+        model: String,
+        effort: String,
+    },
     /// A branch boundary between two sessions. No provider reports this — the
     /// host writes one marker into each side when it branches a session: the
     /// source records where its history was continued, the branch records
@@ -383,6 +390,7 @@ impl AgentEvent {
                 | AgentEvent::AgentMessage { .. }
                 | AgentEvent::Error { .. }
                 | AgentEvent::ModelChanged { .. }
+                | AgentEvent::ProviderChanged { .. }
                 | AgentEvent::Branched { .. }
         )
     }
@@ -478,6 +486,7 @@ impl AgentEvent {
             AgentEvent::Thinking { .. } => "thinking",
             AgentEvent::Error { .. } => "error",
             AgentEvent::ModelChanged { .. } => "model",
+            AgentEvent::ProviderChanged { .. } => "provider",
             AgentEvent::Branched { .. } => "branch",
             AgentEvent::TaskStarted { .. }
             | AgentEvent::TaskProgress { .. }
@@ -614,6 +623,11 @@ impl AgentEvent {
             AgentEvent::Error { message } => first_line(message),
             // An arrow marks what moved; a bare parenthetical says what did
             // not, so the line is read at a glance rather than parsed.
+            AgentEvent::ProviderChanged {
+                from, to, model, ..
+            } => {
+                format!("provider: {from} → {to} · model → {model}")
+            }
             AgentEvent::ModelChanged { model, effort } => match (model, effort) {
                 (Some(model), Some(effort)) => format!("model → {model} · effort → {effort}"),
                 (Some(model), None) => format!("model → {model} (same effort)"),
@@ -795,6 +809,14 @@ impl AgentEvent {
                 _ => markdown_blocks(text),
             },
             AgentEvent::Error { message } => vec![DetailBlock::Text(message.clone())],
+            AgentEvent::ProviderChanged {
+                from,
+                to,
+                model,
+                effort,
+            } => vec![DetailBlock::Text(format!(
+                "provider: {from} → {to}\nmodel: {model}\nreasoning effort: {effort}"
+            ))],
             AgentEvent::ModelChanged { model, effort } => {
                 // Name what did *not* change too: the detail is where an
                 // operator checks what the session is now running under, and

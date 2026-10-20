@@ -298,6 +298,10 @@ fn current_summary(entry: &Entry) -> InteractionSummary {
     // Tags are edited on the Session after the run that mirrored this row, so
     // the mirrored copy is stale the moment the operator retags a stopped row.
     summary.tags = crate::journal::read_session_tags(&entry.session_path).unwrap_or_default();
+    // A stopped Session can switch provider without creating a new row.
+    if let Ok(meta) = crate::journal::read_session_meta(&entry.session_path) {
+        summary.selection = meta.selection;
+    }
     // Integration can land, or finish cleaning up, after the row was mirrored.
     summary.integration = crate::journal::read_session_integration(&entry.session_path);
     // A focus request was about the launch, which a restored row is long past.

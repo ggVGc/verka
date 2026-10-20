@@ -1350,31 +1350,21 @@ fn run_rounds(
                         ))),
                     }
                 }
-                // Moving a stopped Session onto another agent. The server copies
-                // the whole history into the new agent's native format as a
-                // sibling Session, and that sibling — not this one — is where the
-                // conversation carries on, so the view follows it. Both sides keep
-                // a branch marker, so the Session it came from stays reachable.
                 Request::ConvertProvider(selection) => {
-                    match client.branch_session_with_selection(
-                        &app.session_id,
-                        None,
-                        styra_protocol::BranchHistory::ThroughSelected,
-                        Some(selection.provider),
-                        Some(selection.clone()),
-                    ) {
-                        Ok(converted) => {
-                            app.push_log(LogEntry::info(format!(
-                                "converted this Session's history to {}; continuing in Session {}",
-                                selection.provider.as_str(),
-                                converted.name.as_deref().unwrap_or(&converted.id)
-                            )));
-                            return Ok(RunOutcome::OpenSession(converted.id));
+                    let previous = app.selection.clone();
+                    app.set_selection(selection.clone());
+                    let restarted = blocked_on(
+                        terminal,
+                        app,
+                        "switching provider and restarting the interaction…",
+                        |app| session::restart(app, client, live),
+                    )?;
+                    match restarted {
+                        Ok(_) => return Ok(RunOutcome::OpenSession(app.session_id.clone())),
+                        Err(error) => {
+                            app.set_selection(previous);
+                            app.show_error(format!("could not switch provider: {error:#}"));
                         }
-                        Err(error) => app.push_log(LogEntry::error(format!(
-                            "could not convert this Session to {}: {error:#}",
-                            selection.provider.as_str()
-                        ))),
                     }
                 }
                 Request::Templates => {

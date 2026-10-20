@@ -1666,6 +1666,15 @@ defmodule Styra.Protocol do
             %{name: "effort", required: false, type: %{kind: :optional, inner: %{kind: :string}}}
           ]
         }},
+        %{name: "provider_changed", payload: %{
+          kind: :struct,
+          fields: [
+            %{name: "from", required: true, type: %{kind: :string}},
+            %{name: "to", required: true, type: %{kind: :string}},
+            %{name: "model", required: true, type: %{kind: :string}},
+            %{name: "effort", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "branched", payload: %{
           kind: :struct,
           fields: [
@@ -3026,13 +3035,9 @@ defmodule Styra.Protocol do
     def list_worktrees!(data), do: Styra.Protocol.build!("list_worktrees", data)
 
     @doc ~S"""
-    Convert a stored Session's native provider transcript (Codex rollout or
-    Claude project JSONL) to the other interactive provider's format,
-    using Genta's session conversion. The source Session and its native
-    transcript are left untouched; the result is a new sibling Session in
-    the same Workspace, ready to resume under the other provider. Sugar
-    for `Request::BranchSession` with `at_ms: None` and the other
-    provider named.
+    Switch a stopped Session's native transcript to the other interactive
+    provider, retaining its id, checkout, and journal. Records the provider
+    change in the conversation log; the Session can then be resumed.
 
     Fields of `data`:
 
@@ -3200,8 +3205,8 @@ defmodule Styra.Protocol do
 
     @doc ~S"""
     Switch a live interaction onto another model, applied now and recorded
-    with the session so reopening it keeps the switch. The provider cannot
-    change; that needs a new session.
+    with the session so reopening it keeps the switch. To change provider,
+    stop the interaction and resume it with the new selection instead.
 
     Fields of `data`:
 
@@ -4547,6 +4552,7 @@ defmodule Styra.Protocol.AgentEvent do
     {:thinking, "thinking"},
     {:error, "error"},
     {:model_changed, "model_changed"},
+    {:provider_changed, "provider_changed"},
     {:branched, "branched"},
     {:task_started, "task_started"},
     {:task_progress, "task_progress"},
@@ -4665,6 +4671,11 @@ defmodule Styra.Protocol.AgentEvent do
   equal to the current one is not a change and produces no event.
   """
   def model_changed, do: "model_changed"
+
+  @doc ~S"""
+  The host restarted this conversation under another provider.
+  """
+  def provider_changed, do: "provider_changed"
 
   @doc ~S"""
   A branch boundary between two sessions. No provider reports this — the

@@ -1656,6 +1656,15 @@ M.types.AgentEvent = {
         { name = "effort", required = false, type = { kind = "optional", inner = { kind = "string" } } },
       },
     } },
+    { name = "provider_changed", payload = {
+      kind = "struct",
+      fields = {
+        { name = "from", required = true, type = { kind = "string" } },
+        { name = "to", required = true, type = { kind = "string" } },
+        { name = "model", required = true, type = { kind = "string" } },
+        { name = "effort", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "branched", payload = {
       kind = "struct",
       fields = {
@@ -2302,7 +2311,7 @@ M.InteractionActivityReason = {
   BRANCHED = "branched",
 }
 
-M.enums.AgentEvent = { "user_message", "thread_started", "turn_started", "turn_completed", "usage_updated", "command_started", "command_completed", "file_changed", "diff_updated", "tool_started", "tool_completed", "plan_updated", "agent_message", "thinking", "error", "model_changed", "branched", "task_started", "task_progress", "task_completed", "background_tasks", "unknown", "malformed" }
+M.enums.AgentEvent = { "user_message", "thread_started", "turn_started", "turn_completed", "usage_updated", "command_started", "command_completed", "file_changed", "diff_updated", "tool_started", "tool_completed", "plan_updated", "agent_message", "thinking", "error", "model_changed", "provider_changed", "branched", "task_started", "task_progress", "task_completed", "background_tasks", "unknown", "malformed" }
 --- Wire spellings of `AgentEvent`.
 M.AgentEvent = {
   USER_MESSAGE = "user_message",
@@ -2321,6 +2330,7 @@ M.AgentEvent = {
   THINKING = "thinking",
   ERROR = "error",
   MODEL_CHANGED = "model_changed",
+  PROVIDER_CHANGED = "provider_changed",
   BRANCHED = "branched",
   TASK_STARTED = "task_started",
   TASK_PROGRESS = "task_progress",
@@ -3117,13 +3127,9 @@ function M.request.list_worktrees(data)
   return M.build("list_worktrees", data)
 end
 
---- Convert a stored Session's native provider transcript (Codex rollout or
---- Claude project JSONL) to the other interactive provider's format,
---- using Genta's session conversion. The source Session and its native
---- transcript are left untouched; the result is a new sibling Session in
---- the same Workspace, ready to resume under the other provider. Sugar
---- for `Request::BranchSession` with `at_ms: None` and the other
---- provider named.
+--- Switch a stopped Session's native transcript to the other interactive
+--- provider, retaining its id, checkout, and journal. Records the provider
+--- change in the conversation log; the Session can then be resumed.
 ---
 --- Fields of `data`:
 ---   id  string
@@ -3242,8 +3248,8 @@ function M.request.send_message(data)
 end
 
 --- Switch a live interaction onto another model, applied now and recorded
---- with the session so reopening it keeps the switch. The provider cannot
---- change; that needs a new session.
+--- with the session so reopening it keeps the switch. To change provider,
+--- stop the interaction and resume it with the new selection instead.
 ---
 --- Fields of `data`:
 ---   id         string

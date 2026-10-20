@@ -194,9 +194,9 @@ pub struct ResumeSession {
     /// operator who changed the model while nothing was running gets the
     /// model they chose rather than the one the stopped turn ran on.
     ///
-    /// The agent itself is not a choice here — the resume hands the provider
-    /// its own native transcript, so a selection naming a different one is
-    /// refused rather than quietly resumed under the stored agent.
+    /// A different provider converts the native transcript in place and adds
+    /// a provider-change marker before resuming the same Session. Requires a
+    /// stopped interaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<Selection>,
 }
@@ -489,13 +489,9 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace_id: Option<String>,
     },
-    /// Convert a stored Session's native provider transcript (Codex rollout or
-    /// Claude project JSONL) to the other interactive provider's format,
-    /// using Genta's session conversion. The source Session and its native
-    /// transcript are left untouched; the result is a new sibling Session in
-    /// the same Workspace, ready to resume under the other provider. Sugar
-    /// for [`Request::BranchSession`] with `at_ms: None` and the other
-    /// provider named.
+    /// Switch a stopped Session's native transcript to the other interactive
+    /// provider, retaining its id, checkout, and journal. Records the provider
+    /// change in the conversation log; the Session can then be resumed.
     ConvertSessionProvider {
         id: String,
     },
@@ -567,8 +563,8 @@ pub enum Request {
         message: SendMessage,
     },
     /// Switch a live interaction onto another model, applied now and recorded
-    /// with the session so reopening it keeps the switch. The provider cannot
-    /// change; that needs a new session.
+    /// with the session so reopening it keeps the switch. To change provider,
+    /// stop the interaction and resume it with the new selection instead.
     SetSessionSelection {
         id: String,
         selection: Selection,
