@@ -182,6 +182,50 @@ mod tests {
         assert!(app.preview.follows_command());
     }
 
+    #[test]
+    fn a_highlighted_file_link_opens_at_its_line_and_pages_through_the_file() {
+        use super::super::{apply_feedback, draw_application};
+        let root = std::env::temp_dir().join("styra-preview-file-scroll");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let file = (1..=200)
+            .map(|n| format!("row {n:03}\n"))
+            .collect::<String>();
+        std::fs::write(root.join("long.txt"), file).unwrap();
+        let mut app = test_support::app("s1");
+        app.workspace.enter(root.clone());
+        app.push_event(AgentEvent::AgentMessage {
+            text: "[long](long.txt:100)".into(),
+        });
+        app.preview.show();
+        app.highlight_first_link();
+        let mut ui = styra_ui::TestUi::new(120, 30).unwrap();
+        let mut draw = |app: &mut App| {
+            let feedback = draw_application(&mut ui, app).unwrap();
+            apply_feedback(app, &feedback);
+            ui.rows().concat()
+        };
+
+        let screen = draw(&mut app);
+        assert!(screen.contains("row 100"), "{screen}");
+        assert!(!screen.contains("row 001"), "{screen}");
+        let opened = app.preview.scroll.offset;
+        assert!(opened > 0);
+
+        app.preview.scroll.half_page_down();
+        let screen = draw(&mut app);
+        assert!(app.preview.scroll.offset > opened);
+        assert!(!screen.contains("row 100"), "{screen}");
+
+        app.preview.scroll.scroll_to_end();
+        let screen = draw(&mut app);
+        assert!(screen.contains("row 200"), "{screen}");
+
+        app.clear_link_highlight();
+        assert_eq!(app.preview.scroll.offset, 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn changed(path: &str, old: &str, new: &str) -> AgentEvent {
         AgentEvent::FileChanged {
             id: String::new(),

@@ -121,21 +121,23 @@ pub fn render_tree(
     frame.render_widget(Paragraph::new(lines).block(block).scroll((scroll, 0)), area);
 }
 
+/// Draw a file's content, scrolled `requested_scroll` lines down as far as it
+/// goes. Where a marked line should start out is the caller's to choose.
 pub fn render_content(
     frame: &mut Frame,
     title: Option<&str>,
     content: FileContent<'_>,
     marked_line: Option<u32>,
+    requested_scroll: u16,
     area: Rect,
-) {
-    let (title, text, scroll) = match content {
+) -> crate::preview::PreviewFeedback {
+    let (title, text) = match content {
         FileContent::None => (
             " file preview ".into(),
             Text::from(Line::from(Span::styled(
                 "no file selected",
                 Style::default().fg(theme::MUTED_TEXT),
             ))),
-            0,
         ),
         FileContent::Empty => (
             format!(" {} ", title.unwrap_or_default()),
@@ -143,11 +145,10 @@ pub fn render_content(
                 "(empty file)",
                 Style::default().fg(theme::MUTED_TEXT),
             ))),
-            0,
         ),
         FileContent::Ready(content) => {
             let content = content.replace('\t', "    ");
-            let lines =
+            let mut lines =
                 crate::markdown::syntax_highlighted_code_lines(&content, file_language(title), "")
                     .unwrap_or_else(|| {
                         content
@@ -157,7 +158,7 @@ pub fn render_content(
                     });
             if let Some(marked) = marked_line {
                 let marked_index = usize::try_from(marked.saturating_sub(1)).unwrap_or(usize::MAX);
-                let lines: Vec<_> = lines
+                lines = lines
                     .into_iter()
                     .enumerate()
                     .map(|(index, line)| {
@@ -179,22 +180,11 @@ pub fn render_content(
                         Line::from(spans).style(line.style.patch(style))
                     })
                     .collect();
-                let viewport = usize::from(area.height.saturating_sub(2));
-                let scroll = marked_index
-                    .saturating_sub(viewport / 2)
-                    .min(usize::from(u16::MAX)) as u16;
-                (
-                    format!(" {} ", title.unwrap_or_default()),
-                    Text::from(lines),
-                    scroll,
-                )
-            } else {
-                (
-                    format!(" {} ", title.unwrap_or_default()),
-                    Text::from(lines),
-                    0,
-                )
             }
+            (
+                format!(" {} ", title.unwrap_or_default()),
+                Text::from(lines),
+            )
         }
         FileContent::Failed(error) => (
             format!(" {} ", title.unwrap_or_default()),
@@ -202,26 +192,36 @@ pub fn render_content(
                 format!("could not read file: {error}"),
                 Style::default().fg(theme::ERROR),
             ))),
-            0,
         ),
     };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::INACTIVE))
         .title(Span::styled(title, Style::default().fg(theme::ACCENT)));
+    let inner = block.inner(area);
+    let limit = crate::preview::preview_scroll_limit(&text.lines, inner.width, inner.height);
+    let effective = requested_scroll.min(limit);
     frame.render_widget(
         Paragraph::new(text)
             .block(block)
             .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
+            .scroll((effective, 0)),
         area,
     );
+    crate::preview::PreviewFeedback {
+        limit,
+        effective_scroll: effective,
+        viewport: inner.height,
+    }
 }
 
 /// The TextMate grammar name for a previewed filename. Link targets can carry
 /// `:line[:column]`, so peel those numeric suffixes before asking `Path` for
-/// its extension.
-fn file_language(title: Option<&str>) -> Option<&'static str> {
+/// its extension. An extension without a name of its own here is passed on
+/// as written, as is the whole name of a file without one (`Makefile`): the
+/// highlighter looks grammars up by the extensions they claim, and falls back
+/// to plain text for one none does.
+fn file_language(title: Option<&str>) -> Option<&str> {
     let mut path = title?;
     for _ in 0..2 {
         let Some((before, suffix)) = path.rsplit_once(':') else {
@@ -232,12 +232,11 @@ fn file_language(title: Option<&str>) -> Option<&'static str> {
         }
         path = before;
     }
-    match Path::new(path)
-        .extension()?
-        .to_str()?
-        .to_ascii_lowercase()
-        .as_str()
-    {
+    let path = Path::new(path);
+    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+        return path.file_name()?.to_str();
+    };
+    match extension.to_ascii_lowercase().as_str() {
         "rs" => Some("rust"),
         "py" => Some("python"),
         "js" | "jsx" => Some("javascript"),
@@ -257,7 +256,7 @@ fn file_language(title: Option<&str>) -> Option<&'static str> {
         "css" => Some("css"),
         "md" | "mdx" => Some("markdown"),
         "xml" => Some("xml"),
-        _ => None,
+        _ => Some(extension),
     }
 }
 
@@ -282,6 +281,7 @@ mod tests {
                     files.first().map(|file| file.reported.as_str()),
                     content,
                     None,
+                    0,
                     panes[1],
                 );
             })
@@ -325,6 +325,7 @@ mod tests {
                     Some("src/main.rs:2"),
                     FileContent::Ready("first\nsecond\nthird"),
                     Some(2),
+                    0,
                     frame.area(),
                 );
             })
@@ -343,6 +344,73 @@ mod tests {
     fn file_extensions_select_the_syntax_grammar_even_with_a_location_suffix() {
         assert_eq!(file_language(Some("src/main.rs:12")), Some("rust"));
         assert_eq!(file_language(Some("web/app.tsx:8:3")), Some("typescript"));
-        assert_eq!(file_language(Some("notes.txt")), None);
+        assert_eq!(file_language(Some("lib/styra.ex:4")), Some("ex"));
+        assert_eq!(file_language(Some("Makefile")), Some("Makefile"));
+    }
+
+    #[test]
+    fn content_scrolls_as_asked_up_to_its_last_page() {
+        let content = (1..=30).map(|n| format!("line {n}\n")).collect::<String>();
+        let draw = |scroll| {
+            let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+            let mut feedback = None;
+            terminal
+                .draw(|frame| {
+                    feedback = Some(render_content(
+                        frame,
+                        Some("notes.txt"),
+                        FileContent::Ready(&content),
+                        None,
+                        scroll,
+                        frame.area(),
+                    ));
+                })
+                .unwrap();
+            let rows: Vec<String> = terminal
+                .backend()
+                .buffer()
+                .content()
+                .chunks(40)
+                .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+                .collect();
+            (feedback.unwrap(), rows)
+        };
+
+        let (feedback, rows) = draw(5);
+        assert_eq!(feedback.effective_scroll, 5);
+        assert_eq!(feedback.viewport, 10);
+        assert_eq!(feedback.limit, 20);
+        assert!(rows[1].contains("line 6"), "{rows:?}");
+
+        let (feedback, rows) = draw(u16::MAX);
+        assert_eq!(feedback.effective_scroll, 20);
+        assert!(rows[10].contains("line 30"), "{rows:?}");
+    }
+
+    #[test]
+    fn file_types_without_a_name_here_are_still_highlighted() {
+        let content = "defmodule Styra do\n  def hello, do: :world\nend\n";
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_content(
+                    frame,
+                    Some("lib/styra.ex"),
+                    FileContent::Ready(content),
+                    None,
+                    0,
+                    frame.area(),
+                );
+            })
+            .unwrap();
+        let colors: BTreeSet<_> = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty() && !"│─┌┐└┘".contains(cell.symbol()))
+            .map(|cell| format!("{:?}", cell.fg))
+            .collect();
+        assert!(colors.len() > 2, "{colors:?}");
     }
 }

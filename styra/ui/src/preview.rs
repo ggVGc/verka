@@ -108,8 +108,14 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
             FileTargetContent::Ready(content) => crate::files::FileContent::Ready(content),
             FileTargetContent::Failed(error) => crate::files::FileContent::Failed(error),
         };
-        crate::files::render_content(frame, Some(&target.location), content, target.line, area);
-        return PreviewFeedback::default();
+        return crate::files::render_content(
+            frame,
+            Some(&target.location),
+            content,
+            target.line,
+            view.requested_scroll,
+            area,
+        );
     }
     let (content_area, block) = if view.fullscreen {
         (area, None)

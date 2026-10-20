@@ -1440,6 +1440,8 @@ impl App {
     /// Leave link navigation, restoring ordinary keys and preview visibility.
     pub fn clear_link_highlight(&mut self) {
         self.link_highlight = None;
+        // The offset was into the linked file, not the entry shown again now.
+        self.preview.scroll.reset();
         if let Some(open) = self.link_preview_open.take() {
             self.preview.open = open;
         }
@@ -1617,6 +1619,12 @@ impl App {
         self.timeline.entries[highlight.entry].expanded = true;
         self.timeline.follow = false;
         self.preview.scroll.reset();
+        // A file link to a line opens its preview with that line in the
+        // middle, from where PgUp/PgDn read the rest of the file.
+        if let Some((_, Ok(_), Some(line))) = self.highlighted_link_target() {
+            let line = u16::try_from(line.saturating_sub(1)).unwrap_or(u16::MAX);
+            self.preview.scroll.offset = line.saturating_sub(self.preview.scroll.half_page());
+        }
         self.entry_log_follow_selection();
     }
 
