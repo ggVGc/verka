@@ -13,8 +13,10 @@ pub mod files;
 pub mod git;
 pub mod keys;
 pub mod layers;
+mod prompt;
 pub mod report;
 mod split;
+pub use prompt::Prompt;
 mod state;
 mod view;
 

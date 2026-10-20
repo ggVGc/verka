@@ -296,7 +296,11 @@ and `g`/`G` move it instead of the view; `l` or `Esc` leaves. `v` opens the
 editor at the cursor's line. `i` from the diff starts a message about what it is
 on: the per-file view's file, and the cursor's line when lines are selected. The
 message box notes that source under the message, and the message is sent with
-`Source: path` or `Source: path:line` under it.
+`Source: path` or `Source: path:line` under it. Sent prompts mark their file
+and, in line mode, their line with `●`. Selecting a marked line shows its
+prompts in a box beneath the diff; Enter selects the latest matching prompt
+in the interaction log. File prompts appear when selecting the file outside
+line mode. These markers are restored from the session history.
 The Rust wire types are in `styra_server::api`, and the blocking client used by
 the TUI is `styra_server::Client`.
 

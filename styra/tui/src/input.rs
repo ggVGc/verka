@@ -136,6 +136,15 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
         return;
     }
     let typing_filter = app.shown_diff().is_some_and(|diff| diff.search.typing());
+    if key.code == KeyCode::Enter
+        && !typing_filter
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        && app.jump_to_diff_prompt()
+    {
+        return;
+    }
     if DIFF_CONVERSATION.matches(key) && app.view == View::CheckoutDiff && !typing_filter {
         app.diff_conversation = !app.diff_conversation;
         return;
@@ -2765,6 +2774,56 @@ mod tests {
         assert_ne!(app.view, View::CheckoutDiff);
         assert!(!app.diff_turn);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn diff_prompt_enter_reveals_latest_matching_message() {
+        let root = tree("diff-prompt-jump");
+        let mut app = app_with_diffable_interaction(&root);
+        let mut diff = styra_diff::CheckoutDiff::read(diffable_target());
+        diff.diff = Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n".into());
+        diff.per_file = true;
+        diff.line_cursor = Some(3);
+        app.checkout_diff = Some(diff);
+        app.view = View::CheckoutDiff;
+        handle_diff_key(&mut app, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(
+            app.view,
+            View::CheckoutDiff,
+            "unmarked lines stay in the diff"
+        );
+        app.checkout_diff.as_mut().unwrap().line_cursor = Some(3);
+        for text in [
+            "file\n\nSource: a.txt",
+            "old\n\nSource: a.txt:1",
+            "latest\n\nSource: a.txt:1",
+            "other\n\nSource: b.txt:1",
+        ] {
+            app.push_event(styra_protocol::event::AgentEvent::UserMessage { text: text.into() });
+        }
+        let expected = app.timeline.entries.len() - 2;
+        assert_eq!(app.diff_prompts().len(), 4);
+        app.checkout_diff.as_mut().unwrap().search.open();
+        handle_diff_key(&mut app, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(
+            app.view,
+            View::CheckoutDiff,
+            "Enter accepts the filter first"
+        );
+        handle_diff_key(&mut app, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.view, View::Events);
+        assert_eq!(app.timeline.selected, expected);
+        assert!(!app.timeline.follow);
+        assert!(app.timeline.anchor_selection);
+        assert!(app.timeline.entries[expected].expanded);
+
+        app.view = View::CheckoutDiff;
+        app.diff_preview = true;
+        app.checkout_diff.as_mut().unwrap().line_cursor = None;
+        handle_diff_key(&mut app, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.timeline.selected, expected - 2, "file prompt");
+        assert!(app.diff_interaction_focus, "side pane returns keys to log");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// `i` starts a message about what the diff is on — the file it shows,

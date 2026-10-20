@@ -25,6 +25,8 @@ use styra_ui::search::SearchView;
 use styra_ui::theme;
 
 pub struct CheckoutDiffView<'a> {
+    /// Prompts attached to files and lines in this session.
+    pub prompts: Vec<crate::Prompt>,
     /// The frame drawn around the view: Styra's panel chrome, or a plain
     /// border when the view runs on its own.
     pub block: Block<'a>,
@@ -120,6 +122,7 @@ impl<'a> CheckoutDiffView<'a> {
             conversation: None,
             intro: None,
             line_cursor: None,
+            prompts: Vec::new(),
         }
     }
 }
@@ -402,6 +405,14 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
     let mut file_list_offset = view.file_list_offset;
     let body = if view.per_file {
         let mut rows = file_tree_rows(&files, view.compact_dirs);
+        for (index, line) in &mut rows {
+            if index
+                .and_then(|index| files.iter().find(|(at, _)| *at == index))
+                .is_some_and(|(_, file)| view.prompts.iter().any(|p| p.path == file.path))
+            {
+                line.spans.push(prompt_marker());
+            }
+        }
         let stat = view.diff.ok().map(stat_line);
         let stat_width = stat.as_ref().map_or(0, |stat| {
             u16::try_from(stat.width())
@@ -541,7 +552,11 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
     let body = if let Some(file) = selected_file {
         let [info, patch] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
-        frame.render_widget(Paragraph::new(file_info(file)), info);
+        let mut label = file_info(file);
+        if view.prompts.iter().any(|p| p.path == file.path) {
+            label.spans.push(prompt_marker());
+        }
+        frame.render_widget(Paragraph::new(label), info);
         match view.report.filter(|report| report.shown()) {
             Some(report) => render_description(frame, report, file, patch),
             None => patch,
@@ -593,6 +608,39 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                 Block::default()
                     .borders(Borders::TOP)
                     .border_style(Style::default().fg(theme::INACTIVE)),
+            ),
+            info,
+        );
+        body = rest;
+    }
+    let source = match (view.line_cursor, shown) {
+        (Some(cursor), Ok(text)) => crate::files::position(text, cursor),
+        _ => selected_file.map(|file| (file.path, None)),
+    };
+    let prompts: Vec<_> = view
+        .prompts
+        .iter()
+        .filter(|p| source.is_some_and(|source| p.matches(source)))
+        .collect();
+    if !prompts.is_empty() {
+        let text = prompts
+            .iter()
+            .rev()
+            .map(|p| p.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+        let height = u16::try_from(paragraph.line_count(body.width.saturating_sub(2).max(1)))
+            .unwrap_or(u16::MAX)
+            .saturating_add(2)
+            .min(body.height / 2);
+        let [rest, info] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(height)]).areas(body);
+        frame.render_widget(
+            paragraph.block(
+                Block::bordered()
+                    .title(" Prompt · Enter: interaction log (latest) ")
+                    .border_style(Style::default().fg(theme::ACCENT)),
             ),
             info,
         );
@@ -675,6 +723,33 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             );
             (limit, requested.min(limit), view.horizontal_scroll)
         };
+    if let Ok(text) = shown {
+        let lines: Vec<_> = text.lines().collect();
+        for index in crate::prompt::marked_rows(text, &view.prompts, view.per_file) {
+            let line = lines[index];
+            let row =
+                crate::split::row_of(text, view.hide_removed, side_by_side, view.per_file, index);
+            // Hidden source lines must not put their marker onto a different row.
+            if view.hide_removed && line.starts_with('-') {
+                continue;
+            }
+            if let Some(y) = row
+                .checked_sub(usize::from(effective))
+                .filter(|y| *y < usize::from(body.height))
+            {
+                let x = if line.starts_with("diff --git ") {
+                    body.right().saturating_sub(1)
+                } else {
+                    body.x
+                };
+                if body.width > 0 {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((x, body.y + y as u16)) {
+                        cell.set_symbol("●").set_fg(theme::ACCENT);
+                    }
+                }
+            }
+        }
+    }
     if let (Some(cursor), Ok(text)) = (view.line_cursor, shown) {
         let row =
             crate::split::row_of(text, view.hide_removed, side_by_side, view.per_file, cursor);
@@ -682,7 +757,16 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             .checked_sub(usize::from(effective))
             .filter(|y| *y < usize::from(body.height))
         {
+            let marked = frame
+                .buffer_mut()
+                .cell((body.x, body.y + y as u16))
+                .is_some_and(|cell| cell.symbol() == "●");
             render_line_cursor(frame, Rect::new(body.x, body.y + y as u16, body.width, 1));
+            if marked {
+                if let Some(cell) = frame.buffer_mut().cell_mut((body.x, body.y + y as u16)) {
+                    cell.set_symbol("●");
+                }
+            }
         }
     }
     if let (Some(area), Some(file)) = (thumbnail_area, selected_file) {
@@ -716,6 +800,10 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         },
         file_list_offset,
     }
+}
+
+fn prompt_marker() -> Span<'static> {
+    Span::styled(" ●", Style::default().fg(theme::ACCENT))
 }
 
 /// Mark the line cursor's row: the editor's cursor-line band across it, and
@@ -2668,6 +2756,7 @@ index 1111111..2222222 100644
                         conversation: None,
                         intro: None,
                         line_cursor: None,
+                        prompts: Vec::new(),
                     },
                     frame.area(),
                 );
@@ -3025,6 +3114,7 @@ index 1111111..2222222 100644
                             conversation: None,
                             intro: None,
                             line_cursor: None,
+                            prompts: Vec::new(),
                         },
                         frame.area(),
                     );
@@ -3337,6 +3427,7 @@ index 1111111..2222222 100644
                         conversation: None,
                         intro: None,
                         line_cursor: None,
+                        prompts: Vec::new(),
                     },
                     frame.area(),
                 );

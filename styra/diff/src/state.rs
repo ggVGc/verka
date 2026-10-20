@@ -374,6 +374,7 @@ impl CheckoutDiff {
             conversation: None,
             intro: None,
             line_cursor: self.line_cursor,
+            prompts: Vec::new(),
         }
     }
 
@@ -876,6 +877,49 @@ mod tests {
         );
         diff.scroll.note_limit(100);
         diff
+    }
+
+    #[test]
+    fn prompts_mark_files_and_lines_and_preview_in_both_layouts() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut diff = two_files();
+        for per_file in [false, true] {
+            for split in [false, true] {
+                for hidden in [false, true] {
+                    diff.per_file = per_file;
+                    diff.selected_file = 1;
+                    diff.line_cursor = Some(if per_file { 3 } else { 7 });
+                    diff.side_by_side = split;
+                    diff.hide_removed = hidden;
+                    let mut terminal = Terminal::new(TestBackend::new(120, 35)).unwrap();
+                    terminal
+                        .draw(|frame| {
+                            let mut view = diff.view(Block::default());
+                            view.prompts = vec![crate::Prompt::from_message(
+                                "please fix this\n\nSource: b.txt:1",
+                                2,
+                            )
+                            .unwrap()];
+                            crate::render(frame, &view, frame.area());
+                        })
+                        .unwrap();
+                    let buffer = terminal.backend().buffer();
+                    let rows: Vec<String> = (0..35)
+                        .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+                        .collect();
+                    assert!(rows.iter().any(|r| r.contains("please fix this")));
+                    assert!(rows.iter().any(|r| r.contains("Enter: interaction log")));
+                    assert!(
+                        rows.iter().any(|r| r.contains("b.txt") && r.contains('●')),
+                        "file marker: {rows:?}"
+                    );
+                    assert!(
+                        rows.iter().any(|r| r.contains('●') && r.contains('d')),
+                        "line marker: {rows:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

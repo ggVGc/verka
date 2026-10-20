@@ -152,6 +152,7 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
         }
         None => return None,
     };
+    view.prompts = app.diff_prompts();
     if turn {
         view.report = None;
         view.intro = app.turn_message().map(|message| {

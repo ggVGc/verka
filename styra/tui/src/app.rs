@@ -1828,6 +1828,43 @@ impl App {
         self.message_source = None;
     }
 
+    /// Recover diff annotations from the current session history.
+    pub(crate) fn diff_prompts(&self) -> Vec<styra_diff::Prompt> {
+        self.timeline
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| match entry.event() {
+                AgentEvent::UserMessage { text } => styra_diff::Prompt::from_message(text, index),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Reveal the latest prompt attached to the current file or line.
+    pub(crate) fn jump_to_diff_prompt(&mut self) -> bool {
+        let entry = self
+            .shown_diff()
+            .and_then(|diff| diff.source())
+            .and_then(|source| {
+                self.diff_prompts()
+                    .iter()
+                    .rev()
+                    .find(|p| p.matches(source))
+                    .map(|p| p.entry)
+            });
+        let Some(entry) = entry else { return false };
+        self.set_view(View::Events);
+        self.diff_turn = false;
+        self.diff_interaction_focus = self.diff_preview;
+        self.entry_log.unfocus();
+        self.timeline.selected = entry;
+        self.timeline.entries[entry].expanded = true;
+        self.timeline.follow = false;
+        self.moved(true);
+        true
+    }
+
     /// Start a message about what the diff on screen — the checkout's or the
     /// turn's — is on: the file it shows, and the line cursor's line, if any
     /// (see [`styra_diff::CheckoutDiff::source`]).
