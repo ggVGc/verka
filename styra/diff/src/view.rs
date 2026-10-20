@@ -54,6 +54,8 @@ pub struct CheckoutDiffView<'a> {
     pub requested_scroll: u16,
     /// Scroll position of the shortcut legend while it is open.
     pub help: Option<u16>,
+    /// Additional shortcuts provided by the host, shown first in the legend.
+    pub host_shortcuts: &'a [(&'a str, &'a str)],
     pub per_file: bool,
     pub side_by_side: bool,
     pub rendered_side: bool,
@@ -107,6 +109,7 @@ impl<'a> CheckoutDiffView<'a> {
             diff: Err("no diff read yet"),
             requested_scroll: 0,
             help: None,
+            host_shortcuts: &[],
             per_file: false,
             side_by_side: false,
             rendered_side: false,
@@ -809,18 +812,22 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
 }
 
 fn render_shortcut_legend(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect, scroll: u16) {
-    let rows: Vec<Line<'static>> = crate::keys::BINDINGS
+    let rows: Vec<Line<'_>> = view
+        .host_shortcuts
         .iter()
-        .filter(|binding| {
-            view.report.is_some() || !matches!(binding.label, "E" | "e (per-file view)")
-        })
-        .map(|binding| {
+        .copied()
+        .chain(
+            crate::keys::BINDINGS
+                .iter()
+                .filter(|binding| {
+                    view.report.is_some() || !matches!(binding.label, "E" | "e (per-file view)")
+                })
+                .map(|binding| (binding.label, binding.description)),
+        )
+        .map(|(label, description)| {
             Line::from(vec![
-                Span::styled(
-                    format!("{}  ", binding.label),
-                    Style::default().fg(theme::ACCENT),
-                ),
-                Span::raw(binding.description),
+                Span::styled(format!("{label}  "), Style::default().fg(theme::ACCENT)),
+                Span::raw(description),
             ])
         })
         .collect();
@@ -2730,6 +2737,7 @@ index 1111111..2222222 100644
                 measured = render(
                     frame,
                     &CheckoutDiffView {
+                        host_shortcuts: &[],
                         block: Block::bordered(),
                         worktree: Path::new("/state/worktrees/styra-7"),
                         branch: Some("styra/rename"),
@@ -3089,6 +3097,7 @@ index 1111111..2222222 100644
                     let measured = render(
                         frame,
                         &CheckoutDiffView {
+                            host_shortcuts: &[],
                             block: Block::bordered(),
                             worktree: Path::new("/w"),
                             branch: None,
@@ -3403,6 +3412,7 @@ index 1111111..2222222 100644
                 render(
                     frame,
                     &CheckoutDiffView {
+                        host_shortcuts: &[],
                         block: Block::bordered(),
                         worktree: Path::new("/w"),
                         branch: None,

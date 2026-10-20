@@ -357,6 +357,7 @@ impl CheckoutDiff {
             },
             requested_scroll: self.scroll.clamped(),
             help: self.help,
+            host_shortcuts: &[],
             per_file: self.per_file,
             side_by_side: self.side_by_side,
             rendered_side: self.rendered_side,
