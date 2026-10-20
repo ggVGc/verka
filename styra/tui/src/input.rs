@@ -2889,6 +2889,7 @@ mod tests {
             side_by_side: false,
             rendered_side: false,
             combined_side: false,
+            help: None,
             horizontal_scroll: 0,
             hide_removed: false,
             compact_dirs: true,

@@ -48,6 +48,8 @@ pub struct PreviewView<'a> {
     /// The local destination being inspected while Markdown-link navigation is
     /// active. This supersedes the conversation entry in the preview pane.
     pub file_target: Option<FileTarget>,
+    /// The selected Styra answer, parsed under its original request contract.
+    pub answer_target: Option<styra_protocol::Answer>,
     pub requested_scroll: u16,
     pub fullscreen: bool,
 }
@@ -116,7 +118,13 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
             PreviewTarget::Selection => ("preview", "command"),
             PreviewTarget::Command => ("command", "selection"),
         };
-        let shown = if view.branch_log.is_some() {
+        let answer_title = view
+            .answer_target
+            .as_ref()
+            .map(|answer| crate::answer::title(Some(answer)));
+        let shown = if let Some(title) = answer_title.as_deref() {
+            title
+        } else if view.branch_log.is_some() {
             "branch log"
         } else {
             shown
@@ -140,8 +148,12 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
     let mut lines = wrap_preview_lines(
         preview_lines(view),
         usize::from(content_area.width),
-        summary_indent(view.entry.as_ref()),
-        if view.entry_change.is_some() {
+        if view.answer_target.is_some() {
+            0
+        } else {
+            summary_indent(view.entry.as_ref())
+        },
+        if view.entry_change.is_some() || view.answer_target.is_some() {
             0
         } else {
             DETAIL_INDENT.len()
@@ -165,6 +177,9 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
 }
 
 pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
+    if let Some(answer) = &view.answer_target {
+        return crate::answer::preview_lines(answer);
+    }
     let Some(entry) = &view.entry else {
         return vec![Line::from(Span::styled(
             "  no entry selected",

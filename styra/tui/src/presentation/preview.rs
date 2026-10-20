@@ -61,6 +61,7 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
             .map(|highlight| highlight.link),
         branch_log,
         file_target,
+        answer_target: app.highlighted_answer(),
         requested_scroll: app.preview.scroll.offset,
         fullscreen,
     }
@@ -144,6 +145,42 @@ mod tests {
     use crate::app::App;
 
     use styra_protocol::event::AgentEvent;
+
+    #[test]
+    fn highlighted_answers_preview_the_selected_section_even_when_following_commands() {
+        let mut app = test_support::app("s1");
+        app.push_event(AgentEvent::UserMessage {
+            text: styra_protocol::contract::frame("show me", styra_protocol::Contract::Lines),
+        });
+        app.push_event(AgentEvent::CommandStarted {
+            command: "echo waiting".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "Before\n<styra:answer>\nfirst answer\n</styra:answer>\nBetween\n<styra:answer>\nsecond answer\n</styra:answer>\n[web](https://example.com)".into(),
+        });
+        app.preview.show();
+        app.preview.toggle_target();
+        app.highlight_first_link();
+
+        let screen = test_support::screen_sized(&app, 120, 30).all();
+        assert!(screen.contains("answer · lines"), "{screen}");
+        assert!(screen.contains("first answer"), "{screen}");
+        assert!(!screen.contains("second answer"), "{screen}");
+
+        app.highlight_next_link();
+        let screen = test_support::screen_sized(&app, 120, 30).all();
+        assert!(screen.contains("second answer"), "{screen}");
+        assert!(!screen.contains("first answer"), "{screen}");
+
+        app.highlight_next_link();
+        assert!(super::view(&app, false).answer_target.is_none());
+        app.highlight_prev_link();
+        assert!(super::view(&app, false).answer_target.is_some());
+        app.clear_link_highlight();
+        assert!(super::view(&app, false).answer_target.is_none());
+        assert!(app.preview.open);
+        assert!(app.preview.follows_command());
+    }
 
     fn changed(path: &str, old: &str, new: &str) -> AgentEvent {
         AgentEvent::FileChanged {

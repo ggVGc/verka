@@ -116,6 +116,14 @@ fn count(count: usize) -> String {
     }
 }
 
+/// The answer's full content without a selectable row, for link previews.
+pub(crate) fn preview_lines(answer: &Answer) -> Vec<Line<'static>> {
+    match answer.value.as_ref() {
+        Some(value) => value_lines(value, usize::MAX),
+        None => unsatisfied_lines(answer),
+    }
+}
+
 fn value_lines(value: &AnswerValue, selected: usize) -> Vec<Line<'static>> {
     match value {
         AnswerValue::Text(text) => text

@@ -1466,25 +1466,11 @@ impl App {
         let Some(destination) = self.highlighted_link_destination() else {
             return self.show_warning("selected link no longer exists");
         };
-        if let Some(section) = styra_ui::answer::link_section(&destination) {
-            let highlight = self.link_highlight.unwrap();
-            let AgentEvent::AgentMessage { text } = self.timeline.entries[highlight.entry].event()
-            else {
+        if styra_ui::answer::link_section(&destination).is_some() {
+            let Some(answer) = self.highlighted_answer() else {
                 return self.show_warning("selected answer no longer exists");
             };
-            let Some((start, end)) = styra_ui::answer::sections(text).nth(section) else {
-                return self.show_warning("selected answer no longer exists");
-            };
-            let contract = self.timeline.entries[..highlight.entry]
-                .iter()
-                .rev()
-                .find(|entry| matches!(entry.event(), AgentEvent::UserMessage { .. }))
-                .and_then(|entry| entry.contract)
-                .unwrap_or(Contract::Text);
-            self.answer.set(Ok(styra_protocol::contract::read(
-                &text[start..end],
-                contract,
-            )));
+            self.answer.set(Ok(answer));
             self.set_view(View::Answer);
         } else if is_web_address(&destination) {
             self.ask(Request::OpenUrl(destination));
@@ -1495,6 +1481,25 @@ impl App {
             }
         }
         self.clear_link_highlight();
+    }
+
+    /// Read the highlighted answer from its own message and request contract,
+    /// shared by the preview and the full answer view.
+    pub(crate) fn highlighted_answer(&self) -> Option<styra_protocol::Answer> {
+        let section = styra_ui::answer::link_section(&self.highlighted_link_destination()?)?;
+        let highlight = self.link_highlight?;
+        let AgentEvent::AgentMessage { text } = self.timeline.entries.get(highlight.entry)?.event()
+        else {
+            return None;
+        };
+        let (start, end) = styra_ui::answer::sections(text).nth(section)?;
+        let contract = self.timeline.entries[..highlight.entry]
+            .iter()
+            .rev()
+            .find(|entry| matches!(entry.event(), AgentEvent::UserMessage { .. }))
+            .and_then(|entry| entry.contract)
+            .unwrap_or(Contract::Text);
+        Some(styra_protocol::contract::read(&text[start..end], contract))
     }
 
     /// The active file link as written, the file it names on this host (or
