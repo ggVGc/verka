@@ -111,6 +111,8 @@ pub struct CheckoutDiff {
     /// The combined diff's scroll, put by while the per-file view is shown so
     /// going back to it returns to the same place.
     pub combined_scroll: Scroll,
+    /// Scroll position of the shortcut legend while it is open.
+    pub help: Option<u16>,
     pub per_file: bool,
     /// Requested layout; temporarily unified when the patch area is narrow.
     pub side_by_side: bool,
@@ -217,6 +219,7 @@ impl CheckoutDiff {
             base_names,
             scroll: Scroll::default(),
             combined_scroll: Scroll::default(),
+            help: None,
             per_file: false,
             side_by_side: false,
             rendered_side: false,
@@ -353,6 +356,7 @@ impl CheckoutDiff {
                 Err(error) => Err(error),
             },
             requested_scroll: self.scroll.clamped(),
+            help: self.help,
             per_file: self.per_file,
             side_by_side: self.side_by_side,
             rendered_side: self.rendered_side,

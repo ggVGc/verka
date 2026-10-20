@@ -17,6 +17,7 @@ enum Command {
     ClearFilterOrClose,
     /// Styra's `d`, which opened the view, closing it again.
     Toggle,
+    ToggleHelp,
     OpenFile,
     GenerateReport,
 }
@@ -47,6 +48,12 @@ const fn bind(
 
 /// Every key the view answers, in the order a reference lists them.
 pub const BINDINGS: &[Binding] = &[
+    bind(
+        &[KeyCode::Char('?')],
+        "?",
+        "show / hide the shortcut legend (↑/↓ or PgUp/PgDn to scroll)",
+        Command::ToggleHelp,
+    ),
     bind(
         &[KeyCode::Char('s')],
         "s",
@@ -197,7 +204,12 @@ pub const BINDINGS: &[Binding] = &[
         "go to the bottom",
         Command::View(Action::Last),
     ),
-    bind(&[KeyCode::Char('d')], "d", "close the diff", Command::Toggle),
+    bind(
+        &[KeyCode::Char('d')],
+        "d",
+        "close the diff",
+        Command::Toggle,
+    ),
     bind(
         &[KeyCode::Esc],
         "Esc",
@@ -242,6 +254,18 @@ impl CheckoutDiff {
         {
             return Outcome::Ignored;
         }
+        if let Some(scroll) = self.help.as_mut() {
+            match key.code {
+                KeyCode::Char('?') | KeyCode::Esc => self.help = None,
+                KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.saturating_add(1),
+                KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
+                KeyCode::PageDown => *scroll = scroll.saturating_add(10),
+                KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
+                KeyCode::Char('g') => *scroll = 0,
+                _ => {}
+            }
+            return Outcome::Handled;
+        }
         let Some(binding) = BINDINGS
             .iter()
             .find(|binding| binding.codes.contains(&key.code))
@@ -249,6 +273,10 @@ impl CheckoutDiff {
             return Outcome::Ignored;
         };
         match binding.command {
+            Command::ToggleHelp => {
+                self.help = Some(0);
+                Outcome::Handled
+            }
             Command::View(action) => {
                 self.apply(action);
                 Outcome::Handled
@@ -281,6 +309,24 @@ mod tests {
                         diff --git a/q.txt b/q.txt\n@@ -1 +1 @@\n-c\n+d\n"
             .into());
         diff
+    }
+
+    #[test]
+    fn shortcut_legend_is_modal_and_preserves_selection() {
+        let mut diff = diff();
+        diff.line_cursor = Some(3);
+        assert_eq!(press(&mut diff, KeyCode::Char('?')), Outcome::Handled);
+        assert_eq!(diff.help, Some(0));
+        press(&mut diff, KeyCode::Down);
+        assert_eq!(diff.help, Some(1));
+        press(&mut diff, KeyCode::Char('f'));
+        assert!(!diff.per_file);
+        assert_eq!(press(&mut diff, KeyCode::Esc), Outcome::Handled);
+        assert_eq!(diff.help, None);
+        assert_eq!(diff.line_cursor, Some(3));
+        press(&mut diff, KeyCode::Char('?'));
+        press(&mut diff, KeyCode::Char('?'));
+        assert_eq!(diff.help, None);
     }
 
     fn press(diff: &mut CheckoutDiff, code: KeyCode) -> Outcome {
@@ -334,7 +380,7 @@ mod tests {
             Outcome::GenerateReport
         );
         assert_eq!(press(&mut diff, KeyCode::Char('d')), Outcome::Toggle);
-        for key in ['q', 'i', 'y', '?'] {
+        for key in ['q', 'i', 'y'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Outcome::Ignored);
         }
         let control_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);

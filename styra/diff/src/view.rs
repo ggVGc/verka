@@ -12,7 +12,7 @@ use crate::report::{Described, ReportState};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use std::io::BufRead;
 use std::path::Path;
@@ -52,6 +52,8 @@ pub struct CheckoutDiffView<'a> {
     /// `git diff`'s output, or why there is none.
     pub diff: Result<&'a str, &'a str>,
     pub requested_scroll: u16,
+    /// Scroll position of the shortcut legend while it is open.
+    pub help: Option<u16>,
     pub per_file: bool,
     pub side_by_side: bool,
     pub rendered_side: bool,
@@ -75,7 +77,7 @@ pub struct CheckoutDiffView<'a> {
     pub search: SearchView<'a>,
     /// The edit report the per-file view describes the selected file from.
     /// `None` where no report can be had, as in `styra-diff` on its own,
-    /// which leaves its keys out of the header too.
+    /// which leaves its keys out of the shortcut legend too.
     pub report: Option<&'a ReportState>,
     /// Lines the host shows in place of the header, such as the latest
     /// messages of the conversation the diff belongs to. `None` keeps the
@@ -104,6 +106,7 @@ impl<'a> CheckoutDiffView<'a> {
             label: None,
             diff: Err("no diff read yet"),
             requested_scroll: 0,
+            help: None,
             per_file: false,
             side_by_side: false,
             rendered_side: false,
@@ -790,6 +793,9 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             side_by_side,
         );
     }
+    if let Some(scroll) = view.help {
+        render_shortcut_legend(frame, view, area, scroll);
+    }
     CheckoutDiffFeedback {
         side_by_side,
         horizontal_scroll,
@@ -800,6 +806,33 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         },
         file_list_offset,
     }
+}
+
+fn render_shortcut_legend(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect, scroll: u16) {
+    let rows: Vec<Line<'static>> = crate::keys::BINDINGS
+        .iter()
+        .filter(|binding| {
+            view.report.is_some() || !matches!(binding.label, "E" | "e (per-file view)")
+        })
+        .map(|binding| {
+            Line::from(vec![
+                Span::styled(
+                    format!("{}  ", binding.label),
+                    Style::default().fg(theme::ACCENT),
+                ),
+                Span::raw(binding.description),
+            ])
+        })
+        .collect();
+    let block = Block::bordered().title(" Shortcuts · ? / Esc: close · ↑/↓: scroll ");
+    let inner = block.inner(area);
+    let paragraph = Paragraph::new(rows).wrap(Wrap { trim: false });
+    let limit = paragraph
+        .line_count(inner.width.max(1))
+        .saturating_sub(usize::from(inner.height));
+    let scroll = usize::from(scroll).min(limit).min(usize::from(u16::MAX)) as u16;
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph.scroll((scroll, 0)).block(block), area);
 }
 
 fn prompt_marker() -> Span<'static> {
@@ -1570,77 +1603,11 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
     if let (Ok(text), false) = (view.diff, view.per_file) {
         lines.push(stat_line(text));
     }
-    let navigation = if view.line_cursor.is_some() {
-        "line selection · j/k: changed line · ↑/↓: any line · J/K: change block · PgUp/PgDn: half-screen · g/G: first/last · Enter/Esc: leave"
-    } else if view.per_file {
-        "f: combined diff · /: search · j/k: files · J/K: 5 files · ↑/↓: scroll 10 · PgUp/PgDn: half-screen"
-    } else {
-        "f: per-file diffs · j/k: scroll · ↑/↓: scroll 10 · PgUp/PgDn: half-screen"
-    };
-    let lines_key = if view.line_cursor.is_some() {
-        ""
-    } else {
-        "Enter: select lines · "
-    };
-    lines.push(muted(&format!(
-        "s: {} · {navigation}",
-        if view.side_by_side {
-            "unified · ←/→: pan"
-        } else {
-            "side-by-side"
-        }
-    )));
     if let Some(report) = view.report {
-        let has = report.report.is_some() || report.pending;
-        let toggle = match (view.per_file, has, report.hidden) {
-            (true, true, false) => " · e: hide edit report",
-            (true, true, true) => " · e: show edit report",
-            (false, true, _) => " · f: see it per file",
-            (_, false, _) => "",
-        };
-        let state = if report.pending {
-            "E: describing edits…"
-        } else if report.report.is_some() {
-            "E: describe edits again"
-        } else {
-            "E: describe each file's edits"
-        };
-        lines.push(muted(&format!("{state}{toggle}")));
+        if report.pending {
+            lines.push(muted("Describing edits…"));
+        }
     }
-    let removed = if view.hide_removed {
-        "r: show removed lines · removed lines hidden"
-    } else {
-        "r: hide removed lines"
-    };
-    // On the same row, so the header is as tall in either view.
-    let directories = match (view.per_file, view.compact_dirs) {
-        (false, _) => "",
-        (true, true) => " · c: unfold directories",
-        (true, false) => " · c: fold directories",
-    };
-    // Only where the host shows a thumbnail to toggle.
-    let thumbnail = match (view.per_file && view.thumbnail, view.thumbnail_hidden) {
-        (false, _) => "",
-        (true, false) => " · m: hide thumbnail",
-        (true, true) => " · m: show thumbnail",
-    };
-    let tint = match view.tint {
-        Tint::Full => "t: halve unchanged tint",
-        Tint::Half => "t: full unchanged tint",
-    };
-    let words = if view.word_highlights {
-        "w: words on"
-    } else {
-        "w: words off"
-    };
-    let layered = if view.layers.is_some() {
-        "L: layers on"
-    } else {
-        "L: layers off"
-    };
-    lines.push(muted(&format!(
-        "{lines_key}v: edit file · {words} · {layered} · {removed} · {tint}{directories}{thumbnail}"
-    )));
     if view.per_file {
         if let Some(query) = view.search.query {
             lines.push(muted(&format!(
@@ -1975,6 +1942,40 @@ index 1111111..2222222 100644
 ";
 
     #[test]
+    fn shortcut_rows_only_appear_in_the_legend() {
+        for help in [None, Some(0), Some(u16::MAX)] {
+            let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut view = CheckoutDiffView::unread(Block::bordered());
+                    view.diff = Ok(DIFF);
+                    view.help = help;
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            let output: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            if help.is_some() {
+                assert!(output.contains("Shortcuts"), "{output}");
+                if help == Some(0) {
+                    assert!(output.contains("toggle unified / side-by-side"), "{output}");
+                } else {
+                    assert!(output.contains("close the diff"), "{output}");
+                }
+            } else {
+                assert!(!output.contains("s:"), "{output}");
+                assert!(!output.contains("v: edit file"), "{output}");
+                assert!(output.contains("fn c()"), "{output}");
+            }
+        }
+    }
+
+    #[test]
     fn file_view_shows_the_title_and_hunks_without_git_headers() {
         for side_by_side in [false, true] {
             let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
@@ -2144,7 +2145,7 @@ index 1111111..2222222 100644
 
         // Where the strip grows over the cursor's line, the diff scrolls to
         // keep it in sight.
-        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
         let mut measured = CheckoutDiffFeedback::default();
         terminal
             .draw(|frame| {
@@ -2156,7 +2157,7 @@ index 1111111..2222222 100644
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let cursor = (0..16).find(|&y| buffer[(0, y)].symbol() == LINE_CURSOR_MARKER);
+        let cursor = (0..14).find(|&y| buffer[(0, y)].symbol() == LINE_CURSOR_MARKER);
         assert!(cursor.is_some(), "the cursor is drawn: {buffer:?}");
         assert!(measured.scroll.effective_scroll > 0);
     }
@@ -2577,6 +2578,7 @@ index 1111111..2222222 100644
                             per_file: true,
                             thumbnail: true,
                             requested_scroll: scroll,
+                            help: None,
                             side_by_side: false,
                             rendered_side: false,
                             horizontal_scroll: 0,
@@ -2738,6 +2740,7 @@ index 1111111..2222222 100644
                         label: None,
                         diff,
                         requested_scroll: scroll,
+                        help: None,
                         side_by_side: false,
                         rendered_side: false,
                         horizontal_scroll: 0,
@@ -2806,7 +2809,7 @@ index 1111111..2222222 100644
     fn the_per_file_view_describes_the_selected_file_from_the_report() {
         let (_, without) = report_screen(&ReportState::default(), true);
         let (output, _) = report_screen(&ReportState::default(), true);
-        assert!(output.contains("E: describe each file's edits"), "{output}");
+        assert!(!output.contains("E:"), "{output}");
         assert!(!output.contains("e: hide"), "{output}");
 
         let described = |patch: &str| ReportState {
@@ -2829,7 +2832,7 @@ index 1111111..2222222 100644
             "{output}"
         );
         assert!(!output.contains("written before"), "{output}");
-        assert!(output.contains("E: describe edits again · e: hide edit report"));
+        assert!(!output.contains("e: hide edit report"));
         assert_eq!(with, without - 2, "a line of description and its rule");
         let description = output.find("Replaces b").unwrap();
         assert!(output.find("src/a.rs [M]").unwrap() < description);
@@ -2848,12 +2851,12 @@ index 1111111..2222222 100644
         hidden.hidden = true;
         let (output, rows) = report_screen(&hidden, true);
         assert!(!output.contains("Replaces b"), "{output}");
-        assert!(output.contains("e: show edit report"), "{output}");
+        assert!(!output.contains("e: show edit report"), "{output}");
         assert_eq!(rows, without);
 
         let (output, _) = report_screen(&described(DIFF), false);
         assert!(!output.contains("Replaces b"), "only per file: {output}");
-        assert!(output.contains("f: see it per file"), "{output}");
+        assert!(!output.contains("f: see it per file"), "{output}");
     }
 
     #[test]
@@ -2937,7 +2940,7 @@ index 1111111..2222222 100644
             1,
             "not in the header too: {output}"
         );
-        assert_eq!(viewport, 10, "the header is a row shorter");
+        assert_eq!(viewport, 12, "shortcut rows leave room for the patch");
     }
 
     #[test]
@@ -3066,7 +3069,7 @@ index 1111111..2222222 100644
         let text = (0..60)
             .map(|n| format!("diff --git a/src/file{n:02} b/src/file{n:02}\n"))
             .collect::<String>();
-        let mut terminal = Terminal::new(TestBackend::new(80, 28)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 26)).unwrap();
         let mut offset = 0;
         // The directory takes the first row; the file's row is its index + 1.
         for (selected_file, expected_offset) in [
@@ -3096,6 +3099,7 @@ index 1111111..2222222 100644
                             label: None,
                             diff: Ok(&text),
                             requested_scroll: 0,
+                            help: None,
                             per_file: true,
                             side_by_side: false,
                             rendered_side: false,
@@ -3123,13 +3127,13 @@ index 1111111..2222222 100644
                 })
                 .unwrap();
             assert_eq!(offset, expected_offset, "selected file {selected_file}");
-            let selection_row = (0..28)
+            let selection_row = (0..26)
                 .find(|&y| terminal.backend().buffer()[(1, y)].symbol() == "›")
                 .expect("selection remains visible");
             if (14..=30).contains(&selected_file) {
-                // The body spans rows 7 through 26, inclusive.
-                assert!(selection_row >= 7 + 5);
-                assert!(selection_row <= 26 - 5);
+                // The body spans rows 5 through 24, inclusive.
+                assert!(selection_row >= 5 + 5);
+                assert!(selection_row <= 24 - 5);
             }
         }
     }
@@ -3409,6 +3413,7 @@ index 1111111..2222222 100644
                         label: None,
                         diff: Ok(DIFF),
                         requested_scroll: 0,
+                        help: None,
                         per_file: false,
                         side_by_side: false,
                         rendered_side: false,
