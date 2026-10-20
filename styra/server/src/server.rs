@@ -221,16 +221,18 @@ impl IdleNotice {
     }
 }
 
-/// Everything an interaction reaching idle does: commit what the turn left
-/// in the checkout, when the operator has left that on, record that going idle
-/// is news for a client that was not watching, and what the agent left
+/// What an interaction's turn ending and its reaching idle do: as a turn
+/// ends, commit what it left in the checkout, when the operator has left that
+/// on, and snapshot the checkout; on reaching idle, record that going idle is
+/// news for a client that was not watching, and what the agent left
 /// uncommitted in the checkout.
 ///
-/// One handle rather than several because they are the same event. The
-/// collector thread notices an interaction stop working in three places — a
-/// turn completing, a background task set emptying, a background poll
-/// finishing — and each of them has to do all of it, so it is held together
-/// where forgetting one is not possible.
+/// The two are apart because background tasks hold them apart: a turn that
+/// leaves one running ends, and must be recorded as ending, long before the
+/// interaction is idle. The collector thread notices an interaction stop
+/// working in three places — a turn completing, a background task set
+/// emptying, a background poll finishing — and each of them has to do all of
+/// the idle half, so it is held together where forgetting one is not possible.
 struct GoneIdle {
     notice: Arc<IdleNotice>,
     working_tree: Arc<WorkingTree>,
@@ -240,14 +242,19 @@ struct GoneIdle {
 }
 
 impl GoneIdle {
-    fn became_idle(&self) {
-        // Committed first, so the snapshot and the reading below describe
-        // what the commit left — nothing, ordinarily — and a client arriving
-        // at the idle interaction finds the commit already in its stream.
+    /// The agent reported its turn complete, whether or not background
+    /// tasks it started are still running.
+    fn turn_ended(&self) {
+        // Committed first, so the snapshot describes what the commit left —
+        // nothing, ordinarily — and a client arriving at the idle interaction
+        // finds the commit already in its stream.
         if let Some(interaction) = self.interaction.upgrade() {
             interaction.commit_turn();
             interaction.snapshot(journal::SnapshotMoment::TurnEnded);
         }
+    }
+
+    fn became_idle(&self) {
         self.notice.became_idle();
         self.working_tree.reread();
     }
@@ -2515,6 +2522,7 @@ impl ServerState {
                                 turn_error.take(),
                             );
                             activity.set(next, Some(reason));
+                            idle.turn_ended();
                             if next == InteractionActivity::Pending {
                                 idle.became_idle();
                             }
@@ -3119,6 +3127,7 @@ impl ServerState {
                                 turn_error.take(),
                             );
                             activity.set(next, Some(reason));
+                            idle.turn_ended();
                             if next == InteractionActivity::Pending {
                                 idle.became_idle();
                             }

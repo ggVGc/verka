@@ -517,17 +517,19 @@ pub enum TurnSnapshots {
 /// The snapshots a turn started from and ended on, if both were taken, or
 /// the most recent snapshot for a turn that has not ended yet.
 ///
-/// The end is the turn's own `turn_ended` snapshot. The start is the snapshot
-/// just before it: the one taken before the turn's message, or — when that one
-/// was skipped because nothing had changed — the one the previous turn ended
-/// on. Anything else just before the end means snapshots were not being taken
-/// when the turn started, and there is no start to compare with.
+/// The end is the turn's last `turn_ended` snapshot: an agent woken by its
+/// own background task completes again without a message of the operator's,
+/// and that work is still the turn's. The start is the snapshot just before
+/// the turn's first: the one taken before the turn's message, or — when that
+/// one was skipped because nothing had changed — the one the previous turn
+/// ended on. Anything else there means snapshots were not being taken when the
+/// turn started, and there is no start to compare with.
 ///
 /// A turn with no end is running only if no later turn has been snapshotted;
 /// otherwise its end was never recorded, and there is nothing to say.
 pub fn turn_snapshots(path: &Path, turn: u64) -> Result<Option<TurnSnapshots>> {
     let snapshots = read_snapshots(path)?;
-    let Some(end) = snapshots.iter().position(|snapshot| {
+    let Some(end) = snapshots.iter().rposition(|snapshot| {
         snapshot.moment == SnapshotMoment::TurnEnded && snapshot.turn == Some(turn)
     }) else {
         let later = snapshots
@@ -538,8 +540,19 @@ pub fn turn_snapshots(path: &Path, turn: u64) -> Result<Option<TurnSnapshots>> {
             .flatten()
             .map(TurnSnapshots::Running));
     };
-    let Some(start) = end.checked_sub(1).map(|start| &snapshots[start]) else {
-        return Ok(None);
+    let first = snapshots
+        .iter()
+        .position(|snapshot| snapshot.turn == Some(turn))
+        .expect("the turn's end is one of its snapshots");
+    let start = match &snapshots[first] {
+        own @ Snapshot {
+            moment: SnapshotMoment::BeforeMessage,
+            ..
+        } => own,
+        _ => match first.checked_sub(1) {
+            Some(before) => &snapshots[before],
+            None => return Ok(None),
+        },
     };
     let starts_turn = match start.moment {
         SnapshotMoment::BeforeMessage => start.turn == Some(turn),
@@ -2160,6 +2173,17 @@ mod tests {
             None,
             "a later turn has started, so turn 4's end was never recorded"
         );
+
+        // Woken by its own background task, the agent completes again without
+        // an operator message: the turn runs from its message to the last end.
+        take(TurnEnded, 5);
+        take(TurnEnded, 5);
+        assert_eq!(pair(5), Some((6, 8)));
+
+        // Turns 6 and 7 were never recorded: turn 5's end is not turn 8's
+        // start, and comparing with it would hand turn 8 their changes.
+        take(TurnEnded, 8);
+        assert_eq!(pair(8), None);
 
         std::fs::remove_dir_all(&directory).ok();
     }
