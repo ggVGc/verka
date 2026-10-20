@@ -400,7 +400,7 @@ fn mount_highlighted_link(app: &mut App, writable: bool) {
         Some((_, Err(problem), _)) => return app.show_error(problem),
         None => return app.show_warning("selected link names no file to mount"),
     };
-    if !app.allow_launch_edit() {
+    if !app.allow_mount_edit() {
         return;
     }
     // Driva canonicalizes a mount source, so the grant is recorded in the
@@ -429,12 +429,7 @@ fn mount_highlighted_link(app: &mut App, writable: bool) {
         destination: None,
         writable,
     };
-    let label = crate::mount::label(&mount);
-    let message = match app.launch.add_interaction_mount(mount) {
-        Ok(()) => format!("added {label} — applies when this Session next launches"),
-        Err(reason) => return app.show_error(reason),
-    };
-    app.show_action_message(message);
+    crate::launch::grant_interaction_mount(app, mount);
 }
 
 pub fn handle_list_key(
@@ -1170,26 +1165,12 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
         }
         insert::Outcome::Grant { mount, path } => {
             app.insert = None;
-            let label = crate::mount::label(&mount);
-            let message = match app.launch.add_interaction_mount(mount) {
-                // The mount is a request, not a live change: nothing rebinds a
-                // running sandbox. An idle one is restarted under it before
-                // this message goes out; otherwise it waits for the launch.
-                Ok(()) => {
-                    app.note_mount_change();
-                    if app.restart_for_mounts {
-                        format!("added {label} — restarting the interaction to apply it")
-                    } else {
-                        format!("added {label} — applies when this Session next launches")
-                    }
-                }
-                Err(reason) => {
-                    app.composer.insert(&path.display().to_string());
-                    return app.show_error(reason);
-                }
-            };
+            // The mount is a request, not a live change: nothing rebinds a
+            // running sandbox. An idle one is restarted under it before this
+            // message goes out; otherwise it waits for the launch. The path
+            // goes in either way — the operator asked for it.
+            crate::launch::grant_interaction_mount(app, mount);
             app.composer.insert(&path.display().to_string());
-            app.show_action_message(message);
         }
     }
 }
@@ -3324,9 +3305,10 @@ mod tests {
             }]
         );
         assert_eq!(app.composer.text(), host.display().to_string());
-        assert!(app.notices.iter().any(|message| message
-            .text
-            .contains("applies when this Session next launches")));
+        assert!(app
+            .notices
+            .iter()
+            .any(|message| message.text.contains("to this interaction")));
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
@@ -3391,6 +3373,39 @@ mod tests {
             "mounting keeps the link highlighted"
         );
         assert!(app.take_request().is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// An idle interaction takes the mount by restarting, as it does when the
+    /// mount is added in the Driva view; a working one refuses it.
+    #[test]
+    fn the_link_menu_restarts_an_idle_interaction_to_mount() {
+        let root = tree("link-mount-idle");
+        let outside = tree("link-mount-idle-elsewhere");
+        let host = outside.join("notes.txt");
+
+        let mut working = app(&root);
+        link_menu_on(&mut working, &host.display().to_string());
+        working.activity.status = crate::activity::Status::Running;
+        press(&mut working, KeyCode::Char('j'));
+        press(&mut working, KeyCode::Enter);
+        assert!(working.launch.interaction.mounts.is_empty());
+        assert!(!working.restart_for_mounts);
+
+        let mut idle = app(&root);
+        link_menu_on(&mut idle, &host.display().to_string());
+        idle.activity.status =
+            crate::activity::Status::Idle(crate::activity::IdleReason::TurnComplete);
+        assert!(!idle.can_edit_launch());
+        press(&mut idle, KeyCode::Char('j'));
+        press(&mut idle, KeyCode::Enter);
+        assert_eq!(idle.launch.interaction.mounts.len(), 1);
+        assert!(idle.restart_for_mounts);
+        assert!(idle.notices.iter().any(|message| message
+            .text
+            .contains("restarting the interaction to apply it")));
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);

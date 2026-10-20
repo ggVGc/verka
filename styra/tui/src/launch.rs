@@ -342,29 +342,13 @@ impl Launch {
         )
     }
 
-    /// Add `mount` to the layer being edited, or say why it would change
-    /// nothing there.
+    /// Add `mount` to the `scope` layer, or say why it would change nothing
+    /// there.
     ///
     /// The two layers refuse a mount for different reasons. On the Workspace's,
     /// only a duplicate of its own grants is pointless. On this interaction's, a
     /// mount the Workspace already grants identically is too — an overlay row
     /// that changes nothing about the sandbox is worse than being told so.
-    fn add_mount(&mut self, mount: LaunchMount) -> Result<(), &'static str> {
-        self.add_mount_to(self.scope, mount)
-    }
-
-    /// Add `mount` to this interaction's own layer whatever the driva view's
-    /// keys are currently editing.
-    ///
-    /// For the callers that are not the driva view — the message editor's path
-    /// prompt — where a grant lands is not the operator's choice of pane but a
-    /// property of what they are doing: a path that came up in one message is
-    /// this interaction's business, and `U` moves it up a layer if it turns out
-    /// to be the Workspace's.
-    pub fn add_interaction_mount(&mut self, mount: LaunchMount) -> Result<(), &'static str> {
-        self.add_mount_to(LaunchScope::Interaction, mount)
-    }
-
     fn add_mount_to(&mut self, scope: LaunchScope, mount: LaunchMount) -> Result<(), &'static str> {
         match scope {
             LaunchScope::Workspace => {
@@ -676,13 +660,38 @@ pub fn confirm_prompt(app: &mut App) {
             format!("added {label} to every launch in this Workspace"),
         );
     }
-    match app.launch.add_mount(parsed) {
+    add_mount_to(app, app.launch.scope, parsed);
+}
+
+/// Add `mount` to this interaction's own layer from outside the Driva view —
+/// the message editor's path prompt, a link's menu — by the same path the
+/// view's own prompt takes: refused while the agent is working, and an idle
+/// interaction restarted to take it. Returns whether the mount was added.
+///
+/// The layer is not the operator's choice of pane here but a property of what
+/// they are doing: a path that came up in one message is this interaction's
+/// business, and `U` moves it up a layer if it turns out to be the Workspace's.
+pub fn grant_interaction_mount(app: &mut App, mount: LaunchMount) -> bool {
+    if !app.allow_mount_edit() {
+        return false;
+    }
+    add_mount_to(app, LaunchScope::Interaction, mount)
+}
+
+/// Add `mount` to the client-held `scope` layer, ask for the restart that
+/// applies it to an idle interaction, and say so.
+fn add_mount_to(app: &mut App, scope: LaunchScope, mount: LaunchMount) -> bool {
+    let label = mount::label(&mount);
+    match app.launch.add_mount_to(scope, mount) {
         Ok(()) => {
             app.note_mount_change();
-            let scope = app.launch.scope;
             show_mount_change(app, format!("added {label} to {}", scope.subject()));
+            true
         }
-        Err(reason) => app.show_error(reason),
+        Err(reason) => {
+            app.show_error(reason);
+            false
+        }
     }
 }
 
