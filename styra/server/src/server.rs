@@ -29,7 +29,7 @@ use std::io::{BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -814,6 +814,9 @@ struct ManagedInteraction {
     /// focused: see [`InteractionSummary::focus_requested`]. Never set on a
     /// resume, which is returning to work rather than starting it.
     focus_requested: bool,
+    /// When an operator last turned to this interaction: see
+    /// [`InteractionSummary::interacted_at_ms`].
+    interacted_at_ms: AtomicU64,
 }
 
 /// How often the quota log is asked whether a plan window has come back. A
@@ -970,6 +973,7 @@ impl ManagedInteraction {
             selection: self.selection(),
             workspace: self.workspace.clone(),
             idle_unseen: activity == InteractionActivity::Pending && self.idle.unseen(),
+            interacted_at_ms: self.interacted_at_ms.load(Ordering::Acquire),
             // Only reported where it was read: an interaction that is working
             // again has an answer from before the turn it is running, and an
             // operator cannot act on a checkout the agent is still writing to.
@@ -1020,6 +1024,12 @@ impl ManagedInteraction {
     /// Take back a note whose interrupt never reached the agent.
     fn withdraw_interrupt_request(&self) {
         self.interrupt_requested.store(false, Ordering::Release);
+    }
+
+    /// Note that an operator has turned to this interaction just now.
+    fn note_interacted(&self) {
+        self.interacted_at_ms
+            .store(journal::now_ms(), Ordering::Release);
     }
 
     fn mark_idle_seen(&self) {
@@ -2314,6 +2324,8 @@ impl ServerState {
                 .unwrap_or(&self.inner.store_root)
                 .to_path_buf(),
             focus_requested: request.focus,
+            // Asking for an interaction is the first time anyone turns to it.
+            interacted_at_ms: AtomicU64::new(journal::now_ms()),
         });
         let reported_selection = Arc::downgrade(&managed);
         let refused = Arc::downgrade(&managed);
@@ -2944,6 +2956,10 @@ impl ServerState {
             launch: request.launch.clone(),
             session_path: summary.path.clone(),
             focus_requested: false,
+            // A resume may be the server waiting out a plan window rather than
+            // anyone returning to it; an operator who did is noted as they
+            // open it or send it something.
+            interacted_at_ms: AtomicU64::new(0),
         });
         let reported_selection = Arc::downgrade(&managed);
         let refused = Arc::downgrade(&managed);
@@ -3427,6 +3443,7 @@ impl ServerState {
             activity_reason: Some(InteractionActivityReason::Branched),
             activity_since_ms: journal::now_ms(),
             idle_unseen: false,
+            interacted_at_ms: 0,
             uncommitted_changes: false,
             last_message: None,
             recent_messages: Vec::new(),
@@ -4476,6 +4493,7 @@ impl ServerState {
                 self.ensure_not_integrating(&id)?;
                 let interaction = self.interaction(&id)?;
                 interaction.send_message(message)?;
+                interaction.note_interacted();
                 Ok(Response::Accepted)
             }
             Request::SetSessionSelection { id, selection } => {
@@ -4499,13 +4517,16 @@ impl ServerState {
             }
             Request::QueueMessage { id, message } => {
                 self.ensure_not_integrating(&id)?;
-                Ok(Response::QueuedMessages(
-                    self.interaction(&id)?.queue_message(&message)?,
-                ))
+                let interaction = self.interaction(&id)?;
+                let queued = interaction.queue_message(&message)?;
+                interaction.note_interacted();
+                Ok(Response::QueuedMessages(queued))
             }
             Request::SendQueuedMessage { id } => {
                 self.ensure_not_integrating(&id)?;
-                let (sent, queued) = self.interaction(&id)?.send_queued_message()?;
+                let interaction = self.interaction(&id)?;
+                let (sent, queued) = interaction.send_queued_message()?;
+                interaction.note_interacted();
                 Ok(Response::SentQueuedMessage(sent, queued))
             }
             Request::ClearQueuedMessages { id } => {
@@ -4573,6 +4594,7 @@ impl ServerState {
                 // the interaction. Listing it must leave an idle notification
                 // intact, but the focused screen acknowledges it.
                 interaction.mark_idle_seen();
+                interaction.note_interacted();
                 // And it is the point at which they can act on what the agent
                 // left behind, which is usually why they came — so the
                 // checkout is asked about once more just after they arrive,
@@ -6974,6 +6996,7 @@ mod tests {
                 activity_reason: None,
                 activity_since_ms: 1,
                 idle_unseen: false,
+                interacted_at_ms: 0,
                 uncommitted_changes: false,
                 expected_branch: None,
                 checkout: None,
@@ -8422,6 +8445,7 @@ mod tests {
                 activity_reason: None,
                 activity_since_ms: 1,
                 idle_unseen: false,
+                interacted_at_ms: 0,
                 uncommitted_changes: false,
                 expected_branch: None,
                 checkout: None,
@@ -8481,6 +8505,7 @@ mod tests {
                 activity_reason: None,
                 activity_since_ms: 1,
                 idle_unseen: false,
+                interacted_at_ms: 0,
                 uncommitted_changes: false,
                 expected_branch: None,
                 checkout: None,

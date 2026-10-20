@@ -392,6 +392,7 @@ mod tests {
             activity_reason: None,
             activity_since_ms: 7,
             idle_unseen: true,
+            interacted_at_ms: 0,
             uncommitted_changes: false,
             expected_branch: None,
             checkout: Some(crate::protocol::CheckoutState {

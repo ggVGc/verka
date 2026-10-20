@@ -1125,10 +1125,13 @@ impl LiveInteractions {
     }
 }
 
-/// The Interaction to land on when entering `workspace_id`: one waiting on the
-/// operator outranks one mid-turn, and the newest wins a tie. Unlike the
-/// navigator's own creation-time order, this does weigh activity — it picks
-/// one Interaction once, rather than holding rows in place.
+/// The Interaction to land on when entering `workspace_id`: the one an
+/// operator most recently turned to, so arriving returns to the work they were
+/// last on. Among those the server cannot tell apart — none turned to since it
+/// started — one waiting on the operator outranks one mid-turn, and the newest
+/// wins a tie. Unlike the navigator's own creation-time order, this does weigh
+/// recency and activity — it picks one Interaction once, rather than holding
+/// rows in place.
 ///
 /// Stopped Interactions are not candidates. Entering a Workspace should land on
 /// work that can still be talked to, and a stopped Interaction is reached the
@@ -1158,7 +1161,12 @@ fn first_live_where(
         .cloned()
         .collect::<Vec<_>>();
     sort_interactions(&mut live);
-    live.into_iter().min_by_key(activity_rank)
+    live.into_iter().min_by_key(|interaction| {
+        (
+            std::cmp::Reverse(interaction.interacted_at_ms),
+            activity_rank(interaction),
+        )
+    })
 }
 
 /// `visible` re-ordered so each Workspace's entries are contiguous, in the
@@ -1502,6 +1510,7 @@ pub(crate) mod tests {
             activity_reason: None,
             activity_since_ms: 0,
             idle_unseen: false,
+            interacted_at_ms: 0,
             uncommitted_changes: false,
             expected_branch: None,
             checkout: None,
@@ -3018,6 +3027,25 @@ pub(crate) mod tests {
                 .unwrap()
                 .id,
             "other"
+        );
+    }
+
+    #[test]
+    fn first_live_in_workspace_returns_to_the_one_last_turned_to() {
+        let mut idle = interaction("idle", InteractionActivity::Pending);
+        idle.interacted_at_ms = 10;
+        let mut running = interaction("running", InteractionActivity::Running);
+        running.interacted_at_ms = 20;
+        let mut stopped = interaction("stopped", InteractionActivity::Stopped);
+        stopped.interacted_at_ms = 30;
+        let untouched = interaction("untouched", InteractionActivity::Pending);
+        let interactions = vec![idle, running, stopped, untouched];
+
+        assert_eq!(
+            first_live_in_workspace(&interactions, "workspace")
+                .unwrap()
+                .id,
+            "running"
         );
     }
 

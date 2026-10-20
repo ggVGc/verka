@@ -402,10 +402,10 @@ fn main() -> Result<()> {
         session::workspace_for_host(&client, &host_path)?
     };
 
-    // Opening a Workspace that already holds live work lands on that work with
-    // the Interactions navigator open, exactly as `v` does mid-session —
-    // whether the Workspace came from the current directory or from the
-    // startup picker. A trailing prompt overrides it below: that is input the
+    // Opening a Workspace that already holds live work lands on the live
+    // Interaction the operator last turned to, with the Interactions navigator
+    // open exactly as `v` does mid-session — whether the Workspace came from
+    // the current directory or from the startup picker. A trailing prompt overrides it below: that is input the
     // operator has already given, so it starts an Interaction of its own rather
     // than joining one in flight.
     let startup_interaction = if ordinary_launch && !start_fresh {

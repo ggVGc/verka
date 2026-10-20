@@ -1203,6 +1203,14 @@ pub struct InteractionSummary {
     /// listing it is deliberately not an acknowledgement.
     #[serde(default)]
     pub idle_unseen: bool,
+    /// When an operator last turned to this interaction — created it, opened
+    /// it, or gave it a message — in epoch milliseconds on the server's clock,
+    /// so a client arriving in its Workspace can return to the one they were
+    /// last working with. Streaming its updates does not count: a preview
+    /// does that too. `0` when no operator has done so since the server
+    /// started, and from a server too old to report it.
+    #[serde(default)]
+    pub interacted_at_ms: u64,
     /// True when this interaction has stopped working and the Git checkout it
     /// works in has uncommitted changes. Read when the interaction goes idle
     /// and once more shortly after a client loads it: an operator deciding
