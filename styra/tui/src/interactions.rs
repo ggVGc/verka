@@ -1120,9 +1120,8 @@ impl LiveInteractions {
 /// operator most recently turned to, so arriving returns to the work they were
 /// last on. Among those the server cannot tell apart — none turned to since it
 /// started — one waiting on the operator outranks one mid-turn, and the newest
-/// wins a tie. Unlike the navigator's own creation-time order, this does weigh
-/// recency and activity — it picks one Interaction once, rather than holding
-/// rows in place.
+/// wins a tie. This also counts opening an Interaction, while the navigator
+/// sorts by the most recent operator message.
 ///
 /// Stopped Interactions are not candidates. Entering a Workspace should land on
 /// work that can still be talked to, and a stopped Interaction is reached the
@@ -1165,7 +1164,7 @@ fn first_live_where(
 /// kept together by the checkout they work in — the main checkout counting as
 /// one, like any worktree — in the order the checkouts first appear: the
 /// groups [`display_tree`] lays out under the navigator's Workspace and
-/// worktree headings, rather than the creation-sorted item order.
+/// worktree headings, rather than the message-sorted item order.
 fn grouped_by_workspace(
     interactions: &[InteractionSummary],
     workspaces: &[WorkspaceSummary],
@@ -1447,10 +1446,15 @@ fn has_news(before: &InteractionSummary, now: &InteractionSummary) -> bool {
 }
 
 fn sort_interactions(interactions: &mut [InteractionSummary]) {
-    // Keep paused interactions below the others, newest first within each group.
+    // Keep paused interactions below the others, latest operator message first.
     interactions.sort_by_key(|interaction| {
         (
             interaction.activity_reason == Some(styra_protocol::InteractionActivityReason::Paused),
+            std::cmp::Reverse(if interaction.last_user_message_at_ms == 0 {
+                created_at_ms(interaction)
+            } else {
+                interaction.last_user_message_at_ms
+            }),
             std::cmp::Reverse(created_at_ms(interaction)),
         )
     });
@@ -1505,6 +1509,7 @@ pub(crate) mod tests {
             activity_since_ms: 0,
             idle_unseen: false,
             interacted_at_ms: 0,
+            last_user_message_at_ms: 0,
             uncommitted_changes: false,
             expected_branch: None,
             checkout: None,
@@ -1644,6 +1649,54 @@ pub(crate) mod tests {
                 "0000000000300-1-0"
             ]
         );
+    }
+
+    #[test]
+    fn live_interactions_sort_by_sent_messages_not_focus_or_agent_activity() {
+        let mut older = interaction("0000000000100-old", InteractionActivity::Pending);
+        older.last_user_message_at_ms = 500;
+        let mut newer = interaction("0000000000200-new", InteractionActivity::Running);
+        newer.last_user_message_at_ms = 400;
+        newer.interacted_at_ms = 900;
+        newer.activity_since_ms = 900;
+        let unsent = interaction("0000000000300-unsent", InteractionActivity::Pending);
+        let mut paused = interaction("0000000000400-paused", InteractionActivity::Stopped);
+        paused.last_user_message_at_ms = 1000;
+        paused.activity_reason = Some(styra_protocol::InteractionActivityReason::Paused);
+        let mut live = LiveInteractions::default();
+        live.open(vec![newer.clone(), unsent, paused, older], vec![]);
+        let ids = |live: &LiveInteractions| {
+            live.items
+                .iter()
+                .map(|item| item.id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(&live),
+            [
+                "0000000000100-old",
+                "0000000000200-new",
+                "0000000000300-unsent",
+                "0000000000400-paused"
+            ]
+        );
+
+        // A new operator message moves the row on the next listing, even
+        // though no other metadata (or agent response) has changed yet.
+        newer.last_user_message_at_ms = 1100;
+        let mut refreshed = live.items.clone();
+        refreshed[1] = newer;
+        assert!(live.refresh(refreshed));
+        assert_eq!(
+            ids(&live),
+            [
+                "0000000000200-new",
+                "0000000000100-old",
+                "0000000000300-unsent",
+                "0000000000400-paused"
+            ]
+        );
+        assert_eq!(live.display_indices(Some("workspace")), [0, 1, 2, 3]);
     }
 
     #[test]

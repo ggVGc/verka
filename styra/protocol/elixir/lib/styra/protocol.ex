@@ -1125,6 +1125,7 @@ defmodule Styra.Protocol do
         %{name: "activity_since_ms", required: false, type: %{kind: :number, integer: true}},
         %{name: "idle_unseen", required: false, type: %{kind: :boolean}},
         %{name: "interacted_at_ms", required: false, type: %{kind: :number, integer: true}},
+        %{name: "last_user_message_at_ms", required: false, type: %{kind: :number, integer: true}},
         %{name: "uncommitted_changes", required: false, type: %{kind: :boolean}},
         %{name: "checkout", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "CheckoutState"}}},
         %{name: "expected_branch", required: false, type: %{kind: :optional, inner: %{kind: :string}}},

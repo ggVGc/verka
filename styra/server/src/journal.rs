@@ -807,6 +807,20 @@ fn last_event_at_ms(directory: &Path) -> Option<u64> {
     u64::try_from(since_epoch.as_millis()).ok()
 }
 
+/// Recover the latest sent operator message when resuming a Session. Agent
+/// output, focus changes, and messages still in the queue do not count.
+pub(crate) fn last_user_message_at_ms(directory: &Path) -> Result<u64> {
+    let file = File::open(directory.join(JOURNAL_FILE))
+        .context("opening journal for latest operator message")?;
+    let mut latest = 0;
+    for line in BufReader::new(file).lines() {
+        if let Ok(Record::User { at_ms, .. }) = serde_json::from_str::<Record>(&line?) {
+            latest = at_ms;
+        }
+    }
+    Ok(latest)
+}
+
 fn sort_newest_first(sessions: &mut [SessionSummary]) {
     sessions.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
 }
@@ -1543,6 +1557,36 @@ fn new_session_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latest_user_message_time_ignores_agent_output_and_survives_reopening() {
+        let dir = temp_dir("last-user-message");
+        let mut journal = Journal::create(&dir).unwrap();
+        assert_eq!(last_user_message_at_ms(&dir).unwrap(), 0);
+        journal
+            .write(&Record::User {
+                at_ms: 100,
+                text: "first".into(),
+            })
+            .unwrap();
+        journal
+            .write(&Record::User {
+                at_ms: 200,
+                text: "second".into(),
+            })
+            .unwrap();
+        journal
+            .write(&Record::Agent {
+                at_ms: 900,
+                raw: "agent output".into(),
+                protocol: None,
+            })
+            .unwrap();
+        drop(journal);
+        let _reopened = Journal::open(&dir).unwrap();
+        assert_eq!(last_user_message_at_ms(&dir).unwrap(), 200);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("styra-journal-{tag}-{}", new_session_id()));

@@ -831,6 +831,8 @@ struct ManagedInteraction {
     /// When an operator last turned to this interaction: see
     /// [`InteractionSummary::interacted_at_ms`].
     interacted_at_ms: AtomicU64,
+    /// Most recent message sent, independent of opening or focusing the interaction.
+    last_user_message_at_ms: AtomicU64,
 }
 
 /// How often the quota log is asked whether a plan window has come back. A
@@ -996,6 +998,7 @@ impl ManagedInteraction {
             workspace: self.workspace.clone(),
             idle_unseen: activity == InteractionActivity::Pending && self.idle.unseen(),
             interacted_at_ms: self.interacted_at_ms.load(Ordering::Acquire),
+            last_user_message_at_ms: self.last_user_message_at_ms.load(Ordering::Acquire),
             // Only reported where it was read: an interaction that is working
             // again has an answer from before the turn it is running, and an
             // operator cannot act on a checkout the agent is still writing to.
@@ -1501,6 +1504,8 @@ impl ManagedInteraction {
         }
         self.snapshot(journal::SnapshotMoment::BeforeMessage);
         self.interaction.send(text)?;
+        self.last_user_message_at_ms
+            .store(journal::now_ms(), Ordering::Release);
         Ok(())
     }
 
@@ -1524,6 +1529,8 @@ impl ManagedInteraction {
         self.snapshot(journal::SnapshotMoment::BeforeMessage);
         self.interaction
             .send_with_selection(&text, Some(&self.selection()))?;
+        self.last_user_message_at_ms
+            .store(journal::now_ms(), Ordering::Release);
         // The server accepts the turn before the provider echoes its
         // UserMessage event. Date it here so a client that attaches in that
         // interval still sees when this work actually started.
@@ -2420,6 +2427,7 @@ impl ServerState {
             focus_requested: request.focus,
             // Asking for an interaction is the first time anyone turns to it.
             interacted_at_ms: AtomicU64::new(journal::now_ms()),
+            last_user_message_at_ms: AtomicU64::new(0),
         });
         let reported_selection = Arc::downgrade(&managed);
         let refused = Arc::downgrade(&managed);
@@ -3024,6 +3032,9 @@ impl ServerState {
             // anyone returning to it; an operator who did is noted as they
             // open it or send it something.
             interacted_at_ms: AtomicU64::new(0),
+            last_user_message_at_ms: AtomicU64::new(journal::last_user_message_at_ms(
+                &summary.path,
+            )?),
         });
         let reported_selection = Arc::downgrade(&managed);
         let refused = Arc::downgrade(&managed);
@@ -3491,6 +3502,7 @@ impl ServerState {
             activity_since_ms: journal::now_ms(),
             idle_unseen: false,
             interacted_at_ms: 0,
+            last_user_message_at_ms: journal::last_user_message_at_ms(&branched.path)?,
             uncommitted_changes: false,
             last_message: None,
             recent_messages: Vec::new(),
@@ -7098,6 +7110,7 @@ mod tests {
                 activity_since_ms: 1,
                 idle_unseen: false,
                 interacted_at_ms: 0,
+                last_user_message_at_ms: 0,
                 uncommitted_changes: false,
                 expected_branch: None,
                 checkout: None,
@@ -8558,6 +8571,7 @@ mod tests {
                 activity_since_ms: 1,
                 idle_unseen: false,
                 interacted_at_ms: 0,
+                last_user_message_at_ms: 0,
                 uncommitted_changes: false,
                 expected_branch: None,
                 checkout: None,
@@ -8618,6 +8632,7 @@ mod tests {
                 activity_since_ms: 1,
                 idle_unseen: false,
                 interacted_at_ms: 0,
+                last_user_message_at_ms: 0,
                 uncommitted_changes: false,
                 expected_branch: None,
                 checkout: None,

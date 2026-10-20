@@ -98,6 +98,13 @@ impl Roster {
             // operator a conversation they cannot open.
             .filter(|entry| entry.session_path.is_dir())
             .map(|mut entry| {
+                // Recover older rosters' missing message time, and messages
+                // journaled after the last roster snapshot, once at startup.
+                if let Ok(at_ms) = crate::journal::last_user_message_at_ms(&entry.session_path) {
+                    if at_ms != 0 {
+                        entry.summary.last_user_message_at_ms = at_ms;
+                    }
+                }
                 // A row already stopped lost no agent to the restart, so it
                 // keeps the reason it stopped for.
                 if entry.summary.activity != InteractionActivity::Stopped {
@@ -397,6 +404,7 @@ mod tests {
             activity_since_ms: 7,
             idle_unseen: true,
             interacted_at_ms: 0,
+            last_user_message_at_ms: 0,
             uncommitted_changes: false,
             expected_branch: None,
             checkout: Some(crate::protocol::CheckoutState {
@@ -430,6 +438,12 @@ mod tests {
         let session = root.join("session-a");
         std::fs::create_dir_all(&session).unwrap();
 
+        let mut journal = crate::journal::Journal::create(&session).unwrap();
+        journal.record_user_message("latest request").unwrap();
+        drop(journal);
+        let sent_at = crate::journal::last_user_message_at_ms(&session).unwrap();
+        assert!(sent_at > 0);
+        // A roster from before message times were reported has the default 0.
         Roster::open(&root).publish(vec![(session, summary("session-a"), Default::default())]);
 
         let restored = Roster::open(&root).restored(&InteractionQuery::default());
@@ -441,6 +455,7 @@ mod tests {
             Some(InteractionActivityReason::ServerRestarted)
         );
         assert_eq!(restored[0].last_message.as_deref(), Some("still going"));
+        assert_eq!(restored[0].last_user_message_at_ms, sent_at);
         // Where the agent was working outlives the agent. Nothing this run can
         // do would re-derive it — the branch was read from a checkout the
         // previous run's agent may since have been the last to touch — so a

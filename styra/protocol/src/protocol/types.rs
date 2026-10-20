@@ -1211,6 +1211,11 @@ pub struct InteractionSummary {
     /// started, and from a server too old to report it.
     #[serde(default)]
     pub interacted_at_ms: u64,
+    /// When the latest operator message was sent to this interaction, in epoch
+    /// milliseconds on the server's clock. Opening or focusing it does not
+    /// change this. `0` before any message, or from an older server.
+    #[serde(default)]
+    pub last_user_message_at_ms: u64,
     /// True when this interaction has stopped working and the Git checkout it
     /// works in has uncommitted changes. Read when the interaction goes idle
     /// and once more shortly after a client loads it: an operator deciding
