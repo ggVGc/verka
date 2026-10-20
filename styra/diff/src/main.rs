@@ -233,6 +233,8 @@ fn handle(diff: &mut CheckoutDiff, key: KeyEvent) -> Step {
     match diff.handle_key(key) {
         Outcome::Handled => Step::Stay,
         Outcome::Close => Step::Quit,
+        // There is no Styra to go back to, so `d` does not quit.
+        Outcome::Toggle => Step::Stay,
         Outcome::OpenFile => Step::Edit,
         Outcome::GenerateReport => {
             Step::Notice("edit reports are written in Styra, which has an agent to ask")
@@ -280,6 +282,7 @@ mod tests {
 
         assert_eq!(press(&mut diff, KeyCode::Esc), Step::Stay);
         assert_eq!(diff.search.query(), None);
+        assert_eq!(press(&mut diff, KeyCode::Char('d')), Step::Stay);
         assert_eq!(press(&mut diff, KeyCode::Esc), Step::Quit);
         assert_eq!(press(&mut diff, KeyCode::Char('q')), Step::Quit);
         assert_eq!(

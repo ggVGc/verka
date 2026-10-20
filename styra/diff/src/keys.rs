@@ -15,7 +15,8 @@ enum Command {
     /// Leave line selection, or clear a standing file filter, or else close
     /// the view.
     ClearFilterOrClose,
-    Close,
+    /// Styra's `d`, which opened the view, closing it again.
+    Toggle,
     OpenFile,
     GenerateReport,
 }
@@ -196,7 +197,7 @@ pub const BINDINGS: &[Binding] = &[
         "go to the bottom",
         Command::View(Action::Last),
     ),
-    bind(&[KeyCode::Char('d')], "d", "close the diff", Command::Close),
+    bind(&[KeyCode::Char('d')], "d", "close the diff", Command::Toggle),
     bind(
         &[KeyCode::Esc],
         "Esc",
@@ -214,6 +215,9 @@ pub enum Outcome {
     Ignored,
     /// Leave the view.
     Close,
+    /// Leave the view if `d` opened it, as in Styra; nothing where the view is
+    /// all there is, as in `styra-diff`.
+    Toggle,
     /// Open the file at the top of the view in the editor, at
     /// [`CheckoutDiff::location`].
     OpenFile,
@@ -252,7 +256,8 @@ impl CheckoutDiff {
             Command::ClearFilterOrClose if self.leave_lines() || self.clear_filter() => {
                 Outcome::Handled
             }
-            Command::ClearFilterOrClose | Command::Close => Outcome::Close,
+            Command::ClearFilterOrClose => Outcome::Close,
+            Command::Toggle => Outcome::Toggle,
             Command::OpenFile => Outcome::OpenFile,
             Command::GenerateReport => Outcome::GenerateReport,
         }
@@ -302,7 +307,7 @@ mod tests {
         assert_eq!(press(&mut diff, KeyCode::Char('d')), Outcome::Handled);
         assert_eq!(diff.search.query(), Some("d"));
         assert_eq!(press(&mut diff, KeyCode::Enter), Outcome::Handled);
-        assert_eq!(press(&mut diff, KeyCode::Char('d')), Outcome::Close);
+        assert_eq!(press(&mut diff, KeyCode::Char('d')), Outcome::Toggle);
     }
 
     #[test]
@@ -328,7 +333,7 @@ mod tests {
             press(&mut diff, KeyCode::Char('E')),
             Outcome::GenerateReport
         );
-        assert_eq!(press(&mut diff, KeyCode::Char('d')), Outcome::Close);
+        assert_eq!(press(&mut diff, KeyCode::Char('d')), Outcome::Toggle);
         for key in ['q', 'i', 'y', '?'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Outcome::Ignored);
         }

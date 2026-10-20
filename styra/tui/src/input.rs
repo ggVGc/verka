@@ -173,7 +173,7 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
     };
     match outcome {
         Outcome::Handled | Outcome::Ignored => {}
-        Outcome::Close => {
+        Outcome::Close | Outcome::Toggle => {
             if app.view == View::CheckoutDiff {
                 app.set_view(View::Events);
             } else {
