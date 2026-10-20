@@ -583,8 +583,9 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         } else if !side_by_side {
             "unified · side-by-side needs more width (81 columns)".to_owned()
         } else if view.label.is_some() {
+            // As `render_split` draws them: the newer side on the left.
             let half = usize::from(body.width / 2);
-            format!("{:<half$}│ After", "Before")
+            format!("{:<half$}│ Before", "After")
         } else {
             let half = usize::from(body.width / 2);
             let base = format!(
@@ -593,7 +594,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                     .get(..SHORT_COMMIT)
                     .unwrap_or(view.base_commit)
             );
-            format!("{base:<half$}│ Working tree")
+            format!("{:<half$}│ {base}", "Working tree")
         };
         frame.render_widget(Paragraph::new(muted(&label_text)), label);
         body = rest;
@@ -3326,8 +3327,8 @@ index 1111111..2222222 100644
         assert!(!output.contains("working tree"), "{output}");
         assert!(output.contains("1 file changed"), "{output}");
         let output = draw(true, DIFF);
-        assert!(output.contains("Before"), "{output}");
-        assert!(output.contains("│ After"), "{output}");
+        assert!(output.contains("After"), "{output}");
+        assert!(output.contains("│ Before"), "{output}");
         assert!(!output.contains("Base ·"), "{output}");
         let output = draw(false, "");
         assert!(output.contains("no changes"), "{output}");
