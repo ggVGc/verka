@@ -9,10 +9,11 @@
 
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::fuzzy_list::{marked, FuzzyList};
 use crate::modal_input::wrapped_input_lines;
 use crate::theme;
 
@@ -120,23 +121,27 @@ pub fn render(frame: &mut Frame, prompt: &TextPrompt<'_>, area: Rect) -> Rect {
 /// Rows of choices the list under a prompt shows at once.
 const CHOICE_ROWS: u16 = 10;
 
-/// Draw `choices` in a list under `prompt`, the box [`render`] drew, with
-/// `selected` highlighted and scrolled into view. Above the box instead when
-/// there is more room there.
+/// Draw the `rows` that `list` leaves standing under `prompt`, the box
+/// [`render`] drew, with the letters each matched on marked and the cursor's
+/// row highlighted and scrolled into view. Above the box instead when there is
+/// more room there. Narrowed down to nothing, it says so rather than vanish,
+/// so the query that did it is plainly the reason.
 pub fn render_choices(
     frame: &mut Frame,
     prompt: Rect,
     area: Rect,
-    choices: &[String],
-    selected: Option<usize>,
+    rows: &[String],
+    list: &FuzzyList,
 ) {
-    if choices.is_empty() {
+    if rows.is_empty() {
         return;
     }
+    let matches = list.matches(rows);
+    let selected = list.selected.min(matches.len().saturating_sub(1));
     let below = (area.y + area.height).saturating_sub(prompt.y + prompt.height);
     let above = prompt.y.saturating_sub(area.y);
     let room = below.max(above);
-    let height = (choices.len() as u16)
+    let height = (matches.len().max(1) as u16)
         .min(CHOICE_ROWS)
         .saturating_add(2)
         .min(room);
@@ -154,32 +159,41 @@ pub fn render_choices(
         ..prompt
     };
     let visible = usize::from(height - 2);
-    let first = selected.map_or(0, |index| (index + 1).saturating_sub(visible));
-    let lines: Vec<Line> = choices
+    let first = (selected + 1).saturating_sub(visible);
+    let mut lines: Vec<Line> = matches
         .iter()
         .enumerate()
         .skip(first)
         .take(visible)
-        .map(|(index, choice)| {
-            let style = if Some(index) == selected {
-                Style::default()
-                    .fg(theme::TEXT)
-                    .bg(theme::SELECTION_BACKGROUND)
-                    .add_modifier(Modifier::BOLD)
+        .map(|(index, found)| {
+            let mut spans = vec![Span::raw(" ")];
+            spans.extend(marked(&rows[found.index], &found.positions));
+            let line = Line::from(spans);
+            if index == selected {
+                line.style(
+                    Style::default()
+                        .bg(theme::SELECTION_BACKGROUND)
+                        .add_modifier(Modifier::BOLD),
+                )
             } else {
-                Style::default().fg(theme::TEXT)
-            };
-            Line::styled(format!(" {choice}"), style)
+                line
+            }
         })
         .collect();
-    let position = match selected {
-        Some(index) => format!(" {}/{} ", index + 1, choices.len()),
-        None => format!(" {} ", choices.len()),
+    if matches.is_empty() {
+        lines.push(Line::styled(
+            " nothing here matches",
+            Style::default().fg(theme::MUTED_TEXT),
+        ));
+    }
+    let position = match matches.len() {
+        0 => format!(" 0/{} ", rows.len()),
+        count => format!(" {}/{count} ", selected + 1),
     };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::MUTED_TEXT))
-        .title(" Tab next · Shift-Tab previous · Enter accept · Esc close ")
+        .title(" ↑↓ select · Tab open · Shift-Tab up · Enter add ")
         .title_bottom(Line::from(position).right_aligned());
     frame.render_widget(Clear, rect);
     frame.render_widget(Paragraph::new(lines).block(block), rect);

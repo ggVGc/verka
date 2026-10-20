@@ -60,11 +60,11 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
             workspace_cursor: app.launch.cursor(LaunchScope::Workspace),
             interaction_cursor: app.launch.cursor(LaunchScope::Interaction),
             prompt: app.launch.prompt.as_deref(),
-            completion: app
+            paths: app
                 .launch
-                .completion
+                .paths
                 .as_ref()
-                .map(|completion| (completion.labels.as_slice(), completion.selected)),
+                .map(|paths| (paths.rows.as_slice(), &paths.list)),
             command_prompt: app
                 .launch
                 .command_prompt

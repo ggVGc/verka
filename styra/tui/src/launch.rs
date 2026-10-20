@@ -23,11 +23,12 @@
 
 use crate::activity::Status;
 use crate::app::{App, Request};
-use crate::mount;
+use crate::mount::{self, PathList};
 use styra_protocol::agent::Selection;
 use styra_protocol::{
     DrivaOptions, LaunchMount, LaunchPolicy, ProjectAction, WorkspaceLaunchChange,
 };
+use styra_ui::fuzzy_list::FuzzyList;
 
 /// Which of the two policy layers the Driva view's keys are editing.
 ///
@@ -87,9 +88,8 @@ pub struct Launch {
     selected: (usize, usize),
     /// The open "add a mount" prompt, while the operator is typing one.
     pub prompt: Option<String>,
-    /// The paths `Tab` is stepping through in that prompt, until another key
-    /// settles on one.
-    pub completion: Option<mount::Completion>,
+    /// The paths listed under that prompt, narrowed by the name being typed.
+    pub paths: Option<mount::PathList>,
     /// The open prompt editing a project action's command in the focused
     /// layer, and what has been typed into it.
     pub command_prompt: Option<(ProjectAction, String)>,
@@ -569,85 +569,81 @@ pub fn open_prompt(app: &mut App) {
     }
     // Mounts are normally adjacent to the Workspace already on screen. Start
     // there so adding one only needs the part of the path that differs.
-    app.launch.completion = None;
     app.launch.prompt = Some(
         app.workspace
             .root_or_current_directory()
             .map(|path| path.display().to_string())
             .unwrap_or_default(),
     );
+    refresh_paths(app);
 }
 
 pub fn cancel_prompt(app: &mut App) {
     app.launch.prompt = None;
-    app.launch.completion = None;
+    app.launch.paths = None;
 }
 
-/// Put the next (or previous) path under what is typed into the prompt,
-/// listing the candidates on the first press.
-pub fn complete_prompt(app: &mut App, forward: bool) {
-    let Some(text) = app.launch.prompt.as_mut() else {
-        return;
-    };
-    let completion = app
-        .launch
-        .completion
-        .get_or_insert_with(|| mount::complete(text));
-    match completion.step(forward) {
-        Some(candidate) => *text = candidate.to_owned(),
-        None => {
-            app.launch.completion = None;
-            app.show_warning("no paths to complete");
+/// Bring the list under the mount prompt up to date with what it holds, or
+/// drop it with the prompt.
+pub fn refresh_paths(app: &mut App) {
+    match &app.launch.prompt {
+        Some(text) => app
+            .launch
+            .paths
+            .get_or_insert_with(Default::default)
+            .update(text),
+        None => app.launch.paths = None,
+    }
+}
+
+/// Take the highlighted path into the prompt. A directory keeps its trailing
+/// `/`, so the list goes straight on to what is under it.
+pub fn take_highlighted_path(app: &mut App) {
+    let highlighted = app.launch.paths.as_ref().and_then(PathList::highlighted);
+    match highlighted {
+        Some(path) => {
+            app.launch.prompt = Some(path);
+            refresh_paths(app);
         }
+        None => app.show_warning("no path to take"),
     }
 }
 
-/// Settle on the highlighted path. A directory opens straight onto a list of
-/// what is under it, so `Enter` walks down a tree the way `Tab` walks across
-/// one level; a file, or nothing highlighted, just closes the list. Returns
-/// whether there was a list to act on.
-pub fn accept_completion(app: &mut App) -> bool {
-    let Some(completion) = app.launch.completion.take() else {
-        return false;
-    };
-    let Some(index) = completion.selected else {
-        return true;
-    };
-    if !completion.labels[index].ends_with('/') {
-        return true;
+/// Move the cursor in the list under the mount prompt.
+pub fn move_path_cursor(app: &mut App, step: fn(&mut FuzzyList, &[String])) {
+    if let Some(paths) = app.launch.paths.as_mut() {
+        step(&mut paths.list, &paths.rows);
     }
-    let next = mount::complete(&completion.candidates[index]);
-    if !next.candidates.is_empty() {
-        app.launch.completion = Some(next);
-    }
-    true
-}
-
-/// Leave the completion list, putting back what was typed before it opened.
-/// Returns whether there was a list to leave.
-pub fn abandon_completion(app: &mut App) -> bool {
-    let Some(completion) = app.launch.completion.take() else {
-        return false;
-    };
-    app.launch.prompt = Some(completion.typed);
-    true
 }
 
 /// Accept what the prompt holds as an extra mount, or explain why it is not one
 /// and leave the prompt open with the text still in it.
+///
+/// A source still being narrowed down — a name typed that is not a path that
+/// exists — means the row the list has highlighted for it, as it would in any
+/// fuzzy finder, so that row is what gets mounted.
 pub fn confirm_prompt(app: &mut App) {
-    let Some(text) = app.launch.prompt.clone() else {
+    let Some(mut text) = app.launch.prompt.clone() else {
         return;
     };
+    if let Some(paths) = &app.launch.paths {
+        let source = !text.contains(':');
+        if source && paths.narrowing() && !mount::expand_home(&text).exists() {
+            if let Some(highlighted) = paths.highlighted() {
+                text = highlighted;
+                app.launch.prompt = Some(text.clone());
+                refresh_paths(app);
+            }
+        }
+    }
     if !app.allow_mount_edit() {
-        app.launch.prompt = None;
-        return;
+        return cancel_prompt(app);
     }
     let parsed = match mount::parse(&text) {
         Ok(mount) => mount,
         Err(problem) => return app.show_error(problem),
     };
-    app.launch.prompt = None;
+    cancel_prompt(app);
     let label = mount::label(&parsed);
     if app.launch.scope == LaunchScope::Workspace {
         if app.launch.workspace.mounts.contains(&parsed) {

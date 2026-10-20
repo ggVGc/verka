@@ -478,12 +478,15 @@ switches focused layer; `j`/`k` selects a mount.
 | `G` | set the Workspace Git checkout; submit an empty path to clear it |
 | `c` / `C` | set the run / test command; submit an empty command to inherit again |
 
-In the mount prompt, `Ctrl+W` removes the final path component. `Tab` and
-`Shift+Tab` step down and up through a list of the paths under the one typed
-(or, for a partial name, the entries beside it that start with it). `Enter`
-accepts the highlighted path and, for a directory, opens the list of what is
-under it so `Tab` keeps completing; `Esc` closes the list and restores what was
-typed. With the list closed, `Enter` adds the mount.
+The mount prompt keeps a list open under it of what is in the directory typed
+so far (up to its last `/`), narrowed live by the name typed after that `/`:
+matching is fuzzy, best match first, with the matched letters marked, so `dcs`
+finds `docs`. Hidden entries are listed once the name starts with `.`.
+`↑`/`↓` (or `Ctrl+P`/`Ctrl+N`, `PgUp`/`PgDn`) move the highlight. `Tab` puts
+the highlighted path into the prompt and, for a directory, lists what is under
+it; `Shift+Tab` and `Ctrl+W` go back up to the parent. `Enter` adds the mount:
+the typed path when it exists, otherwise the highlighted match for the name
+being typed. `Esc` cancels.
 
 Workspace edits take effect for future launches everywhere in that Workspace.
 Interaction edits apply only to its next launch/resume unless promoted. Existing

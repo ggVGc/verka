@@ -20,6 +20,7 @@
 //! mount, the profile's credential mounts, the broker's control mount.
 
 use crate::chrome::{panel_block, PanelChrome};
+use crate::fuzzy_list::FuzzyList;
 use crate::placeholders::{self, Placeholders};
 use crate::text_prompt::{self, TextPrompt};
 use crate::theme;
@@ -145,8 +146,9 @@ pub struct DrivaLaunch<'a> {
     pub workspace_cursor: usize,
     pub interaction_cursor: usize,
     pub prompt: Option<&'a str>,
-    /// The paths `Tab` steps through in the prompt, and the one it is on.
-    pub completion: Option<(&'a [String], Option<usize>)>,
+    /// The paths listed under the prompt, and the name typed to narrow them
+    /// with the cursor among what it leaves.
+    pub paths: Option<(&'a [String], &'a FuzzyList)>,
     /// The open prompt for a project action's command, and what is typed.
     pub command_prompt: Option<(ProjectAction, &'a str)>,
     pub driva: Option<&'a DrivaOptions>,
@@ -1729,13 +1731,13 @@ fn render_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
         ));
     }
     let prompt = TextPrompt::new(
-        " mount · source[:destination][:ro|rw] · Tab complete · Ctrl-W parent · Enter add · Esc cancel ",
+        " mount · source[:destination][:ro|rw] · Ctrl-W parent · Enter add · Esc cancel ",
         text,
     )
     .bottom(bottom);
     let rect = text_prompt::render(frame, &prompt, area);
-    if let Some((choices, selected)) = app.launch.completion {
-        text_prompt::render_choices(frame, rect, area, choices, selected);
+    if let Some((rows, list)) = app.launch.paths {
+        text_prompt::render_choices(frame, rect, area, rows, list);
     }
 }
 
@@ -1894,7 +1896,7 @@ mod tests {
                 workspace_cursor: 0,
                 interaction_cursor: 0,
                 prompt: None,
-                completion: None,
+                paths: None,
                 command_prompt: None,
                 driva: None,
                 planned: false,

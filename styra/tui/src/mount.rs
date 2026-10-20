@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use styra_protocol::{LaunchMount, Mount, MountAccess};
+use styra_ui::fuzzy_list::FuzzyList;
 
 /// How an extra mount reads in the view and in the prompt that adds one.
 pub fn label(mount: &LaunchMount) -> String {
@@ -57,14 +58,16 @@ pub fn parse(text: &str) -> Result<LaunchMount, String> {
     if source.is_empty() {
         return Err("give a path to mount, e.g. /srv/data:ro".into());
     }
-    let source = expand_home(source);
+    // Rebuilt from its components, which drops the trailing `/` a directory
+    // taken from the prompt's list arrives with.
+    let source: PathBuf = expand_home(source).components().collect();
     if !source.is_absolute() {
         return Err(format!("{} must be an absolute path", source.display()));
     }
     let destination = match destination {
         Some("") => return Err("the destination cannot be empty".into()),
         Some(destination) => {
-            let destination = expand_home(destination);
+            let destination: PathBuf = expand_home(destination).components().collect();
             if !destination.is_absolute() {
                 return Err(format!(
                     "the destination {} must be an absolute path",
@@ -95,95 +98,106 @@ pub fn expand_home(text: &str) -> PathBuf {
     }
 }
 
-/// The paths `Tab` steps through in the mount prompt, and what was typed before
-/// it started, so `Esc` can put that back.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Completion {
-    pub typed: String,
-    /// Each candidate as the whole prompt text it would leave behind.
-    pub candidates: Vec<String>,
-    /// Each candidate as the list shows it: the entry's own name, with a
-    /// trailing `/` on a directory.
-    pub labels: Vec<String>,
-    /// The candidate in the prompt now; `None` until the first `Tab`.
-    pub selected: Option<usize>,
-}
-
-impl Completion {
-    /// Move one step through the list, wrapping at either end, and return the
-    /// prompt text for the candidate landed on.
-    pub fn step(&mut self, forward: bool) -> Option<&str> {
-        let len = self.candidates.len();
-        if len == 0 {
-            return None;
-        }
-        let next = match (self.selected, forward) {
-            (None, true) => 0,
-            (None, false) => len - 1,
-            (Some(index), true) => (index + 1) % len,
-            (Some(index), false) => (index + len - 1) % len,
-        };
-        self.selected = Some(next);
-        Some(&self.candidates[next])
-    }
-}
-
-/// The host paths that could finish `text`, the prompt's whole contents.
+/// The list that stands under the mount prompt while it is open: the entries
+/// of the directory being typed into, narrowed as the name after its last `/`
+/// is typed.
 ///
-/// Only the part after the last `:` is completed — the source, or the
-/// destination once one is being typed. A part naming an existing directory
-/// lists what is under it; otherwise it lists the entries of its parent that
-/// start with what follows the last `/`. Hidden entries only appear once a `.`
-/// has been typed for them, as in a shell. A part with no `/` is not a path
-/// the prompt would accept, so nothing completes it.
-pub fn complete(text: &str) -> Completion {
-    let start = text.rfind(':').map_or(0, |colon| colon + 1);
-    let (head, part) = text.split_at(start);
-    // `.` and `..` are directories too, but typed at the end they are the
-    // start of a hidden name rather than somewhere to list.
-    let dotted = part.ends_with("/.") || part.ends_with("/..");
-    let names_directory =
-        (part == "~" || part.contains('/')) && !dotted && expand_home(part).is_dir();
-    let (directory, stem) = if part.ends_with('/') || names_directory {
-        (format!("{}/", part.trim_end_matches('/')), "")
-    } else {
-        match part.rfind('/') {
-            Some(slash) => (part[..=slash].to_owned(), &part[slash + 1..]),
-            None => (String::new(), ""),
+/// Only the part after the last `:` is listed — the source, or the
+/// destination once one is being typed. Which directory is listed is read off
+/// the text alone, up to its last `/`, so the list never jumps into a
+/// directory just because a name typed so far happens to be one: `Tab` is what
+/// goes into it. Narrowing is [`FuzzyList`]'s subsequence matching, best match
+/// first, so `dcs` finds `docs`. Hidden entries are listed only, and alone,
+/// once a `.` has been typed for them, as in a shell. A part with no `/` is not
+/// a path the prompt would accept, so nothing is listed for it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PathList {
+    /// The prompt text the list was last brought up to date with.
+    text: String,
+    /// What stands before the listed directory: up to and including the last
+    /// `:`, kept in front of a chosen entry.
+    head: String,
+    /// The directory listed, as typed and ending in `/`; empty when the part
+    /// being typed is not a path.
+    directory: String,
+    /// Whether the directory's hidden entries are the ones listed.
+    hidden: bool,
+    /// Each entry as the list shows it and matches it: its name, with a
+    /// trailing `/` on a directory.
+    pub rows: Vec<String>,
+    /// The name typed after the last `/`, and the cursor among what it leaves.
+    pub list: FuzzyList,
+}
+
+impl PathList {
+    /// Bring the list up to date with the prompt holding `text`. Nothing is
+    /// listed for the empty text a default list stands for, so the first
+    /// update reads whatever directory `text` names. After that the directory
+    /// is read again only when a different one is named; a different name in
+    /// the same one only narrows, and puts the cursor back on the best match.
+    pub fn update(&mut self, text: &str) {
+        if self.text == text {
+            return;
         }
-    };
-    let mut entries: Vec<(String, bool)> = match directory.is_empty() {
-        true => Vec::new(),
-        false => std::fs::read_dir(expand_home(&directory))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|entry| {
-                let name = entry.file_name().into_string().ok()?;
-                let visible = !name.starts_with('.') || stem.starts_with('.');
-                (visible && name.starts_with(stem)).then(|| (name, entry.path().is_dir()))
-            })
-            .collect(),
-    };
-    entries.sort();
-    Completion {
-        typed: text.to_owned(),
-        candidates: entries
-            .iter()
-            .map(|(name, _)| format!("{head}{directory}{name}"))
-            .collect(),
-        labels: entries
-            .iter()
-            .map(|(name, is_dir)| {
-                if *is_dir {
-                    format!("{name}/")
-                } else {
-                    name.clone()
-                }
-            })
-            .collect(),
-        selected: None,
+        self.text = text.to_owned();
+        let start = text.rfind(':').map_or(0, |colon| colon + 1);
+        let (head, part) = text.split_at(start);
+        let (directory, stem) = match part.rfind('/') {
+            Some(slash) => (&part[..=slash], &part[slash + 1..]),
+            None => ("", ""),
+        };
+        let hidden = stem.starts_with('.');
+        if (head, directory, hidden) != (&self.head[..], &self.directory[..], self.hidden) {
+            self.head = head.to_owned();
+            self.directory = directory.to_owned();
+            self.hidden = hidden;
+            self.rows = entries(directory, hidden);
+        }
+        self.list.query = stem.to_owned();
+        self.list.selected = 0;
     }
+
+    /// The row under the cursor, as the whole prompt text it would leave
+    /// behind: a directory with its trailing `/`, so the list goes on to what
+    /// is under it.
+    pub fn highlighted(&self) -> Option<String> {
+        let row = &self.rows[self.list.selected_row(&self.rows)?];
+        Some(format!("{}{}{row}", self.head, self.directory))
+    }
+
+    /// Whether a name is being typed, rather than the list standing open on a
+    /// whole directory. Only then is the highlighted row what `Enter` means
+    /// when the typed path itself does not exist.
+    pub fn narrowing(&self) -> bool {
+        self.list.is_filtering()
+    }
+}
+
+/// The entries of `directory`, sorted, with a `/` after each directory: the
+/// hidden ones when `hidden`, and otherwise the rest.
+fn entries(directory: &str, hidden: bool) -> Vec<String> {
+    if directory.is_empty() {
+        return Vec::new();
+    }
+    let mut entries: Vec<String> = std::fs::read_dir(expand_home(directory))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            // A leading `.` asks for hidden entries, and only those: matched
+            // fuzzily, it would also find every name with a dot inside.
+            if name.starts_with('.') != hidden {
+                return None;
+            }
+            Some(match entry.path().is_dir() {
+                true => format!("{name}/"),
+                false => name,
+            })
+        })
+        .collect();
+    entries.sort();
+    entries
 }
 
 /// Where a host path turns out to be reachable from inside the sandbox, and on
@@ -378,49 +392,97 @@ mod tests {
         root
     }
 
-    /// A directory lists what is under it, whether or not the `/` was typed;
-    /// a partial name lists its siblings that start with it.
+    /// The list for the prompt holding `text`.
+    fn listed(text: &str) -> PathList {
+        let mut list = PathList::default();
+        list.update(text);
+        list
+    }
+
+    /// The rows `list` shows, best match first.
+    fn shown(list: &PathList) -> Vec<String> {
+        list.list
+            .matches(&list.rows)
+            .into_iter()
+            .map(|found| list.rows[found.index].clone())
+            .collect()
+    }
+
+    /// A directory up to its last `/` is what is listed: all of it, or with a
+    /// name typed after the `/`, the entries that name fuzzily matches, in any
+    /// case and closest first. A name that happens to be a directory is not
+    /// listed into until its `/` is typed.
     #[test]
-    fn completion_lists_paths_under_the_typed_one() {
-        let root = completion_tree("under");
+    fn the_list_is_the_typed_directory_narrowed_by_the_typed_name() {
+        let root = completion_tree("narrow");
         let base = root.display().to_string();
 
-        let under = complete(&base);
-        assert_eq!(under.labels, ["data/", "docs/", "notes.txt"]);
-        assert_eq!(under.candidates[0], format!("{base}/data"));
-        assert_eq!(complete(&format!("{base}/")).candidates, under.candidates);
+        let under = listed(&format!("{base}/"));
+        assert_eq!(shown(&under), ["data/", "docs/", "notes.txt"]);
+        assert_eq!(under.highlighted(), Some(format!("{base}/data/")));
+        assert!(!under.narrowing());
 
-        let partial = complete(&format!("{base}/d"));
-        assert_eq!(partial.labels, ["data/", "docs/"]);
+        let skipped = listed(&format!("{base}/dcs"));
+        assert_eq!(shown(&skipped), ["docs/"]);
+        assert_eq!(skipped.highlighted(), Some(format!("{base}/docs/")));
+        assert!(skipped.narrowing());
 
-        assert_eq!(complete(&format!("{base}/.")).labels, [".hidden/"]);
-        assert!(complete("relative").candidates.is_empty());
+        assert_eq!(shown(&listed(&format!("{base}/NTS"))), ["notes.txt"]);
+        // Both `docs` and `notes.txt` hold an `s`; the shorter one, whose `s`
+        // sits nearer the front, ranks first.
+        assert_eq!(shown(&listed(&format!("{base}/s"))), ["docs/", "notes.txt"]);
+        assert_eq!(shown(&listed(&format!("{base}/data"))), ["data/"]);
+        assert!(shown(&listed(&format!("{base}/zz"))).is_empty());
+        assert!(listed("relative").rows.is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// The destination after a `:` completes on its own, keeping the source.
+    /// Hidden entries are listed once a `.` is typed, and then alone: a dot
+    /// matched fuzzily would otherwise find every name with one inside.
     #[test]
-    fn completion_keeps_what_comes_before_the_last_colon() {
+    fn a_leading_dot_lists_hidden_entries_alone() {
+        let root = completion_tree("hidden");
+        let base = root.display().to_string();
+        assert_eq!(shown(&listed(&format!("{base}/."))), [".hidden/"]);
+        assert!(shown(&listed(&format!("{base}/hid"))).is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Typing on in the same directory narrows without reading it again, and
+    /// puts the cursor back on the best match.
+    #[test]
+    fn typing_on_narrows_and_resets_the_cursor() {
+        let root = completion_tree("update");
+        let base = root.display().to_string();
+        let mut list = listed(&format!("{base}/"));
+        list.list.next(&list.rows);
+        assert_eq!(list.highlighted(), Some(format!("{base}/docs/")));
+
+        list.update(&format!("{base}/n"));
+        assert_eq!(list.list.selected, 0);
+        assert_eq!(list.highlighted(), Some(format!("{base}/notes.txt")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The destination after a `:` is listed on its own, keeping the source.
+    #[test]
+    fn the_list_keeps_what_comes_before_the_last_colon() {
         let root = completion_tree("colon");
         let base = root.display().to_string();
-        let completion = complete(&format!("/srv:{base}/no"));
-        assert_eq!(completion.candidates, [format!("/srv:{base}/notes.txt")]);
+        let list = listed(&format!("/srv:{base}/no"));
+        assert_eq!(list.highlighted(), Some(format!("/srv:{base}/notes.txt")));
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A directory taken from the list arrives with its `/`, which is not part
+    /// of the mount.
     #[test]
-    fn stepping_wraps_in_both_directions() {
-        let mut completion = Completion {
-            typed: "/x/".into(),
-            candidates: vec!["/x/a".into(), "/x/b".into()],
-            labels: vec!["a".into(), "b".into()],
-            selected: None,
-        };
-        assert_eq!(completion.clone().step(false), Some("/x/b"));
-        assert_eq!(completion.step(true), Some("/x/a"));
-        assert_eq!(completion.step(true), Some("/x/b"));
-        assert_eq!(completion.step(true), Some("/x/a"));
-        assert_eq!(completion.step(false), Some("/x/b"));
+    fn a_trailing_slash_is_not_part_of_a_mount() {
+        assert_eq!(
+            parse("/srv/data/:/mnt/data/:rw").unwrap(),
+            parse("/srv/data:/mnt/data:rw").unwrap()
+        );
+        assert_eq!(label(&parse("/srv/data/").unwrap()), "/srv/data (ro)");
     }
 
     /// The client resolves `~` itself: a path left for the server to expand
