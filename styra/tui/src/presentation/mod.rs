@@ -139,8 +139,10 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
     let turn = app.turn_diff_shown();
     let title = if turn {
         "turn diff · T: full diff · b: branch"
+    } else if app.diff_turn_highlight {
+        "diff · H: turn highlight on · T: turn diff · b: branch"
     } else {
-        "diff · T: turn diff · b: branch"
+        "diff · H: highlight turn · T: turn diff · b: branch"
     };
     let mut chrome = panel_chrome(app, Some("diff"));
     chrome.suffix = Some(title.to_owned());
@@ -152,10 +154,23 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
         }
         None => return None,
     };
-    view.host_shortcuts = &[("T", "toggle selected turn / full checkout diff")];
+    view.host_shortcuts = &[
+        ("T", "toggle selected turn / full checkout diff"),
+        (
+            "H",
+            "toggle highlighting the selected turn in the full diff",
+        ),
+    ];
     // The side panel is too narrow to give the files a column; fullscreen
     // puts them back beside the patch.
     view.files_below = app.view != View::CheckoutDiff;
+    if !turn && app.diff_turn_highlight {
+        view.highlight_diff = app
+            .turn_diff
+            .as_ref()
+            .filter(|panel| panel.turn == app.selected_turn())
+            .and_then(|panel| panel.diff.diff.as_deref().ok());
+    }
     view.prompts = app.diff_prompts();
     if turn {
         view.report = None;

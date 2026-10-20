@@ -51,6 +51,8 @@ pub struct CheckoutDiffView<'a> {
     pub label: Option<&'a str>,
     /// `git diff`'s output, or why there is none.
     pub diff: Result<&'a str, &'a str>,
+    /// A selected turn patch whose surviving changes should stand out.
+    pub highlight_diff: Option<&'a str>,
     pub requested_scroll: u16,
     /// Scroll position of the shortcut legend while it is open.
     pub help: Option<u16>,
@@ -112,6 +114,7 @@ impl<'a> CheckoutDiffView<'a> {
             branch_point: false,
             label: None,
             diff: Err("no diff read yet"),
+            highlight_diff: None,
             requested_scroll: 0,
             help: None,
             host_shortcuts: &[],
@@ -844,6 +847,9 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             );
             (limit, requested.min(limit), view.horizontal_scroll)
         };
+    if let (Ok(text), Some(turn)) = (shown, view.highlight_diff) {
+        highlight_turn(frame, view, text, turn, body, effective, side_by_side);
+    }
     if let Ok(text) = shown {
         let lines: Vec<_> = text.lines().collect();
         for index in crate::prompt::marked_rows(text, &view.prompts, view.per_file) {
@@ -979,6 +985,69 @@ fn render_line_cursor(frame: &mut Frame, row: Rect) {
     }
     if let Some(cell) = buffer.cell_mut((row.x, row.y)) {
         cell.set_symbol(LINE_CURSOR_MARKER).set_fg(theme::ACCENT);
+    }
+}
+
+/// Paint after layout so wrapping, hidden removals and horizontal panning
+/// keep their positions. Each side of a split row is attributed separately.
+fn highlight_turn(
+    frame: &mut Frame,
+    view: &CheckoutDiffView<'_>,
+    text: &str,
+    turn: &str,
+    area: Rect,
+    scroll: u16,
+    split: bool,
+) {
+    let marked = crate::highlight::marked_rows(text, turn);
+    let mut paint = |index: usize, rect: Rect| {
+        if !marked.contains(&index) {
+            return;
+        }
+        for x in rect.x..rect.right() {
+            if let Some(cell) = frame.buffer_mut().cell_mut((x, rect.y)) {
+                if cell.bg != theme::DIFF_WORD_ADDED_BACKGROUND
+                    && cell.bg != theme::DIFF_WORD_REMOVED_BACKGROUND
+                    && cell.bg != theme::ACCENT
+                {
+                    cell.set_bg(theme::DIFF_TURN_BACKGROUND);
+                }
+                cell.modifier.insert(Modifier::BOLD);
+            }
+        }
+    };
+    if split {
+        let left = area.width / 2;
+        for (y, row) in crate::split::aligned(text, view.per_file)
+            .into_iter()
+            .skip(usize::from(scroll))
+            .take(usize::from(area.height))
+            .enumerate()
+        {
+            if let crate::split::SplitRow::Pair(old, new) = row {
+                let y = area.y + y as u16;
+                if let Some(new) = new {
+                    paint(new.index, Rect::new(area.x, y, left, 1));
+                }
+                if let Some(old) = old {
+                    paint(
+                        old.index,
+                        Rect::new(area.x + left + 1, y, area.width - left - 1, 1),
+                    );
+                }
+            }
+        }
+    } else {
+        for (y, row) in rows(text, view.hide_removed, view.per_file)
+            .into_iter()
+            .skip(usize::from(scroll))
+            .take(usize::from(area.height))
+            .enumerate()
+        {
+            if let Row::Line(index) = row {
+                paint(index, Rect::new(area.x, area.y + y as u16, area.width, 1));
+            }
+        }
     }
 }
 
@@ -2723,6 +2792,7 @@ index 1111111..2222222 100644
                             diff: Ok(&patch),
                             per_file: true,
                             thumbnail: true,
+                            highlight_diff: None,
                             requested_scroll: scroll,
                             help: None,
                             side_by_side: false,
@@ -2886,6 +2956,7 @@ index 1111111..2222222 100644
                         branch_point: true,
                         label: None,
                         diff,
+                        highlight_diff: None,
                         requested_scroll: scroll,
                         help: None,
                         side_by_side: false,
@@ -3307,6 +3378,7 @@ index 1111111..2222222 100644
                             branch_point: true,
                             label: None,
                             diff: Ok(&text),
+                            highlight_diff: None,
                             requested_scroll: 0,
                             help: None,
                             per_file: true,
@@ -3624,6 +3696,7 @@ index 1111111..2222222 100644
                         branch_point: true,
                         label: None,
                         diff: Ok(DIFF),
+                        highlight_diff: None,
                         requested_scroll: 0,
                         help: None,
                         per_file: false,
@@ -3931,6 +4004,105 @@ index 1111111..2222222 100644
 mod split_tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn turn_highlights_preserve_search_matches() {
+        let patch = "diff --git a/a.rs b/a.rs\n@@ -1 +1 @@\n-old unique\n+new unique\n";
+        for split in [false, true] {
+            let mut terminal = Terminal::new(TestBackend::new(160, 24)).unwrap();
+            let frame = terminal
+                .draw(|frame| {
+                    let view = CheckoutDiffView {
+                        diff: Ok(patch),
+                        highlight_diff: Some(patch),
+                        side_by_side: split,
+                        line_cursor: Some(2),
+                        find: SearchView {
+                            query: Some("unique"),
+                            typing: false,
+                        },
+                        ..CheckoutDiffView::unread(Block::default())
+                    };
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            let found = (0..24)
+                .find_map(|y| {
+                    let row: String = (0..160).map(|x| frame.buffer[(x, y)].symbol()).collect();
+                    let start = row.find("new unique")?;
+                    let x = row[..start].chars().count() as u16 + 4;
+                    Some(&frame.buffer[(x, y)])
+                })
+                .unwrap();
+            // In split view both halves share the cursor's row, whose
+            // current search match uses the inverted search style.
+            assert_eq!(
+                found.bg,
+                if split {
+                    theme::CODE_BACKGROUND
+                } else {
+                    theme::ACCENT
+                }
+            );
+            if split {
+                assert_eq!(found.fg, theme::LIGHT_ACCENT);
+            }
+        }
+    }
+
+    #[test]
+    fn turn_highlights_preserve_all_changes_and_stay_on_the_correct_side() {
+        let patch = "diff --git a/a.rs b/a.rs\n@@ -1,2 +1,2 @@\n-old unique\n+new unique\n-other old\n+other new\n";
+        let turn = "diff --git a/a.rs b/a.rs\n@@ -40 +40 @@\n-old unique\n+new unique\n";
+        for split in [false, true] {
+            for per_file in [false, true] {
+                for hidden in [false, true] {
+                    for enabled in [false, true] {
+                        let mut terminal = Terminal::new(TestBackend::new(160, 32)).unwrap();
+                        let frame = terminal
+                            .draw(|frame| {
+                                let view = CheckoutDiffView {
+                                    diff: Ok(patch),
+                                    highlight_diff: enabled.then_some(turn),
+                                    side_by_side: split,
+                                    per_file,
+                                    hide_removed: hidden,
+                                    ..CheckoutDiffView::unread(Block::default())
+                                };
+                                render(frame, &view, frame.area());
+                            })
+                            .unwrap();
+                        for (code, selected) in [
+                            ("new unique", true),
+                            ("old unique", true),
+                            ("other new", false),
+                            ("other old", false),
+                        ] {
+                            let found = (0..32).find_map(|y| {
+                                let row: String =
+                                    (0..160).map(|x| frame.buffer[(x, y)].symbol()).collect();
+                                let byte = row.find(code)?;
+                                let x = row[..byte].chars().count() as u16
+                                    + code.find(' ').unwrap() as u16
+                                    + 1;
+                                Some(&frame.buffer[(x, y)])
+                            });
+                            if hidden && code.contains("old") {
+                                assert!(found.is_none());
+                            } else {
+                                let cell = found.unwrap_or_else(|| panic!("missing {code}"));
+                                assert_eq!(
+                                    cell.bg == theme::DIFF_TURN_BACKGROUND,
+                                    enabled && selected,
+                                    "{code}: split={split} per_file={per_file} hidden={hidden}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn split_paints_each_side_and_leaves_missing_cells_neutral() {

@@ -162,6 +162,8 @@ pub const CONVERSATION_CHANGE: Color = palette::MAUVE;
 pub const CONVERSATION_CHANGE_BACKGROUND: Color = palette::DARK_MAUVE_TINT;
 /// Behind a diff's added and removed lines: a hint of [`SUCCESS`] and
 /// [`ERROR`], faint enough that the code's own colors still read over it.
+/// Surviving edits from the selected turn in the full diff.
+pub const DIFF_TURN_BACKGROUND: Color = Color::Rgb(62, 58, 30);
 pub const DIFF_ADDED_BACKGROUND: Color = palette::FAINT_GREEN;
 /// Muted word fills provide contrast while preserving syntax colors.
 pub const DIFF_WORD_ADDED_BACKGROUND: Color = palette::EMPHASIS_GREEN;

@@ -93,10 +93,9 @@ impl TurnSnapshot {
 }
 
 impl crate::app::App {
-    /// The turn whose snapshots are wanted: the selected one, while the side
-    /// diff panel shows its turn diff.
+    /// Read the selected turn while its own diff or its highlights are shown.
     fn snapshot_turn(&self) -> Option<u64> {
-        self.turn_diff_shown()
+        (self.turn_diff_shown() || (self.diff_turn_highlight && self.diff_visible()))
             .then(|| self.selected_turn())
             .flatten()
     }
@@ -173,5 +172,25 @@ impl TurnSnapshot {
             })),
             ..Self::new(session_id.into(), turn)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_diff_highlights_request_the_selected_turns_snapshots() {
+        let mut app = crate::presentation::test_support::app("s1");
+        app.push_event(styra_protocol::event::AgentEvent::UserMessage {
+            text: "edit a file".into(),
+        });
+        app.select_first();
+        app.diff_preview = true;
+        assert_eq!(app.snapshot_turn(), None);
+        app.diff_turn_highlight = true;
+        assert_eq!(app.snapshot_turn(), Some(1));
+        app.diff_preview = false;
+        assert_eq!(app.snapshot_turn(), None);
     }
 }

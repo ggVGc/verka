@@ -153,6 +153,12 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
         app.diff_conversation = !app.diff_conversation;
         return;
     }
+    if DIFF_TURN_HIGHLIGHT.matches(key) && !typing_filter {
+        app.diff_turn_highlight = !app.diff_turn_highlight;
+        app.diff_turn = false;
+        app.sync_turn_diff();
+        return;
+    }
     if DIFF_TURN.matches(key) && !typing_filter {
         app.diff_turn = !app.diff_turn;
         app.sync_turn_diff();

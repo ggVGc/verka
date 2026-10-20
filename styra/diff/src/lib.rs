@@ -12,6 +12,7 @@
 pub mod files;
 mod find;
 pub mod git;
+mod highlight;
 pub mod keys;
 pub mod layers;
 mod prompt;

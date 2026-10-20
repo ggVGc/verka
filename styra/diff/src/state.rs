@@ -378,6 +378,7 @@ impl CheckoutDiff {
                 Ok(text) => Ok(text),
                 Err(error) => Err(error),
             },
+            highlight_diff: None,
             requested_scroll: self.scroll.clamped(),
             help: self.help,
             host_shortcuts: &[],

@@ -123,6 +123,7 @@ bindings! { CHECKOUT_DIFF = "Diff";
         => Action::DiffConversation;
     DIFF_BRANCH: [Key::ch('b')] => Action::DiffBranch;
     DIFF_TURN: [Key::ch('T')] => Action::DiffTurn;
+    DIFF_TURN_HIGHLIGHT: [Key::ch('H')] => Action::DiffTurnHighlight;
 }
 
 bindings! { PREVIEW = "Full-screen preview";

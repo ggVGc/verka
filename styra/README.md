@@ -267,6 +267,9 @@ checkout's diff and the selected turn's (`D` takes either fullscreen as it is): 
 — a turn without both, or still running — the file changes the agent reported,
 with the message that started the turn above it. The turn diff follows the
 selection, keeping the view's layout, and has no edit report.
+`H` toggles highlighting the selected turn's matching changes within the full
+diff, following the selection in either layout. Changes since rewritten or
+reverted are not highlighted; ambiguous repeated lines are left unmarked.
 With a file selected in the Files view or a file reference highlighted in the
 conversation, `d` and `D` jump to its patch. References with a line number jump
 to that line when it appears in a changed hunk (including context). If the file

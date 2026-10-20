@@ -305,6 +305,8 @@ pub struct App {
     /// Whether the side diff shows the selected turn's diff rather than the
     /// checkout's; see [`crate::turn_diff`].
     pub diff_turn: bool,
+    /// Highlight the selected turn within the checkout diff.
+    pub diff_turn_highlight: bool,
     /// The turn diff the side diff shows while [`Self::diff_turn`] is set.
     pub turn_diff: Option<crate::turn_diff::TurnDiffPanel>,
     /// Whether the fullscreen diff shows the conversation's latest messages
@@ -612,6 +614,7 @@ impl App {
             message_source: None,
             diff_preview: false,
             diff_turn: false,
+            diff_turn_highlight: false,
             turn_diff: None,
             diff_interaction_focus: false,
             diff_conversation: false,

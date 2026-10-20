@@ -1,6 +1,7 @@
 //! The diff view's turn diff: what the selected message's turn changed, shown
 //! by `styra-diff` as a supplied diff in place of the checkout's whole diff
-//! while `T` has it so, in the side panel or fullscreen.
+//! while `T` has it so, in the side panel or fullscreen. `H` uses the same
+//! turn patch to highlight matching changes within the checkout diff.
 //!
 //! The turn is the stretch of the conversation the selection is in (see
 //! [`crate::timeline::Timeline::conversation_span`]). Where the server took
@@ -20,7 +21,7 @@ use crate::app::App;
 /// The turn diff the panel shows, and the turn it is of, so moving to
 /// another turn starts that turn's diff from its top.
 pub struct TurnDiffPanel {
-    turn: Option<u64>,
+    pub(crate) turn: Option<u64>,
     pub diff: CheckoutDiff,
 }
 
@@ -76,11 +77,12 @@ impl App {
             .find(|event| is_operator_message(event))
     }
 
-    /// Bring the turn diff up to date with the selection and what has been
+    /// Bring the turn diff (also used for full-diff highlights) up to date
+    /// with the selection and what has been
     /// read of its snapshots, keeping the view where it is while the turn
     /// stays the same. Whether anything on screen changed.
     pub(crate) fn sync_turn_diff(&mut self) -> bool {
-        if !self.turn_diff_shown() {
+        if !self.turn_diff_shown() && !(self.diff_turn_highlight && self.diff_visible()) {
             return false;
         }
         let turn = self.selected_turn();
@@ -269,6 +271,51 @@ mod tests {
         app.diff_turn = true;
         app.sync_turn_diff();
         app
+    }
+
+    #[test]
+    fn highlighting_follows_the_turn_while_keeping_the_full_diff_and_scroll() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut app = app_with_two_turns();
+        let full = "diff --git a/src/retry.rs b/src/retry.rs\n@@ -1 +1 @@\n-delay * 3\n+delay * 2\ndiff --git a/src/helper.rs b/src/helper.rs\n@@ -1 +1 @@\n-fn old_name\n+fn new_name\n";
+        app.checkout_diff = Some(CheckoutDiff::supplied(
+            full.into(),
+            Supplied {
+                label: "full diff".into(),
+                root: None,
+            },
+        ));
+        app.checkout_diff.as_mut().unwrap().scroll.offset = 3;
+        crate::input::handle_diff_key(&mut app, KeyEvent::from(KeyCode::Char('H')));
+        assert!(app.diff_turn_highlight);
+        assert!(!app.turn_diff_shown());
+        assert_eq!(shown(&app), full);
+        assert_eq!(app.shown_diff().unwrap().scroll.offset, 3);
+        assert!(app
+            .turn_diff
+            .as_ref()
+            .unwrap()
+            .diff
+            .diff
+            .as_ref()
+            .unwrap()
+            .contains("+delay * 2"));
+        app.select_next_line();
+        assert!(app.sync_turn_diff());
+        assert_eq!(app.turn_diff.as_ref().unwrap().turn, Some(2));
+        assert!(app
+            .turn_diff
+            .as_ref()
+            .unwrap()
+            .diff
+            .diff
+            .as_ref()
+            .unwrap()
+            .contains("+fn new_name"));
+        assert_eq!(shown(&app), full);
+        crate::input::handle_diff_key(&mut app, KeyEvent::from(KeyCode::Char('H')));
+        assert!(!app.diff_turn_highlight);
+        assert_eq!(shown(&app), full);
     }
 
     fn shown(app: &App) -> &str {
