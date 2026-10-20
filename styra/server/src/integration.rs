@@ -1146,6 +1146,93 @@ mod tests {
         );
     }
 
+    #[test]
+    fn comparison_branch_is_persisted_validated_and_can_be_reset() {
+        let fixture = Fixture::new();
+        let initial = fixture.state.diff_base(&fixture.id).unwrap().unwrap();
+        git(fixture.path(), &["branch", "comparison"]);
+        fixture.feature();
+        let id = fixture.id.clone();
+        fixture
+            .state
+            .handle(Request::SetDiffBranch {
+                id: id.clone(),
+                branch: Some(fixture.checkout.branch.clone()),
+            })
+            .unwrap();
+        let chosen = fixture.state.diff_base(&id).unwrap().unwrap();
+        assert_eq!(chosen.base, git(fixture.path(), &["rev-parse", "HEAD"]));
+        assert_eq!(
+            chosen.branch.as_deref(),
+            Some(fixture.checkout.branch.as_str())
+        );
+        assert_eq!(
+            journal::read_session_diff_branch(&fixture.session).unwrap(),
+            chosen.branch
+        );
+        let reopened = ServerState::with_git(
+            SystemGit::shared(),
+            fixture.state.store_root().to_path_buf(),
+        );
+        assert_eq!(reopened.diff_base(&id).unwrap(), Some(chosen.clone()));
+        assert_eq!(
+            fixture
+                .state
+                .session_checkout(&fixture.session, "", &id)
+                .unwrap()
+                .unwrap()
+                .branched_from,
+            fixture.checkout.branched_from
+        );
+        for branch in ["missing", "main~1"] {
+            assert!(fixture
+                .state
+                .handle(Request::SetDiffBranch {
+                    id: id.clone(),
+                    branch: Some(branch.into()),
+                })
+                .is_err());
+            assert_eq!(fixture.state.diff_base(&id).unwrap(), Some(chosen.clone()));
+        }
+        fixture
+            .state
+            .handle(Request::SetDiffBranch {
+                id: id.clone(),
+                branch: None,
+            })
+            .unwrap();
+        assert_eq!(fixture.state.diff_base(&id).unwrap(), Some(initial));
+    }
+
+    #[test]
+    fn comparison_branches_are_sorted_by_commit_date() {
+        let fixture = Fixture::new();
+        git(fixture.path(), &["branch", "z-newest"]);
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["commit", "--allow-empty", "-m", "newest"])
+            .env("GIT_COMMITTER_DATE", "2030-01-01T00:00:00Z")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        git(fixture.path(), &["branch", "-f", "z-newest", "HEAD"]);
+        let Response::DiffBranches(branches) = fixture
+            .state
+            .handle(Request::DiffBranches {
+                id: fixture.id.clone(),
+            })
+            .unwrap()
+        else {
+            panic!("expected branches");
+        };
+        assert_eq!(
+            &branches[..2],
+            &[fixture.checkout.branch.clone(), "z-newest".into()]
+        );
+        assert_eq!(branches.last().unwrap(), "main");
+    }
+
     struct Fixture {
         _directory: tempfile::TempDir,
         host: PathBuf,

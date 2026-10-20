@@ -447,6 +447,21 @@ M.types.Request = {
         { name = "id", required = true, type = { kind = "string" } },
       },
     } },
+    { name = "diff_branches", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
+    { name = "set_diff_branch", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+        { name = "branch", required = true, type = { kind = "optional", inner = { kind = "string" } } },
+      },
+    } },
     { name = "diff_base", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -525,6 +540,7 @@ M.types.Response = {
     { name = "interaction_driva", payload = { kind = "newtype", type = { kind = "ref", name = "DrivaOptions" } } },
     { name = "snapshot_turn_diff", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "ref", name = "TurnDiff" } } } },
     { name = "diff_base", payload = { kind = "newtype", type = { kind = "optional", inner = { kind = "ref", name = "DiffBase" } } } },
+    { name = "diff_branches", payload = { kind = "newtype", type = { kind = "list", item = { kind = "string" } } } },
   },
 }
 
@@ -2067,7 +2083,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "integrate_session", "generate_integration_message", "generate_edit_report", "edit_report", "session_integration_result", "rebase_session", "retarget_session", "session_branch_history", "restore_session_branch", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "start_project_action", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "diff_base", "snapshot_turn_diff", "shutdown" }
+M.enums.Request = { "integrate_session", "generate_integration_message", "generate_edit_report", "edit_report", "session_integration_result", "rebase_session", "retarget_session", "session_branch_history", "restore_session_branch", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "start_project_action", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "diff_branches", "set_diff_branch", "diff_base", "snapshot_turn_diff", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   INTEGRATE_SESSION = "integrate_session",
@@ -2138,12 +2154,14 @@ M.Request = {
   INTERACTION_ACTIONS = "interaction_actions",
   INTERACTION_PROCESSES = "interaction_processes",
   INTERACTION_DRIVA = "interaction_driva",
+  DIFF_BRANCHES = "diff_branches",
+  SET_DIFF_BRANCH = "set_diff_branch",
   DIFF_BASE = "diff_base",
   SNAPSHOT_TURN_DIFF = "snapshot_turn_diff",
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "rebase_started", "session_branch_history", "session_rebase_status", "integration_started", "integration_message", "edit_report", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "project_action_started", "answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff", "diff_base" }
+M.enums.Response = { "rebase_started", "session_branch_history", "session_rebase_status", "integration_started", "integration_message", "edit_report", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "project_action_started", "answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff", "diff_base", "diff_branches" }
 --- Wire spellings of `Response`.
 M.Response = {
   REBASE_STARTED = "rebase_started",
@@ -2199,6 +2217,7 @@ M.Response = {
   INTERACTION_DRIVA = "interaction_driva",
   SNAPSHOT_TURN_DIFF = "snapshot_turn_diff",
   DIFF_BASE = "diff_base",
+  DIFF_BRANCHES = "diff_branches",
 }
 
 M.enums.WireResponse = { "ok", "error" }
@@ -3482,7 +3501,25 @@ function M.request.interaction_driva(data)
   return M.build("interaction_driva", data)
 end
 
---- What checkout diff mode compares the working tree with: where the
+--- Local comparison branches, newest tip commit first.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.diff_branches(data)
+  return M.build("diff_branches", data)
+end
+
+--- Save the comparison branch; None restores the automatic baseline.
+---
+--- Fields of `data`:
+---   id      string
+---   branch  string|null
+function M.request.set_diff_branch(data)
+  return M.build("set_diff_branch", data)
+end
+
+--- What checkout diff mode compares the working tree with: the saved
+--- comparison branch’s merge base with HEAD, or by default where the
 --- interaction's branch would be integrated — the merge base of its
 --- checkout and the branch it targets, which a rebase moves on — or, for
 --- a checkout with no target branch, its first snapshot rebuilt as a Git

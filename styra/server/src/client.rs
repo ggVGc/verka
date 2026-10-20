@@ -2,7 +2,6 @@
 //!
 //! Every call is a JSON exchange over a Unix domain socket with the daemon.
 
-use crate::protocol::{ProjectAction, ProjectActionSession};
 use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DiffBase, DrivaOptions, EditReport,
     EditReportFile, Health, LaunchPolicy, LoadedInteraction, ModelSummary, PlanSession,
@@ -14,6 +13,7 @@ use crate::protocol::{
     CompletionState, ComposerState, InteractionQuery, InteractionSummary, SessionSummary,
     WorkspaceSummary,
 };
+use crate::protocol::{ProjectAction, ProjectActionSession};
 use anyhow::{bail, Context, Result};
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
@@ -746,8 +746,26 @@ impl Client {
         }
     }
 
-    /// What checkout diff mode compares with: the merge base with the branch
-    /// the interaction will be integrated into, or else its first snapshot.
+    /// Local comparison branches ordered by their most recent commit.
+    pub fn diff_branches(&self, id: &str) -> Result<Vec<String>> {
+        match self.request(Request::DiffBranches { id: id.to_owned() })? {
+            Response::DiffBranches(value) => Ok(value),
+            other => unexpected("diff_branches", other),
+        }
+    }
+
+    /// Persist the comparison preference, or restore the automatic baseline.
+    pub fn set_diff_branch(&self, id: &str, branch: Option<String>) -> Result<()> {
+        match self.request(Request::SetDiffBranch {
+            id: id.to_owned(),
+            branch,
+        })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("set_diff_branch", other),
+        }
+    }
+
+    /// Resolve the saved comparison branch or automatic baseline.
     pub fn diff_base(&self, id: &str) -> Result<Option<DiffBase>> {
         match self.request(Request::DiffBase { id: id.to_owned() })? {
             Response::DiffBase(value) => Ok(value),
@@ -1000,6 +1018,8 @@ fn request_operation(request: &Request) -> &'static str {
         Request::InteractionActions { .. } => "interaction_actions",
         Request::InteractionProcesses { .. } => "interaction_processes",
         Request::InteractionDriva { .. } => "interaction_driva",
+        Request::DiffBranches { .. } => "diff_branches",
+        Request::SetDiffBranch { .. } => "set_diff_branch",
         Request::DiffBase { .. } => "diff_base",
         Request::SnapshotTurnDiff { .. } => "snapshot_turn_diff",
         Request::Shutdown => "shutdown",

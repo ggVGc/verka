@@ -727,7 +727,17 @@ pub enum Request {
     InteractionDriva {
         id: String,
     },
-    /// What checkout diff mode compares the working tree with: where the
+    /// Local comparison branches, newest tip commit first.
+    DiffBranches {
+        id: String,
+    },
+    /// Save the comparison branch; None restores the automatic baseline.
+    SetDiffBranch {
+        id: String,
+        branch: Option<String>,
+    },
+    /// What checkout diff mode compares the working tree with: the saved
+    /// comparison branch’s merge base with HEAD, or by default where the
     /// interaction's branch would be integrated — the merge base of its
     /// checkout and the branch it targets, which a rebase moves on — or, for
     /// a checkout with no target branch, its first snapshot rebuilt as a Git
@@ -872,6 +882,7 @@ pub enum Response {
     SnapshotTurnDiff(Option<TurnDiff>),
     /// `None` when the Session has neither a target branch nor snapshots.
     DiffBase(Option<DiffBase>),
+    DiffBranches(Vec<String>),
 }
 
 /// Response envelope returned for every syntactically valid connection.

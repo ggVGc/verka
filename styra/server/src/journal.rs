@@ -66,6 +66,8 @@ struct StoredSessionMeta {
     /// operator's answer has to survive the interaction being resumed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auto_commit: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diff_branch: Option<String>,
     /// The linked checkout and branch this Session works in, for a Session
     /// launched with one. `None` means it works in the Workspace directory
     /// itself — or that it predates this field, which is why a reader that
@@ -640,6 +642,7 @@ fn write_session_meta(
         contract: None,
         auto_retry: false,
         auto_commit: None,
+        diff_branch: None,
         checkout: None,
         previous_branches: Vec::new(),
         completed: CompletionState::Active,
@@ -1040,6 +1043,22 @@ pub fn store_session_auto_retry(path: &Path, auto_retry: bool) -> Result<()> {
     }
     stored.auto_retry = auto_retry;
     write_stored_session_meta(&directory, &stored)
+}
+
+/// The comparison branch saved for this interaction’s diff view.
+pub fn read_session_diff_branch(path: &Path) -> Result<Option<String>> {
+    Ok(read_stored_session_meta(path)?.diff_branch)
+}
+
+pub fn store_session_diff_branch(path: &Path, branch: Option<String>) -> Result<()> {
+    let directory = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+    let mut stored = read_stored_session_meta(directory)?;
+    stored.diff_branch = branch;
+    write_stored_session_meta(directory, &stored)
 }
 
 /// Whether an interaction of this Session commits what each turn leaves

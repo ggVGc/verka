@@ -296,6 +296,7 @@ pub struct App {
     /// The diff [`View::CheckoutDiff`] shows. Kept after the view is left, but
     /// read afresh each time it is opened.
     pub checkout_diff: Option<styra_diff::CheckoutDiff>,
+    pub diff_branch_picker: Option<crate::checkout_diff::BranchPicker>,
     /// Temporarily use the preview pane for the diff without changing the
     /// operator's preview choice.
     pub diff_preview: bool,
@@ -607,6 +608,7 @@ impl App {
             auto_commit: false,
             transcript: Scroll::default(),
             checkout_diff: None,
+            diff_branch_picker: None,
             message_source: None,
             diff_preview: false,
             diff_turn: false,

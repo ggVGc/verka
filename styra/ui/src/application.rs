@@ -126,6 +126,7 @@ pub struct ApplicationOverlays<'a> {
     pub link_menu: Option<overlays::LinkMenuView<'a>>,
     /// The current window's actions, searchable, opened with Space.
     pub action_menu: Option<overlays::ActionMenuView<'a>>,
+    pub diff_branches: Option<crate::fuzzy_list::FuzzyListView<'a>>,
     /// The Workspaces with live work, searchable, opened with `v`.
     pub workspace_jump: Option<overlays::WorkspaceJumpView<'a>>,
     pub tags: Option<overlays::TagPickerView<'a>>,
@@ -272,6 +273,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     }
     if let Some(tags) = view.overlays.tags {
         overlays::render_tags(frame, tags);
+    }
+    if let Some(picker) = &view.overlays.diff_branches {
+        overlays::render_centered_fuzzy_list(frame, picker, frame.area());
     }
     if let Some(menu) = view.overlays.action_menu {
         overlays::render_action_menu(frame, menu, frame.area());

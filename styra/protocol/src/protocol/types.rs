@@ -214,8 +214,8 @@ pub struct TurnDiff {
 pub struct DiffBase {
     /// The commit or snapshot tree to diff the working tree against.
     pub base: String,
-    /// The branch the interaction will be integrated into, `base` being its
-    /// merge base with the checkout; `None` when `base` is the first snapshot.
+    /// The saved comparison branch, or the integration target by default,
+    /// with `base` its merge base with the checkout; `None` for the first snapshot.
     pub branch: Option<String>,
 }
 

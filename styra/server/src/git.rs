@@ -77,6 +77,10 @@ pub trait Git: Send + Sync {
     fn rebase(&self, _checkout: &Path, _source: &str) -> Result<bool> {
         anyhow::bail!("this Git backend does not support rebasing")
     }
+    /// Local branches ordered by their tip's committer date, newest first.
+    fn diff_branches(&self, _checkout: &Path) -> Result<Vec<String>> {
+        anyhow::bail!("this Git backend cannot list comparison branches")
+    }
     fn local_branch_commit(&self, checkout: &Path, branch: &str) -> Result<Option<String>> {
         self.commit(checkout, &format!("refs/heads/{branch}"))
     }
@@ -326,6 +330,21 @@ impl Git for SystemGit {
             Err(_) if self.rebase_in_progress(checkout)? => Ok(false),
             Err(error) => Err(error),
         }
+    }
+
+    fn diff_branches(&self, checkout: &Path) -> Result<Vec<String>> {
+        Ok(Invocation::new(checkout, "list comparison branches")
+            .args([
+                "for-each-ref",
+                "--sort=refname",
+                "--sort=-committerdate",
+                "--format=%(refname:strip=2)",
+                "refs/heads/",
+            ])
+            .output()?
+            .lines()
+            .map(str::to_owned)
+            .collect())
     }
 
     fn local_branch_commit(&self, checkout: &Path, branch: &str) -> Result<Option<String>> {

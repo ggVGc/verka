@@ -1686,13 +1686,29 @@ impl ServerState {
         Ok(Some(checkout))
     }
 
-    /// What checkout diff mode compares with. A checkout with a branch to
+    /// What checkout diff mode compares with. A saved comparison branch
+    /// takes precedence over the integration target. A checkout with a branch to
     /// integrate into is measured from its merge base with that branch, as
     /// integration measures it, so a rebase moves the base along; one without
     /// is measured from its first snapshot.
     fn diff_base(&self, id: &str) -> Result<Option<crate::protocol::DiffBase>> {
         let summary = self.stored_summary(id)?;
         let checkout = self.session_checkout(&summary.path, &summary.workspace_id, id)?;
+        if let Some(branch) = journal::read_session_diff_branch(&summary.path)? {
+            let path = checkout
+                .as_ref()
+                .and_then(|checkout| checkout.path.as_deref())
+                .ok_or_else(|| anyhow::anyhow!("this interaction has no Git checkout"))?;
+            let tip = self
+                .inner
+                .git
+                .local_branch_commit(path, &branch)?
+                .ok_or_else(|| anyhow::anyhow!("comparison branch {branch} no longer exists"))?;
+            return Ok(Some(crate::protocol::DiffBase {
+                base: self.inner.git.merge_base(path, &tip, "HEAD")?,
+                branch: Some(branch),
+            }));
+        }
         if let Some(checkout) = checkout {
             let target = checkout
                 .branched_from
@@ -4141,6 +4157,7 @@ impl ServerState {
             | Request::InteractionActions { id }
             | Request::InteractionProcesses { id }
             | Request::InteractionDriva { id }
+            | Request::DiffBranches { id }
             | Request::DiffBase { id }
             | Request::SnapshotTurnDiff { id, .. } => Some(id.as_str()),
             _ => match crate::actions::scope(&request) {
@@ -4163,6 +4180,36 @@ impl ServerState {
             }
         }
         match request {
+            Request::DiffBranches { id } => {
+                let summary = self.stored_summary(&id)?;
+                let checkout = self.session_checkout(&summary.path, &summary.workspace_id, &id)?;
+                let path = checkout
+                    .as_ref()
+                    .and_then(|checkout| checkout.path.as_deref())
+                    .ok_or_else(|| anyhow::anyhow!("this interaction has no Git checkout"))?;
+                Ok(Response::DiffBranches(self.inner.git.diff_branches(path)?))
+            }
+            Request::SetDiffBranch { id, branch } => {
+                let summary = self.stored_summary(&id)?;
+                if let Some(branch) = branch.as_deref() {
+                    let checkout =
+                        self.session_checkout(&summary.path, &summary.workspace_id, &id)?;
+                    let path = checkout
+                        .as_ref()
+                        .and_then(|checkout| checkout.path.as_deref())
+                        .ok_or_else(|| anyhow::anyhow!("this interaction has no Git checkout"))?;
+                    let tip = self
+                        .inner
+                        .git
+                        .local_branch_commit(path, branch)?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("comparison branch {branch} does not exist")
+                        })?;
+                    self.inner.git.merge_base(path, &tip, "HEAD")?;
+                }
+                journal::store_session_diff_branch(&summary.path, branch)?;
+                Ok(Response::Accepted)
+            }
             Request::DiffBase { id } => Ok(Response::DiffBase(self.diff_base(&id)?)),
             Request::SnapshotTurnDiff { id, turn } => {
                 let summary = self.stored_summary(&id)?;

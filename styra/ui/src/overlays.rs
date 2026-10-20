@@ -226,7 +226,11 @@ pub fn render_workspace_jump(frame: &mut Frame, jump: WorkspaceJumpView<'_>, fra
 }
 
 /// A narrowing list in a box at the middle of the frame.
-fn render_centered_fuzzy_list(frame: &mut Frame, view: &FuzzyListView<'_>, frame_area: Rect) {
+pub(crate) fn render_centered_fuzzy_list(
+    frame: &mut Frame,
+    view: &FuzzyListView<'_>,
+    frame_area: Rect,
+) {
     // Sized to every row rather than the matches, so the box does not jump
     // about as the query narrows it.
     let height = (view.rows.len() as u16)

@@ -138,9 +138,9 @@ pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrom
 fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
     let turn = app.turn_diff_shown();
     let title = if turn {
-        "turn diff · T: full diff"
+        "turn diff · T: full diff · b: branch"
     } else {
-        "diff · T: turn diff"
+        "diff · T: turn diff · b: branch"
     };
     let mut chrome = panel_chrome(app, Some("diff"));
     chrome.suffix = Some(title.to_owned());
@@ -738,6 +738,16 @@ fn draw_main(
             insert,
             branch,
             link_menu,
+            diff_branches: app.diff_branch_picker.as_ref().map(|picker| {
+                styra_ui::fuzzy_list::FuzzyListView {
+                    title: " Comparison branch · newest commits first ",
+                    rows: &picker.rows,
+                    list: &picker.list,
+                    focused: true,
+                    empty_note: "no matching branches",
+                    hint: " type to narrow · ↑/↓ choose · Enter selects · Esc cancels ",
+                }
+            }),
             action_menu: app
                 .action_menu
                 .as_ref()

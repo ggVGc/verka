@@ -28,6 +28,7 @@ pub(crate) enum Action {
     GlobalDiffFullscreen,
     DiffConversation,
     DiffTurn,
+    DiffBranch,
     GlobalInteractions,
     GlobalOverview,
     GlobalSessions,
@@ -333,6 +334,7 @@ impl Action {
             }
             Self::GlobalDiffFullscreen => "the same diff fullscreen; Esc returns to events",
             Self::DiffConversation => "switch the header for the last 3 messages and back",
+            Self::DiffBranch => "choose and save the interaction’s comparison branch",
             Self::DiffTurn => "switch between the checkout's diff and the selected turn's",
             Self::GlobalInteractions => "live interactions",
             Self::GlobalOverview => "overview: every running and idle interaction as a grid",

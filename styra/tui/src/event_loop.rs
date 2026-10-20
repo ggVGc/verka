@@ -656,7 +656,9 @@ fn load_cursored_interaction(
 }
 
 fn cursored_interaction_is_loadable(app: &App) -> bool {
-    app.tag_picker.is_none() && app.interactions.due(&app.session_id).is_some()
+    app.tag_picker.is_none()
+        && app.diff_branch_picker.is_none()
+        && app.interactions.due(&app.session_id).is_some()
 }
 
 /// Make `interaction` current. Its complete state is loaded on the event-loop
@@ -1976,6 +1978,37 @@ fn run_rounds(
             continue;
         }
 
+        // The comparison picker owns typed text and navigation while open.
+        if let Some(picker) = app.diff_branch_picker.as_mut() {
+            match picker.handle_key(key) {
+                crate::checkout_diff::BranchChoice::Stay => {}
+                crate::checkout_diff::BranchChoice::Cancel => app.diff_branch_picker = None,
+                crate::checkout_diff::BranchChoice::Select(branch) => {
+                    let id = picker.id.clone();
+                    let result = client.set_diff_branch(&id, branch).and_then(|()| {
+                        let interaction = app
+                            .interactions
+                            .items
+                            .iter()
+                            .find(|row| row.id == id)
+                            .ok_or_else(|| anyhow::anyhow!("no interaction to diff"))?;
+                        crate::checkout_diff::target(client, interaction)
+                    });
+                    match result {
+                        Ok(target) => {
+                            app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
+                            app.diff_turn = false;
+                            app.diff_branch_picker = None;
+                            edit_reports.load(app, client);
+                        }
+                        Err(error) => {
+                            app.show_error(format!("could not change comparison branch: {error:#}"))
+                        }
+                    }
+                }
+            }
+            continue;
+        }
         // The action menu is typed at, so while it is open it owns every key
         // but the `?` above. What it runs is pressed back through this loop,
         // so a command chosen from it takes the same path as its own key.
@@ -2254,6 +2287,22 @@ fn run_rounds(
             continue;
         }
         if app.diff_focused() {
+            if keys::DIFF_BRANCH.matches(key)
+                && !app.shown_diff().is_some_and(|diff| diff.search.typing())
+            {
+                match client.diff_branches(&app.session_id) {
+                    Ok(branches) => {
+                        app.diff_branch_picker = Some(crate::checkout_diff::BranchPicker::new(
+                            app.session_id.clone(),
+                            branches,
+                        ))
+                    }
+                    Err(error) => {
+                        app.show_error(format!("could not list comparison branches: {error:#}"))
+                    }
+                }
+                continue;
+            }
             input::handle_diff_key(app, key);
             continue;
         }
@@ -2459,9 +2508,7 @@ fn run_rounds(
                     // Completion is a Session property the server owns, so the
                     // row is still listed and the server is what says so: take
                     // its word for the new state rather than writing one here.
-                    if let Ok(interactions) =
-                        client.list_interactions(&app.interactions_query())
-                    {
+                    if let Ok(interactions) = client.list_interactions(&app.interactions_query()) {
                         app.interactions.refresh(interactions);
                     }
                     let workspace_id = app.workspace.id.clone();

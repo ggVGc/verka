@@ -247,3 +247,19 @@ saved target/base and saves the branch being left in history. Retargeting and
 restoring require an idle interaction, committed changes, no queued messages,
 and a checkout that is not shared by another active interaction. Finish an
 ongoing rebase before changing branches. Sealed sessions cannot change branches.
+
+## Checkout comparison branches
+
+In an interaction’s diff view, `b` opens a fuzzy branch picker. Local branches
+are ordered by their tip commit’s committer date, newest first; filtering
+preserves that order. “Automatic” restores the integration target or first
+snapshot baseline.
+
+`diff_branches` takes `{id}` and returns a `diff_branches` response containing
+branch names in that order. `set_diff_branch` takes `{id, branch}`, where
+`branch` is a local branch name or `null` for automatic, and returns
+`accepted`. The selection is saved with the session and survives reopening
+or resuming its interaction. It changes the diff comparison only.
+
+`diff_base` resolves the selected branch’s merge base with the checkout’s
+HEAD. An invalid, missing, or unrelated branch is rejected before saving.

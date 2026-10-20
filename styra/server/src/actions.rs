@@ -57,6 +57,7 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
         | Request::InteractionActions { .. }
         | Request::InteractionProcesses { .. }
         | Request::InteractionDriva { .. }
+        | Request::DiffBranches { .. }
         | Request::DiffBase { .. }
         | Request::SnapshotTurnDiff { .. } => Scope::Read,
         Request::CreateSession(request) => match request.checkout_from.as_deref() {
@@ -72,6 +73,7 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
         Request::RenameSession(request) => Scope::Session(&request.id),
         Request::SetSessionTags(request) => Scope::Session(&request.id),
         Request::CreateSessionWorktree { id }
+        | Request::SetDiffBranch { id, .. }
         | Request::RetargetSession { id, .. }
         | Request::RestoreSessionBranch { id, .. }
         | Request::RebaseSession { id }

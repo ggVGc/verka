@@ -121,6 +121,7 @@ bindings! { READING = "Raw, messages, log, quota, processes, and transcript";
 bindings! { CHECKOUT_DIFF = "Diff";
     DIFF_CONVERSATION: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)] ("fullscreen")
         => Action::DiffConversation;
+    DIFF_BRANCH: [Key::ch('b')] => Action::DiffBranch;
     DIFF_TURN: [Key::ch('T')] => Action::DiffTurn;
 }
 

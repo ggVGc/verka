@@ -457,6 +457,21 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}}
           ]
         }},
+        %{name: "diff_branches", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
+        %{name: "set_diff_branch", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}},
+            %{name: "branch", required: true, type: %{kind: :optional, inner: %{kind: :string}}}
+          ]
+        }},
         %{name: "diff_base", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -534,7 +549,8 @@ defmodule Styra.Protocol do
         %{name: "interaction_processes", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :list, item: %{kind: :ref, name: "SandboxProcess"}}}}},
         %{name: "interaction_driva", payload: %{kind: :newtype, type: %{kind: :ref, name: "DrivaOptions"}}},
         %{name: "snapshot_turn_diff", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "TurnDiff"}}}},
-        %{name: "diff_base", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "DiffBase"}}}}
+        %{name: "diff_base", payload: %{kind: :newtype, type: %{kind: :optional, inner: %{kind: :ref, name: "DiffBase"}}}},
+        %{name: "diff_branches", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :string}}}}
       ]
     },
 
@@ -2155,6 +2171,8 @@ defmodule Styra.Protocol do
     "interaction_actions",
     "interaction_processes",
     "interaction_driva",
+    "diff_branches",
+    "set_diff_branch",
     "diff_base",
     "snapshot_turn_diff",
     "shutdown"
@@ -3534,7 +3552,33 @@ defmodule Styra.Protocol do
     def interaction_driva!(data), do: Styra.Protocol.build!("interaction_driva", data)
 
     @doc ~S"""
-    What checkout diff mode compares the working tree with: where the
+    Local comparison branches, newest tip commit first.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def diff_branches(data), do: Styra.Protocol.build("diff_branches", data)
+
+    @doc "`diff_branches/1`, raising on a request the server would refuse."
+    def diff_branches!(data), do: Styra.Protocol.build!("diff_branches", data)
+
+    @doc ~S"""
+    Save the comparison branch; None restores the automatic baseline.
+
+    Fields of `data`:
+
+      * `id    `  string
+      * `branch`  string|null
+    """
+    def set_diff_branch(data), do: Styra.Protocol.build("set_diff_branch", data)
+
+    @doc "`set_diff_branch/1`, raising on a request the server would refuse."
+    def set_diff_branch!(data), do: Styra.Protocol.build!("set_diff_branch", data)
+
+    @doc ~S"""
+    What checkout diff mode compares the working tree with: the saved
+    comparison branch’s merge base with HEAD, or by default where the
     interaction's branch would be integrated — the merge base of its
     checkout and the branch it targets, which a rebase moves on — or, for
     a checkout with no target branch, its first snapshot rebuilt as a Git
@@ -3655,7 +3699,8 @@ defmodule Styra.Protocol.Response do
     {:interaction_processes, "interaction_processes"},
     {:interaction_driva, "interaction_driva"},
     {:snapshot_turn_diff, "snapshot_turn_diff"},
-    {:diff_base, "diff_base"}
+    {:diff_base, "diff_base"},
+    {:diff_branches, "diff_branches"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -3799,6 +3844,8 @@ defmodule Styra.Protocol.Response do
   `None` when the Session has neither a target branch nor snapshots.
   """
   def diff_base, do: "diff_base"
+
+  def diff_branches, do: "diff_branches"
 end
 
 defmodule Styra.Protocol.WireResponse do
