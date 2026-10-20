@@ -1447,9 +1447,6 @@ pub fn in_main_checkout(interaction: &InteractionSummary, workspaces: &[Workspac
     }
 }
 
-/// Newest first, by creation time alone. What an Interaction is doing changes
-/// several times a turn, and a list re-sorted by it moves rows out from under
-/// the cursor.
 /// Whether `now` has something to show that `before`, the same row's last
 /// listing, did not: it changed what it is doing, or its agent said something
 /// new. Every event is not news — a working row's indicator already steps with
@@ -1459,7 +1456,13 @@ fn has_news(before: &InteractionSummary, now: &InteractionSummary) -> bool {
 }
 
 fn sort_interactions(interactions: &mut [InteractionSummary]) {
-    interactions.sort_by_key(|interaction| std::cmp::Reverse(created_at_ms(interaction)));
+    // Keep paused interactions below the others, newest first within each group.
+    interactions.sort_by_key(|interaction| {
+        (
+            interaction.activity_reason == Some(styra_protocol::InteractionActivityReason::Paused),
+            std::cmp::Reverse(created_at_ms(interaction)),
+        )
+    });
 }
 
 /// The creation time the server embeds as the leading field of an Interaction
@@ -1589,7 +1592,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn live_interactions_open_newest_first_whatever_they_are_doing() {
+    fn live_interactions_open_newest_first_with_paused_last() {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
@@ -1632,6 +1635,22 @@ pub(crate) mod tests {
                 "0000000000300-1-0",
                 "0000000000200-1-0",
                 "0000000000100-1-0"
+            ]
+        );
+
+        let mut items = live.items.clone();
+        items[0].activity_reason = Some(styra_protocol::InteractionActivityReason::Paused);
+        let mut newer_paused = interaction("0000000000400-1-0", InteractionActivity::Stopped);
+        newer_paused.activity_reason = Some(styra_protocol::InteractionActivityReason::Paused);
+        items.push(newer_paused);
+        live.refresh(items);
+        assert_eq!(
+            order(&live),
+            [
+                "0000000000200-1-0",
+                "0000000000100-1-0",
+                "0000000000400-1-0",
+                "0000000000300-1-0"
             ]
         );
     }

@@ -291,6 +291,9 @@ defmodule StyraWebWeb.DashboardLive do
   end
 
   defp apply_snapshot(socket, {:ok, snapshot}) do
+    interactions =
+      Enum.sort_by(snapshot.interactions, &(&1["activity_reason"] == %{"reason" => "paused"}))
+
     selected_still_exists? =
       is_nil(snapshot.selected_id) or
         Enum.any?(snapshot.interactions, &(&1["id"] == snapshot.selected_id))
@@ -309,7 +312,7 @@ defmodule StyraWebWeb.DashboardLive do
         cursor: snapshot.cursor,
         updates_empty?: socket.assigns.updates_empty? and snapshot.updates == []
       )
-      |> stream(:interactions, snapshot.interactions, reset: true)
+      |> stream(:interactions, interactions, reset: true)
       |> stream(:updates, snapshot.updates, at: -1, limit: -@max_updates)
     else
       socket
@@ -325,7 +328,7 @@ defmodule StyraWebWeb.DashboardLive do
         cursor: 0,
         updates_empty?: true
       )
-      |> stream(:interactions, snapshot.interactions, reset: true)
+      |> stream(:interactions, interactions, reset: true)
       |> stream(:updates, [], reset: true)
     end
   end
