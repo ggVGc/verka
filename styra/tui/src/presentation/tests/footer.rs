@@ -134,10 +134,12 @@ mod tests {
     }
 
     #[test]
-    fn working_directory_opens_the_bottom_row() {
+    fn working_directory_is_shown_on_the_bottom_row() {
         let mut app = test_support::app("s1");
         app.workspace.enter("/workspace".into());
-        let bottom_row = test_support::screen_sized(&app, 40, 10).row(9);
-        assert!(bottom_row.starts_with("/workspace"), "{bottom_row}");
+        // Feature-branch builds show their branch before the directory. Leave
+        // room for that label and check the directory's row, not its column.
+        let bottom_row = test_support::screen(&app).row(19);
+        assert!(bottom_row.contains("/workspace"), "{bottom_row}");
     }
 }

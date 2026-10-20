@@ -1375,7 +1375,7 @@ pub(crate) fn temporary_directory(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "styra-git-{tag}-{}-{}",
         std::process::id(),
-        crate::journal::now_ms()
+        uuid::Uuid::new_v4()
     ))
 }
 
