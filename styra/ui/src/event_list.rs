@@ -1325,7 +1325,8 @@ fn build_entry_rows(
     wrapped
 }
 
-/// Tint operator messages, and mark a selected row, by backing its first row
+/// Tint operator messages and conversation changes, and mark a selected row,
+/// by backing its first row
 /// only. An expanded entry's detail body keeps the plain background, so either
 /// cue reads as one line rather than as a block.
 /// The style sits on the [`Line`], not on its spans, so the fill runs to the
@@ -1335,6 +1336,8 @@ fn with_entry_backdrop(line: Line<'static>, entry: &EventEntry<'_>) -> Line<'sta
         Some(theme::SELECTION_BACKGROUND)
     } else if matches!(entry.event, AgentEvent::UserMessage { .. }) {
         Some(theme::USER_MESSAGE_BACKGROUND)
+    } else if is_conversation_change(entry.event) {
+        Some(theme::CONVERSATION_CHANGE_BACKGROUND)
     } else {
         None
     };
@@ -1782,6 +1785,15 @@ pub enum SummaryContext {
     Preview,
 }
 
+fn is_conversation_change(event: &AgentEvent) -> bool {
+    matches!(
+        event,
+        AgentEvent::Branched { .. }
+            | AgentEvent::ProviderChanged { .. }
+            | AgentEvent::ModelChanged { .. }
+    )
+}
+
 /// Render an entry's header for its display context. Expansion state and
 /// detail availability come from the entry itself.
 pub fn summary_line(
@@ -1790,11 +1802,18 @@ pub fn summary_line(
     protocol: Protocol,
 ) -> Line<'static> {
     let tag = entry.event.tag();
+    let conversation_change = is_conversation_change(entry.event);
     let is_conversation = matches!(
         entry.event,
         AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
     );
-    let row_lead = if is_conversation { "" } else { "  " };
+    let row_lead = if is_conversation {
+        ""
+    } else if conversation_change {
+        "◆ "
+    } else {
+        "  "
+    };
     let display_tag = match entry.event {
         AgentEvent::UserMessage { .. } => "»",
         AgentEvent::AgentMessage { .. } => "«",
@@ -1859,6 +1878,13 @@ pub fn summary_line(
             "✓ ",
             Style::default().fg(theme::SUCCESS),
         ),
+        _ if conversation_change => (
+            Style::default()
+                .fg(theme::CONVERSATION_CHANGE)
+                .add_modifier(Modifier::BOLD),
+            "",
+            Style::default(),
+        ),
         _ => (
             Style::default().fg(message_text_color(tag)),
             "",
@@ -1878,7 +1904,7 @@ pub fn summary_line(
         summary_style
     };
     let mut spans = vec![
-        Span::raw(row_lead),
+        Span::styled(row_lead, Style::default().fg(theme::CONVERSATION_CHANGE)),
         Span::styled(
             if is_conversation {
                 format!("{display_tag} ")

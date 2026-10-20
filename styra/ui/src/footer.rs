@@ -120,7 +120,7 @@ pub fn tag_color(tag: &str) -> Color {
         "shell" => theme::SHELL_TAG,
         "tool" => theme::SPECIAL,
         "plan" | "files" => theme::INFO,
-        "branch" => theme::ACCENT,
+        "branch" | "provider" | "model" => theme::CONVERSATION_CHANGE,
         "error" | "malformed" => theme::ERROR,
         _ => theme::ADDITIONAL_INFO,
     }

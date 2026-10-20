@@ -157,6 +157,9 @@ pub const ENDED_STATUS_HIGHLIGHT: Color = palette::STONE_TINT_BRIGHT;
 /// agent output without turning the log into chat bubbles. Paired with
 /// [`USER_TEXT`].
 pub const USER_MESSAGE_BACKGROUND: Color = palette::DARK_GREEN_TINT;
+/// Host-authored branch, provider, and model/effort changes in the log.
+pub const CONVERSATION_CHANGE: Color = palette::MAUVE;
+pub const CONVERSATION_CHANGE_BACKGROUND: Color = palette::DARK_MAUVE_TINT;
 /// Behind a diff's added and removed lines: a hint of [`SUCCESS`] and
 /// [`ERROR`], faint enough that the code's own colors still read over it.
 pub const DIFF_ADDED_BACKGROUND: Color = palette::FAINT_GREEN;

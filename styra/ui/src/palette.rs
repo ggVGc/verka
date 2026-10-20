@@ -74,6 +74,8 @@ pub const MAUVE: Color = Color::Rgb(205, 160, 215);
 /// A restrained cue behind operator-authored rows, separating prompts from
 /// agent output without turning the log into chat bubbles.
 pub const DARK_GREEN_TINT: Color = Color::Rgb(18, 28, 21);
+/// A faint mauve band for changes to the conversation itself.
+pub const DARK_MAUVE_TINT: Color = Color::Rgb(32, 24, 35);
 /// A green a tenth of the way up from [`NEAR_BLACK`]: only just green.
 pub const FAINT_GREEN: Color = Color::Rgb(22, 38, 26);
 /// A red a tenth of the way up from [`NEAR_BLACK`]: only just red.
