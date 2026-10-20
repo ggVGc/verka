@@ -149,8 +149,9 @@ where `Space` keeps its own link menu.
 | `Ctrl+L` | choose provider, model, and effort (one list, typed at) |
 | `Ctrl+G` | turn auto-commit on/off for this interaction (also in the message editor) |
 
-Pasting into the message editor creates a new box after the current one and
-moves typing into it, preserving the pasted text's line breaks.
+Pasting into the message editor puts the pasted text in a new box after the
+current one, preserving its line breaks, and opens another empty box below it
+to carry on typing in.
 Inactive boxes show at most three lines, with an ellipsis for hidden text;
 entering a box to edit it expands its contents.
 
