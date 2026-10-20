@@ -10,6 +10,7 @@
 //! exactly as Styra styles diffs elsewhere.
 
 pub mod files;
+mod find;
 pub mod git;
 pub mod keys;
 pub mod layers;

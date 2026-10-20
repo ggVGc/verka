@@ -51,7 +51,8 @@ impl BranchPicker {
     }
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> BranchChoice {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
+        use styra_ui::query::Edit;
         match key.code {
             KeyCode::Esc => return BranchChoice::Cancel,
             KeyCode::Enter => {
@@ -63,19 +64,11 @@ impl BranchPicker {
             KeyCode::Up => self.list.prev(&self.rows),
             KeyCode::PageDown => self.list.page_down(&self.rows),
             KeyCode::PageUp => self.list.page_up(&self.rows),
-            KeyCode::Backspace => self.list.backspace(),
-            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.list.delete_word()
+            _ => {
+                if let Some(edit) = Edit::from_key(key) {
+                    self.list.edit(edit);
+                }
             }
-            KeyCode::Char(c)
-                if !c.is_control()
-                    && !key
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                self.list.push(c)
-            }
-            _ => {}
         }
         BranchChoice::Stay
     }

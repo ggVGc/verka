@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use styra_protocol::{InteractionActivity, InteractionQuery, InteractionSummary, WorkspaceSummary};
+use styra_ui::query::Edit;
 
 /// How long the cursor must rest on an entry before that Interaction is
 /// loaded, matching the Session and Workspace pickers' settle: short enough to
@@ -897,20 +898,10 @@ impl LiveInteractions {
         self.filter.as_deref().filter(|filter| !filter.is_empty())
     }
 
-    /// Take a typed character into the filter, or drop the last one.
-    pub fn type_filter(
-        &mut self,
-        character: Option<char>,
-        current: &str,
-        workspace_id: Option<&str>,
-    ) {
-        let filter = self.filter.get_or_insert_with(String::new);
-        match character {
-            Some(character) => filter.push(character),
-            None => {
-                filter.pop();
-            }
-        }
+    /// Make a change typed into the filter, as every search field takes it
+    /// (see [`styra_ui::query`]).
+    pub fn type_filter(&mut self, edit: Edit, current: &str, workspace_id: Option<&str>) {
+        edit.apply(self.filter.get_or_insert_with(String::new));
         self.follow_filter(current, workspace_id);
     }
 
@@ -3116,14 +3107,14 @@ pub(crate) mod tests {
         live.start_filter();
         assert!(live.typing_filter());
         for character in "CHECK".chars() {
-            live.type_filter(Some(character), "one", Some("workspace"));
+            live.type_filter(Edit::Push(character), "one", Some("workspace"));
         }
         assert_eq!(live.visible_indices(Some("workspace")), vec![0]);
 
         live.clear_filter();
         live.start_filter();
         for character in "bill".chars() {
-            live.type_filter(Some(character), "one", Some("workspace"));
+            live.type_filter(Edit::Push(character), "one", Some("workspace"));
         }
         assert_eq!(live.visible_indices(Some("workspace")), vec![2]);
 
@@ -3152,13 +3143,13 @@ pub(crate) mod tests {
 
         live.start_filter();
         for character in "docs".chars() {
-            live.type_filter(Some(character), "one", Some("workspace"));
+            live.type_filter(Edit::Push(character), "one", Some("workspace"));
         }
         assert_eq!(live.cursor("one"), "two");
 
         // Still matching as the term changes, so it stays put.
         live.cursor_next("one", Some("workspace"));
-        live.type_filter(None, "one", Some("workspace"));
+        live.type_filter(Edit::Backspace, "one", Some("workspace"));
         assert_eq!(live.cursor("one"), "three");
     }
 
@@ -3226,7 +3217,7 @@ pub(crate) mod tests {
         let mut live = LiveInteractions::default();
         live.open(vec![named("one", "Fix checkout")], vec![]);
         live.start_filter();
-        live.type_filter(Some('z'), "one", None);
+        live.type_filter(Edit::Push('z'), "one", None);
         live.open(vec![named("one", "Fix checkout")], vec![]);
         assert!(live.filter().is_none());
         assert!(!live.typing_filter());

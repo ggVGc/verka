@@ -309,7 +309,10 @@ bindings! { TAGS = "Interaction tags";
     TAGS_PREV: [Key::code(KeyCode::Up), Key::ctrl('k')] => Action::TagsPrev;
     TAGS_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::TagsPageDown;
     TAGS_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::TagsPageUp;
-    TAGS_DELETE_WORD: [Key::ctrl('w')] => Action::TagsDeleteWord;
+    // Typing into a query — letters, Backspace, ctrl-w — is
+    // `styra_ui::query`'s, the same in every search and filter field, so the
+    // pickers' ctrl-w rows only describe it.
+    TAGS_DELETE_WORD: [] as "ctrl-w" => Action::TagsDeleteWord;
     TAGS_TOGGLE: [Key::ch(' ')] => Action::TagsToggle;
     TAGS_EXCLUDE: [Key::ch('-')] ("filtering interactions") => Action::TagsExclude;
     TAGS_CLEAR: [Key::ctrl('t')] => Action::TagsClear;
@@ -348,7 +351,7 @@ bindings! { WORKSPACE_PICKER = "Workspaces";
     WORKSPACES_HELP: [Key::ch('?')] => Action::WorkspacesHelp;
     WORKSPACES_NEXT: [Key::code(KeyCode::Down), Key::ctrl('j')] => Action::WorkspacesNext;
     WORKSPACES_PREV: [Key::code(KeyCode::Up), Key::ctrl('k')] => Action::WorkspacesPrev;
-    WORKSPACES_DELETE_WORD: [Key::ctrl('w')] => Action::WorkspacesDeleteWord;
+    WORKSPACES_DELETE_WORD: [] as "ctrl-w" => Action::WorkspacesDeleteWord;
     WORKSPACES_OPEN: [Key::code(KeyCode::Enter)] => Action::WorkspacesOpen;
     WORKSPACES_NEW: [Key::ctrl('n')] => Action::WorkspacesNew;
     WORKSPACES_CREATE: [Key::ctrl('c')] => Action::WorkspacesCreate;
@@ -369,7 +372,7 @@ bindings! { WORKTREE_PICKER = "Worktrees";
     WORKTREES_PREV: [Key::code(KeyCode::Up), Key::ctrl('k')] => Action::WorktreesPrev;
     WORKTREES_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::WorktreesPageDown;
     WORKTREES_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::WorktreesPageUp;
-    WORKTREES_DELETE_WORD: [Key::ctrl('w')] => Action::WorktreesDeleteWord;
+    WORKTREES_DELETE_WORD: [] as "ctrl-w" => Action::WorktreesDeleteWord;
     WORKTREES_SCOPE: [Key::code(KeyCode::Tab)] => Action::WorktreesScope;
     WORKTREES_OPEN: [Key::code(KeyCode::Enter)] => Action::WorktreesOpen;
     WORKTREES_CANCEL: [Key::code(KeyCode::Esc)] => Action::WorktreesCancel;
@@ -387,7 +390,7 @@ bindings! { LAUNCHER = "Launch";
     LAUNCHER_PREV: [Key::code(KeyCode::Up), Key::ctrl('p')] => Action::LauncherPrev;
     LAUNCHER_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::LauncherPageDown;
     LAUNCHER_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::LauncherPageUp;
-    LAUNCHER_DELETE_WORD: [Key::ctrl('w')] => Action::LauncherDeleteWord;
+    LAUNCHER_DELETE_WORD: [] as "ctrl-w" => Action::LauncherDeleteWord;
     LAUNCHER_SELECT: [Key::code(KeyCode::Enter)] => Action::LauncherSelect;
     LAUNCHER_DEFAULT: [Key::ctrl('d')] => Action::LauncherDefault;
     LAUNCHER_CANCEL: [Key::code(KeyCode::Esc)] => Action::LauncherCancel;
@@ -413,7 +416,7 @@ bindings! { ACTION_MENU = "Actions";
         => Action::ActionsPrev;
     ACTION_MENU_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::ActionsPageDown;
     ACTION_MENU_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::ActionsPageUp;
-    ACTION_MENU_DELETE_WORD: [Key::ctrl('w')] => Action::ActionsDeleteWord;
+    ACTION_MENU_DELETE_WORD: [] as "ctrl-w" => Action::ActionsDeleteWord;
     ACTION_MENU_RUN: [Key::code(KeyCode::Enter)] => Action::ActionsRun;
     ACTION_MENU_CANCEL: [Key::code(KeyCode::Esc)] => Action::ActionsCancel;
 }
@@ -425,7 +428,7 @@ bindings! { WORKSPACE_JUMP = "Jump to a Workspace";
         => Action::WorkspaceJumpNext;
     WORKSPACE_JUMP_PREV: [Key::code(KeyCode::Up), Key::ctrl('k'), Key::ctrl('p')]
         => Action::WorkspaceJumpPrev;
-    WORKSPACE_JUMP_DELETE_WORD: [Key::ctrl('w')] => Action::WorkspaceJumpDeleteWord;
+    WORKSPACE_JUMP_DELETE_WORD: [] as "ctrl-w" => Action::WorkspaceJumpDeleteWord;
     WORKSPACE_JUMP_OPEN: [Key::code(KeyCode::Enter)] => Action::WorkspaceJumpOpen;
     WORKSPACE_JUMP_NEW: [Key::ctrl('n')] => Action::WorkspaceJumpNew;
     WORKSPACE_JUMP_CANCEL: [Key::code(KeyCode::Esc)] => Action::WorkspaceJumpCancel;

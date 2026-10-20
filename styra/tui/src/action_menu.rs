@@ -8,8 +8,9 @@
 
 use crate::keybindings::{self as keys, Window};
 use crate::keyboard::Binding;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use styra_ui::fuzzy_list::FuzzyList;
+use styra_ui::query::Edit;
 
 /// What a key did to the open menu.
 #[derive(Debug, PartialEq, Eq)]
@@ -66,18 +67,11 @@ impl ActionMenu {
             k if keys::ACTION_MENU_PREV.matches(k) => self.list.prev(&self.rows),
             k if keys::ACTION_MENU_PAGE_DOWN.matches(k) => self.list.page_down(&self.rows),
             k if keys::ACTION_MENU_PAGE_UP.matches(k) => self.list.page_up(&self.rows),
-            k if keys::ACTION_MENU_DELETE_WORD.matches(k) => self.list.delete_word(),
-            k if k.code == KeyCode::Backspace => self.list.backspace(),
-            KeyEvent {
-                code: KeyCode::Char(character),
-                modifiers,
-                ..
-            } if !character.is_control()
-                && !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                self.list.push(character)
+            _ => {
+                if let Some(edit) = Edit::from_key(key) {
+                    self.list.edit(edit);
+                }
             }
-            _ => {}
         }
         Outcome::Stay
     }
@@ -97,6 +91,7 @@ fn row(binding: &Binding) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyCode;
 
     fn typed(menu: &mut ActionMenu, text: &str) {
         for character in text.chars() {

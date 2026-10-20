@@ -12,6 +12,7 @@
 //! thing found can be read off the screen without hunting for where the match
 //! ends.
 
+use crate::query::Edit;
 use crate::theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -59,6 +60,17 @@ impl Search {
         self.query.pop();
         if self.query.is_empty() {
             self.typing = false;
+        }
+    }
+
+    /// Make a change typed into the prompt, as every search field takes it
+    /// (see [`crate::query`]). Deleting a word leaves the prompt open even
+    /// when it was the only one: it is taken back to be typed again, where
+    /// backspacing a search away abandons it.
+    pub fn edit(&mut self, edit: Edit) {
+        match edit {
+            Edit::Backspace => self.backspace(),
+            edit => edit.apply(&mut self.query),
         }
     }
 
@@ -348,6 +360,20 @@ mod tests {
 
         assert!(!search.typing());
         assert_eq!(search.query(), None);
+    }
+
+    #[test]
+    fn deleting_the_only_word_keeps_the_prompt_open() {
+        let mut search = Search::default();
+        search.open();
+        for character in "src/retry".chars() {
+            search.edit(Edit::Push(character));
+        }
+        search.edit(Edit::DeleteWord);
+        assert_eq!(search.query(), Some("src/"));
+        search.edit(Edit::DeleteWord);
+        assert!(search.typing());
+        assert_eq!(search.query(), Some(""));
     }
 
     #[test]

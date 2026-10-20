@@ -7,6 +7,7 @@
 //! In filter mode, `-` is reserved for excluding the highlighted tag.
 
 use styra_ui::fuzzy_list::FuzzyList;
+use styra_ui::query::Edit;
 
 /// What the chosen tags are for, which decides what Enter does with them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,16 +81,10 @@ impl TagPicker {
         self.list.page_up(&self.available);
     }
 
-    /// Take a typed character into the filter, or drop the last one.
-    pub fn type_query(&mut self, character: Option<char>) {
-        match character {
-            Some(character) => self.list.push(character),
-            None => self.list.backspace(),
-        }
-    }
-
-    pub fn delete_query_word(&mut self) {
-        self.list.delete_word();
+    /// Make a change typed into the filter, as every search field takes it
+    /// (see [`styra_ui::query`]).
+    pub fn type_query(&mut self, edit: Edit) {
+        self.list.edit(edit);
     }
 
     pub fn clear_query(&mut self) {
@@ -179,11 +174,12 @@ impl TagPicker {
 #[cfg(test)]
 mod tests {
     use super::TagPicker;
+    use styra_ui::query::Edit;
 
     #[test]
     fn a_filter_cannot_start_a_new_tag() {
         let mut picker = TagPicker::filter(vec!["bug".into()], vec![]);
-        picker.type_query(Some('x'));
+        picker.type_query(Edit::Push('x'));
         picker.start_new();
         assert!(picker.new_tag.is_none());
     }
@@ -204,7 +200,7 @@ mod tests {
             vec![],
         );
         for character in "urg".chars() {
-            picker.type_query(Some(character));
+            picker.type_query(Edit::Push(character));
         }
         picker.toggle();
         assert_eq!(picker.selected, ["urgent"]);
@@ -239,7 +235,7 @@ mod tests {
     fn toggling_with_nothing_matching_changes_nothing() {
         let mut picker = TagPicker::new(vec!["bug".into()], vec![]);
         for character in "zzz".chars() {
-            picker.type_query(Some(character));
+            picker.type_query(Edit::Push(character));
         }
         picker.toggle();
         assert!(picker.selected.is_empty());
@@ -250,7 +246,7 @@ mod tests {
     fn a_new_tag_starts_from_the_filter() {
         let mut picker = TagPicker::new(vec!["bug".into()], vec![]);
         for character in "docs".chars() {
-            picker.type_query(Some(character));
+            picker.type_query(Edit::Push(character));
         }
         picker.start_new();
         assert_eq!(picker.new_tag.as_deref(), Some("docs"));

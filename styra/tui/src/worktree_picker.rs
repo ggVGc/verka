@@ -8,13 +8,14 @@
 //! accounts for every directory, but there is nothing for Enter to open there.
 
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyEventKind};
 use std::time::Duration;
 
 use styra_protocol::{CompletionState, WorkspaceSummary, WorktreeSession, WorktreeSummary};
 use styra_server::Client;
 use styra_ui::fuzzy_list::FuzzyList;
 use styra_ui::placeholders::{self, Placeholders};
+use styra_ui::query::Edit;
 use styra_ui::worktrees::WorktreePickerView;
 use styra_ui::Ui;
 
@@ -277,7 +278,6 @@ pub fn run_worktree_picker(
             k if keys::WORKTREES_PREV.matches(k) => list.prev(&text),
             k if keys::WORKTREES_PAGE_DOWN.matches(k) => list.page_down(&text),
             k if keys::WORKTREES_PAGE_UP.matches(k) => list.page_up(&text),
-            k if keys::WORKTREES_DELETE_WORD.matches(k) => list.delete_word(),
             k if keys::WORKTREES_SCOPE.matches(k) => {
                 // The scope being switched to: back to this Workspace from
                 // every one, or out to every one from this.
@@ -310,18 +310,11 @@ pub fn run_worktree_picker(
                     None => notice = Some("no session works in this worktree".to_owned()),
                 }
             }
-            _ => match key.code {
-                KeyCode::Backspace => list.backspace(),
-                KeyCode::Char(character)
-                    if !character.is_control()
-                        && !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    list.push(character)
+            _ => {
+                if let Some(edit) = Edit::from_key(key) {
+                    list.edit(edit);
                 }
-                _ => {}
-            },
+            }
         }
     }
 }

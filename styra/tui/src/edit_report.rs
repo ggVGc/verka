@@ -91,7 +91,7 @@ impl EditReports {
         self.pending.insert(id);
         let noun = if count == 1 { "file" } else { "files" };
         app.show_action_message(format!(
-            "describing the edits of {count} {noun} — the per-file view (f) shows each one"
+            "describing the edits of {count} {noun} — the per-file view (l) shows each one"
         ));
     }
 

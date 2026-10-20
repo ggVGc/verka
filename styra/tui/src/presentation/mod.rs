@@ -1372,6 +1372,8 @@ mod tests {
             search: Default::default(),
             report: Default::default(),
             line_cursor: None,
+            find: Default::default(),
+            find_from: None,
         });
         app.view = View::CheckoutDiff;
 

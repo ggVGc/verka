@@ -14,11 +14,12 @@
 //! owns both its state and keyboard handling. [`crate::presentation::launcher`]
 //! draws it through [`styra_ui::fuzzy_list`].
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use std::path::Path;
 use styra_protocol::agent::{Provider, Selection, PROVIDERS};
 use styra_protocol::LogEntry;
 use styra_ui::fuzzy_list::FuzzyList;
+use styra_ui::query::Edit;
 
 use crate::app::App;
 use crate::keybindings as keys;
@@ -39,7 +40,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
         k if keys::LAUNCHER_PREV.matches(k) => launcher.prev(),
         k if keys::LAUNCHER_PAGE_DOWN.matches(k) => launcher.page_down(),
         k if keys::LAUNCHER_PAGE_UP.matches(k) => launcher.page_up(),
-        k if keys::LAUNCHER_DELETE_WORD.matches(k) => launcher.delete_query_word(),
         k if keys::LAUNCHER_SELECT.matches(k) => confirm(app, preferences_path),
         k if keys::LAUNCHER_DEFAULT.matches(k) => {
             confirm(app, preferences_path);
@@ -59,20 +59,13 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
                 app.cancel_launcher();
             }
         }
-        _ => match key.code {
-            KeyCode::Backspace => launcher.type_query(None),
-            // A chord this picker has no command for is still not a letter
-            // of a model's name, so it is ignored rather than typed.
-            KeyCode::Char(character)
-                if !character.is_control()
-                    && !key
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                launcher.type_query(Some(character));
+        // A chord this picker has no command for is still not a letter of a
+        // model's name, so it is ignored rather than typed.
+        _ => {
+            if let Some(edit) = Edit::from_key(key) {
+                launcher.type_query(edit);
             }
-            _ => {}
-        },
+        }
     }
 }
 
@@ -240,20 +233,13 @@ impl Launcher {
         self.list.page_up(&labels);
     }
 
-    /// Take a character into the query, or `None` to drop the last one.
-    pub fn type_query(&mut self, character: Option<char>) {
-        match character {
-            Some(character) => self.list.push(character),
-            None => self.list.backspace(),
-        }
-    }
-
-    /// Drop the last word of the query, where a word is one part of a name:
+    /// Make a change typed into the query, as every search field takes it
+    /// (see [`styra_ui::query`]). A word deleted is one part of a name:
     /// `claude:claude-opus-5/high` back to `claude:claude-opus-5/`. Typing a
     /// triple is typing an identifier, and a mistyped rung should not cost the
     /// agent and model in front of it.
-    pub fn delete_query_word(&mut self) {
-        self.list.delete_word();
+    pub fn type_query(&mut self, edit: Edit) {
+        self.list.edit(edit);
     }
 
     /// Whether anything has been typed.
@@ -305,7 +291,7 @@ mod tests {
 
     fn typed(launcher: &mut Launcher, query: &str) {
         for character in query.chars() {
-            launcher.type_query(Some(character));
+            launcher.type_query(Edit::Push(character));
         }
     }
 
@@ -534,7 +520,7 @@ mod tests {
         typed(&mut launcher, "claude:claude-opus-5-5/mox");
         assert!(launcher.list.matches(&launcher.labels()).is_empty());
 
-        launcher.delete_query_word();
+        launcher.type_query(Edit::DeleteWord);
         assert_eq!(launcher.list.query, "claude:claude-opus-5-5/");
         assert_eq!(launcher.selection().model, "claude-opus-5-5");
     }

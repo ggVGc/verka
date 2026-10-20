@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind};
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,6 +27,7 @@ use styra_protocol::{
     WorkspaceLaunchChange, WorkspaceSummary,
 };
 use styra_server::Client;
+use styra_ui::query::Edit;
 use styra_ui::Ui;
 
 /// What the interactive loop returned control to `main` for.
@@ -2243,7 +2244,6 @@ fn run_rounds(
                 k if keys::TAGS_PREV.matches(k) => picker.previous(),
                 k if keys::TAGS_PAGE_DOWN.matches(k) => picker.page_down(),
                 k if keys::TAGS_PAGE_UP.matches(k) => picker.page_up(),
-                k if keys::TAGS_DELETE_WORD.matches(k) => picker.delete_query_word(),
                 k if keys::TAGS_TOGGLE.matches(k) => toggle_tag_picker_selection(app),
                 k if keys::TAGS_EXCLUDE.matches(k)
                     && picker.purpose == crate::tag_picker::TagPurpose::Filter =>
@@ -2266,18 +2266,11 @@ fn run_rounds(
                         }
                     }
                 }
-                _ => match key.code {
-                    KeyCode::Backspace => picker.type_query(None),
-                    KeyCode::Char(character)
-                        if !character.is_control()
-                            && !key
-                                .modifiers
-                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        picker.type_query(Some(character));
+                _ => {
+                    if let Some(edit) = Edit::from_key(key) {
+                        picker.type_query(edit);
                     }
-                    _ => {}
-                },
+                }
             }
             continue;
         }
@@ -2287,8 +2280,7 @@ fn run_rounds(
             continue;
         }
         if app.diff_focused() {
-            if keys::DIFF_BRANCH.matches(key)
-                && !app.shown_diff().is_some_and(|diff| diff.search.typing())
+            if keys::DIFF_BRANCH.matches(key) && !app.shown_diff().is_some_and(|diff| diff.typing())
             {
                 match client.diff_branches(&app.session_id) {
                     Ok(branches) => {
@@ -2341,23 +2333,12 @@ fn run_rounds(
                         app.interactions
                             .cursor_page(&session_id, workspace_id.as_deref(), false)
                     }
-                    KeyCode::Backspace => {
-                        app.interactions
-                            .type_filter(None, &session_id, workspace_id.as_deref())
+                    _ => {
+                        if let Some(edit) = Edit::from_key(key) {
+                            app.interactions
+                                .type_filter(edit, &session_id, workspace_id.as_deref())
+                        }
                     }
-                    KeyCode::Char(character)
-                        if !character.is_control()
-                            && !key
-                                .modifiers
-                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        app.interactions.type_filter(
-                            Some(character),
-                            &session_id,
-                            workspace_id.as_deref(),
-                        )
-                    }
-                    _ => {}
                 }
                 continue;
             }
@@ -2606,6 +2587,7 @@ fn run_rounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
 
     fn effects_for_test() -> (LaunchEffects, Sender<LaunchEffectResult>) {
         let (send, _jobs) = mpsc::channel();

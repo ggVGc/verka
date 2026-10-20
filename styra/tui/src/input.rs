@@ -19,6 +19,7 @@ use crate::session::{self, Attachment};
 use styra_diff::Outcome;
 use styra_protocol::{CompletionState, Contract, LogEntry, ProjectAction};
 use styra_server::Client;
+use styra_ui::query::Edit;
 
 /// Keys for the event list's `/` search prompt. It is modal — every printable
 /// key is part of the term, including the letters bound to commands on the
@@ -30,9 +31,11 @@ pub fn handle_search_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => app.search.cancel(),
         KeyCode::Enter => app.search.accept(),
-        KeyCode::Backspace => app.search.backspace(),
-        KeyCode::Char(character) if !character.is_control() => app.search.push(character),
-        _ => {}
+        _ => {
+            if let Some(edit) = Edit::from_key(key) {
+                app.search.edit(edit);
+            }
+        }
     }
 }
 
@@ -135,7 +138,7 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
     if handle_diff_focus_key(app, key) {
         return;
     }
-    let typing_filter = app.shown_diff().is_some_and(|diff| diff.search.typing());
+    let typing_filter = app.shown_diff().is_some_and(|diff| diff.typing());
     if key.code == KeyCode::Enter
         && !typing_filter
         && !key
@@ -208,7 +211,7 @@ pub fn handle_diff_focus_key(app: &mut App, key: KeyEvent) -> bool {
         || !matches!(app.view, View::Events | View::Files)
         || app.search.typing()
         || app.interactions.typing_filter()
-        || app.shown_diff().is_some_and(|diff| diff.search.typing())
+        || app.shown_diff().is_some_and(|diff| diff.typing())
     {
         return false;
     }
@@ -1879,9 +1882,16 @@ mod tests {
         // second one leaves the grid.
         press(&mut app, KeyCode::Char('/'));
         assert!(app.search.typing());
-        for character in "retry".chars() {
+        for character in "retry backoff".chars() {
             handle_search_key(&mut app, KeyEvent::from(KeyCode::Char(character)));
         }
+        // Ctrl-W takes back a word, as in every search field, rather than
+        // typing a `w`.
+        handle_search_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        handle_search_key(&mut app, KeyEvent::from(KeyCode::Backspace));
         handle_search_key(&mut app, KeyEvent::from(KeyCode::Enter));
         assert_eq!(app.search.query(), Some("retry"));
         press(&mut app, KeyCode::Esc);
@@ -2738,7 +2748,7 @@ mod tests {
         let turn = app.shown_diff().unwrap();
         assert!(turn.target().is_none());
         assert!(turn.diff.as_deref().unwrap().contains("+b"));
-        press(&mut app, KeyCode::Char('f'));
+        press(&mut app, KeyCode::Char('l'));
         assert!(app.shown_diff().unwrap().per_file);
         assert!(!app.checkout_diff.as_ref().unwrap().per_file);
         press(&mut app, KeyCode::Char('E'));
@@ -2851,7 +2861,7 @@ mod tests {
         );
         app.enter_list();
 
-        press(&mut app, 'f');
+        press(&mut app, 'l');
         press(&mut app, 'j');
         press(&mut app, 'i');
         assert_eq!(app.message_source.as_deref(), Some("b.txt"));
@@ -2902,6 +2912,8 @@ mod tests {
             search: Default::default(),
             report: Default::default(),
             line_cursor: None,
+            find: Default::default(),
+            find_from: None,
         });
         let diff = app.checkout_diff.as_mut().unwrap();
         diff.scroll.note_limit(100);
@@ -2927,7 +2939,7 @@ mod tests {
         assert_eq!(app.view, View::CheckoutDiff);
         press(&mut app, KeyCode::BackTab);
         assert!(!app.diff_conversation);
-        press(&mut app, KeyCode::Char('f'));
+        press(&mut app, KeyCode::Char('l'));
         assert!(app.checkout_diff.as_ref().unwrap().per_file);
         // As drawing the per-file view would.
         let diff = app.checkout_diff.as_mut().unwrap();
@@ -2973,7 +2985,7 @@ mod tests {
         press(&mut app, KeyCode::Char('k'));
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);
-        press(&mut app, KeyCode::Char('f'));
+        press(&mut app, KeyCode::Char('l'));
         assert!(!app.checkout_diff.as_ref().unwrap().per_file);
         assert!(app.checkout_diff.as_ref().unwrap().hide_removed);
         // Back where it was left, with removed lines hidden since: "+d", row 8.
@@ -2981,7 +2993,7 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 9);
 
-        press(&mut app, KeyCode::Char('f'));
+        press(&mut app, KeyCode::Char('l'));
         press(&mut app, KeyCode::Char('/'));
         press(&mut app, KeyCode::Char('B'));
         let diff = app.checkout_diff.as_ref().unwrap();

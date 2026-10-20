@@ -2830,7 +2830,7 @@ mod tests {
         let model = Provider::Claude.default_model();
         let effort = Provider::Claude.efforts_for(model)[0];
         for character in format!("claude:{model}/{}", effort.as_str()).chars() {
-            launcher.type_query(Some(character));
+            launcher.type_query(styra_ui::query::Edit::Push(character));
         }
         assert_eq!(launcher.selection().provider, Provider::Claude);
 

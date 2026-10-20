@@ -8,9 +8,10 @@
 //! the highlighted Workspace instead.
 
 use crate::keybindings as keys;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use styra_protocol::{InteractionSummary, WorkspaceSummary};
 use styra_ui::fuzzy_list::FuzzyList;
+use styra_ui::query::Edit;
 
 /// What a key did to the open list.
 #[derive(Debug, PartialEq, Eq)]
@@ -131,18 +132,11 @@ impl WorkspaceJump {
             }
             k if keys::WORKSPACE_JUMP_NEXT.matches(k) => self.list.next(&self.rows),
             k if keys::WORKSPACE_JUMP_PREV.matches(k) => self.list.prev(&self.rows),
-            k if keys::WORKSPACE_JUMP_DELETE_WORD.matches(k) => self.list.delete_word(),
-            k if k.code == KeyCode::Backspace => self.list.backspace(),
-            KeyEvent {
-                code: KeyCode::Char(character),
-                modifiers,
-                ..
-            } if !character.is_control()
-                && !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                self.list.push(character)
+            _ => {
+                if let Some(edit) = Edit::from_key(key) {
+                    self.list.edit(edit);
+                }
             }
-            _ => {}
         }
         Outcome::Stay
     }
@@ -168,6 +162,7 @@ fn is_live_in(interaction: &InteractionSummary, workspace_id: &str) -> bool {
 mod tests {
     use super::*;
     use crate::interactions::tests::interaction;
+    use crossterm::event::{KeyCode, KeyModifiers};
     use std::path::PathBuf;
     use styra_protocol::InteractionActivity;
 

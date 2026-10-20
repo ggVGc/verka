@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -14,6 +14,7 @@ use crate::keybindings::{self as keys, Window};
 use crate::launch::LaunchScope;
 use crate::presentation;
 use crate::session::{is_recent_session, session_tree_depths, sort_sessions_tree, SessionOrder};
+use styra_ui::query::Edit;
 use styra_ui::Ui;
 
 /// How long the cursor must rest on a Session or Workspace before its preview
@@ -213,15 +214,10 @@ pub fn run_session_picker(
                     searching = false;
                 }
                 KeyCode::Enter => searching = false,
-                KeyCode::Backspace => {
-                    if let Some(filter) = &mut filter {
-                        filter.pop();
-                    }
-                }
-                KeyCode::Char(character) if !character.is_control() => {
-                    filter.get_or_insert_with(String::new).push(character);
-                }
-                _ => continue,
+                _ => match Edit::from_key(key) {
+                    Some(edit) => edit.apply(filter.get_or_insert_with(String::new)),
+                    None => continue,
+                },
             }
             let cursor_id = sessions.get(selected).map(|session| session.id.clone());
             sessions = picker_sessions(
@@ -731,22 +727,13 @@ pub fn run_workspace_picker(
                 help.open();
                 false
             }
-            k if keys::WORKSPACES_DELETE_WORD.matches(k) => {
-                delete_last_word(&mut filter);
-                true
-            }
-            _ => match key.code {
-                KeyCode::Backspace => filter.pop().is_some(),
-                KeyCode::Char(character)
-                    if !character.is_control()
-                        && !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    filter.push(character);
-                    true
+            _ => match Edit::from_key(key) {
+                Some(edit) => {
+                    let before = filter.clone();
+                    edit.apply(&mut filter);
+                    filter != before
                 }
-                _ => false,
+                None => false,
             },
         };
         if typed {
@@ -944,20 +931,6 @@ fn read_workspace_text(
             _ => {}
         }
     }
-}
-
-/// Drop the last word of a typed filter, and the separators after it, the way
-/// Ctrl+W does in a shell.
-fn delete_last_word(filter: &mut String) {
-    let boundary = |character: char| !character.is_alphanumeric();
-    filter.truncate(filter.trim_end_matches(boundary).len());
-    let word: usize = filter
-        .chars()
-        .rev()
-        .take_while(|character| !boundary(*character))
-        .map(char::len_utf8)
-        .sum();
-    filter.truncate(filter.len() - word);
 }
 
 /// The Workspaces the filter leaves on screen, in the order they were sorted
@@ -1451,17 +1424,6 @@ mod tests {
             filtered.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
             vec!["work-a", "work-b"]
         );
-    }
-
-    #[test]
-    fn deleting_a_word_drops_it_and_the_separators_after_it() {
-        let mut filter = String::from("styra wörk- ");
-        delete_last_word(&mut filter);
-        assert_eq!(filter, "styra ");
-        delete_last_word(&mut filter);
-        assert_eq!(filter, "");
-        delete_last_word(&mut filter);
-        assert_eq!(filter, "");
     }
 
     #[test]

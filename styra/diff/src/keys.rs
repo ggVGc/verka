@@ -12,8 +12,8 @@ use crate::state::{Action, CheckoutDiff};
 enum Command {
     /// Done to the view itself.
     View(Action),
-    /// Leave line selection, or clear a standing file filter, or else close
-    /// the view.
+    /// Clear the text to find, or leave line selection, or clear a standing
+    /// file filter, or else close the view.
     ClearFilterOrClose,
     /// Styra's `d`, which opened the view, closing it again.
     Toggle,
@@ -80,7 +80,25 @@ pub const BINDINGS: &[Binding] = &[
     ),
     bind(
         &[KeyCode::Char('f')],
-        "f",
+        "f (line selection)",
+        "find text in the diff, marked wherever it is (Enter keeps it, Esc clears)",
+        Command::View(Action::Find),
+    ),
+    bind(
+        &[KeyCode::Char('n')],
+        "n (line selection)",
+        "next line with the found text",
+        Command::View(Action::FindNext),
+    ),
+    bind(
+        &[KeyCode::Char('N')],
+        "N (line selection)",
+        "previous line with the found text",
+        Command::View(Action::FindPrevious),
+    ),
+    bind(
+        &[KeyCode::Char('l')],
+        "l",
         "toggle combined / per-file diffs",
         Command::View(Action::ToggleFiles),
     ),
@@ -213,7 +231,7 @@ pub const BINDINGS: &[Binding] = &[
     bind(
         &[KeyCode::Esc],
         "Esc",
-        "leave line selection, clear the file filter, or close the diff",
+        "clear the found text, leave line selection, clear the file filter, or close the diff",
         Command::ClearFilterOrClose,
     ),
 ];
@@ -239,9 +257,14 @@ pub enum Outcome {
 }
 
 impl CheckoutDiff {
-    /// Answer one key. The file-name filter's prompt takes every key while it
-    /// is open; otherwise the key is looked up in [`BINDINGS`].
+    /// Answer one key. The prompts for text to find and for the file-name
+    /// filter take every key while they are open; otherwise the key is looked
+    /// up in [`BINDINGS`].
     pub fn handle_key(&mut self, key: KeyEvent) -> Outcome {
+        if self.find.typing() {
+            self.find_key(key);
+            return Outcome::Handled;
+        }
         if self.search.typing() {
             self.search_key(key);
             return Outcome::Handled;
@@ -281,7 +304,9 @@ impl CheckoutDiff {
                 self.apply(action);
                 Outcome::Handled
             }
-            Command::ClearFilterOrClose if self.leave_lines() || self.clear_filter() => {
+            Command::ClearFilterOrClose
+                if self.clear_find() || self.leave_lines() || self.clear_filter() =>
+            {
                 Outcome::Handled
             }
             Command::ClearFilterOrClose => Outcome::Close,
@@ -319,7 +344,7 @@ mod tests {
         assert_eq!(diff.help, Some(0));
         press(&mut diff, KeyCode::Down);
         assert_eq!(diff.help, Some(1));
-        press(&mut diff, KeyCode::Char('f'));
+        press(&mut diff, KeyCode::Char('l'));
         assert!(!diff.per_file);
         assert_eq!(press(&mut diff, KeyCode::Esc), Outcome::Handled);
         assert_eq!(diff.help, None);
@@ -338,7 +363,7 @@ mod tests {
     #[test]
     fn esc_closes_once_a_filter_is_cleared() {
         let mut diff = diff();
-        assert_eq!(press(&mut diff, KeyCode::Char('f')), Outcome::Handled);
+        assert_eq!(press(&mut diff, KeyCode::Char('l')), Outcome::Handled);
         assert_eq!(press(&mut diff, KeyCode::Char('/')), Outcome::Handled);
         assert_eq!(press(&mut diff, KeyCode::Char('q')), Outcome::Handled);
         assert_eq!(diff.search.query(), Some("q"));
@@ -359,7 +384,7 @@ mod tests {
     #[test]
     fn view_keys_act_and_the_rest_go_to_the_host() {
         let mut diff = diff();
-        for key in ['r', 'f', 'j', 'c', 't', 'e', 'w', 'L', 'm'] {
+        for key in ['r', 'l', 'j', 'c', 't', 'e', 'w', 'L', 'm'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Outcome::Handled);
         }
         assert!(!diff.word_highlights);

@@ -92,6 +92,8 @@ pub struct CheckoutDiffView<'a> {
     /// The line the line cursor is on, among the shown patch's lines; `None`
     /// unless lines are being selected.
     pub line_cursor: Option<usize>,
+    /// The text to find in line selection, marked wherever it is drawn.
+    pub find: SearchView<'a>,
 }
 
 impl<'a> CheckoutDiffView<'a> {
@@ -128,6 +130,7 @@ impl<'a> CheckoutDiffView<'a> {
             conversation: None,
             intro: None,
             line_cursor: None,
+            find: SearchView::default(),
             prompts: Vec::new(),
         }
     }
@@ -653,6 +656,52 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         );
         body = rest;
     }
+    // The text to find, along the bottom with how many lines it is on and
+    // which of them the line cursor is on, as Vim counts its matches.
+    let find = view.find.query.filter(|term| !term.is_empty());
+    if let (Some(query), Some(cursor)) = (view.find.query, view.line_cursor) {
+        let [rest, prompt] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(body);
+        let found = match (find, shown) {
+            (Some(term), Ok(text)) => {
+                crate::find::match_rows(text, term, view.hide_removed, side_by_side, view.per_file)
+            }
+            _ => Vec::new(),
+        };
+        let mut spans = vec![Span::styled(
+            format!(" /{query}{}", if view.find.typing { "▌" } else { "" }),
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )];
+        let at = match shown {
+            Ok(text) => {
+                crate::split::row_of(text, view.hide_removed, side_by_side, view.per_file, cursor)
+            }
+            Err(_) => usize::MAX,
+        };
+        let status = match found.iter().position(|&(row, _)| row == at) {
+            _ if find.is_none() => String::new(),
+            _ if found.is_empty() => "no match".to_owned(),
+            Some(at) => format!("[{}/{}]", at + 1, found.len()),
+            None => format!("{} lines", found.len()),
+        };
+        let keys = if view.find.typing {
+            "Enter: keep · Esc: cancel"
+        } else {
+            "n / N: next / previous · Esc: clear"
+        };
+        spans.push(Span::styled(
+            format!(
+                "  {status}{}{keys}",
+                if status.is_empty() { "" } else { "  · " }
+            ),
+            Style::default().fg(theme::MUTED_TEXT),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)), prompt);
+        body = rest;
+    }
+    let find = find.filter(|_| view.line_cursor.is_some());
     let width = usize::from(body.width);
     let requested = shown
         .ok()
@@ -696,6 +745,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                 requested,
                 view.horizontal_scroll,
                 view.per_file,
+                find,
             )
         } else {
             let mut lines = match shown {
@@ -714,6 +764,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                     view.layers.and_then(Result::ok),
                     width,
                     view.per_file,
+                    find,
                 ),
                 Err(error) => vec![Line::from(Span::styled(
                     format!("  {error}"),
@@ -849,9 +900,20 @@ fn prompt_marker() -> Span<'static> {
 
 /// Mark the line cursor's row: the editor's cursor-line band across it, and
 /// a bar at its edge that stays when the band is over a changed line's own.
+/// Found text stays marked over the band, as the current match.
 fn render_line_cursor(frame: &mut Frame, row: Rect) {
     let buffer = frame.buffer_mut();
-    buffer.set_style(row, Style::default().bg(theme::SELECTION_BACKGROUND));
+    let found = crate::find::style().bg;
+    for x in row.left()..row.right() {
+        let Some(cell) = buffer.cell_mut((x, row.y)) else {
+            continue;
+        };
+        if Some(cell.bg) == found {
+            cell.set_style(crate::find::current_style());
+        } else {
+            cell.set_bg(theme::SELECTION_BACKGROUND);
+        }
+    }
     if let Some(cell) = buffer.cell_mut((row.x, row.y)) {
         cell.set_symbol(LINE_CURSOR_MARKER).set_fg(theme::ACCENT);
     }
@@ -871,11 +933,12 @@ fn render_split(
     scroll: u16,
     pan: u16,
     per_file: bool,
+    find: Option<&str>,
 ) -> (u16, u16, u16) {
     use crate::split::{aligned, Cell, SplitRow};
     let plan = aligned(text, per_file);
     let source_lines: Vec<_> = text.lines().collect();
-    let mut rendered = rendered_patch(text, tint, word_highlights);
+    let mut rendered = rendered_patch(text, tint, word_highlights, find);
     if let Some(layers) = layers {
         paint_layers(text, &mut rendered, layers);
     }
@@ -1437,10 +1500,18 @@ fn is_hunk_header(line: &str) -> bool {
     line.starts_with("@@")
 }
 
-fn rendered_patch(text: &str, tint: Tint, word_highlights: bool) -> Vec<Line<'static>> {
+fn rendered_patch(
+    text: &str,
+    tint: Tint,
+    word_highlights: bool,
+    find: Option<&str>,
+) -> Vec<Line<'static>> {
     let mut lines = diff_block_lines_fading(text, None, false, tint.fade());
     if word_highlights {
         styra_ui::diff::highlight_words(text, &mut lines);
+    }
+    if let Some(term) = find {
+        crate::find::highlight(text, &mut lines, term);
     }
     // Keep raw metadata available to highlighting and source navigation;
     // only the displayed file separator uses the resolved path.
@@ -1469,8 +1540,9 @@ fn patch_lines(
     layers: Option<&Layers>,
     width: usize,
     per_file: bool,
+    find: Option<&str>,
 ) -> Vec<Line<'static>> {
-    let mut rendered = rendered_patch(text, tint, word_highlights);
+    let mut rendered = rendered_patch(text, tint, word_highlights, find);
     let removed: Vec<bool> = if hide_removed {
         rendered.iter().map(is_removed).collect()
     } else {
@@ -2026,7 +2098,7 @@ index 1111111..2222222 100644
             "similarity index 100%\nrename from old\nrename to new",
         ] {
             let text = format!("diff --git a/old b/new\n{detail}\n");
-            let shown = patch_lines(&text, false, Tint::Full, true, None, 80, true);
+            let shown = patch_lines(&text, false, Tint::Full, true, None, 80, true, None);
             let shown = shown
                 .iter()
                 .map(ToString::to_string)
@@ -2061,6 +2133,7 @@ index 1111111..2222222 100644
                 Some(&layers),
                 40,
                 false,
+                None,
             )
             .into_iter()
             .map(|line| {
@@ -2338,7 +2411,7 @@ index 1111111..2222222 100644
 
     #[test]
     fn hiding_removals_keeps_added_indicators_and_original_line_numbers() {
-        let lines = patch_lines(DIFF, true, Tint::Full, true, None, 80, false);
+        let lines = patch_lines(DIFF, true, Tint::Full, true, None, 80, false, None);
         let text = lines
             .iter()
             .map(|line| {
@@ -2362,9 +2435,11 @@ index 1111111..2222222 100644
                 .count(),
             2
         );
-        assert!(patch_lines(DIFF, false, Tint::Full, true, None, 80, false)
-            .iter()
-            .any(|line| line.style.bg == Some(theme::DIFF_REMOVED_BACKGROUND)));
+        assert!(
+            patch_lines(DIFF, false, Tint::Full, true, None, 80, false, None)
+                .iter()
+                .any(|line| line.style.bg == Some(theme::DIFF_REMOVED_BACKGROUND))
+        );
     }
 
     /// The per-file view's left pane holds the files, then the layers, then
@@ -2768,6 +2843,7 @@ index 1111111..2222222 100644
                         conversation: None,
                         intro: None,
                         line_cursor: None,
+                        find: Default::default(),
                         prompts: Vec::new(),
                     },
                     frame.area(),
@@ -3128,6 +3204,7 @@ index 1111111..2222222 100644
                             conversation: None,
                             intro: None,
                             line_cursor: None,
+                            find: Default::default(),
                             prompts: Vec::new(),
                         },
                         frame.area(),
@@ -3443,6 +3520,7 @@ index 1111111..2222222 100644
                         conversation: None,
                         intro: None,
                         line_cursor: None,
+                        find: Default::default(),
                         prompts: Vec::new(),
                     },
                     frame.area(),
@@ -3745,6 +3823,7 @@ mod split_tests {
                     0,
                     0,
                     false,
+                    None,
                 );
             })
             .unwrap();
@@ -3784,6 +3863,7 @@ mod split_tests {
                     0,
                     32,
                     false,
+                    None,
                 );
             })
             .unwrap();
@@ -3851,7 +3931,7 @@ mod split_tests {
                 }
             }
         }
-        let lines = patch_lines(patch, true, Tint::Half, true, None, 80, false);
+        let lines = patch_lines(patch, true, Tint::Half, true, None, 80, false, None);
         assert!(lines
             .iter()
             .flat_map(|l| &l.spans)
@@ -3879,6 +3959,7 @@ mod split_tests {
                     0,
                     30,
                     false,
+                    None,
                 );
             })
             .unwrap();

@@ -2,9 +2,10 @@
 //! at: scrolled, split per file, filtered. [`crate::keys`] turns keys into
 //! [`Action`]s, so what each one does is decided here once.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::widgets::Block;
 use std::path::{Path, PathBuf};
+use styra_ui::query::Edit;
 use styra_ui::scroll::Scroll;
 use styra_ui::search::Search;
 
@@ -57,6 +58,13 @@ pub struct Supplied {
 pub(crate) enum Action {
     /// Start typing a file-name filter. Per-file view only.
     Search,
+    /// Start typing text to find. Line selection only.
+    Find,
+    /// The next line with the found text on it, from the line cursor's,
+    /// wrapping past the last. Line selection only.
+    FindNext,
+    /// The previous line with the found text on it. Line selection only.
+    FindPrevious,
     /// Switch between the combined diff and one file's patch at a time.
     ToggleFiles,
     ToggleRemoved,
@@ -139,9 +147,22 @@ pub struct CheckoutDiff {
     /// The line the line cursor is on, by its place among the shown patch's
     /// lines; `None` unless lines are being selected.
     pub line_cursor: Option<usize>,
+    /// Text to find in the shown patch, marked while lines are selected.
+    pub find: Search,
+    /// Where the line cursor was, and the view scrolled, when the text to
+    /// find began to be typed: what it moves on from as the text changes,
+    /// and goes back to if the text is cancelled.
+    pub find_from: Option<(usize, u16)>,
 }
 
 impl CheckoutDiff {
+    /// Whether a prompt — for text to find, or for the file-name filter —
+    /// has the keys, so a letter is typed into it rather than a command to
+    /// the view or the host.
+    pub fn typing(&self) -> bool {
+        self.find.typing() || self.search.typing()
+    }
+
     /// Show the file list, retaining the combined diff's scroll position.
     pub fn show_files(&mut self) {
         if !self.per_file {
@@ -236,6 +257,8 @@ impl CheckoutDiff {
             search: Default::default(),
             report: ReportState::default(),
             line_cursor: None,
+            find: Search::default(),
+            find_from: None,
         }
     }
 
@@ -379,6 +402,10 @@ impl CheckoutDiff {
             conversation: None,
             intro: None,
             line_cursor: self.line_cursor,
+            find: match self.line_cursor {
+                Some(_) => self.find.view(),
+                None => Default::default(),
+            },
             prompts: Vec::new(),
         }
     }
@@ -396,6 +423,12 @@ impl CheckoutDiff {
     pub(crate) fn apply(&mut self, action: Action) {
         let lines = self.line_cursor.is_some();
         match action {
+            Action::Find if lines => {
+                self.find.open();
+                self.find_from = self.line_cursor.map(|line| (line, self.scroll.offset));
+            }
+            Action::FindNext if lines => self.find_next(true),
+            Action::FindPrevious if lines => self.find_next(false),
             Action::Search if self.per_file => {
                 self.line_cursor = None;
                 self.search.open();
@@ -416,7 +449,10 @@ impl CheckoutDiff {
                     self.place_cursor(file, line);
                 }
             }
-            Action::ToggleLines if lines => self.line_cursor = None,
+            Action::ToggleLines if lines => {
+                self.line_cursor = None;
+                self.find.cancel();
+            }
             Action::ToggleLines => {
                 self.line_cursor = self.shown_text().and_then(|text| {
                     let rows = crate::split::source_rows(
@@ -511,7 +547,12 @@ impl CheckoutDiff {
             Action::HalfPageUp => self.scroll.half_page_up(),
             Action::First => self.scroll.reset(),
             Action::Last => self.scroll.scroll_to_end(),
-            Action::Search | Action::FilesDown | Action::FilesUp => {}
+            Action::Search
+            | Action::Find
+            | Action::FindNext
+            | Action::FindPrevious
+            | Action::FilesDown
+            | Action::FilesUp => {}
         }
     }
 
@@ -521,18 +562,79 @@ impl CheckoutDiff {
         match key.code {
             KeyCode::Esc => self.search.cancel(),
             KeyCode::Enter => self.search.accept(),
-            KeyCode::Backspace => self.search.backspace(),
-            KeyCode::Char(character)
-                if !character.is_control()
-                    && !key
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                self.search.push(character)
+            _ => {
+                if let Some(edit) = Edit::from_key(key) {
+                    self.search.edit(edit);
+                }
             }
-            _ => {}
         }
         self.update_search();
+    }
+
+    /// The prompt for text to find takes every key while it is open. The
+    /// line cursor goes to the next line the text is on, from where it was
+    /// when the prompt opened, as the text is typed, and back there if the
+    /// text is cancelled or backspaced away.
+    pub(crate) fn find_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.find.cancel(),
+            KeyCode::Enter => {
+                self.find.accept();
+                self.find_from = None;
+                return;
+            }
+            _ => match Edit::from_key(key) {
+                Some(edit) => self.find.edit(edit),
+                None => return,
+            },
+        }
+        let Some((line, offset)) = self.find_from else {
+            return;
+        };
+        self.line_cursor = Some(line);
+        self.scroll.offset = offset;
+        if self.find.typing() {
+            self.find_next(true);
+        } else {
+            self.find_from = None;
+        }
+    }
+
+    /// Move the line cursor to the next line drawn with the text to find on
+    /// it, or when `down` is false the previous one, going round past the
+    /// end, and scroll it into view. With no such line the cursor stays.
+    fn find_next(&mut self, down: bool) {
+        let (Some(cursor), Some(text), Some(term)) =
+            (self.line_cursor, self.shown_text(), self.find.query())
+        else {
+            return;
+        };
+        let (hidden, side, per_file) = (self.hide_removed, self.rendered_side, self.per_file);
+        let found = crate::find::match_rows(text, term, hidden, side, per_file);
+        let at = crate::split::row_of(text, hidden, side, per_file, cursor);
+        let target = if down {
+            found.iter().find(|&&(row, _)| row > at).or(found.first())
+        } else {
+            found
+                .iter()
+                .rev()
+                .find(|&&(row, _)| row < at)
+                .or(found.last())
+        };
+        if let Some(&(row, line)) = target {
+            self.line_cursor = Some(line);
+            self.scroll.reveal(u16::try_from(row).unwrap_or(u16::MAX));
+        }
+    }
+
+    /// Drop standing text to find, saying whether there was any: Esc clears
+    /// it before it leaves line selection.
+    pub(crate) fn clear_find(&mut self) -> bool {
+        if self.find.query().is_none() {
+            return false;
+        }
+        self.find.cancel();
+        true
     }
 
     /// Drop a standing file-name filter, saying whether there was one: Esc
@@ -591,6 +693,7 @@ impl CheckoutDiff {
     /// Leave line selection, saying whether lines were being selected: Esc
     /// does that before it means anything else to the host.
     pub(crate) fn leave_lines(&mut self) -> bool {
+        self.find.cancel();
         self.line_cursor.take().is_some()
     }
 
@@ -1402,6 +1505,122 @@ mod tests {
         diff.line_cursor = Some(1);
         diff.apply(Action::Search);
         assert_eq!(diff.line_cursor, None, "the filter may change the file");
+        assert!(!diff.find.typing());
+        diff.search_key(KeyEvent::from(KeyCode::Esc));
+        diff.apply(Action::Find);
+        assert!(!diff.find.typing(), "text is found in line selection only");
+    }
+
+    /// In line selection `f` finds text in the code as it is typed, from
+    /// where the cursor was, and Esc puts the cursor back there; once kept,
+    /// `n` and `N` go round the lines it is on, and Esc clears it before it
+    /// leaves line selection.
+    #[test]
+    fn found_text_is_stepped_through_with_n_and_shift_n() {
+        let mut diff = two_files();
+        // Lines: a.txt's header 0, hunk 1, " retry" 2, "-a" 3, "+Retry" 4,
+        // hunk 5, " retry_backoff" 6, b.txt's header 7, hunk 8, "+retry" 9.
+        diff.diff = Ok(
+            "diff --git a/a.txt b/a.txt\n@@ -1,2 +1,2 @@\n retry\n-a\n+Retry\n\
+                        @@ -9 +9 @@\n retry_backoff\n\
+                        diff --git a/retry.txt b/retry.txt\n@@ -1 +1 @@\n+retry\n"
+                .into(),
+        );
+        diff.scroll.note_viewport(40);
+        diff.apply(Action::ToggleLines);
+        assert_eq!(diff.line_cursor, Some(3));
+        let typed = |diff: &mut CheckoutDiff, text: &str| {
+            for character in text.chars() {
+                diff.find_key(KeyEvent::from(KeyCode::Char(character)));
+            }
+        };
+        diff.apply(Action::Find);
+        typed(&mut diff, "ret");
+        assert_eq!(diff.line_cursor, Some(4), "found as it is typed");
+        typed(&mut diff, "ry_");
+        assert_eq!(diff.line_cursor, Some(6), "from where it was, not +Retry");
+        // Ctrl-W takes back the word after the `_`, and the cursor with it.
+        let control_w = KeyEvent::new(KeyCode::Char('w'), crossterm::event::KeyModifiers::CONTROL);
+        typed(&mut diff, "bac");
+        diff.find_key(control_w);
+        assert_eq!(diff.find.query(), Some("retry_"));
+        assert_eq!(diff.line_cursor, Some(6));
+        diff.find_key(control_w);
+        diff.find_key(control_w);
+        assert_eq!(diff.find.query(), Some(""), "still being typed");
+        assert_eq!(diff.line_cursor, Some(3), "back where it was");
+        typed(&mut diff, "retry_");
+        diff.find_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!((diff.line_cursor, diff.find.query()), (Some(3), None));
+
+        diff.apply(Action::Find);
+        typed(&mut diff, "retry");
+        diff.find_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(diff.find.query(), Some("retry"));
+        let mut step = |action, expected| {
+            diff.apply(action);
+            assert_eq!(diff.line_cursor, Some(expected), "{action:?}");
+        };
+        step(Action::FindNext, 6);
+        step(Action::FindNext, 9);
+        step(Action::FindNext, 2);
+        step(Action::FindPrevious, 9);
+        step(Action::FindPrevious, 6);
+
+        diff.apply(Action::Find);
+        typed(&mut diff, "Retry");
+        diff.find_key(KeyEvent::from(KeyCode::Enter));
+        diff.apply(Action::FindNext);
+        diff.apply(Action::FindNext);
+        assert_eq!(diff.line_cursor, Some(4), "a capital is matched as typed");
+
+        assert!(diff.clear_find());
+        assert_eq!(diff.line_cursor, Some(4));
+        assert!(!diff.clear_find());
+    }
+
+    /// Found text is marked where it is drawn — on the line cursor's line as
+    /// the current match — and the prompt counts which of its lines the
+    /// cursor is on.
+    #[test]
+    fn found_text_is_marked_and_counted() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut diff = two_files();
+        diff.apply(Action::ToggleLines);
+        diff.apply(Action::Find);
+        for key in [KeyCode::Char('d'), KeyCode::Enter] {
+            diff.find_key(KeyEvent::from(key));
+        }
+        assert_eq!(diff.line_cursor, Some(7), "+d");
+        for side_by_side in [false, true] {
+            diff.side_by_side = side_by_side;
+            let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+            terminal
+                .draw(|frame| {
+                    crate::render(frame, &diff.view(Block::default()), frame.area());
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let marked = |style: ratatui::style::Style| -> Vec<(u16, &str)> {
+                (0..20)
+                    .flat_map(|y| (0..120).map(move |x| (x, y)))
+                    .filter(|&at| Some(buffer[at].bg) == style.bg)
+                    .filter(|&at| style.fg.is_none() || Some(buffer[at].fg) == style.fg)
+                    .map(|(_, y)| (y, buffer[(0, y)].symbol()))
+                    .collect()
+            };
+            let current = marked(crate::find::current_style());
+            assert_eq!(current.len(), 1, "only d, not b.txt's name: {current:?}");
+            assert_eq!(current[0].1, "▌", "on the cursor's row");
+            assert!(
+                marked(ratatui::style::Style::new().bg(styra_ui::theme::ACCENT)).is_empty(),
+                "no other match"
+            );
+            let rows: Vec<String> = (0..20)
+                .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            assert!(rows.iter().any(|row| row.contains("/d  [1/1]")), "{rows:?}");
+        }
     }
 
     #[test]

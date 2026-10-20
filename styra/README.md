@@ -271,7 +271,7 @@ With a file selected in the Files view or a file reference highlighted in the
 conversation, `d` and `D` jump to its patch. References with a line number jump
 to that line when it appears in a changed hunk (including context). If the file
 or line has no matching change, a notice explains why and the current view stays open.
-`s` toggles unified and side-by-side layouts independently of `f` (combined or
+`s` toggles unified and side-by-side layouts independently of `l` (combined or
 per-file). Side-by-side shows the working tree on the left and the base on the
 right, with aligned changes, separate line numbers, and linked scrolling.
 `←`/`→` pan both sides while keeping the line numbers fixed. It temporarily
@@ -290,11 +290,14 @@ messages. It runs in the background and is kept with the Session, so reopening
 the diff shows it again. The per-file view shows the selected file's
 description above its patch (`e` hides or shows it), noting when the file has
 changed since it was described.
-`l` (or `V`) in the diff selects lines: a cursor starts on the line at the top
-of the patch shown — one file's, or the combined diff — and `j`/`k`, PgUp/PgDn
-and `g`/`G` move it instead of the view; `l` or `Esc` leaves. `v` opens the
-editor at the cursor's line. `i` from the diff starts a message about what it is
-on: the per-file view's file, and the cursor's line when lines are selected. The
+`Enter` (or `V`) in the diff selects lines: a cursor starts on the line at the
+top of the patch shown — one file's, or the combined diff — and `j`/`k`,
+PgUp/PgDn and `g`/`G` move it instead of the view; `Enter`, `V` or `Esc` leaves.
+`f` finds text in the patch's code, marking every match as it is typed and
+moving the cursor to the next line with one; `n`/`N` then go to the next and
+previous such line, wrapping round, and `Esc` clears the matches before it
+leaves line selection. `v` opens the editor at the cursor's line. `i` from the
+diff starts a message about what it is on: the per-file view's file, and the cursor's line when lines are selected. The
 message box notes that source under the message, and the message is sent with
 `Source: path` or `Source: path:line` under it. Sent prompts mark their file
 and, in line mode, their line with `●`. Selecting a marked line shows its

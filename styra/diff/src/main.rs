@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn q_and_esc_quit_once_nothing_else_wants_them() {
         let mut diff = diff();
-        assert_eq!(press(&mut diff, KeyCode::Char('f')), Step::Stay);
+        assert_eq!(press(&mut diff, KeyCode::Char('l')), Step::Stay);
         assert_eq!(press(&mut diff, KeyCode::Char('/')), Step::Stay);
         assert_eq!(press(&mut diff, KeyCode::Char('q')), Step::Stay);
         assert_eq!(diff.search.query(), Some("q"));
@@ -297,7 +297,7 @@ mod tests {
     #[test]
     fn the_view_keys_are_styras() {
         let mut diff = diff();
-        for key in ['r', 'f', 'j', 'c', 't'] {
+        for key in ['r', 'l', 'j', 'c', 't'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Step::Stay);
         }
         assert!(diff.hide_removed);

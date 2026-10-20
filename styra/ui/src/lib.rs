@@ -41,6 +41,7 @@ pub mod picker;
 pub mod placeholders;
 pub mod preview;
 pub mod processes;
+pub mod query;
 pub mod quota;
 pub mod raw;
 pub mod recording;

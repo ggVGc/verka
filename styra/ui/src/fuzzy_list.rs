@@ -13,6 +13,7 @@
 //! [`score`] — unless the list was opened with [`FuzzyList::keeping_order`],
 //! in which case the query only narrows and the caller's order stands.
 
+use crate::query::Edit;
 use crate::theme;
 
 use ratatui::layout::Rect;
@@ -167,24 +168,17 @@ impl FuzzyList {
         self.selected = 0;
     }
 
-    /// Drop the last word of the query (`Ctrl-W`), readline-style: the
-    /// separators at the end first, then back to the one before them.
-    ///
-    /// A word here ends at punctuation as well as at whitespace, because the
-    /// rows are identifiers rather than prose: in
-    /// `claude:claude-opus-5/high` the parts worth retyping are the ones
-    /// `:`, `-`, `.` and `/` divide, so one press peels off one of them
-    /// instead of the whole query.
+    /// Drop the last word of the query (`Ctrl-W`); see
+    /// [`crate::query::delete_word`].
     pub fn delete_word(&mut self) {
-        let boundary = |character: char| !character.is_alphanumeric();
-        let trimmed = self.query.trim_end_matches(boundary).len();
-        self.query.truncate(trimmed);
-        let word_start = self
-            .query
-            .rfind(boundary)
-            .map(|index| index + 1)
-            .unwrap_or(0);
-        self.query.truncate(word_start);
+        self.edit(Edit::DeleteWord);
+    }
+
+    /// Make a change typed into the query, as every search field takes it
+    /// (see [`crate::query`]). The cursor goes back to the top, as it does
+    /// for [`Self::push`].
+    pub fn edit(&mut self, edit: Edit) {
+        edit.apply(&mut self.query);
         self.selected = 0;
     }
 
