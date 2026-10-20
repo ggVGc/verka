@@ -1532,7 +1532,10 @@ fn run_rounds(
                             continue;
                         }
                     };
-                    app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
+                    app.checkout_diff = Some(crate::checkout_diff::reopen(
+                        app.checkout_diff.take(),
+                        target,
+                    ));
                     edit_reports.load(app, client);
                     diff_refreshed = Instant::now();
                     app.diff_preview = true;
@@ -1555,7 +1558,10 @@ fn run_rounds(
                             continue;
                         }
                     };
-                    app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
+                    app.checkout_diff = Some(crate::checkout_diff::reopen(
+                        app.checkout_diff.take(),
+                        target,
+                    ));
                     edit_reports.load(app, client);
                     diff_refreshed = Instant::now();
                     app.diff_preview = false;
