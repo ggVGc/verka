@@ -389,6 +389,7 @@ impl CheckoutDiff {
             thumbnail_hidden: self.thumbnail_hidden,
             hide_removed: self.hide_removed,
             compact_dirs: self.compact_dirs,
+            files_below: false,
             tint: self.tint,
             word_highlights: self.word_highlights,
             layers: self.layers.as_ref().map(|layers| match layers {

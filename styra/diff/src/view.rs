@@ -68,6 +68,9 @@ pub struct CheckoutDiffView<'a> {
     /// Whether the file tree folds directories with no files of their own
     /// and a single subdirectory onto one row.
     pub compact_dirs: bool,
+    /// Whether the per-file view lists its files in a strip under the patch,
+    /// as in a side panel too narrow to give them a column of their own.
+    pub files_below: bool,
     pub tint: Tint,
     pub word_highlights: bool,
     /// While changes are tinted by the commits that made them, those
@@ -120,6 +123,7 @@ impl<'a> CheckoutDiffView<'a> {
             thumbnail_hidden: false,
             hide_removed: false,
             compact_dirs: true,
+            files_below: false,
             tint: Tint::Full,
             word_highlights: true,
             layers: None,
@@ -287,6 +291,10 @@ const SELECTION_MARKER: &str = "› ";
 /// Blank columns kept between the tree's longest row and its border.
 const FILE_TREE_PADDING: u16 = 2;
 
+/// The most file rows the strip under the patch shows when the files are
+/// listed there; the list scrolls through the rest.
+const FILE_LIST_MAX_HEIGHT: u16 = 10;
+
 /// As wide as the tree's longest row needs, and no wider, so the patch beside
 /// it gets the rest — but never more than half of `available`, so one deep
 /// path cannot squeeze the patch out of view.
@@ -428,38 +436,93 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                 .unwrap_or(u16::MAX)
                 .saturating_add(FILE_TREE_PADDING + 1)
         });
-        let thumbnail = view.thumbnail && !view.thumbnail_hidden;
-        // The layers, under the file list, with what the line cursor is over
-        // standing out.
+        // The layers, beside or under the file list, with what the line
+        // cursor is over standing out.
         let legend = view.layers.map(|layers| legend_rows(layers, &touched));
         let legend_wide = legend.as_deref().map_or(0, legend_width);
-        let tree_width = if thumbnail {
-            file_tree_width(&rows, body.width).max(24.min(body.width / 2))
+        // The files in a strip under the patch, no taller than they need,
+        // nor than FILE_LIST_MAX_HEIGHT, nor than half the body. The
+        // thumbnail has no room there.
+        let thumbnail = view.thumbnail && !view.thumbnail_hidden && !view.files_below;
+        let (tree, right, legend) = if view.files_below {
+            let listed = rows.len() + usize::from(stat.is_some());
+            let wanted = listed.max(legend.as_ref().map_or(0, Vec::len));
+            // One more for the rule above the strip.
+            let height = u16::try_from(wanted)
+                .unwrap_or(u16::MAX)
+                .min(FILE_LIST_MAX_HEIGHT)
+                .saturating_add(1)
+                .min(body.height / 2);
+            let [patch, strip] =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(height)]).areas(body);
+            frame.render_widget(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(theme::INACTIVE)),
+                strip,
+            );
+            let strip = Rect::new(
+                strip.x,
+                strip.y.saturating_add(1),
+                strip.width,
+                strip.height.saturating_sub(1),
+            );
+            // The layers to the files' right, behind a rule of their own.
+            let tree = match legend {
+                Some(legend) => {
+                    let width = legend_wide.saturating_add(1).min(strip.width / 2);
+                    let [files, beside] =
+                        Layout::horizontal([Constraint::Min(0), Constraint::Length(width)])
+                            .areas(strip);
+                    frame.render_widget(
+                        Block::default()
+                            .borders(Borders::LEFT)
+                            .border_style(Style::default().fg(theme::INACTIVE)),
+                        beside,
+                    );
+                    let column = Rect::new(
+                        beside.x.saturating_add(1),
+                        beside.y,
+                        beside.width.saturating_sub(1),
+                        beside.height,
+                    );
+                    render_legend(frame, legend, column);
+                    files
+                }
+                None => strip,
+            };
+            (tree, patch, None)
         } else {
-            file_tree_width(&rows, body.width)
-        }
-        .max(stat_width.min(body.width / 2))
-        .max(legend_wide.min(body.width / 2));
-        let [left, right] =
-            Layout::horizontal([Constraint::Length(tree_width), Constraint::Min(0)]).areas(body);
+            let tree_width = if thumbnail {
+                file_tree_width(&rows, body.width).max(24.min(body.width / 2))
+            } else {
+                file_tree_width(&rows, body.width)
+            }
+            .max(stat_width.min(body.width / 2))
+            .max(legend_wide.min(body.width / 2));
+            let [left, right] =
+                Layout::horizontal([Constraint::Length(tree_width), Constraint::Min(0)])
+                    .areas(body);
+            frame.render_widget(
+                Block::default()
+                    .borders(Borders::RIGHT)
+                    .border_style(Style::default().fg(theme::INACTIVE)),
+                left,
+            );
+            (
+                Rect::new(left.x, left.y, left.width.saturating_sub(1), left.height),
+                right,
+                legend,
+            )
+        };
         let thumbnail_height =
-            if thumbnail && selected_file.is_some() && left.width >= 12 && left.height >= 19 {
+            if thumbnail && selected_file.is_some() && tree.width >= 11 && tree.height >= 19 {
                 17
             } else {
                 0
             };
-        frame.render_widget(
-            Block::default()
-                .borders(Borders::RIGHT)
-                .border_style(Style::default().fg(theme::INACTIVE)),
-            left,
-        );
-        let tree = Rect::new(
-            left.x,
-            left.y,
-            left.width.saturating_sub(1),
-            left.height - thumbnail_height,
-        );
+        let left = tree;
+        let tree = Rect::new(tree.x, tree.y, tree.width, tree.height - thumbnail_height);
         // The layers take what they need beneath the files, with a rule above
         // them, but never more than half of what the two share.
         let tree = match legend {
@@ -2833,6 +2896,7 @@ index 1111111..2222222 100644
                         thumbnail_hidden: false,
                         hide_removed: false,
                         compact_dirs: true,
+                        files_below: false,
                         tint: Tint::Full,
                         word_highlights: true,
                         layers: None,
@@ -3028,6 +3092,65 @@ index 1111111..2222222 100644
         assert_eq!(viewport, 12, "shortcut rows leave room for the patch");
     }
 
+    /// Below the patch, the files take the full width and no more rows than
+    /// FILE_LIST_MAX_HEIGHT, scrolling to keep the selection in sight.
+    #[test]
+    fn files_below_the_patch_fill_a_strip_of_bounded_height() {
+        let text = (0..20)
+            .map(|n| format!("diff --git a/f{n:02} b/f{n:02}\n@@ -1 +1 @@\n-old {n}\n+new {n}\n"))
+            .collect::<String>();
+        let (width, height) = (50, 40);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let mut view = CheckoutDiffView::unread(Block::bordered());
+                view.diff = Ok(&text);
+                view.per_file = true;
+                view.files_below = true;
+                view.thumbnail = true;
+                view.selected_file = 19;
+                render(frame, &view, frame.area());
+            })
+            .unwrap();
+        let output = terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = output.lines().collect::<Vec<_>>();
+        let stat = rows
+            .iter()
+            .position(|row| row.contains("20 files changed"))
+            .expect(&output);
+        // The panel's bottom border closes the strip.
+        assert_eq!(
+            stat + usize::from(FILE_LIST_MAX_HEIGHT),
+            rows.len() - 1,
+            "{output}"
+        );
+        assert!(rows[stat - 1].contains("──────"), "a rule above: {output}");
+        assert!(
+            rows[stat + 1..].iter().any(|row| row.contains("› f19")),
+            "{output}"
+        );
+        assert!(
+            !rows[stat + 1..].iter().any(|row| row.contains("f00")),
+            "{output}"
+        );
+        // The patch has the whole width above it.
+        assert!(
+            rows[..stat].iter().any(|row| row.contains("new 19")),
+            "{output}"
+        );
+        assert!(
+            !rows[..stat].iter().any(|row| row.contains("f18")),
+            "{output}"
+        );
+    }
+
     #[test]
     fn file_list_and_title_use_the_same_change_markers() {
         let text = "diff --git a/a b/a\nnew file mode 100644\n\
@@ -3194,6 +3317,7 @@ index 1111111..2222222 100644
                             thumbnail_hidden: false,
                             hide_removed: false,
                             compact_dirs: true,
+                            files_below: false,
                             tint: Tint::Full,
                             word_highlights: true,
                             layers: None,
@@ -3510,6 +3634,7 @@ index 1111111..2222222 100644
                         thumbnail_hidden: false,
                         hide_removed: false,
                         compact_dirs: true,
+                        files_below: false,
                         tint: Tint::Full,
                         word_highlights: true,
                         layers: None,

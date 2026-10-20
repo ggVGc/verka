@@ -40,6 +40,10 @@ struct Cli {
     /// a patch, where its files are opened from.
     #[arg(short = 'C', value_name = "DIR", default_value = ".")]
     directory: PathBuf,
+    /// List the per-file view's files in a strip under the patch rather than
+    /// in a column beside it.
+    #[arg(long)]
+    files_below: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -56,7 +60,7 @@ fn main() -> anyhow::Result<()> {
         }
     };
     let mut terminal = init().context("taking over the terminal")?;
-    let result = run(&mut terminal, &mut diff);
+    let result = run(&mut terminal, &mut diff, cli.files_below);
     restore();
     result
 }
@@ -109,7 +113,11 @@ fn supplied(path: &Path, directory: &Path) -> anyhow::Result<CheckoutDiff> {
     ))
 }
 
-fn run(terminal: &mut DefaultTerminal, diff: &mut CheckoutDiff) -> anyhow::Result<()> {
+fn run(
+    terminal: &mut DefaultTerminal,
+    diff: &mut CheckoutDiff,
+    files_below: bool,
+) -> anyhow::Result<()> {
     // Why the last key did nothing — a `v` that opened no file, say — until
     // the next key.
     let mut notice: Option<String> = None;
@@ -119,6 +127,7 @@ fn run(terminal: &mut DefaultTerminal, diff: &mut CheckoutDiff) -> anyhow::Resul
             .draw(|frame| {
                 let mut view = diff.view(block(notice.as_deref()));
                 view.thumbnail = true;
+                view.files_below = files_below;
                 // There is no agent here to write an edit report with.
                 view.report = None;
                 measured = render(frame, &view, frame.area());

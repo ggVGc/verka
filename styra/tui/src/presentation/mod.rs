@@ -153,6 +153,9 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
         None => return None,
     };
     view.host_shortcuts = &[("T", "toggle selected turn / full checkout diff")];
+    // The side panel is too narrow to give the files a column; fullscreen
+    // puts them back beside the patch.
+    view.files_below = app.view != View::CheckoutDiff;
     view.prompts = app.diff_prompts();
     if turn {
         view.report = None;
