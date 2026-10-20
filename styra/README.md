@@ -256,10 +256,17 @@ directly; the Ratatui implementation also supports an in-memory test backend.
 The checkout diff view (`d` in the preview pane, `D` fullscreen) is its own crate, `styra-diff` in `styra/diff`,
 built on `styra-ui`; its `styra-diff` binary opens the same view over any
 repository: `styra-diff [-C DIR] [BASE]` shows the working tree against where
-the current branch left `BASE`, or against `HEAD` when no base is given.
+the current branch left `BASE`, or against `HEAD` when no base is given, and
+`styra-diff -p FILE` shows a Git-style patch instead (`-` reads it from
+standard input: `git show | styra-diff -p -`), opening its files from `DIR`.
 The view's keys live in that crate too, so both answer them the same way;
 while the view is open in Styra its navigation keys act, and Esc closes it.
 `D` also expands a diff already open in the preview pane to fullscreen.
+In the diff, in the preview pane or fullscreen, `T` switches between the
+checkout's diff and the selected turn's (`D` takes either fullscreen as it is): the diff between the snapshots taken as the turn started and ended, or
+— a turn without both, or still running — the file changes the agent reported,
+with the message that started the turn above it. The turn diff follows the
+selection, keeping the view's layout, and has no edit report.
 With a file selected in the Files view or a file reference highlighted in the
 conversation, `d` and `D` jump to its patch. References with a line number jump
 to that line when it appears in a changed hunk (including context). If the file

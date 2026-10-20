@@ -1,7 +1,7 @@
 //! `styra-diff`: the diff view Styra opens with `d`, as a program of its own,
-//! over whichever repository it is run in.
+//! over whichever repository it is run in, or over a patch it is given.
 
-use std::io;
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -16,32 +16,74 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Block;
 use ratatui::DefaultTerminal;
-use styra_diff::{git, render, CheckoutDiff, CheckoutDiffFeedback, Outcome};
+use styra_diff::{git, render, CheckoutDiff, CheckoutDiffFeedback, Outcome, Supplied};
 use styra_ui::theme;
 
-/// Browse a Git working tree's changes as Styra's diff view shows them:
-/// syntax-highlighted, whole or one file at a time.
+/// Browse a Git working tree's changes, or a patch, as Styra's diff view
+/// shows them: syntax-highlighted, whole or one file at a time.
 #[derive(Parser)]
 #[command(name = "styra-diff", version)]
 struct Cli {
     /// Show the work since the current branch left BASE — their merge base —
     /// uncommitted changes included. Without it, what is not committed yet.
+    #[arg(conflicts_with = "patch")]
     base: Option<String>,
-    /// Read the repository DIR is in rather than the current directory's.
+    /// Show the Git-style patch in FILE, or on standard input for `-`, rather
+    /// than reading one from the repository: `git show | styra-diff -p -`.
+    #[arg(short, long, value_name = "FILE")]
+    patch: Option<PathBuf>,
+    /// Read the repository DIR is in rather than the current directory's. With
+    /// a patch, where its files are opened from.
     #[arg(short = 'C', value_name = "DIR", default_value = ".")]
     directory: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    // Resolved before the terminal is taken over, so a mistyped base or a
-    // directory outside any repository is an ordinary error message.
-    let target = git::target(&cli.directory, cli.base.as_deref()).map_err(anyhow::Error::msg)?;
-    let mut diff = CheckoutDiff::read(target);
+    // Resolved before the terminal is taken over, so a mistyped base, a
+    // directory outside any repository, or a patch that cannot be read is an
+    // ordinary error message.
+    let mut diff = match &cli.patch {
+        Some(patch) => supplied(patch, &cli.directory)?,
+        None => {
+            let target =
+                git::target(&cli.directory, cli.base.as_deref()).map_err(anyhow::Error::msg)?;
+            CheckoutDiff::read(target)
+        }
+    };
     let mut terminal = ratatui::init();
     let result = run(&mut terminal, &mut diff);
     ratatui::restore();
     result
+}
+
+/// The patch at `path`, or on standard input for `-`, with its files opened
+/// from the top of the repository `directory` is in — where Git's paths start
+/// — or from `directory` itself outside one. Keys are still read from the
+/// terminal when standard input is the patch.
+fn supplied(path: &Path, directory: &Path) -> anyhow::Result<CheckoutDiff> {
+    let (text, label) = if path == Path::new("-") {
+        let mut text = String::new();
+        io::stdin()
+            .read_to_string(&mut text)
+            .context("reading the patch from standard input")?;
+        (text, "patch from standard input".to_owned())
+    } else {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading the patch {}", path.display()))?;
+        (text, format!("patch {}", path.display()))
+    };
+    let root = git::toplevel(directory).map_or_else(
+        |_| std::path::absolute(directory).unwrap_or_else(|_| directory.to_owned()),
+        PathBuf::from,
+    );
+    Ok(CheckoutDiff::supplied(
+        text,
+        Supplied {
+            label,
+            root: Some(root),
+        },
+    ))
 }
 
 fn run(terminal: &mut DefaultTerminal, diff: &mut CheckoutDiff) -> anyhow::Result<()> {
@@ -107,6 +149,13 @@ fn edit(terminal: &mut DefaultTerminal, path: &Path, line: Option<u32>) -> Resul
     let program = command.get_program().to_string_lossy().into_owned();
     // `+N` is how vi, Emacs, nano and their kin are told where to start.
     command.args(line.map(|line| format!("+{line}"))).arg(path);
+    // A patch read from standard input leaves the editor nothing there to
+    // read keys from; the terminal is where they come from.
+    if !io::stdin().is_terminal() {
+        if let Ok(tty) = std::fs::File::open("/dev/tty") {
+            command.stdin(tty);
+        }
+    }
     let leave = || -> io::Result<()> {
         disable_raw_mode()?;
         execute!(io::stdout(), LeaveAlternateScreen)
@@ -275,5 +324,28 @@ mod tests {
         let cli = Cli::parse_from(["styra-diff", "-C", "/repo", "main"]);
         assert_eq!(cli.base.as_deref(), Some("main"));
         assert_eq!(cli.directory, PathBuf::from("/repo"));
+        let cli = Cli::parse_from(["styra-diff", "-p", "-"]);
+        assert_eq!(cli.patch, Some(PathBuf::from("-")));
+        assert!(Cli::try_parse_from(["styra-diff", "-p", "-", "main"]).is_err());
+    }
+
+    /// A patch file is shown as given, with its files opened from where it
+    /// was run, and is not read again from Git.
+    #[test]
+    fn a_patch_file_is_shown_as_given() {
+        let directory = std::env::temp_dir().join("styra-diff-patch-file");
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("turn.patch");
+        let patch = "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n";
+        std::fs::write(&file, patch).unwrap();
+        std::fs::write(directory.join("a.txt"), "b\n").unwrap();
+
+        let mut diff = supplied(&file, &directory).unwrap();
+        assert_eq!(diff.diff.as_deref(), Ok(patch));
+        assert!(diff.target().is_none());
+        assert!(!diff.refresh());
+        assert_eq!(diff.location(), Ok((directory.join("a.txt"), None)));
+        assert!(supplied(&directory.join("missing.patch"), &directory).is_err());
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

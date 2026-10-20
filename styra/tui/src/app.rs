@@ -301,6 +301,11 @@ pub struct App {
     pub diff_preview: bool,
     /// While a side diff is open, whether navigation belongs to the interaction.
     pub diff_interaction_focus: bool,
+    /// Whether the side diff shows the selected turn's diff rather than the
+    /// checkout's; see [`crate::turn_diff`].
+    pub diff_turn: bool,
+    /// The turn diff the side diff shows while [`Self::diff_turn`] is set.
+    pub turn_diff: Option<crate::turn_diff::TurnDiffPanel>,
     /// Whether the fullscreen diff shows the conversation's latest messages
     /// where its header would be. Kept as the diff is left and opened again.
     pub diff_conversation: bool,
@@ -330,8 +335,8 @@ pub struct App {
     /// The linked Session's log, while the preview is on a `branch` marker;
     /// see [`crate::branch_log`].
     pub branch_log: Option<crate::branch_log::BranchLog>,
-    /// What the turn the preview's diff is about changed according to its
-    /// snapshots; see [`crate::turn_snapshot`].
+    /// What the turn the side diff's turn diff is about changed according to
+    /// its snapshots; see [`crate::turn_snapshot`].
     pub turn_snapshot: Option<crate::turn_snapshot::TurnSnapshot>,
     /// The microphone capture that is running, if one is; see [`Recorded`].
     /// While it is set the message box is the level meter, and the keys that
@@ -599,6 +604,8 @@ impl App {
             transcript: Scroll::default(),
             checkout_diff: None,
             diff_preview: false,
+            diff_turn: false,
+            turn_diff: None,
             diff_interaction_focus: false,
             diff_conversation: false,
             entry_log: EntryLog::default(),
@@ -1657,22 +1664,6 @@ impl App {
             } if *session != self.session_id => Some((session, *direction)),
             _ => None,
         }
-    }
-
-    /// What the preview shows in place of [`Self::preview_entry`]'s content
-    /// when that entry is a conversation line: the file changes made during
-    /// its stretch ([`Timeline::conversation_changes`]). The message itself is
-    /// already readable on the list; the work done for it is what the list
-    /// does not show. `None` for any other entry, which previews as itself.
-    ///
-    /// A conversation entry the preview can land on is always the start of the
-    /// selected stretch: the entry-log pane's cursor stays inside that stretch,
-    /// whose only conversation entry is its first, and the command target
-    /// only falls back to the selection itself.
-    pub(crate) fn preview_changes(&self) -> Option<Vec<&AgentEvent>> {
-        self.preview_entry()
-            .filter(|entry| entry.event().is_conversation())
-            .map(|_| self.timeline.conversation_changes())
     }
 
     /// Whether the launch policy can still be edited; see [`launch::editable`].

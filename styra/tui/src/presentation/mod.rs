@@ -15,7 +15,7 @@ mod footer_tests;
 mod interactions;
 mod list;
 mod overview;
-mod preview;
+pub(crate) mod preview;
 pub(crate) mod quota;
 mod raw;
 #[cfg(test)]
@@ -131,6 +131,40 @@ pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrom
 /// Workspace name followed by the interaction's own title. `suffix` names
 /// the view in the title; `None` is the event list, which is the default
 /// view and so needs no name.
+/// The diff on screen, in the side panel or fullscreen: the checkout's, or —
+/// while `T` has it so — the selected turn's, with the message that started
+/// the turn above it. A turn diff has no edit report to write: that is the
+/// checkout's.
+fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
+    let turn = app.turn_diff_shown();
+    let title = if turn {
+        "turn diff · T: full diff"
+    } else {
+        "diff · T: turn diff"
+    };
+    let mut chrome = panel_chrome(app, Some("diff"));
+    chrome.suffix = Some(title.to_owned());
+    let block = styra_ui::chrome::focused_panel_block(&chrome);
+    let mut view = match app.shown_diff() {
+        Some(diff) => diff.view(block),
+        None if turn || app.view == View::CheckoutDiff => {
+            styra_diff::CheckoutDiffView::unread(block)
+        }
+        None => return None,
+    };
+    if turn {
+        view.report = None;
+        view.intro = app.turn_message().map(|message| {
+            styra_ui::preview::message_lines(
+                message,
+                app.selection.provider.protocol(),
+                list::ui_link_display(app.link_display),
+            )
+        });
+    }
+    Some(view)
+}
+
 fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrome {
     let label = app.launch_label();
     use styra_ui::chrome::StatusTone;
@@ -386,12 +420,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                     selected: None,
                 });
             let preview = app.preview.open.then(|| preview::view(app, false));
-            let diff = app.checkout_diff.as_ref().map(|diff| {
-                diff.view(styra_ui::chrome::focused_panel_block(&panel_chrome(
-                    app,
-                    Some("diff"),
-                )))
-            });
+            let diff = shown_diff(app);
             let side_preview = if app.diff_visible() {
                 diff.as_ref()
                     .map(|diff| styra_ui::application::SidePreview::CheckoutDiff(diff))
@@ -483,11 +512,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
             draw_main(ui, app, MainView::Transcript(&transcript))
         }
         View::CheckoutDiff => {
-            let block = styra_ui::chrome::focused_panel_block(&panel_chrome(app, Some("diff")));
-            let mut diff = match &app.checkout_diff {
-                Some(diff) => diff.view(block),
-                None => styra_diff::CheckoutDiffView::unread(block),
-            };
+            let mut diff = shown_diff(app).expect("fullscreen always draws a diff");
             diff.thumbnail = true;
             if app.diff_conversation {
                 diff.conversation = Some(styra_ui::picker::latest_conversation(
@@ -522,12 +547,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
         View::Files => {
             let list = list::view(app);
             let preview = app.preview.open.then(|| preview::view(app, false));
-            let diff = app.checkout_diff.as_ref().map(|diff| {
-                diff.view(styra_ui::chrome::focused_panel_block(&panel_chrome(
-                    app,
-                    Some("diff"),
-                )))
-            });
+            let diff = shown_diff(app);
             let side_preview = if app.diff_visible() {
                 diff.as_ref()
                     .map(|diff| styra_ui::application::SidePreview::CheckoutDiff(diff))
@@ -742,13 +762,13 @@ fn draw_main(
 
 pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback) {
     if let (Some((side_by_side, horizontal_scroll)), Some(diff)) =
-        (feedback.diff_layout, &mut app.checkout_diff)
+        (feedback.diff_layout, app.shown_diff_mut())
     {
         diff.rendered_side = side_by_side;
         diff.horizontal_scroll = horizontal_scroll;
     }
     if let Some(offset) = feedback.diff_file_list_offset {
-        if let Some(diff) = &mut app.checkout_diff {
+        if let Some(diff) = app.shown_diff_mut() {
             diff.file_list_offset = offset;
         }
     }
@@ -809,7 +829,7 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
                 }
             }
             styra_ui::PanelId::CheckoutDiff { .. } => {
-                if let Some(diff) = &mut app.checkout_diff {
+                if let Some(diff) = app.shown_diff_mut() {
                     diff.scroll.offset = scroll.effective_offset;
                     diff.scroll.note_limit(scroll.limit);
                     diff.scroll.note_viewport(scroll.viewport);
@@ -1308,13 +1328,13 @@ mod tests {
     fn the_checkout_diff_names_both_branches_above_the_diff() {
         let mut app = test_support::app("s1");
         app.checkout_diff = Some(styra_diff::CheckoutDiff {
-            target: styra_diff::DiffTarget {
+            source: styra_diff::Source::Checkout(styra_diff::DiffTarget {
                 worktree: "/state/worktrees/styra-7".into(),
                 branch: Some("styra/rename".into()),
                 base_branch: Some("main".into()),
                 base: "4bf5c35d".into(),
                 branch_point: true,
-            },
+            }),
             diff: Ok(
                 "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n"
                     .into(),

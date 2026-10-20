@@ -118,9 +118,10 @@ bindings! { READING = "Raw, messages, log, quota, processes, and transcript";
     READING_COPY: [Key::ch('y')] ("raw, messages, processes") => Action::ReadingCopy;
 }
 
-bindings! { CHECKOUT_DIFF = "Fullscreen diff";
-    DIFF_CONVERSATION: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]
+bindings! { CHECKOUT_DIFF = "Diff";
+    DIFF_CONVERSATION: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)] ("fullscreen")
         => Action::DiffConversation;
+    DIFF_TURN: [Key::ch('T')] => Action::DiffTurn;
 }
 
 bindings! { PREVIEW = "Full-screen preview";

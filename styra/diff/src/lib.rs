@@ -19,5 +19,5 @@ mod view;
 
 pub use keys::Outcome;
 pub use report::{FileReport, Report, ReportState};
-pub use state::{CheckoutDiff, DiffTarget};
+pub use state::{CheckoutDiff, DiffTarget, Source, Supplied};
 pub use view::{render, CheckoutDiffFeedback, CheckoutDiffView, Tint};

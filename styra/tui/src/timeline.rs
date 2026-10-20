@@ -503,8 +503,8 @@ impl Timeline {
 
     /// The file changes made during the selected message's stretch — the
     /// entries [`Self::conversation_span`] scopes it to, so the same work the
-    /// entry-log pane lists. This is what the preview shows for a message: its
-    /// text is already on the list, and what the agent changed under it is not.
+    /// entry-log pane lists. This is the turn diff where the turn has no
+    /// snapshots (see [`crate::turn_diff`]).
     ///
     /// Codex follows each file-change item with a snapshot of the whole turn's
     /// diff so far. Where the stretch has one, the newest stands for them all:

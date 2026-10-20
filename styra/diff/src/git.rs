@@ -85,7 +85,7 @@ pub fn names_at(worktree: &Path, commit: &str) -> Vec<String> {
 /// so that what `base` has gained since is not shown as undone here — or,
 /// with no base, against `HEAD`, which leaves what is not committed yet.
 pub fn target(directory: &Path, base: Option<&str>) -> Result<DiffTarget, String> {
-    let worktree = git(directory, &["rev-parse", "--show-toplevel"])?;
+    let worktree = toplevel(directory)?;
     // Fails only for a detached head, the repository having just answered.
     let branch = git(directory, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
     let commit = match base {
@@ -99,6 +99,11 @@ pub fn target(directory: &Path, base: Option<&str>) -> Result<DiffTarget, String
         base: commit,
         branch_point: base.is_some(),
     })
+}
+
+/// The top of the working tree `directory` is in, where a diff's paths start.
+pub fn toplevel(directory: &Path) -> Result<String, String> {
+    git(directory, &["rev-parse", "--show-toplevel"])
 }
 
 /// Run `git` in `directory`, returning what it printed or what went wrong.

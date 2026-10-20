@@ -50,6 +50,7 @@ mod tag_picker;
 mod tail;
 mod terminal;
 mod timeline;
+mod turn_diff;
 mod turn_snapshot;
 mod workspace;
 mod workspace_jump;

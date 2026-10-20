@@ -1519,6 +1519,7 @@ fn run_rounds(
                     diff_refreshed = Instant::now();
                     app.diff_preview = !fullscreen;
                     app.diff_interaction_focus = false;
+                    app.diff_turn = false;
                     if fullscreen {
                         app.set_view(View::CheckoutDiff);
                     } else if !matches!(app.view, View::Events | View::Files) {
@@ -1543,6 +1544,7 @@ fn run_rounds(
                     diff_refreshed = Instant::now();
                     app.diff_preview = true;
                     app.diff_interaction_focus = false;
+                    app.diff_turn = false;
                     if !matches!(app.view, View::Events | View::Files) {
                         app.set_view(View::Events);
                     }
@@ -1565,6 +1567,7 @@ fn run_rounds(
                     diff_refreshed = Instant::now();
                     app.diff_preview = false;
                     app.diff_interaction_focus = false;
+                    app.diff_turn = false;
                     app.set_view(View::CheckoutDiff);
                 }
                 Request::ProjectAction(action) => {
@@ -1823,6 +1826,7 @@ fn run_rounds(
 
         dirty |= crate::branch_log::sync(app, client);
         dirty |= crate::turn_snapshot::sync(app, client);
+        dirty |= app.sync_turn_diff();
         dirty |= app.activity.note_progress();
 
         // The parts of a frame that are read off the clock have nothing to

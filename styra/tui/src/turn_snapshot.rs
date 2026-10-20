@@ -1,13 +1,14 @@
 //! What a turn changed in the checkout, read from the snapshots the server
-//! took as it started and ended, for the preview's turn diff.
+//! took as it started and ended, for the side diff panel's turn diff (see
+//! [`crate::turn_diff`]).
 //!
 //! The agent's own file-change events say what it reported writing; the
 //! snapshots say what actually changed — a file a shell command rewrote, a
 //! formatter's pass, the operator's edit while the turn ran. Where a turn has
-//! both snapshots, the preview shows theirs. A turn still running is shown
+//! both snapshots, the turn diff is theirs. A turn still running is shown
 //! from the most recent snapshot to the checkout as it is now, read again
 //! every [`REPOLL`] while it runs. Where there are no snapshots — outside a
-//! Git checkout, or from before they were taken — it shows the events.
+//! Git checkout, or from before they were taken — it is the events'.
 //!
 //! The diff is the server's to compute, so it is fetched once the cursor has
 //! settled on a turn, as the branch log is (see [`crate::branch_log`]).
@@ -17,7 +18,7 @@ use std::time::{Duration, Instant};
 use styra_protocol::TurnDiff;
 use styra_server::Client;
 
-/// How long the preview must rest on a turn before its snapshots are read.
+/// How long the selection must rest on a turn before its snapshots are read.
 const SETTLE: Duration = Duration::from_millis(120);
 
 /// How often a turn that has not ended yet is asked about again, so its diff
@@ -92,32 +93,18 @@ impl TurnSnapshot {
 }
 
 impl crate::app::App {
-    /// The turn the preview's diff is about, counting the operator messages
-    /// from 1 up to the selected stretch's, as the server counts them; `None`
-    /// when the preview shows no turn diff, or the stretch comes before the
-    /// first message.
-    pub(crate) fn preview_turn(&self) -> Option<u64> {
-        // Only the side panel shows a turn diff: `P` reads the entry itself.
-        let side_panel = matches!(
-            self.view,
-            crate::app::View::Events | crate::app::View::Files
-        ) && self.preview.open;
-        if !side_panel {
-            return None;
-        }
-        self.preview_changes()?;
-        let start = self.timeline.conversation_span().start;
-        let turn = self.timeline.entries[..=start]
-            .iter()
-            .filter(|entry| is_operator_message(entry.event()))
-            .count() as u64;
-        (turn > 0).then_some(turn)
+    /// The turn whose snapshots are wanted: the selected one, while the side
+    /// diff panel shows its turn diff.
+    fn snapshot_turn(&self) -> Option<u64> {
+        self.turn_diff_shown()
+            .then(|| self.selected_turn())
+            .flatten()
     }
 
     /// The selected turn's diff from its snapshots, if it has been read and
     /// there is one.
-    pub(crate) fn preview_snapshot_diff(&self) -> Option<&TurnDiff> {
-        let turn = self.preview_turn()?;
+    pub(crate) fn turn_snapshot_diff(&self) -> Option<&TurnDiff> {
+        let turn = self.selected_turn()?;
         self.turn_snapshot
             .as_ref()
             .filter(|snapshot| snapshot.is_for(&self.session_id, turn))?
@@ -138,11 +125,11 @@ fn is_operator_message(event: &styra_protocol::event::AgentEvent) -> bool {
     matches!(event, styra_protocol::event::AgentEvent::UserMessage { .. })
 }
 
-/// Keep `app.turn_snapshot` on the turn the preview's diff is about: start a
-/// fresh read when it moves to another, and drop it once the preview shows no
-/// turn diff. Whether anything on screen changed.
+/// Keep `app.turn_snapshot` on the turn the turn diff is about: start a
+/// fresh read when it moves to another, and drop it once no turn diff is
+/// shown. Whether anything on screen changed.
 pub fn sync(app: &mut crate::app::App, client: &Client) -> bool {
-    let Some(turn) = app.preview_turn().filter(|_| !app.session_id.is_empty()) else {
+    let Some(turn) = app.snapshot_turn().filter(|_| !app.session_id.is_empty()) else {
         app.turn_snapshot = None;
         return false;
     };

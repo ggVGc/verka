@@ -126,20 +126,23 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
 /// `styra-diff` answers every key, the same way its own program does, and
 /// `i` focuses the message box and `q` quits Styra unless the diff's filter
 /// is being typed.
-/// Tab hands navigation to the interaction when the diff is in a side pane,
-/// and fullscreen swaps the diff's header for the conversation's latest
-/// messages. Other global bindings and the other views' keys do not act from
+/// `T` switches between the checkout's diff and the selected turn's. Tab
+/// hands navigation to the interaction when the diff is in a side pane, and
+/// fullscreen swaps the diff's header for the conversation's latest
+/// messages; `D` takes a side diff fullscreen as it is, turn diff and all. Other global bindings and the other views' keys do not act from
 /// it.
 pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
     if handle_diff_focus_key(app, key) {
         return;
     }
-    let typing_filter = app
-        .checkout_diff
-        .as_ref()
-        .is_some_and(|diff| diff.search.typing());
+    let typing_filter = app.shown_diff().is_some_and(|diff| diff.search.typing());
     if DIFF_CONVERSATION.matches(key) && app.view == View::CheckoutDiff && !typing_filter {
         app.diff_conversation = !app.diff_conversation;
+        return;
+    }
+    if DIFF_TURN.matches(key) && !typing_filter {
+        app.diff_turn = !app.diff_turn;
+        app.sync_turn_diff();
         return;
     }
     if GLOBAL_QUIT.matches(key) && !typing_filter {
@@ -154,9 +157,10 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
         app.diff_preview = false;
         app.diff_interaction_focus = false;
         app.set_view(View::CheckoutDiff);
+        app.sync_turn_diff();
         return;
     }
-    let outcome = match app.checkout_diff.as_mut() {
+    let outcome = match app.shown_diff_mut() {
         Some(diff) => diff.handle_key(key),
         None if matches!(key.code, KeyCode::Esc | KeyCode::Char('d'))
             && !key
@@ -176,8 +180,12 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
                 app.diff_preview = false;
                 app.diff_interaction_focus = false;
             }
+            app.diff_turn = false;
         }
         Outcome::OpenFile => open_diff_file(app),
+        Outcome::GenerateReport if app.turn_diff_shown() => {
+            app.show_warning("edit reports describe the checkout's diff: T shows it")
+        }
         Outcome::GenerateReport => app.ask(Request::GenerateEditReport),
     }
 }
@@ -191,10 +199,7 @@ pub fn handle_diff_focus_key(app: &mut App, key: KeyEvent) -> bool {
         || !matches!(app.view, View::Events | View::Files)
         || app.search.typing()
         || app.interactions.typing_filter()
-        || app
-            .checkout_diff
-            .as_ref()
-            .is_some_and(|diff| diff.search.typing())
+        || app.shown_diff().is_some_and(|diff| diff.search.typing())
     {
         return false;
     }
@@ -1208,7 +1213,7 @@ fn toggle_auto_commit(app: &mut App) {
 /// Ask for the file at the top of the diff to be opened, at the line there,
 /// or say why there is none to open.
 fn open_diff_file(app: &mut App) {
-    let Some(diff) = app.checkout_diff.as_ref() else {
+    let Some(diff) = app.shown_diff() else {
         return;
     };
     match diff.location() {
@@ -2697,6 +2702,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// `T` swaps the diff between the checkout's and the selected turn's, the
+    /// diff keys then acting on the turn's; closing the diff leaves the next
+    /// one opened on the checkout's diff again.
+    #[test]
+    fn t_switches_the_diff_to_the_turn_diff_and_back() {
+        let root = tree("diff-turn");
+        let mut app = app_with_diffable_interaction(&root);
+        app.push_event(styra_protocol::event::AgentEvent::UserMessage {
+            text: "change a".into(),
+        });
+        app.push_event(styra_protocol::event::AgentEvent::FileChanged {
+            id: String::new(),
+            paths: vec!["a.txt".into()],
+            diff: Some("@@ -1 +1 @@\n-a\n+b".into()),
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.select_first();
+        app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
+        app.diff_preview = true;
+        let press = |app: &mut App, code| press_list_key(app, &root, KeyEvent::from(code));
+
+        press(&mut app, KeyCode::Char('T'));
+        assert!(app.turn_diff_shown());
+        let turn = app.shown_diff().unwrap();
+        assert!(turn.target().is_none());
+        assert!(turn.diff.as_deref().unwrap().contains("+b"));
+        press(&mut app, KeyCode::Char('f'));
+        assert!(app.shown_diff().unwrap().per_file);
+        assert!(!app.checkout_diff.as_ref().unwrap().per_file);
+        press(&mut app, KeyCode::Char('E'));
+        assert!(app.take_request().is_none(), "no report for a turn diff");
+
+        press(&mut app, KeyCode::Char('T'));
+        assert!(!app.turn_diff_shown());
+        assert!(app.shown_diff().unwrap().target().is_some());
+        press(&mut app, KeyCode::Char('T'));
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.diff_visible());
+        assert!(!app.diff_turn);
+
+        // `D` takes the turn diff fullscreen as it is, where `T` switches
+        // the same way, and leaving fullscreen forgets it.
+        app.diff_preview = true;
+        press(&mut app, KeyCode::Char('T'));
+        press(&mut app, KeyCode::Char('D'));
+        assert_eq!(app.view, View::CheckoutDiff);
+        assert!(app.turn_diff_shown());
+        assert!(app.shown_diff().unwrap().per_file, "the same turn diff");
+        let screen = crate::presentation::test_support::screen_sized(&app, 140, 30).all();
+        assert!(screen.contains("change a"), "{screen}");
+        assert!(screen.contains("turn diff · T: full diff"), "{screen}");
+        press(&mut app, KeyCode::Char('T'));
+        assert!(!app.turn_diff_shown());
+        assert!(app.shown_diff().unwrap().target().is_some());
+        press(&mut app, KeyCode::Char('T'));
+        assert!(app.turn_diff_shown());
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        assert_ne!(app.view, View::CheckoutDiff);
+        assert!(!app.diff_turn);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn per_file_diff_navigation_and_scrolling_use_separate_keys() {
         let root = tree("diff-files");
@@ -2704,7 +2774,7 @@ mod tests {
         app.enter_list();
         app.view = View::CheckoutDiff;
         app.checkout_diff = Some(styra_diff::CheckoutDiff {
-            target: diffable_target(),
+            source: styra_diff::Source::Checkout(diffable_target()),
             diff: Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n".into()),
             base_names: Vec::new(),
             scroll: Default::default(),

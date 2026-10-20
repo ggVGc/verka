@@ -64,7 +64,9 @@ impl EditReports {
         if files.is_empty() {
             return app.show_warning("no edited files to describe");
         }
-        let base = diff.target.base.clone();
+        let Some(base) = diff.target().map(|target| target.base.clone()) else {
+            return app.show_warning("only a checkout's diff has edits to describe");
+        };
         let count = files.len();
         let client = client.clone();
         let send = self.send.clone();

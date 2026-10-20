@@ -30,6 +30,27 @@ pub struct DiffTarget {
     pub branch_point: bool,
 }
 
+/// Where a diff view's diff comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// Read from Git, and read again on [`CheckoutDiff::refresh`].
+    Checkout(DiffTarget),
+    /// Handed to the view whole — a turn's snapshot diff, say, or a patch
+    /// piped into `styra-diff` — and changed only by
+    /// [`CheckoutDiff::replace`].
+    Supplied(Supplied),
+}
+
+/// What a supplied diff is, for saying so, and where its files are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Supplied {
+    /// What the diff is of, said where a checkout's diff names its branches.
+    pub label: String,
+    /// The directory the diff's paths are relative to, for opening its files
+    /// and measuring them; `None` when they are not on this host.
+    pub root: Option<PathBuf>,
+}
+
 /// What a key can ask of the view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
@@ -71,10 +92,11 @@ pub(crate) enum Action {
 
 /// A diff read for the view, and how far it is scrolled.
 pub struct CheckoutDiff {
-    pub target: DiffTarget,
-    /// `git diff`'s output, or why it could not be read.
+    pub source: Source,
+    /// `git diff`'s output, or the supplied diff, or why there is none.
     pub diff: Result<String, String>,
-    /// The branches and tags at the base commit, read with the diff.
+    /// The branches and tags at the base commit, read with the diff. Always
+    /// empty for a supplied diff.
     pub base_names: Vec<String>,
     pub scroll: Scroll,
     /// The combined diff's scroll, put by while the per-file view is shown so
@@ -110,8 +132,11 @@ impl CheckoutDiff {
     /// Focus a changed file, optionally at a working-tree line present in a
     /// hunk. An unmatched location leaves the view untouched.
     pub fn jump_to(&mut self, path: &Path, line: Option<u32>) -> Result<(), String> {
+        let root = self
+            .root()
+            .ok_or("this diff's files are not on this host")?;
         let relative = path
-            .strip_prefix(&self.target.worktree)
+            .strip_prefix(root)
             .map_err(|_| format!("{} is outside this diff's checkout", path.display()))?;
         let text = self.diff.as_deref().map_err(Clone::clone)?;
         let (index, file) = crate::files::file_diffs(text)
@@ -155,8 +180,19 @@ impl CheckoutDiff {
     pub fn read(target: DiffTarget) -> Self {
         let diff = crate::git::diff(&target.worktree, &target.base);
         let base_names = crate::git::names_at(&target.worktree, &target.base);
+        Self::new(Source::Checkout(target), diff, base_names)
+    }
+
+    /// Show `diff` — a Git-style patch, one `diff --git` header per file —
+    /// rather than reading one from a checkout. [`Self::replace`] puts a
+    /// newer one in its place.
+    pub fn supplied(diff: String, supplied: Supplied) -> Self {
+        Self::new(Source::Supplied(supplied), Ok(diff), Vec::new())
+    }
+
+    fn new(source: Source, diff: Result<String, String>, base_names: Vec<String>) -> Self {
         Self {
-            target,
+            source,
             diff,
             base_names,
             scroll: Scroll::default(),
@@ -177,12 +213,39 @@ impl CheckoutDiff {
         }
     }
 
-    /// Read the diff again, keeping the view where it is: the same file stays
-    /// selected while it is still in the diff, and the scroll is left for the
-    /// renderer to hold to what now fits. Reports whether the diff changed.
+    /// What a checkout's diff compares; `None` for a supplied diff.
+    pub fn target(&self) -> Option<&DiffTarget> {
+        match &self.source {
+            Source::Checkout(target) => Some(target),
+            Source::Supplied(_) => None,
+        }
+    }
+
+    /// The directory the diff's paths are relative to, if it is on this host.
+    pub fn root(&self) -> Option<&Path> {
+        match &self.source {
+            Source::Checkout(target) => Some(&target.worktree),
+            Source::Supplied(supplied) => supplied.root.as_deref(),
+        }
+    }
+
+    /// Read a checkout's diff again, keeping the view where it is: the same
+    /// file stays selected while it is still in the diff, and the scroll is
+    /// left for the renderer to hold to what now fits. Reports whether the
+    /// diff changed. A supplied diff has nothing to read again: it changes
+    /// only by [`Self::replace`].
     pub fn refresh(&mut self) -> bool {
-        let diff = crate::git::diff(&self.target.worktree, &self.target.base);
-        self.base_names = crate::git::names_at(&self.target.worktree, &self.target.base);
+        let Source::Checkout(target) = &self.source else {
+            return false;
+        };
+        let diff = crate::git::diff(&target.worktree, &target.base);
+        self.base_names = crate::git::names_at(&target.worktree, &target.base);
+        self.replace(diff)
+    }
+
+    /// Show `diff` in place of the one shown, keeping the view where it is as
+    /// [`Self::refresh`] does. Reports whether the diff changed.
+    pub fn replace(&mut self, diff: Result<String, String>) -> bool {
         if diff == self.diff {
             return false;
         }
@@ -219,14 +282,20 @@ impl CheckoutDiff {
 
     /// The view to draw this diff as, inside `block`.
     pub fn view<'a>(&'a self, block: Block<'a>) -> CheckoutDiffView<'a> {
+        let target = self.target();
+        let supplied = match &self.source {
+            Source::Supplied(supplied) => Some(supplied),
+            Source::Checkout(_) => None,
+        };
         CheckoutDiffView {
             block,
-            worktree: &self.target.worktree,
-            branch: self.target.branch.as_deref(),
-            base_branch: self.target.base_branch.as_deref(),
-            base_commit: &self.target.base,
+            worktree: self.root().unwrap_or(Path::new("")),
+            branch: target.and_then(|target| target.branch.as_deref()),
+            base_branch: target.and_then(|target| target.base_branch.as_deref()),
+            base_commit: target.map_or("", |target| &target.base),
             base_names: &self.base_names,
-            branch_point: self.target.branch_point,
+            branch_point: target.is_some_and(|target| target.branch_point),
+            label: supplied.map(|supplied| supplied.label.as_str()),
             diff: match &self.diff {
                 Ok(text) => Ok(text),
                 Err(error) => Err(error),
@@ -246,6 +315,7 @@ impl CheckoutDiff {
             search: self.search.view(),
             report: Some(&self.report),
             conversation: None,
+            intro: None,
         }
     }
 
@@ -380,7 +450,10 @@ impl CheckoutDiff {
             crate::split::source_rows(text, self.hide_removed, self.rendered_side, self.per_file);
         let top = line_at(&rows, usize::from(self.scroll.clamped())).ok_or("no file to open")?;
         let (file, line) = position(text, top).ok_or("no file to open")?;
-        let path = self.target.worktree.join(file);
+        let root = self
+            .root()
+            .ok_or("this diff's files are not on this host")?;
+        let path = root.join(file);
         if !path.exists() {
             return Err(format!("{file} is deleted in the working tree"));
         }
@@ -483,34 +556,19 @@ mod tests {
     use crate::view::removed_rows;
 
     fn two_files() -> CheckoutDiff {
-        let mut diff = CheckoutDiff {
-            target: DiffTarget {
+        let mut diff = CheckoutDiff::new(
+            Source::Checkout(DiffTarget {
                 worktree: PathBuf::from("/w"),
                 branch: None,
                 base_branch: None,
                 base: "4bf5c35d".into(),
                 branch_point: true,
-            },
-            diff: Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n\
-                      diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n"
+            }),
+            Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n\
+                diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n"
                 .into()),
-            base_names: Vec::new(),
-            scroll: Scroll::default(),
-            combined_scroll: Scroll::default(),
-            per_file: false,
-            side_by_side: false,
-            rendered_side: false,
-            combined_side: false,
-            horizontal_scroll: 0,
-            hide_removed: false,
-            compact_dirs: true,
-            tint: Tint::Full,
-            word_highlights: true,
-            selected_file: 0,
-            file_list_offset: 0,
-            search: Search::default(),
-            report: ReportState::default(),
-        };
+            Vec::new(),
+        );
         diff.scroll.note_limit(100);
         diff
     }
@@ -660,6 +718,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A supplied diff is only ever changed by the host: refreshing reads
+    /// nothing, and a replacement keeps the selected file as a refresh does.
+    /// Its files open from its root, and not at all without one.
+    #[test]
+    fn a_supplied_diff_changes_only_when_replaced() {
+        let one = "diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n";
+        let mut diff = CheckoutDiff::supplied(
+            one.into(),
+            Supplied {
+                label: "turn 1".into(),
+                root: Some(PathBuf::from("/w")),
+            },
+        );
+        assert!(!diff.refresh());
+        assert_eq!(diff.root(), Some(Path::new("/w")));
+        diff.apply(Action::ToggleFiles);
+        diff.scroll.offset = 3;
+
+        let two = format!("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n{one}");
+        assert!(diff.replace(Ok(two.clone())));
+        assert!(!diff.replace(Ok(two)));
+        assert_eq!(diff.selected_path().as_deref(), Some("b.txt"));
+        assert_eq!(diff.scroll.offset, 3);
+        assert!(diff.jump_to(Path::new("/w/a.txt"), None).is_ok());
+
+        let Source::Supplied(supplied) = &mut diff.source else {
+            unreachable!("the diff was supplied");
+        };
+        supplied.root = None;
+        assert!(diff.location().is_err());
+        assert!(diff.jump_to(Path::new("/w/a.txt"), None).is_err());
+    }
+
     /// The same keys scroll the combined diff and walk the files of the
     /// per-file one; the file-only actions do nothing in the combined diff.
     #[test]
@@ -690,7 +781,10 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("a.rs"), "").unwrap();
         let mut diff = two_files();
-        diff.target.worktree = root.clone();
+        let Source::Checkout(target) = &mut diff.source else {
+            unreachable!("two_files reads a checkout");
+        };
+        target.worktree = root.clone();
         // Rows: 0 a.rs's header, 1 its rule, 2 its hunk, 3 " keep" (10),
         // 4 "-old", 5 "+new" (11), 6 " after" (12), 7 the rule above
         // gone.rs's header, 8 that header. Git path markers are hidden.

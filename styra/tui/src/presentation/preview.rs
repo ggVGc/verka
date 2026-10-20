@@ -43,43 +43,8 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
             inherited: false,
         });
     let branch_log = branch_log(app);
-    let snapshot_diff = app.preview_snapshot_diff();
     styra_ui::preview::PreviewView {
         entry,
-        // The side panel shows a message's turn diff beside the list that
-        // already shows the message; `P` is for reading the entry itself. A
-        // branch marker is read for the Session it leads to instead. A turn
-        // with snapshots on both sides is what they say changed, and only
-        // otherwise what the agent reported changing.
-        changes: (!fullscreen && branch_log.is_none())
-            .then(|| match snapshot_diff.map(|turn| turn.diff.as_str()) {
-                Some("") => Some(Vec::new()),
-                Some(diff) => Some(vec![styra_ui::preview::ChangeView {
-                    paths: &[],
-                    diff: Some(Cow::Borrowed(diff)),
-                }]),
-                None => app.preview_changes().map(|changes| {
-                    changes
-                        .into_iter()
-                        .filter_map(|event| change_view(app, event))
-                        .collect()
-                }),
-            })
-            .flatten(),
-        changes_from_snapshots: snapshot_diff.map(|turn| {
-            if turn.ended {
-                styra_ui::preview::SnapshotDiff::Turn
-            } else {
-                styra_ui::preview::SnapshotDiff::SoFar
-            }
-        }),
-        turn_start_message: snapshot_diff.and_then(|_| {
-            app.timeline.entries[..=app.timeline.conversation_span().start]
-                .iter()
-                .rev()
-                .map(|entry| entry.event())
-                .find(|event| matches!(event, AgentEvent::UserMessage { .. }))
-        }),
         entry_change: app
             .preview_entry()
             .and_then(|entry| change_view(app, entry.event())),
@@ -156,7 +121,7 @@ fn change_view<'a>(app: &App, event: &'a AgentEvent) -> Option<styra_ui::preview
     }
 }
 
-fn placed<'a>(app: &App, diff: &'a str, paths: &[String]) -> Cow<'a, str> {
+pub(crate) fn placed<'a>(app: &App, diff: &'a str, paths: &[String]) -> Cow<'a, str> {
     let [path] = paths else {
         return Cow::Borrowed(diff);
     };
@@ -211,203 +176,26 @@ mod tests {
         app
     }
 
-    /// A conversation line's text is already on the list; what the preview
-    /// adds is the work done for it, which the list is hiding.
+    /// A message previews as itself: its turn's diff is the diff panel's to
+    /// show (see [`crate::turn_diff`]).
     #[test]
-    fn a_selected_message_previews_the_diff_of_its_turn() {
+    fn a_selected_message_previews_as_itself() {
         let app = app_with_two_turns();
-        let (width, height) = (120, 30);
-        let screen = test_support::screen_sized(&app, width, height);
-        let (_, preview_y) = screen.find("turn diff · C: command");
-        let (diff_x, diff_y) = screen.find("delay * 2");
-        assert!(
-            (width / 2 + 1..width - 1).contains(&diff_x)
-                && (preview_y + 1..height - 2).contains(&diff_y),
-            "the diff is inside the preview pane"
-        );
-        assert!(screen.all().contains("src/retry.rs"));
-        // The next message's work belongs to its own turn.
-        assert!(!screen.all().contains("new_name"));
-    }
-
-    #[test]
-    fn the_preview_moves_to_the_next_turns_diff_with_the_selection() {
-        let mut app = app_with_two_turns();
-        app.select_next_line();
-        let screen = test_support::rendered(&app);
-        assert!(screen.contains("new_name"));
-        assert!(!screen.contains("delay * 2"));
-    }
-
-    #[test]
-    fn a_turn_without_file_changes_says_so() {
-        let mut app = test_support::app("s1");
-        app.push_event(AgentEvent::UserMessage {
-            text: "what does this do".into(),
-        });
-        app.push_event(AgentEvent::AgentMessage {
-            text: "it retries".into(),
-        });
-        app.select_first();
-        app.preview.show();
-        assert!(test_support::rendered(&app).contains("no file changes during this turn"));
-    }
-
-    /// A turn the server snapshotted on both sides is shown as the snapshots
-    /// say, in place of the agent's own reports, and counted by its message.
-    #[test]
-    fn a_snapshotted_turn_previews_its_snapshot_diff() {
-        let mut app = app_with_two_turns();
-        app.select_last();
-        assert_eq!(app.preview_turn(), Some(2));
-        app.turn_snapshot = Some(crate::turn_snapshot::TurnSnapshot::loaded(
-            "s1",
-            2,
-            Some(
-                "diff --git a/src/helper.rs b/src/helper.rs\n@@\n-fn old_name\n+fn snapshot_name\n",
-            ),
-        ));
         let screen = test_support::screen_sized(&app, 120, 30).all();
-        assert!(
-            screen.contains("turn snapshot diff · C: command"),
-            "{screen}"
-        );
-        assert!(screen.contains("snapshot_name"), "{screen}");
-        assert!(
-            !screen.contains("new_name"),
-            "the agent's report is not shown"
-        );
-
-        // Turn 1 has no snapshots read, so its reports are shown as before.
-        app.select_first();
-        assert_eq!(app.preview_turn(), Some(1));
-        let screen = test_support::screen_sized(&app, 120, 30).all();
-        assert!(screen.contains("turn diff · C: command"), "{screen}");
-        assert!(screen.contains("delay * 2"), "{screen}");
-    }
-
-    #[test]
-    fn a_snapshot_diff_starts_with_the_full_turn_request_even_on_its_reply() {
-        for ended in [false, true] {
-            for diff in [
-                "",
-                "diff --git a/helper.rs b/helper.rs\n@@\n+snapshot_name\n",
-            ] {
-                let mut app = app_with_two_turns();
-                app.push_event(AgentEvent::UserMessage {
-                    text: "update the helper\n\nKeep the public interface intact.".into(),
-                });
-                app.turn_snapshot = Some(crate::turn_snapshot::TurnSnapshot::loaded_as(
-                    "s1",
-                    3,
-                    Some(diff),
-                    ended,
-                ));
-                app.select_last();
-                for on_reply in [false, true] {
-                    if on_reply {
-                        app.push_event(AgentEvent::AgentMessage {
-                            text: "the helper is updated".into(),
-                        });
-                        app.select_last();
-                    }
-                    let view = super::view(&app, false);
-                    let content = styra_ui::preview::preview_lines(&view)
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    assert!(
-                        content.trim_start().starts_with("update the helper"),
-                        "{content}"
-                    );
-                    let request_end = content.find("Keep the public interface intact.").unwrap();
-                    let changes = content
-                        .find(if diff.is_empty() {
-                            "no file changes during this turn"
-                        } else {
-                            "snapshot_name"
-                        })
-                        .unwrap();
-                    assert!(request_end < changes, "{content}");
-                    assert!(!content.contains("the helper is updated"), "{content}");
-                    assert!(!content.contains("and rename the helper"), "{content}");
-                }
-            }
-        }
-    }
-
-    /// A turn still running shows what has changed since the most recent
-    /// snapshot, and says it is only so far.
-    #[test]
-    fn a_running_turn_previews_its_snapshot_diff_so_far() {
-        let mut app = app_with_two_turns();
-        app.select_last();
-        app.turn_snapshot = Some(crate::turn_snapshot::TurnSnapshot::loaded_as(
-            "s1",
-            2,
-            Some("diff --git a/src/helper.rs b/src/helper.rs\n@@\n+fn half_done\n"),
-            false,
-        ));
-        let screen = test_support::screen_sized(&app, 120, 30).all();
-        assert!(
-            screen.contains("turn snapshot diff so far · C: command"),
-            "{screen}"
-        );
-        assert!(screen.contains("half_done"), "{screen}");
-    }
-
-    /// Snapshots that agree say the turn changed nothing, whatever the agent
-    /// reported.
-    #[test]
-    fn a_snapshotted_turn_that_changed_nothing_says_so() {
-        let mut app = app_with_two_turns();
-        app.turn_snapshot = Some(crate::turn_snapshot::TurnSnapshot::loaded(
-            "s1",
-            1,
-            Some(""),
-        ));
-        let screen = test_support::rendered(&app);
-        assert!(
-            screen.contains("no file changes during this turn"),
-            "{screen}"
-        );
+        assert!(screen.contains("preview · C: command"), "{screen}");
+        assert!(!screen.contains("turn diff"), "{screen}");
         assert!(!screen.contains("delay * 2"), "{screen}");
     }
 
-    /// Codex follows every file-change item with the turn's whole diff so
-    /// far; the newest snapshot covers the items, so they are not repeated.
+    /// A file change is its own diff, its path from the Workspace on, and a
+    /// Claude edit numbered from where it sits in the file.
     #[test]
-    fn a_turn_diff_snapshot_stands_for_the_file_changes_before_it() {
-        let mut app = test_support::app("s1");
-        app.push_event(AgentEvent::UserMessage {
-            text: "fix it".into(),
-        });
-        app.push_event(changed("src/a.rs", "item-old", "item-new"));
-        app.push_event(AgentEvent::DiffUpdated {
-            diff: "diff --git a/src/a.rs b/src/a.rs\n@@\n-first-old\n+first-new\n".into(),
-        });
-        app.push_event(AgentEvent::DiffUpdated {
-            diff: "diff --git a/src/a.rs b/src/a.rs\n@@\n-latest-old\n+latest-new\n".into(),
-        });
-        app.select_first();
-        app.preview.show();
-        let changes = app.preview_changes().unwrap();
-        assert_eq!(changes.len(), 1);
-        let screen = test_support::rendered(&app);
-        assert!(screen.contains("latest-new"));
-        assert!(!screen.contains("item-new"));
-        assert!(!screen.contains("first-new"));
-    }
-
-    /// Claude's edit snippets say what changed but not where; the file still
-    /// holds the new text, so the preview finds it there and numbers it.
-    #[test]
-    fn a_claude_edit_is_numbered_from_where_it_sits_in_the_file() {
+    fn a_file_change_previews_its_own_diff() {
         let dir = std::env::temp_dir().join(format!("styra-snippet-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("retry.rs");
         std::fs::write(&file, "fn a() {}\nfn b() {}\nlet delay = base * 2;\n").unwrap();
+        let workspace = styra_protocol::agent::SandboxLayout::default().workspace;
 
         let mut app = test_support::app("s1");
         app.push_event(AgentEvent::UserMessage {
@@ -420,65 +208,21 @@ mod tests {
             checkpoint: None,
             checkpoint_error: None,
         });
+        app.push_event(changed(
+            &workspace.join("src/helper.rs").display().to_string(),
+            "fn old_name",
+            "fn new_name",
+        ));
         app.select_first();
+        app.select_next_line();
         app.preview.show();
-
         let screen = test_support::screen_sized(&app, 160, 30).all();
         assert!(screen.contains("3 +let delay = base * 2;"), "{screen}");
         assert!(screen.contains("3 -let delay = base * 3;"), "{screen}");
-        let _ = std::fs::remove_dir_all(dir);
-    }
 
-    /// `P` is for reading the selected entry at full size, so a message there
-    /// is its own text rather than its turn's diff.
-    #[test]
-    fn the_full_screen_preview_shows_a_message_itself() {
-        let mut app = app_with_two_turns();
-        app.view = crate::app::View::Preview;
-        let screen = test_support::rendered(&app);
-        assert!(screen.contains("fix the retry backoff"), "{screen}");
-        assert!(!screen.contains("delay * 2"));
-        assert!(!screen.contains("no file changes during this turn"));
-    }
-
-    /// The Workspace root says nothing that differs between changed files,
-    /// so it is shortened and the rest of the path is what reads.
-    #[test]
-    fn a_changed_path_in_the_workspace_is_shown_from_the_workspace_on() {
-        let workspace = styra_protocol::agent::SandboxLayout::default().workspace;
-        let mut app = test_support::app("s1");
-        app.push_event(AgentEvent::UserMessage {
-            text: "fix the retry backoff".into(),
-        });
-        app.push_event(changed(
-            &workspace.join("src/retry.rs").display().to_string(),
-            "delay * 3",
-            "delay * 2",
-        ));
-        app.select_first();
-        app.preview.show();
-        let (width, height) = (120, 30);
-        let screen = test_support::screen_sized(&app, width, height);
-        let (_, preview_y) = screen.find("turn diff · C: command");
-        let (path_x, path_y) = screen.find("ws:src/retry.rs");
-        assert!(
-            (width / 2 + 1..width - 1).contains(&path_x)
-                && (preview_y + 1..height - 2).contains(&path_y),
-            "the shortened path is inside the preview pane"
-        );
-    }
-
-    /// Any other entry is its own content, as before.
-    #[test]
-    fn a_work_entry_still_previews_as_itself() {
-        let mut app = app_with_two_turns();
-        app.timeline.all_events = true;
         app.select_next_line();
-        assert_eq!(
-            app.preview_entry().map(|entry| entry.event().tag()),
-            Some("shell")
-        );
-        assert!(app.preview_changes().is_none());
-        assert!(test_support::rendered(&app).contains("preview · C: command"));
+        let screen = test_support::screen_sized(&app, 160, 30).all();
+        assert!(screen.contains("ws:src/helper.rs"), "{screen}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

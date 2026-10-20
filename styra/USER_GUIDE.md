@@ -374,16 +374,17 @@ last message. Otherwise, `Enter`
 folds the selected event; `O` expands only it, `z R` expands all, `z M`
 collapses all, and `m` hides/shows minor events. With a preview open, side or
 full-screen, `↑`/`↓` scroll it ten lines and `PgUp`/`PgDn` half its height;
-in the full-screen preview `j`/`k` scroll too. On a conversation line (a message, an error or a model
-change), the side preview shows the file changes the agent made during
-that entry's turn — the same stretch `e` lists — rather than the line itself;
-the full-screen preview (`P`) still shows the entry. If the turn was
-snapshotted both as it started and as it ended (see snapshots above), the side preview
-shows the diff between those two snapshots instead, titled `turn snapshot diff`:
-everything that changed in the checkout during the whole turn, including what
-shell commands or you changed, rather than what the agent reported editing.
-A turn that is still running, or that has no snapshot from its start, shows the
-agent's reports as before. On a `branch` marker,
+in the full-screen preview `j`/`k` scroll too. What a turn changed is shown
+by the diff pane rather than the preview: with the diff open in the preview
+pane (`d`) or fullscreen (`D`), `T` switches it to the selected message's turn — the same stretch
+`e` lists — with the message that started the turn above the diff, and back to
+the checkout's whole diff. If the turn was snapshotted both as it started and
+as it ended (see snapshots above), the turn diff is the diff between those two
+snapshots: everything that changed in the checkout during the whole turn,
+including what shell commands or you changed, rather than what the agent
+reported editing. A turn that is still running is shown from its latest
+snapshot, and one with no snapshot from its start shows the agent's reported
+changes. On a `branch` marker,
 both previews show the linked interaction's conversation instead: a branch
 from where its own history begins, after what it copied from this one, and a
 source in full. A live interaction's log keeps growing while it is shown.

@@ -11,7 +11,7 @@ use crate::report::{Described, ReportState};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use std::io::BufRead;
 use std::path::Path;
@@ -42,6 +42,10 @@ pub struct CheckoutDiffView<'a> {
     /// Whether that commit is where the checked-out branch started, which the
     /// header says, rather than just a commit to compare with.
     pub branch_point: bool,
+    /// What a diff the host supplied is of, said in place of the branches
+    /// and commit a checkout's diff compares; `None` for a checkout's diff.
+    /// [`Self::worktree`] is then where its files are, or empty.
+    pub label: Option<&'a str>,
     /// `git diff`'s output, or why there is none.
     pub diff: Result<&'a str, &'a str>,
     pub requested_scroll: u16,
@@ -69,6 +73,10 @@ pub struct CheckoutDiffView<'a> {
     /// messages of the conversation the diff belongs to. `None` keeps the
     /// header.
     pub conversation: Option<Vec<Line<'a>>>,
+    /// Lines the host shows above the header, such as the message that
+    /// started the turn a turn diff is of. Wrapped to the panel, and given
+    /// no more than half of it.
+    pub intro: Option<Vec<Line<'a>>>,
 }
 
 impl<'a> CheckoutDiffView<'a> {
@@ -82,6 +90,7 @@ impl<'a> CheckoutDiffView<'a> {
             base_commit: "",
             base_names: &[],
             branch_point: false,
+            label: None,
             diff: Err("no diff read yet"),
             requested_scroll: 0,
             per_file: false,
@@ -98,6 +107,7 @@ impl<'a> CheckoutDiffView<'a> {
             search: SearchView::default(),
             report: None,
             conversation: None,
+            intro: None,
         }
     }
 }
@@ -273,8 +283,27 @@ const SHORT_COMMIT: usize = 10;
 /// Draw the view, and return how far its diff can scroll.
 pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> CheckoutDiffFeedback {
     let block = view.block.clone();
-    let inner = block.inner(area);
+    let mut inner = block.inner(area);
     frame.render_widget(block, area);
+    if let Some(intro) = &view.intro {
+        let paragraph = Paragraph::new(intro.clone()).wrap(Wrap { trim: false });
+        // One more for the rule beneath it.
+        let wanted = paragraph.line_count(inner.width.max(1)).saturating_add(1);
+        let height = u16::try_from(wanted)
+            .unwrap_or(u16::MAX)
+            .min(inner.height / 2);
+        let [top, rest] =
+            Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).areas(inner);
+        frame.render_widget(
+            paragraph.block(
+                Block::default()
+                    .borders(Borders::BOTTOM)
+                    .border_style(Style::default().fg(theme::INACTIVE)),
+            ),
+            top,
+        );
+        inner = rest;
+    }
     let header = view
         .conversation
         .clone()
@@ -405,6 +434,9 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             "unified · removed lines hidden".to_owned()
         } else if !side_by_side {
             "unified · side-by-side needs more width (81 columns)".to_owned()
+        } else if view.label.is_some() {
+            let half = usize::from(body.width / 2);
+            format!("{:<half$}│ After", "Before")
         } else {
             let half = usize::from(body.width / 2);
             let base = format!(
@@ -447,11 +479,13 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             )
         } else {
             let mut lines = match shown {
-                Ok(text) if text.trim().is_empty() => vec![muted(if view.branch_point {
-                    "  no changes since the branch was made"
-                } else {
-                    "  no changes"
-                })],
+                Ok(text) if text.trim().is_empty() => {
+                    vec![muted(if view.branch_point && view.label.is_none() {
+                        "  no changes since the branch was made"
+                    } else {
+                        "  no changes"
+                    })]
+                }
                 Ok(text) => patch_lines(
                     text,
                     view.hide_removed,
@@ -476,8 +510,9 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             (limit, requested.min(limit), view.horizontal_scroll)
         };
     if let (Some(area), Some(file)) = (thumbnail_area, selected_file) {
-        let file_lines = std::fs::File::open(view.worktree.join(file.path))
-            .ok()
+        let file_lines = (!view.worktree.as_os_str().is_empty())
+            .then(|| std::fs::File::open(view.worktree.join(file.path)).ok())
+            .flatten()
             .and_then(|file| {
                 std::io::BufReader::new(file)
                     .lines()
@@ -522,7 +557,7 @@ fn render_split(
     let plan = aligned(text, per_file);
     let source_lines: Vec<_> = text.lines().collect();
     let rendered = rendered_patch(text, tint, word_highlights);
-    let gutter = plan
+    let highest = plan
         .iter()
         .flat_map(|row| match row {
             SplitRow::Pair(left, right) => [*left, *right],
@@ -531,10 +566,15 @@ fn render_split(
         .flatten()
         .filter_map(|cell| cell.number)
         .max()
-        .unwrap_or(0)
-        .to_string()
-        .len() as u16
-        + 1;
+        .unwrap_or(0);
+    // A patch with no positions at all, such as an agent's edit snippets, is
+    // drawn without a number column, as the unified view draws it.
+    let gutter = if highest > 0 {
+        highest.to_string().len() as u16 + 1
+    } else {
+        0
+    };
+    let numbered = |cell: &Cell| cell.number.is_some() && gutter > 0;
     let limit = u16::try_from(plan.len())
         .unwrap_or(u16::MAX)
         .saturating_sub(area.height);
@@ -549,7 +589,7 @@ fn render_split(
         .flatten()
         .filter_map(|cell| {
             rendered.get(cell.index).map(|line| {
-                let old_gutter = if cell.number.is_some() {
+                let old_gutter = if numbered(&cell) {
                     line.spans.first().map(Span::width).unwrap_or(0)
                 } else {
                     0
@@ -570,16 +610,17 @@ fn render_split(
         let Some(mut line) = rendered.get(cell.index).cloned() else {
             return;
         };
-        let code = if cell.number.is_some() {
+        let code = if numbered(&cell) {
             // The unified highlighter emits its line-number gutter as the first span.
             if !line.spans.is_empty() {
                 line.spans.remove(0);
             }
-            let number = format!(
-                "{:>width$} ",
-                cell.number.unwrap(),
-                width = usize::from(gutter - 1)
-            );
+            // A hunk without a position, such as an agent's edit snippet
+            // (`@@ edit @@`), counts from 0: no line is numbered that.
+            let number = match cell.number.unwrap() {
+                0 => " ".repeat(usize::from(gutter)),
+                number => format!("{number:>width$} ", width = usize::from(gutter - 1)),
+            };
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     number,
@@ -1205,63 +1246,10 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
     let strong = Style::default()
         .fg(theme::TEXT)
         .add_modifier(Modifier::BOLD);
-    let commit = view
-        .base_commit
-        .get(..SHORT_COMMIT)
-        .unwrap_or(view.base_commit);
-    let mut comparison = vec![
-        Span::styled(
-            view.branch.unwrap_or("detached head").to_owned(),
-            strong.fg(theme::WORKSPACE_NAME),
-        ),
-        Span::styled("  against  ", Style::default().fg(theme::MUTED_TEXT)),
-    ];
-    if let Some(base) = view.base_branch {
-        comparison.push(Span::styled(base.to_owned(), strong));
-        comparison.push(Span::styled(" at ", Style::default().fg(theme::MUTED_TEXT)));
-    }
-    comparison.push(Span::styled(
-        commit.to_owned(),
-        Style::default().fg(theme::ACCENT),
-    ));
-    if !view.base_commit.is_empty() {
-        let muted = Style::default().fg(theme::MUTED_TEXT);
-        comparison.push(Span::styled(" (", muted));
-        if view.base_names.is_empty() {
-            comparison.push(Span::styled("no branch tip or tag", muted));
-        }
-        for (position, name) in view.base_names.iter().enumerate() {
-            if position > 0 {
-                comparison.push(Span::styled(", ", muted));
-            }
-            let label = if name.starts_with("tag: ") {
-                name.clone()
-            } else {
-                format!("branch tip: {name}")
-            };
-            comparison.push(Span::styled(label, Style::default().fg(theme::TEXT)));
-        }
-        comparison.push(Span::styled(")", muted));
-    }
-    if view.branch_point {
-        comparison.push(Span::styled(
-            "  (where the branch started)",
-            Style::default().fg(theme::MUTED_TEXT),
-        ));
-    }
-    let mut lines = vec![
-        Line::from(comparison),
-        Line::from(vec![
-            Span::styled(
-                view.worktree.display().to_string(),
-                Style::default().fg(theme::DIRECTORY_NAME),
-            ),
-            Span::styled(
-                "  · working tree, uncommitted changes included",
-                Style::default().fg(theme::MUTED_TEXT),
-            ),
-        ]),
-    ];
+    let mut lines = match view.label {
+        Some(label) => supplied_lines(label, view.worktree, strong),
+        None => comparison_lines(view, strong),
+    };
     if let Ok(text) = view.diff {
         lines.push(stat_line(text));
     }
@@ -1329,6 +1317,87 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
                 }
             )));
         }
+    }
+    lines
+}
+
+/// The checkout's branch against the branch and commit it is diffed with,
+/// and the working tree they are read in.
+fn comparison_lines(view: &CheckoutDiffView<'_>, strong: Style) -> Vec<Line<'static>> {
+    let commit = view
+        .base_commit
+        .get(..SHORT_COMMIT)
+        .unwrap_or(view.base_commit);
+    let mut comparison = vec![
+        Span::styled(
+            view.branch.unwrap_or("detached head").to_owned(),
+            strong.fg(theme::WORKSPACE_NAME),
+        ),
+        Span::styled("  against  ", Style::default().fg(theme::MUTED_TEXT)),
+    ];
+    if let Some(base) = view.base_branch {
+        comparison.push(Span::styled(base.to_owned(), strong));
+        comparison.push(Span::styled(" at ", Style::default().fg(theme::MUTED_TEXT)));
+    }
+    comparison.push(Span::styled(
+        commit.to_owned(),
+        Style::default().fg(theme::ACCENT),
+    ));
+    if !view.base_commit.is_empty() {
+        let muted = Style::default().fg(theme::MUTED_TEXT);
+        comparison.push(Span::styled(" (", muted));
+        if view.base_names.is_empty() {
+            comparison.push(Span::styled("no branch tip or tag", muted));
+        }
+        for (position, name) in view.base_names.iter().enumerate() {
+            if position > 0 {
+                comparison.push(Span::styled(", ", muted));
+            }
+            let label = if name.starts_with("tag: ") {
+                name.clone()
+            } else {
+                format!("branch tip: {name}")
+            };
+            comparison.push(Span::styled(label, Style::default().fg(theme::TEXT)));
+        }
+        comparison.push(Span::styled(")", muted));
+    }
+    if view.branch_point {
+        comparison.push(Span::styled(
+            "  (where the branch started)",
+            Style::default().fg(theme::MUTED_TEXT),
+        ));
+    }
+    vec![
+        Line::from(comparison),
+        Line::from(vec![
+            Span::styled(
+                view.worktree.display().to_string(),
+                Style::default().fg(theme::DIRECTORY_NAME),
+            ),
+            Span::styled(
+                "  · working tree, uncommitted changes included",
+                Style::default().fg(theme::MUTED_TEXT),
+            ),
+        ]),
+    ]
+}
+
+/// What a supplied diff is, and where its files are opened from, if they are
+/// on this host.
+fn supplied_lines(label: &str, root: &Path, strong: Style) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(label.to_owned(), strong))];
+    if !root.as_os_str().is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                root.display().to_string(),
+                Style::default().fg(theme::DIRECTORY_NAME),
+            ),
+            Span::styled(
+                "  · where its files are opened",
+                Style::default().fg(theme::MUTED_TEXT),
+            ),
+        ]));
     }
     lines
 }
@@ -1790,6 +1859,7 @@ index 1111111..2222222 100644
                         base_commit: "4bf5c35d0123456789abcdef",
                         base_names: &[],
                         branch_point: true,
+                        label: None,
                         diff,
                         requested_scroll: scroll,
                         side_by_side: false,
@@ -1806,6 +1876,7 @@ index 1111111..2222222 100644
                         search,
                         report: None,
                         conversation: None,
+                        intro: None,
                     },
                     frame.area(),
                 );
@@ -2128,6 +2199,7 @@ index 1111111..2222222 100644
                             base_commit: "4bf5c35d",
                             base_names: &[],
                             branch_point: true,
+                            label: None,
                             diff: Ok(&text),
                             requested_scroll: 0,
                             per_file: true,
@@ -2144,6 +2216,7 @@ index 1111111..2222222 100644
                             search: Default::default(),
                             report: None,
                             conversation: None,
+                            intro: None,
                         },
                         frame.area(),
                     );
@@ -2308,6 +2381,117 @@ index 1111111..2222222 100644
         assert!(output.contains("fn c() {}"), "{output}");
     }
 
+    /// A supplied diff is called what the host says it is, rather than a
+    /// comparison of branches it has none of, and its sides are before and
+    /// after rather than a base commit and the working tree.
+    #[test]
+    fn a_supplied_diff_is_labelled_as_given() {
+        let draw = |side_by_side, diff| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+            let frame = terminal
+                .draw(|frame| {
+                    render(
+                        frame,
+                        &CheckoutDiffView {
+                            label: Some("turn 3 · snapshot diff"),
+                            diff: Ok(diff),
+                            side_by_side,
+                            ..CheckoutDiffView::unread(Block::bordered())
+                        },
+                        frame.area(),
+                    );
+                })
+                .unwrap();
+            frame
+                .buffer
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        let output = draw(false, DIFF);
+        assert!(output.contains("turn 3 · snapshot diff"), "{output}");
+        assert!(!output.contains("against"), "{output}");
+        assert!(!output.contains("working tree"), "{output}");
+        assert!(output.contains("1 file changed"), "{output}");
+        let output = draw(true, DIFF);
+        assert!(output.contains("Before"), "{output}");
+        assert!(output.contains("│ After"), "{output}");
+        assert!(!output.contains("Base ·"), "{output}");
+        let output = draw(false, "");
+        assert!(output.contains("no changes"), "{output}");
+        assert!(!output.contains("since the branch"), "{output}");
+    }
+
+    /// A hunk without a position is drawn side by side without numbers
+    /// rather than counted from 0.
+    #[test]
+    fn a_hunk_without_a_position_has_no_numbers_side_by_side() {
+        let mut terminal = Terminal::new(TestBackend::new(120, 16)).unwrap();
+        let frame = terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &CheckoutDiffView {
+                        label: Some("turn 1"),
+                        diff: Ok("diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ edit @@\n-fn old_name\n+fn new_name\n"),
+                        side_by_side: true,
+                        rendered_side: true,
+                        ..CheckoutDiffView::unread(Block::bordered())
+                    },
+                    frame.area(),
+                );
+            })
+            .unwrap();
+        let output = frame
+            .buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(output.contains("-fn old_name"), "{output}");
+        assert!(!output.contains("0 -fn old_name"), "{output}");
+        assert!(!output.contains("0 +fn new_name"), "{output}");
+    }
+
+    /// A host's intro sits above the header, which stays, and is held to
+    /// half the panel however long it is.
+    #[test]
+    fn an_intro_goes_above_the_header_and_takes_at_most_half() {
+        let draw = |intro: Vec<Line<'static>>| {
+            let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+            let frame = terminal
+                .draw(|frame| {
+                    render(
+                        frame,
+                        &CheckoutDiffView {
+                            label: Some("turn 2"),
+                            diff: Ok(DIFF),
+                            intro: Some(intro),
+                            ..CheckoutDiffView::unread(Block::bordered())
+                        },
+                        frame.area(),
+                    );
+                })
+                .unwrap();
+            let buffer = &frame.buffer;
+            (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let rows = draw(vec![Line::from("rename b to c")]);
+        let row = |rows: &[String], text: &str| rows.iter().position(|row| row.contains(text));
+        assert!(row(&rows, "rename b to c").unwrap() < row(&rows, "turn 2").unwrap());
+        let rows = draw((0..40).map(|i| Line::from(format!("line {i}"))).collect());
+        assert!(row(&rows, "line 0").is_some());
+        assert!(row(&rows, "line 20").is_none(), "{rows:#?}");
+        assert!(row(&rows, "turn 2").is_some(), "{rows:#?}");
+    }
+
     /// The hint fills the row out to the panel's edge, not just the text.
     #[test]
     fn a_changed_row_is_tinted_across_the_panel() {
@@ -2324,6 +2508,7 @@ index 1111111..2222222 100644
                         base_commit: "4bf5c35d",
                         base_names: &[],
                         branch_point: true,
+                        label: None,
                         diff: Ok(DIFF),
                         requested_scroll: 0,
                         per_file: false,
@@ -2340,6 +2525,7 @@ index 1111111..2222222 100644
                         search: Default::default(),
                         report: None,
                         conversation: None,
+                        intro: None,
                     },
                     frame.area(),
                 );

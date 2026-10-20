@@ -28,27 +28,8 @@ pub enum PreviewTarget {
     Command,
 }
 
-/// What a snapshot diff in the preview covers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SnapshotDiff {
-    /// The whole of a turn that has ended.
-    Turn,
-    /// A running turn, from the most recent snapshot to the checkout now.
-    SoFar,
-}
-
 pub struct PreviewView<'a> {
     pub entry: Option<EventEntry<'a>>,
-    /// The file changes made during a conversation entry's turn, shown under
-    /// its summary in place of its own content. `None` for an entry that
-    /// previews as itself; empty for a turn that changed no files.
-    pub changes: Option<Vec<ChangeView<'a>>>,
-    /// Whether `changes` were read from the turn's snapshots rather than from
-    /// the agent's own reports, and how far they reach.
-    pub changes_from_snapshots: Option<SnapshotDiff>,
-    /// The user message that started the snapshotted turn, shown in full
-    /// above its diff instead of the selected entry's summary.
-    pub turn_start_message: Option<&'a AgentEvent>,
     /// The entry itself, when it is a file change: drawn as one, from a diff
     /// the host may have placed in its file (see [`ChangeView::diff`]).
     pub entry_change: Option<ChangeView<'a>>,
@@ -74,7 +55,7 @@ pub struct PreviewView<'a> {
 /// One file change as the preview draws it.
 pub struct ChangeView<'a> {
     /// The files it touched. Empty for a diff that names its own files in its
-    /// headers, as a whole-turn snapshot does.
+    /// headers.
     pub paths: &'a [String],
     /// The diff to draw, or `None` when the provider reported none. It may
     /// differ from what the provider sent: a snippet that gave no position
@@ -135,14 +116,7 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
             PreviewTarget::Selection => ("preview", "command"),
             PreviewTarget::Command => ("command", "selection"),
         };
-        let shown = if let Some(snapshot) = view.changes_from_snapshots {
-            match snapshot {
-                SnapshotDiff::Turn => "turn snapshot diff",
-                SnapshotDiff::SoFar => "turn snapshot diff so far",
-            }
-        } else if view.changes.is_some() {
-            "turn diff"
-        } else if view.branch_log.is_some() {
+        let shown = if view.branch_log.is_some() {
             "branch log"
         } else {
             shown
@@ -167,7 +141,7 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
         preview_lines(view),
         usize::from(content_area.width),
         summary_indent(view.entry.as_ref()),
-        if view.changes.is_some() || view.entry_change.is_some() {
+        if view.entry_change.is_some() {
             0
         } else {
             DETAIL_INDENT.len()
@@ -197,31 +171,7 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
             Style::default().fg(theme::MUTED_TEXT),
         ))];
     };
-    let mut lines = if let Some(message) = view.turn_start_message {
-        detail_lines(
-            message,
-            view,
-            false,
-            None,
-            &crate::event_list::BranchLink::default(),
-        )
-    } else {
-        vec![summary_line(entry, SummaryContext::Preview, view.protocol)]
-    };
-    if let Some(changes) = &view.changes {
-        if changes.is_empty() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "no file changes during this turn",
-                Style::default().fg(theme::MUTED_TEXT),
-            )));
-        }
-        for change in changes {
-            lines.push(Line::from(""));
-            lines.extend(change_lines(change, &view.workspace_roots));
-        }
-        return lines;
-    }
+    let mut lines = vec![summary_line(entry, SummaryContext::Preview, view.protocol)];
     if let Some(change) = &view.entry_change {
         lines.extend(change_lines(change, &view.workspace_roots));
         return lines;
@@ -234,12 +184,31 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
     let suspicious = suspicious_shell_success(entry.event);
     lines.extend(detail_lines(
         entry.event,
-        view,
+        view.protocol,
+        view.links,
         suspicious,
         view.link_highlight,
         &entry.branch,
     ));
     lines
+}
+
+/// An event's text as the preview shows it in full — a message's Markdown,
+/// say — for a host to show elsewhere, as the diff panel shows the message
+/// that started the turn it is the diff of.
+pub fn message_lines(
+    event: &AgentEvent,
+    protocol: Protocol,
+    links: LinkDisplay,
+) -> Vec<Line<'static>> {
+    detail_lines(
+        event,
+        protocol,
+        links,
+        false,
+        None,
+        &crate::event_list::BranchLink::default(),
+    )
 }
 
 /// The linked Session's conversation, one line per message, oldest first.
@@ -325,7 +294,8 @@ fn changed_path_line(path: &str, workspace_roots: &[String]) -> Line<'static> {
 /// One event's presented detail blocks, a blank line between each.
 fn detail_lines(
     event: &AgentEvent,
-    view: &PreviewView<'_>,
+    protocol: Protocol,
+    links: LinkDisplay,
     suspicious: bool,
     highlight: Option<EntryIndex>,
     branch: &crate::event_list::BranchLink<'_>,
@@ -334,7 +304,7 @@ fn detail_lines(
     let mut entries_before = 0;
     let blocks = crate::event_list::without_branch_snapshot(
         event,
-        crate::answer::presented_detail(event, view.protocol),
+        crate::answer::presented_detail(event, protocol),
     );
     for (index, block) in blocks.into_iter().enumerate() {
         if index > 0 {
@@ -344,7 +314,7 @@ fn detail_lines(
             block,
             message_text_color(event.tag()),
             suspicious,
-            view.links,
+            links,
             highlight,
             &mut entries_before,
         ));
