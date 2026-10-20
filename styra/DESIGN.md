@@ -855,7 +855,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `C`             | Show only expanded conversation lines                       |
 | `zR` / `zM`     | Expand all / collapse all                                   |
 | `g` / `G`       | Jump to first / last entry (`G` re-enables tail-follow)     |
-| `r`             | Toggle the raw wire view, focused on the selected entry's wire line (in the raw view, `j`/`k`/`g`/`G` select, `PgUp`/`PgDn` scroll the entry panel) |
+| `Ctrl+R`        | Toggle the raw wire view, focused on the selected entry's wire line (in the raw view, `j`/`k`/`g`/`G` select, `PgUp`/`PgDn` scroll the entry panel) |
 | `l`             | Toggle the diagnostic log view (same scrolling as the raw view) |
 | `t`             | Toggle the rendered transcript view (`j`/`k`/`g`/`G` scroll from the start) |
 | `Q`             | Toggle the plan-quota view, refreshing it from the server (`j`/`k` scroll; `R` there sets the rate-limit retry) |

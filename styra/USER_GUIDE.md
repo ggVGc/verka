@@ -140,7 +140,7 @@ where `Space` keeps its own link menu.
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
-| `E` / `Ctrl+E` (main interaction view) | run / test the project from the interaction's worktree, or the Workspace directory, in the configured terminal; see "Run and test actions" |
+| `r` / `R` (main interaction view) | run / test the project from the interaction's worktree, or the Workspace directory, in the configured terminal; see "Run and test actions" |
 | `a` / `A` / `Ctrl+V` | live interactions / sessions in this Workspace / Workspaces |
 | `v` | choose a Workspace with live interactions (typed at) and open the live list at its first; over the grid, the grid narrows to the highlighted Workspace, Enter keeps it and Esc restores the grid; `Ctrl-N` starts a new interaction in the highlighted Workspace |
 | `V` | as `v`, but every Workspace with an interaction the live list shows under its completion, stopped and tag filters; always opens the live list |
@@ -333,7 +333,7 @@ resumed.
 
 | Key | View or action |
 | --- | --- |
-| `r`, `l`, `t`, `d` | raw wire records, client/server log, transcript, Workspace/interaction details; press again for events |
+| `Ctrl+R`, `l`, `t`, `d` | raw wire records, client/server log, transcript, Workspace/interaction details; press again for events |
 | `M` | received protocol messages for the current interaction; press again for events |
 | `Q` | quota readings observed by the server (`R` there: keep at it after a rate limit) |
 | `h` | processes running in the interaction's sandbox, in the bottom half below the event list; press again to close |
@@ -494,7 +494,7 @@ dimmed, to show they are disabled rather than gone.
 
 ## Run and test actions
 
-In the main interaction view, `E` (execute) runs the project and `Ctrl+E` tests
+In the main interaction view, `r` runs the project and `R` tests
 it. The configured command runs with `sh` on the host from the interaction's
 worktree when one exists, otherwise from the Workspace directory, in the
 configured terminal. Stored sessions also use their existing worktree. No

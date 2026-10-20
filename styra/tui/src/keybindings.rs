@@ -42,7 +42,7 @@ bindings! { GLOBAL = "Global";
     GLOBAL_RETARGET: [Key::alt_code(KeyCode::Char('b'))] => Action::GlobalRetarget;
     GLOBAL_INTEGRATE: [Key::ch('I')] => Action::GlobalIntegrate;
     GLOBAL_MESSAGES: [Key::ch('M')] => Action::GlobalMessages;
-    GLOBAL_RAW: [Key::ch('r')] => Action::GlobalRaw;
+    GLOBAL_RAW: [Key::ctrl('r')] => Action::GlobalRaw;
     GLOBAL_LOG: [Key::ctrl('l')] => Action::GlobalLog;
     GLOBAL_TRANSCRIPT: [Key::ch('t')] => Action::GlobalTranscript;
     GLOBAL_DETAILS: [Key::ctrl('s')] => Action::GlobalDetails;
@@ -96,8 +96,8 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_LINKS: [Key::ch('f')]
         => Action::EventsLinks;
     EVENTS_COPY: [Key::ch('y')] => Action::EventsCopy;
-    EVENTS_RUN: [Key::ch('E')] => Action::EventsRun;
-    EVENTS_TEST: [Key::ctrl('e')] => Action::EventsTest;
+    EVENTS_RUN: [Key::ch('r')] => Action::EventsRun;
+    EVENTS_TEST: [Key::ch('R')] => Action::EventsTest;
 }
 
 bindings! { READING = "Raw, messages, log, quota, processes, and transcript";
