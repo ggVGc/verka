@@ -9,6 +9,7 @@ use styra_ui::scroll::Scroll;
 use styra_ui::search::Search;
 
 use crate::files::{filtered_file_diffs, position, FileDiff};
+use crate::layers::Layers;
 use crate::report::ReportState;
 use crate::view::{rows, CheckoutDiffFeedback, CheckoutDiffView, Row, Tint};
 
@@ -65,6 +66,11 @@ pub(crate) enum Action {
     /// Step the added and removed rows' bands through full, half, and none.
     CycleTint,
     ToggleWords,
+    /// Put the per-file view's thumbnail away, or bring it back.
+    ToggleThumbnail,
+    /// Tint each change by the commits that made it, or by whether it adds
+    /// or removes again.
+    ToggleLayers,
     /// Put the per-file view's edit report away, or bring it back.
     ToggleReport,
     /// Fold the file tree's directories that hold no files of their own and
@@ -117,6 +123,12 @@ pub struct CheckoutDiff {
     pub compact_dirs: bool,
     pub tint: Tint,
     pub word_highlights: bool,
+    /// Whether the per-file view's thumbnail of the selected file's changes
+    /// has been put away, where the host shows one.
+    pub thumbnail_hidden: bool,
+    /// The commits the diff was made in, or why they could not be read,
+    /// while its changes are tinted by them; `None` otherwise.
+    pub layers: Option<Result<Layers, String>>,
     pub selected_file: usize,
     pub file_list_offset: usize,
     pub search: Search,
@@ -214,6 +226,8 @@ impl CheckoutDiff {
             compact_dirs: true,
             tint: Tint::Full,
             word_highlights: true,
+            layers: None,
+            thumbnail_hidden: false,
             selected_file: 0,
             file_list_offset: 0,
             search: Default::default(),
@@ -241,15 +255,25 @@ impl CheckoutDiff {
     /// Read a checkout's diff again, keeping the view where it is: the same
     /// file stays selected while it is still in the diff, and the scroll is
     /// left for the renderer to hold to what now fits. Reports whether the
-    /// diff changed. A supplied diff has nothing to read again: it changes
-    /// only by [`Self::replace`].
+    /// diff, or the commits it is tinted by, changed: a commit can take in
+    /// what was uncommitted and leave the diff as it was. A supplied diff has
+    /// nothing to read again: it changes only by [`Self::replace`].
     pub fn refresh(&mut self) -> bool {
         let Source::Checkout(target) = &self.source else {
             return false;
         };
         let diff = crate::git::diff(&target.worktree, &target.base);
         self.base_names = crate::git::names_at(&target.worktree, &target.base);
-        self.replace(diff)
+        let mut layered = false;
+        if self.layers.is_some() {
+            if let Some(layers) =
+                Layers::reread(self.layers.as_ref(), &target.worktree, &target.base)
+            {
+                self.layers = Some(layers);
+                layered = true;
+            }
+        }
+        self.replace(diff) || layered
     }
 
     /// Show `diff` in place of the one shown, keeping the view where it is as
@@ -334,10 +358,15 @@ impl CheckoutDiff {
             rendered_side: self.rendered_side,
             horizontal_scroll: self.horizontal_scroll,
             thumbnail: false,
+            thumbnail_hidden: self.thumbnail_hidden,
             hide_removed: self.hide_removed,
             compact_dirs: self.compact_dirs,
             tint: self.tint,
             word_highlights: self.word_highlights,
+            layers: self.layers.as_ref().map(|layers| match layers {
+                Ok(layers) => Ok(layers),
+                Err(error) => Err(error.as_str()),
+            }),
             selected_file: self.selected_file,
             file_list_offset: self.file_list_offset,
             search: self.search.view(),
@@ -392,15 +421,18 @@ impl CheckoutDiff {
                     );
                     line_at(&rows, usize::from(self.scroll.clamped()))
                 });
+                // Onto the first change from the top of the view.
+                self.move_cursor(0);
             }
-            Action::Down | Action::ScrollDown if lines => self.move_cursor(1),
-            Action::Up | Action::ScrollUp if lines => self.move_cursor(-1),
-            Action::HalfPageDown | Action::FilesDown if lines => {
-                self.move_cursor(self.scroll.half_page() as isize)
-            }
-            Action::HalfPageUp | Action::FilesUp if lines => {
-                self.move_cursor(-(self.scroll.half_page() as isize))
-            }
+            Action::Down if lines => self.move_cursor(1),
+            Action::Up if lines => self.move_cursor(-1),
+            // The arrows go over every line drawn, headers and cuts too.
+            Action::ScrollDown if lines => self.move_cursor_over(1, false),
+            Action::ScrollUp if lines => self.move_cursor_over(-1, false),
+            Action::HalfPageDown if lines => self.move_cursor(self.scroll.half_page() as isize),
+            Action::HalfPageUp if lines => self.move_cursor(-(self.scroll.half_page() as isize)),
+            Action::FilesDown if lines => self.move_to_block(true),
+            Action::FilesUp if lines => self.move_to_block(false),
             Action::First if lines => self.move_cursor(isize::MIN),
             Action::Last if lines => self.move_cursor(isize::MAX),
             Action::ToggleRemoved => {
@@ -443,13 +475,21 @@ impl CheckoutDiff {
                 self.hide_removed = !hidden;
                 self.scroll.note_limit(u16::MAX);
                 // Off a removed line that is now hidden.
-                self.move_cursor(0);
+                self.move_cursor_over(0, false);
             }
             Action::ToggleLayout => self.side_by_side = !self.side_by_side,
             Action::PanLeft => self.horizontal_scroll = self.horizontal_scroll.saturating_sub(8),
             Action::PanRight => self.horizontal_scroll = self.horizontal_scroll.saturating_add(8),
             // The selected file stays selected, and the list keeps it in view.
             Action::ToggleWords => self.word_highlights = !self.word_highlights,
+            Action::ToggleThumbnail => self.thumbnail_hidden = !self.thumbnail_hidden,
+            Action::ToggleLayers => {
+                self.layers = match (&self.layers, self.target()) {
+                    (Some(_), _) => None,
+                    (None, Some(target)) => Some(Layers::read(&target.worktree, &target.base)),
+                    (None, None) => Some(Err("a supplied diff has no commits to layer".into())),
+                }
+            }
             Action::CycleTint => self.tint = self.tint.next(),
             Action::ToggleCompactDirs => self.compact_dirs = !self.compact_dirs,
             Action::ToggleReport => self.report.hidden = !self.report.hidden,
@@ -549,29 +589,84 @@ impl CheckoutDiff {
     }
 
     /// Move the line cursor `step` lines down, or up when negative, through
-    /// the lines drawn, and scroll it into view. A step of zero only puts it
-    /// back on a drawn line and in view.
+    /// the added and removed lines drawn, and scroll it into view: unchanged
+    /// lines, file headers and hunk cuts are stepped over, so going on from
+    /// one block of changes is going to the next. A step of zero only puts
+    /// it back on such a line — the next one, from anywhere else — and in
+    /// view.
     fn move_cursor(&mut self, step: isize) {
+        self.move_cursor_over(step, true);
+    }
+
+    /// [`Self::move_cursor`], through the changed lines only or through every
+    /// line drawn.
+    fn move_cursor_over(&mut self, step: isize, changes_only: bool) {
         let (Some(cursor), Some(text)) = (self.line_cursor, self.shown_text()) else {
             return;
         };
         let (hidden, side, per_file) = (self.hide_removed, self.rendered_side, self.per_file);
+        let changed = changed_lines(text);
         let drawn: Vec<(usize, usize)> = crate::split::source_rows(text, hidden, side, per_file)
             .into_iter()
             .enumerate()
             .filter_map(|(row, shown)| match shown {
-                Row::Line(line) => Some((row, line)),
-                Row::RuleAbove | Row::RuleBelow => None,
+                Row::Line(line) if !changes_only || changed.get(line).copied().unwrap_or(false) => {
+                    Some((row, line))
+                }
+                Row::Line(_) | Row::RuleAbove | Row::RuleBelow => None,
             })
             .collect();
         let at = crate::split::row_of(text, hidden, side, per_file, cursor);
         let last = drawn.len().saturating_sub(1);
         let current = drawn.iter().position(|(row, _)| *row >= at).unwrap_or(last);
+        // From a line not among them, reaching the next one is a step down.
+        let step = match drawn.get(current) {
+            Some(&(row, _)) if row != at && step > 0 => step - 1,
+            _ => step,
+        };
         let Some(&(row, line)) = drawn.get(current.saturating_add_signed(step).min(last)) else {
             return;
         };
         self.line_cursor = Some(line);
         self.scroll.reveal(u16::try_from(row).unwrap_or(u16::MAX));
+    }
+
+    /// Move the line cursor to the first line of the next block of changes,
+    /// or when `down` is false of the previous one — of the block it is in,
+    /// from inside one — and scroll it into view. A block is a run of added
+    /// and removed lines; its first line is the first of them drawn. With no
+    /// block that way the cursor stays.
+    fn move_to_block(&mut self, down: bool) {
+        let (Some(cursor), Some(text)) = (self.line_cursor, self.shown_text()) else {
+            return;
+        };
+        let (hidden, side, per_file) = (self.hide_removed, self.rendered_side, self.per_file);
+        let blocks = change_blocks(text);
+        let mut starts: Vec<(usize, usize)> = Vec::new();
+        let mut last_block = None;
+        for (row, shown) in crate::split::source_rows(text, hidden, side, per_file)
+            .into_iter()
+            .enumerate()
+        {
+            let Row::Line(line) = shown else { continue };
+            let Some(block) = blocks.get(line).copied().flatten() else {
+                continue;
+            };
+            if last_block != Some(block) {
+                starts.push((row, line));
+                last_block = Some(block);
+            }
+        }
+        let at = crate::split::row_of(text, hidden, side, per_file, cursor);
+        let target = if down {
+            starts.into_iter().find(|&(row, _)| row > at)
+        } else {
+            starts.into_iter().filter(|&(row, _)| row < at).last()
+        };
+        if let Some((row, line)) = target {
+            self.line_cursor = Some(line);
+            self.scroll.reveal(u16::try_from(row).unwrap_or(u16::MAX));
+        }
     }
 
     /// The file the line cursor is in, by its place in the whole diff, and
@@ -609,7 +704,7 @@ impl CheckoutDiff {
             };
             self.line_cursor = Some(start + line);
         }
-        self.move_cursor(0);
+        self.move_cursor_over(0, false);
     }
 
     /// The patch the view shows: the whole diff, or the selected file's in
@@ -710,6 +805,44 @@ fn file_starts(text: &str) -> Vec<(usize, FileDiff<'_>)> {
             let at = start;
             start += file.patch.lines().count();
             (at, file)
+        })
+        .collect()
+}
+
+/// For each line of `text`, whether it is an added or removed line: within
+/// a hunk, where a file's `---` and `+++` markers cannot be.
+fn changed_lines(text: &str) -> Vec<bool> {
+    let mut in_hunk = false;
+    text.lines()
+        .map(|line| {
+            if line.starts_with("diff --git ") {
+                in_hunk = false;
+            } else if line.starts_with("@@") {
+                in_hunk = true;
+            }
+            in_hunk && line.starts_with(['+', '-'])
+        })
+        .collect()
+}
+
+/// For each line of `text`, the block of changes it is in, counted from the
+/// top: a run of added and removed lines, which the note that a side has no
+/// newline at its end does not break. `None` for any other line.
+fn change_blocks(text: &str) -> Vec<Option<usize>> {
+    let changed = changed_lines(text);
+    let mut blocks = 0;
+    let mut previous = false;
+    text.lines()
+        .zip(changed)
+        .map(|(line, changed)| {
+            if line.starts_with('\\') && previous {
+                return None;
+            }
+            if changed && !previous {
+                blocks += 1;
+            }
+            previous = changed;
+            changed.then_some(blocks)
         })
         .collect()
 }
@@ -1079,25 +1212,27 @@ mod tests {
     fn the_line_cursor_moves_over_drawn_lines() {
         let mut diff = two_files();
         // Lines: a.txt's header 0, hunk 1, "-a" 2, "+b" 3, b.txt's header 4,
-        // hunk 5, "-c" 6, "+d" 7. The headers' rules are rows of their own.
+        // hunk 5, "-c" 6, "+d" 7. The headers' rules are rows of their own:
+        // the rows are a.txt's header 0, its rule 1, hunk 2, "-a" 3, "+b" 4,
+        // the rule above b.txt's header 5, the header 6, its rule 7, hunk 8,
+        // "-c" 9, "+d" 10.
         diff.scroll.note_viewport(4);
         assert_eq!(diff.source(), None, "the combined diff is on no one file");
         diff.scroll.offset = 1;
         diff.apply(Action::ToggleLines);
         assert_eq!(
             diff.line_cursor,
-            Some(1),
-            "the hunk, below the rule at the top"
+            Some(2),
+            "the first line of a hunk from the rule at the top"
         );
         diff.apply(Action::Down);
-        assert_eq!(diff.line_cursor, Some(2));
+        assert_eq!(diff.line_cursor, Some(3));
         assert_eq!(diff.source(), Some(("a.txt", Some(1))));
         assert_eq!(diff.scroll.offset, 1, "still on screen");
         diff.apply(Action::Down);
-        diff.apply(Action::Down);
-        assert_eq!(diff.line_cursor, Some(4), "b.txt's header, past the rule");
-        assert_eq!(diff.scroll.offset, 3, "scrolled to keep the cursor in view");
-        assert_eq!(diff.source(), Some(("b.txt", None)));
+        assert_eq!(diff.line_cursor, Some(6), "over b.txt's header and hunk");
+        assert_eq!(diff.scroll.offset, 6, "scrolled to keep the cursor in view");
+        assert_eq!(diff.source(), Some(("b.txt", Some(1))));
         diff.apply(Action::Last);
         assert_eq!(diff.line_cursor, Some(7));
         assert_eq!(diff.source(), Some(("b.txt", Some(1))));
@@ -1107,15 +1242,64 @@ mod tests {
         diff.apply(Action::ToggleRemoved);
         assert_eq!(diff.line_cursor, Some(7), "-c is hidden; +d is next");
         diff.apply(Action::Up);
-        assert_eq!(diff.line_cursor, Some(5), "over -c");
+        assert_eq!(
+            diff.line_cursor,
+            Some(3),
+            "over -c, the header and hunk to +b"
+        );
         diff.apply(Action::First);
-        assert_eq!(diff.line_cursor, Some(0));
-        assert_eq!(diff.scroll.offset, 0);
+        assert_eq!(diff.line_cursor, Some(3), "-a is hidden too");
 
         diff.apply(Action::ToggleLines);
         assert_eq!(diff.line_cursor, None);
+        let offset = diff.scroll.offset;
         diff.apply(Action::Down);
-        assert_eq!(diff.scroll.offset, 1, "j scrolls again");
+        assert_eq!(diff.scroll.offset, offset + 1, "j scrolls again");
+    }
+
+    /// In line selection the cursor keeps to added and removed lines,
+    /// across files in the combined diff and within the file in the per-file
+    /// view, stepping over removed lines too while they are hidden.
+    #[test]
+    fn line_selection_keeps_to_changed_lines() {
+        let mut diff = two_files();
+        // Lines: a.txt's header 0, hunk 1, " x" 2, "-a" 3, "+b" 4, hunk 5,
+        // "-c" 6, " y" 7, b.txt's header 8, hunk 9, " z" 10, "+d" 11.
+        diff.diff = Ok("diff --git a/a.txt b/a.txt\n@@ -1,2 +1,2 @@\n x\n-a\n+b\n\
+                        @@ -9,2 +9 @@\n-c\n y\n\
+                        diff --git a/b.txt b/b.txt\n@@ -1 +1,2 @@\n z\n+d\n"
+            .into());
+        diff.scroll.note_viewport(20);
+        fn lines(diff: &mut CheckoutDiff, action: Action, expected: &[usize]) {
+            for &expected in expected {
+                diff.apply(action);
+                assert_eq!(diff.line_cursor, Some(expected), "{action:?}");
+            }
+        }
+        diff.apply(Action::ToggleLines);
+        assert_eq!(diff.line_cursor, Some(3), "the first change from the top");
+        lines(&mut diff, Action::Down, &[4, 6, 11, 11]);
+        lines(&mut diff, Action::Up, &[6, 4, 3, 3]);
+
+        // J and K go between the first lines of blocks of changes.
+        lines(&mut diff, Action::FilesDown, &[6, 11, 11]);
+        lines(&mut diff, Action::FilesUp, &[6, 3, 3]);
+
+        diff.apply(Action::ToggleRemoved);
+        assert_eq!(diff.line_cursor, Some(4), "off -a, now hidden");
+        lines(&mut diff, Action::Down, &[11]);
+        lines(&mut diff, Action::Up, &[4, 4]);
+        // "-c" is a block of its own, hidden whole; "-a" "+b" starts at +b.
+        lines(&mut diff, Action::FilesDown, &[11]);
+        lines(&mut diff, Action::FilesUp, &[4]);
+        diff.apply(Action::ToggleRemoved);
+
+        diff.apply(Action::First);
+        diff.apply(Action::ToggleFiles);
+        assert_eq!((diff.selected_file, diff.line_cursor), (0, Some(3)));
+        lines(&mut diff, Action::Last, &[6]);
+        lines(&mut diff, Action::Down, &[6]);
+        assert_eq!(diff.selected_file, 0, "the per-file view keeps to its file");
     }
 
     /// The cursor's row is marked in either layout, on the line it is on.

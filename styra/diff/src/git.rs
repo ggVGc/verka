@@ -9,18 +9,7 @@ use crate::DiffTarget;
 /// shown alongside what has. Colour and external drivers are turned off: the
 /// view styles the diff itself, and needs Git's plain format to.
 pub fn diff(worktree: &Path, base: &str) -> Result<String, String> {
-    // Compare the complete working tree, including untracked files present
-    // in a snapshot, without changing what the operator has staged.
-    let scratch = tempfile::tempdir().map_err(|error| format!("creating diff index: {error}"))?;
-    let index = scratch.path().join("index");
-    let current = git(
-        worktree,
-        &["rev-parse", "--path-format=absolute", "--git-path", "index"],
-    )?;
-    if Path::new(&current).exists() {
-        std::fs::copy(&current, &index).map_err(|error| format!("copying diff index: {error}"))?;
-    }
-    git_with_index(worktree, &["add", "--all", "--", ":/"], Some(&index))?;
+    let (_scratch, index) = scratch_index(worktree)?;
     git_with_index(
         worktree,
         &[
@@ -33,6 +22,101 @@ pub fn diff(worktree: &Path, base: &str) -> Result<String, String> {
             "--",
         ],
         Some(&index),
+    )
+}
+
+/// An index holding the complete working tree, untracked files included,
+/// made from a copy of the real one so what the operator has staged is left
+/// alone. It lasts as long as the directory returned with it.
+fn scratch_index(worktree: &Path) -> Result<(tempfile::TempDir, std::path::PathBuf), String> {
+    let scratch = tempfile::tempdir().map_err(|error| format!("creating diff index: {error}"))?;
+    let index = scratch.path().join("index");
+    let current = git(
+        worktree,
+        &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+    )?;
+    if Path::new(&current).exists() {
+        std::fs::copy(&current, &index).map_err(|error| format!("copying diff index: {error}"))?;
+    }
+    git_with_index(worktree, &["add", "--all", "--", ":/"], Some(&index))?;
+    Ok((scratch, index))
+}
+
+/// The working tree as a tree object, as [`diff`] compares it, so it can be
+/// diffed like any commit.
+pub(crate) fn worktree_tree(worktree: &Path) -> Result<String, String> {
+    let (_scratch, index) = scratch_index(worktree)?;
+    git_with_index(worktree, &["write-tree"], Some(&index))
+}
+
+/// A commit as the layers say who made it, when, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Commit {
+    pub id: String,
+    pub author: String,
+    /// When it was made, as `git log` says it relative to now.
+    pub date: String,
+    pub summary: String,
+    /// The rest of its message after the summary line and the blank line
+    /// beneath it.
+    pub body: String,
+}
+
+/// The commits made on the way from `base` to `HEAD`, oldest first and
+/// following first parents. None when `base` is a snapshot tree rather than
+/// a commit, or `HEAD` has no commit.
+pub(crate) fn commits_since(worktree: &Path, base: &str) -> Vec<Commit> {
+    if git(worktree, &["cat-file", "-t", base]).as_deref() != Ok("commit") {
+        return Vec::new();
+    }
+    let range = format!("{base}..HEAD");
+    git(
+        worktree,
+        &[
+            "log",
+            "--reverse",
+            "--first-parent",
+            // Unit separators between fields and record separators between
+            // commits, which no message holds, as a body runs over lines.
+            "--format=%H%x1f%an%x1f%ar%x1f%s%x1f%b%x1e",
+            &range,
+        ],
+    )
+    .unwrap_or_default()
+    .split('\x1e')
+    .filter_map(|record| {
+        let mut fields = record.trim_start_matches('\n').splitn(5, '\x1f');
+        let id = fields.next().filter(|id| !id.is_empty())?.to_owned();
+        let mut field = || fields.next().unwrap_or_default().trim_end().to_owned();
+        Some(Commit {
+            id,
+            author: field(),
+            date: field(),
+            summary: field(),
+            body: field(),
+        })
+    })
+    .collect()
+}
+
+/// What changed from `from` to `to`, commits or trees, with every file's
+/// whole text as context, so each changed file's lines can all be followed
+/// from one step to the next.
+pub(crate) fn step_diff(worktree: &Path, from: &str, to: &str) -> Result<String, String> {
+    git(
+        worktree,
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--find-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--unified=2147483647",
+            from,
+            to,
+            "--",
+        ],
     )
 }
 

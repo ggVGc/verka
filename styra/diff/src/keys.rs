@@ -83,6 +83,12 @@ pub const BINDINGS: &[Binding] = &[
         Command::View(Action::ToggleWords),
     ),
     bind(
+        &[KeyCode::Char('L')],
+        "L",
+        "tint changes by the commit that made them, blending where they overlap",
+        Command::View(Action::ToggleLayers),
+    ),
+    bind(
         &[KeyCode::Char('r')],
         "r",
         "toggle visibility of removed diff lines",
@@ -95,10 +101,16 @@ pub const BINDINGS: &[Binding] = &[
         Command::View(Action::ToggleCompactDirs),
     ),
     bind(
-        &[KeyCode::Char('l'), KeyCode::Char('V')],
-        "l / V",
+        &[KeyCode::Enter, KeyCode::Char('V')],
+        "Enter / V",
         "select lines: j/k move a line cursor, which v and a message start from",
         Command::View(Action::ToggleLines),
+    ),
+    bind(
+        &[KeyCode::Char('m')],
+        "m (per-file view)",
+        "show / hide the thumbnail of the file's changes",
+        Command::View(Action::ToggleThumbnail),
     ),
     bind(
         &[KeyCode::Char('v')],
@@ -138,26 +150,26 @@ pub const BINDINGS: &[Binding] = &[
     ),
     bind(
         &[KeyCode::Char('J')],
-        "J (per-file view)",
-        "move down 5 files",
+        "J",
+        "next block of changes (line selection), or move down 5 files (per-file view)",
         Command::View(Action::FilesDown),
     ),
     bind(
         &[KeyCode::Char('K')],
-        "K (per-file view)",
-        "move up 5 files",
+        "K",
+        "previous block of changes (line selection), or move up 5 files (per-file view)",
         Command::View(Action::FilesUp),
     ),
     bind(
         &[KeyCode::Down],
         "↓",
-        "scroll diff down 10 lines",
+        "scroll diff down 10 lines, or the next line, headers too (line selection)",
         Command::View(Action::ScrollDown),
     ),
     bind(
         &[KeyCode::Up],
         "↑",
-        "scroll diff up 10 lines",
+        "scroll diff up 10 lines, or the previous line, headers too (line selection)",
         Command::View(Action::ScrollUp),
     ),
     bind(
@@ -296,10 +308,15 @@ mod tests {
     #[test]
     fn view_keys_act_and_the_rest_go_to_the_host() {
         let mut diff = diff();
-        for key in ['r', 'f', 'j', 'c', 't', 'e', 'w'] {
+        for key in ['r', 'f', 'j', 'c', 't', 'e', 'w', 'L', 'm'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Outcome::Handled);
         }
         assert!(!diff.word_highlights);
+        assert!(diff.thumbnail_hidden);
+        assert!(
+            matches!(diff.layers, Some(Err(_))),
+            "layered, saying why there is no repository to read them from"
+        );
         assert!(diff.report.hidden);
         assert!(diff.hide_removed);
         assert!(diff.per_file);
@@ -320,20 +337,83 @@ mod tests {
     }
 
     /// Esc leaves line selection before it clears a filter or closes, and
-    /// `l` or `V` leaves it as it entered.
+    /// Enter or `V` leaves it as it entered.
     #[test]
     fn esc_leaves_line_selection_first() {
         let mut diff = diff();
-        assert_eq!(press(&mut diff, KeyCode::Char('l')), Outcome::Handled);
-        assert_eq!(diff.line_cursor, Some(0));
+        assert_eq!(press(&mut diff, KeyCode::Enter), Outcome::Handled);
+        assert_eq!(diff.line_cursor, Some(2), "-a, the first line of a hunk");
         assert_eq!(press(&mut diff, KeyCode::Char('j')), Outcome::Handled);
-        assert_eq!(diff.line_cursor, Some(1));
+        assert_eq!(diff.line_cursor, Some(3));
         assert_eq!(press(&mut diff, KeyCode::Esc), Outcome::Handled);
         assert_eq!(diff.line_cursor, None);
         assert_eq!(press(&mut diff, KeyCode::Char('V')), Outcome::Handled);
         assert_eq!(press(&mut diff, KeyCode::Char('V')), Outcome::Handled);
         assert_eq!(diff.line_cursor, None);
         assert_eq!(press(&mut diff, KeyCode::Esc), Outcome::Close);
+    }
+
+    /// In line selection j and k keep the cursor to added and removed
+    /// lines, stepping over unchanged lines, file headers and hunk cuts to
+    /// the next change; J and K go to the first line of the next and previous
+    /// block of changes, and g and G to the first and last change. The arrows
+    /// go over every line.
+    #[test]
+    fn line_selection_moves_through_changes_only() {
+        let mut diff = diff();
+        // Lines: a.txt's header 0, hunk 1, " x" 2, "-a" 3, "+b" 4, hunk 5,
+        // "-c" 6, then twelve added lines 7 to 18, b.txt's header 19, hunk
+        // 20, " y" 21, "+d" 22.
+        diff.diff = Ok(format!(
+            "diff --git a/a.txt b/a.txt\n@@ -1,2 +1,2 @@\n x\n-a\n+b\n\
+             @@ -9 +9,12 @@\n-c\n{}\
+             diff --git a/b.txt b/b.txt\n@@ -1 +1,2 @@\n y\n+d\n",
+            (0..12).map(|n| format!("+add{n}\n")).collect::<String>()
+        ));
+        diff.scroll.note_viewport(40);
+        let mut keys = |code, expected: usize, why: &str| {
+            assert_eq!(press(&mut diff, code), Outcome::Handled);
+            assert_eq!(diff.line_cursor, Some(expected), "{code:?}: {why}");
+        };
+        keys(
+            KeyCode::Enter,
+            3,
+            "the first change, past headers and \" x\"",
+        );
+        keys(KeyCode::Char('j'), 4, "+b");
+        keys(KeyCode::Char('j'), 6, "over the second hunk's cut to -c");
+        keys(KeyCode::Char('J'), 22, "the next block, b.txt's +d");
+        keys(KeyCode::Char('J'), 22, "no block further down");
+        keys(KeyCode::Char('K'), 6, "the previous block's first line");
+        keys(KeyCode::Char('K'), 3, "and the one before");
+        keys(KeyCode::Char('K'), 3, "no block further up");
+        keys(KeyCode::Char('j'), 4, "+b");
+        keys(KeyCode::Char('J'), 6, "from inside a block, the next one");
+        keys(KeyCode::Char('G'), 22, "the last change, over \" y\"");
+        keys(
+            KeyCode::Char('k'),
+            18,
+            "over b.txt's header, cut and \" y\"",
+        );
+        keys(
+            KeyCode::Char('K'),
+            6,
+            "from inside a block, its own first line",
+        );
+        keys(KeyCode::Char('g'), 3, "the first change");
+        keys(KeyCode::Char('k'), 3, "nowhere further up");
+        // The arrows go over every line, unchanged ones, headers and cuts too.
+        keys(KeyCode::Up, 2, "\" x\"");
+        keys(KeyCode::Up, 1, "the first hunk's cut");
+        keys(KeyCode::Up, 0, "a.txt's header");
+        keys(KeyCode::Up, 0, "nowhere further up");
+        keys(KeyCode::Down, 1, "the cut again");
+        keys(KeyCode::Char('j'), 3, "from the cut, the first change");
+        keys(KeyCode::Char('j'), 4, "+b");
+        keys(KeyCode::Down, 5, "the second hunk's cut");
+        keys(KeyCode::Char('k'), 4, "back to +b");
+        let control = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        assert_eq!(diff.handle_key(control), Outcome::Ignored);
     }
 
     /// A key answers to one command, so the table cannot shadow a row.

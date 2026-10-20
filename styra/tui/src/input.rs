@@ -2799,7 +2799,7 @@ mod tests {
         app.enter_list();
         assert_eq!(app.message_source, None, "leaving the box forgets it");
 
-        press(&mut app, 'l');
+        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Enter));
         press(&mut app, 'j');
         press(&mut app, 'j');
         assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 1);
@@ -2835,6 +2835,8 @@ mod tests {
             compact_dirs: true,
             tint: Default::default(),
             word_highlights: true,
+            layers: None,
+            thumbnail_hidden: false,
             selected_file: 0,
                         file_list_offset: 0,
             search: Default::default(),

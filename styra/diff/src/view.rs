@@ -7,6 +7,7 @@
 //! while the diff below it scrolls.
 
 use crate::files::{filtered_file_diffs, FileChange, FileDiff};
+use crate::layers::Layers;
 use crate::report::{Described, ReportState};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -55,12 +56,17 @@ pub struct CheckoutDiffView<'a> {
     pub horizontal_scroll: u16,
     /// Show the selected patch thumbnail beneath the file tree in fullscreen.
     pub thumbnail: bool,
+    /// Whether the thumbnail has been put away, where it would be shown.
+    pub thumbnail_hidden: bool,
     pub hide_removed: bool,
     /// Whether the file tree folds directories with no files of their own
     /// and a single subdirectory onto one row.
     pub compact_dirs: bool,
     pub tint: Tint,
     pub word_highlights: bool,
+    /// While changes are tinted by the commits that made them, those
+    /// commits, or why they could not be read.
+    pub layers: Option<Result<&'a Layers, &'a str>>,
     pub selected_file: usize,
     /// First visible row in the file tree, retained between frames.
     pub file_list_offset: usize,
@@ -101,10 +107,12 @@ impl<'a> CheckoutDiffView<'a> {
             rendered_side: false,
             horizontal_scroll: 0,
             thumbnail: false,
+            thumbnail_hidden: false,
             hide_removed: false,
             compact_dirs: true,
             tint: Tint::Full,
             word_highlights: true,
+            layers: None,
             selected_file: 0,
             file_list_offset: 0,
             search: SearchView::default(),
@@ -312,20 +320,53 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         .conversation
         .clone()
         .unwrap_or_else(|| header_lines(view));
+    // The combined diff has no left pane to list the layers in: its top
+    // bar shares them, on its left, and is as tall as they need.
+    let top_legend = view.layers.filter(|_| !view.per_file);
+    let legend_height = top_legend.map_or(0, |layers| legend_rows(layers, &[]).len());
     let [top, body] = Layout::vertical([
         // One more than the header for the rule beneath it.
-        Constraint::Length(header.len() as u16 + 1),
+        Constraint::Length(header.len().max(legend_height) as u16 + 1),
         Constraint::Min(0),
     ])
     .areas(inner);
     frame.render_widget(
-        Paragraph::new(header).block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(theme::INACTIVE)),
-        ),
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(theme::INACTIVE)),
         top,
     );
+    let top = Rect::new(top.x, top.y, top.width, top.height.saturating_sub(1));
+    // Filled once what the line cursor is over is known.
+    let (top, legend_area) = match top_legend {
+        Some(layers) => {
+            let width = legend_width(&legend_rows(layers, &[])).min(top.width / 2);
+            let [legend, header] =
+                Layout::horizontal([Constraint::Length(width), Constraint::Min(0)]).areas(top);
+            frame.render_widget(
+                Block::default()
+                    .borders(Borders::RIGHT)
+                    .border_style(Style::default().fg(theme::INACTIVE)),
+                legend,
+            );
+            let inner = Rect::new(
+                legend.x,
+                legend.y,
+                legend.width.saturating_sub(1),
+                legend.height,
+            );
+            // A column's gap between the rule and the header.
+            let header = Rect::new(
+                header.x.saturating_add(1),
+                header.y,
+                header.width.saturating_sub(1),
+                header.height,
+            );
+            (header, Some((layers, inner)))
+        }
+        None => (top, None),
+    };
+    frame.render_widget(Paragraph::new(header), top);
     let files = view
         .diff
         .ok()
@@ -341,21 +382,48 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                 .map(|(_, file)| file)
         })
         .flatten();
+    let shown = if view.per_file {
+        selected_file.map(|file| Ok(file.patch)).unwrap_or_else(|| {
+            if view.search.query.is_some_and(|query| !query.is_empty()) && view.diff.is_ok() {
+                Err("no matching files")
+            } else {
+                view.diff
+            }
+        })
+    } else {
+        view.diff
+    };
+    // The commits that touched the block of changes under the line cursor.
+    let touched = match (view.line_cursor, view.layers, shown) {
+        (Some(cursor), Some(Ok(layers)), Ok(text)) => block_layers(layers, text, cursor),
+        _ => Vec::new(),
+    };
     let mut thumbnail_area = None;
     let mut file_list_offset = view.file_list_offset;
     let body = if view.per_file {
         let mut rows = file_tree_rows(&files, view.compact_dirs);
-        let [left, right] = Layout::horizontal([
-            Constraint::Length(if view.thumbnail {
-                file_tree_width(&rows, body.width).max(24.min(body.width / 2))
-            } else {
-                file_tree_width(&rows, body.width)
-            }),
-            Constraint::Min(0),
-        ])
-        .areas(body);
+        let stat = view.diff.ok().map(stat_line);
+        let stat_width = stat.as_ref().map_or(0, |stat| {
+            u16::try_from(stat.width())
+                .unwrap_or(u16::MAX)
+                .saturating_add(FILE_TREE_PADDING + 1)
+        });
+        let thumbnail = view.thumbnail && !view.thumbnail_hidden;
+        // The layers, under the file list, with what the line cursor is over
+        // standing out.
+        let legend = view.layers.map(|layers| legend_rows(layers, &touched));
+        let legend_wide = legend.as_deref().map_or(0, legend_width);
+        let tree_width = if thumbnail {
+            file_tree_width(&rows, body.width).max(24.min(body.width / 2))
+        } else {
+            file_tree_width(&rows, body.width)
+        }
+        .max(stat_width.min(body.width / 2))
+        .max(legend_wide.min(body.width / 2));
+        let [left, right] =
+            Layout::horizontal([Constraint::Length(tree_width), Constraint::Min(0)]).areas(body);
         let thumbnail_height =
-            if view.thumbnail && selected_file.is_some() && left.width >= 12 && left.height >= 19 {
+            if thumbnail && selected_file.is_some() && left.width >= 12 && left.height >= 19 {
                 17
             } else {
                 0
@@ -372,10 +440,47 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             left.width.saturating_sub(1),
             left.height - thumbnail_height,
         );
+        // The layers take what they need beneath the files, with a rule above
+        // them, but never more than half of what the two share.
+        let tree = match legend {
+            Some(legend) => {
+                let height = u16::try_from(legend.len())
+                    .unwrap_or(u16::MAX)
+                    .saturating_add(1)
+                    .min(tree.height / 2);
+                let [files, below] =
+                    Layout::vertical([Constraint::Min(0), Constraint::Length(height)]).areas(tree);
+                frame.render_widget(
+                    Block::default()
+                        .borders(Borders::TOP)
+                        .border_style(Style::default().fg(theme::INACTIVE)),
+                    below,
+                );
+                let rows = Rect::new(
+                    below.x,
+                    below.y.saturating_add(1),
+                    below.width,
+                    below.height.saturating_sub(1),
+                );
+                render_legend(frame, legend, rows);
+                files
+            }
+            None => tree,
+        };
+        // How much the diff changes, above the files it changes.
+        let tree = match stat {
+            Some(stat) => {
+                let [stat_row, list] =
+                    Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(tree);
+                frame.render_widget(Paragraph::new(stat), stat_row);
+                list
+            }
+            None => tree,
+        };
         if thumbnail_height > 0 {
             thumbnail_area = Some(Rect::new(
                 left.x,
-                tree.bottom(),
+                left.bottom() - thumbnail_height,
                 tree.width.min(30),
                 thumbnail_height,
             ));
@@ -383,6 +488,32 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         let selected = rows
             .iter()
             .position(|(index, _)| *index == Some(view.selected_file));
+        // The files those commits changed stand out, and the others are
+        // muted, as the commits are in the legend.
+        if let (Some(Ok(layers)), false) = (view.layers, touched.is_empty()) {
+            for (index, line) in &mut rows {
+                let Some(file) = index.and_then(|index| {
+                    files
+                        .iter()
+                        .find(|(at, _)| *at == index)
+                        .map(|(_, file)| file)
+                }) else {
+                    continue;
+                };
+                let changed = layers
+                    .marks(file.patch)
+                    .iter()
+                    .flatten()
+                    .any(|layer| touched.contains(layer));
+                if let Some(name) = line.spans.first_mut() {
+                    name.style = if changed {
+                        name.style.fg(theme::TEXT).add_modifier(Modifier::BOLD)
+                    } else {
+                        name.style.fg(theme::MUTED_TEXT)
+                    };
+                }
+            }
+        }
         // Only the name: its change marker keeps its own color.
         if let Some(name) = selected.and_then(|row| rows[row].1.spans.first_mut()) {
             name.style = name.style.fg(theme::SELECTED_FILE_NAME);
@@ -418,17 +549,9 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
     } else {
         body
     };
-    let shown = if view.per_file {
-        selected_file.map(|file| Ok(file.patch)).unwrap_or_else(|| {
-            if view.search.query.is_some_and(|query| !query.is_empty()) && view.diff.is_ok() {
-                Err("no matching files")
-            } else {
-                view.diff
-            }
-        })
-    } else {
-        view.diff
-    };
+    if let Some((layers, column)) = legend_area {
+        render_legend(frame, legend_rows(layers, &touched), column);
+    }
     let side_by_side = view.side_by_side && !view.hide_removed && body.width >= 81;
     let mut body = body;
     if view.side_by_side {
@@ -454,6 +577,27 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         frame.render_widget(Paragraph::new(muted(&label_text)), label);
         body = rest;
     }
+    if let (Some(cursor), Some(Ok(layers)), Ok(text)) = (view.line_cursor, view.layers, shown) {
+        let marks = layers.marks(text);
+        let mark = marks.get(cursor).map(Vec::as_slice).unwrap_or_default();
+        let rows = line_layers(layers, mark);
+        // Only as tall as the cursor's line needs, and never more than half.
+        let height = u16::try_from(rows.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(1)
+            .min(body.height / 2);
+        let [rest, info] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(height)]).areas(body);
+        frame.render_widget(
+            Paragraph::new(rows).block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(theme::INACTIVE)),
+            ),
+            info,
+        );
+        body = rest;
+    }
     let width = usize::from(body.width);
     let requested = shown
         .ok()
@@ -469,6 +613,22 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             )
         })
         .unwrap_or(view.requested_scroll);
+    // The strip under the diff follows the line cursor's line and can grow
+    // over it: scroll as little as keeps the cursor in sight.
+    let requested = match (view.line_cursor, shown) {
+        (Some(cursor), Ok(text)) => {
+            let row =
+                crate::split::row_of(text, view.hide_removed, side_by_side, view.per_file, cursor);
+            let bottom = usize::from(requested) + usize::from(body.height.max(1)) - 1;
+            match row.checked_sub(bottom) {
+                Some(below) if below > 0 => {
+                    requested.saturating_add(u16::try_from(below).unwrap_or(u16::MAX))
+                }
+                _ => requested,
+            }
+        }
+        _ => requested,
+    };
     let (limit, effective, horizontal_scroll) =
         if side_by_side && shown.is_ok_and(|text| !text.trim().is_empty()) {
             render_split(
@@ -476,6 +636,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                 shown.unwrap(),
                 view.tint,
                 view.word_highlights,
+                view.layers.and_then(Result::ok),
                 body,
                 requested,
                 view.horizontal_scroll,
@@ -495,6 +656,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                     view.hide_removed,
                     view.tint,
                     view.word_highlights,
+                    view.layers.and_then(Result::ok),
                     width,
                     view.per_file,
                 ),
@@ -575,6 +737,7 @@ fn render_split(
     text: &str,
     tint: Tint,
     word_highlights: bool,
+    layers: Option<&Layers>,
     area: Rect,
     scroll: u16,
     pan: u16,
@@ -583,7 +746,10 @@ fn render_split(
     use crate::split::{aligned, Cell, SplitRow};
     let plan = aligned(text, per_file);
     let source_lines: Vec<_> = text.lines().collect();
-    let rendered = rendered_patch(text, tint, word_highlights);
+    let mut rendered = rendered_patch(text, tint, word_highlights);
+    if let Some(layers) = layers {
+        paint_layers(text, &mut rendered, layers);
+    }
     let highest = plan
         .iter()
         .flat_map(|row| match row {
@@ -1171,22 +1337,22 @@ fn patch_lines(
     hide_removed: bool,
     tint: Tint,
     word_highlights: bool,
+    layers: Option<&Layers>,
     width: usize,
     per_file: bool,
 ) -> Vec<Line<'static>> {
-    // The diff is drawn a row for each of its lines.
-    let mut rendered: Vec<_> = rendered_patch(text, tint, word_highlights)
-        .into_iter()
-        .map(Some)
-        .collect();
+    let mut rendered = rendered_patch(text, tint, word_highlights);
     let removed: Vec<bool> = if hide_removed {
-        rendered
-            .iter()
-            .map(|line| line.as_ref().is_some_and(is_removed))
-            .collect()
+        rendered.iter().map(is_removed).collect()
     } else {
         Vec::new()
     };
+    // Painted once removed rows are known by their own band.
+    if let Some(layers) = layers {
+        paint_layers(text, &mut rendered, layers);
+    }
+    // The diff is drawn a row for each of its lines.
+    let mut rendered: Vec<_> = rendered.into_iter().map(Some).collect();
     let headers: Vec<bool> = text.lines().map(is_file_header).collect();
     let hunks: Vec<bool> = text.lines().map(is_hunk_header).collect();
     file_view_rows(text, plan(text, &removed), per_file)
@@ -1198,6 +1364,9 @@ fn patch_lines(
                     header_bar(line, width)
                 } else if hunks[index] {
                     hunk_rule(line, width)
+                } else if layers.is_some() {
+                    // A layer's tint is no band `fill_changed_rows` knows.
+                    band(line, width)
                 } else {
                     line
                 })
@@ -1208,6 +1377,38 @@ fn patch_lines(
             Row::RuleBelow => Some(rule('▔', width)),
         })
         .collect()
+}
+
+/// Tint each changed line of `text`, drawn as `lines`, by the layers that
+/// touched it in place of its added or removed band. Word highlights keep
+/// their own colours.
+fn paint_layers(text: &str, lines: &mut [Line<'static>], layers: &Layers) {
+    for ((source, line), marks) in text.lines().zip(lines).zip(layers.marks(text)) {
+        let Some(background) = crate::layers::background(&marks, source.starts_with('-')) else {
+            continue;
+        };
+        let band = line.style.bg;
+        line.style = line.style.bg(background);
+        for span in &mut line.spans {
+            if span.style.bg == band {
+                span.style = span.style.bg(background);
+            }
+        }
+    }
+}
+
+/// A row with a background of its own carried to the edge of the panel.
+fn band(mut line: Line<'static>, width: usize) -> Line<'static> {
+    let (Some(background), pad) = (line.style.bg, width.saturating_sub(line.width())) else {
+        return line;
+    };
+    if pad > 0 {
+        line.spans.push(Span::styled(
+            " ".repeat(pad),
+            Style::default().bg(background),
+        ));
+    }
+    line
 }
 
 /// A file's header line as a bar across the panel.
@@ -1277,11 +1478,12 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
         Some(label) => supplied_lines(label, view.worktree, strong),
         None => comparison_lines(view, strong),
     };
-    if let Ok(text) = view.diff {
+    // The per-file view says it atop its file list instead.
+    if let (Ok(text), false) = (view.diff, view.per_file) {
         lines.push(stat_line(text));
     }
     let navigation = if view.line_cursor.is_some() {
-        "line selection · j/k: line · PgUp/PgDn: half-screen · g/G: first/last · l/Esc: leave"
+        "line selection · j/k: changed line · ↑/↓: any line · J/K: change block · PgUp/PgDn: half-screen · g/G: first/last · Enter/Esc: leave"
     } else if view.per_file {
         "f: combined diff · /: search · j/k: files · J/K: 5 files · ↑/↓: scroll 10 · PgUp/PgDn: half-screen"
     } else {
@@ -1290,7 +1492,7 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
     let lines_key = if view.line_cursor.is_some() {
         ""
     } else {
-        "l: select lines · "
+        "Enter: select lines · "
     };
     lines.push(muted(&format!(
         "s: {} · {navigation}",
@@ -1328,6 +1530,12 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
         (true, true) => " · c: unfold directories",
         (true, false) => " · c: fold directories",
     };
+    // Only where the host shows a thumbnail to toggle.
+    let thumbnail = match (view.per_file && view.thumbnail, view.thumbnail_hidden) {
+        (false, _) => "",
+        (true, false) => " · m: hide thumbnail",
+        (true, true) => " · m: show thumbnail",
+    };
     let tint = match view.tint {
         Tint::Full => "t: halve unchanged tint",
         Tint::Half => "t: full unchanged tint",
@@ -1337,8 +1545,13 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
     } else {
         "w: words off"
     };
+    let layered = if view.layers.is_some() {
+        "L: layers on"
+    } else {
+        "L: layers off"
+    };
     lines.push(muted(&format!(
-        "{lines_key}v: edit file · {words} · {removed} · {tint}{directories}"
+        "{lines_key}v: edit file · {words} · {layered} · {removed} · {tint}{directories}{thumbnail}"
     )));
     if view.per_file {
         if let Some(query) = view.search.query {
@@ -1463,6 +1676,192 @@ fn stat_line(text: &str) -> Line<'static> {
     ])
 }
 
+/// Each layer's colour and the commit it is, a row each, oldest first, as
+/// overlapping changes are laid one over another; or why there are none.
+/// When `touched` names any layers, theirs are the rows that stand out and
+/// the others are muted.
+fn legend_rows(layers: Result<&Layers, &str>, touched: &[u16]) -> Vec<Line<'static>> {
+    let layers = match layers {
+        Ok(layers) => layers,
+        Err(error) => {
+            return vec![Line::from(Span::styled(
+                format!("layers: {error}"),
+                Style::default().fg(theme::ERROR),
+            ))]
+        }
+    };
+    if layers.layers.is_empty() {
+        return vec![muted("no commits or uncommitted work to layer")];
+    }
+    let mut rows = vec![muted("layers, oldest first:")];
+    for (index, layer) in layers.layers.iter().enumerate() {
+        let index = u16::try_from(index).unwrap_or(u16::MAX);
+        let swatch = crate::layers::background(&[index], false).unwrap_or(Color::Reset);
+        let (name, text, row) = if touched.contains(&index) {
+            let bold = Style::default()
+                .bg(theme::SELECTION_BACKGROUND)
+                .add_modifier(Modifier::BOLD);
+            (
+                bold.fg(theme::ACCENT),
+                bold.fg(theme::TEXT),
+                Style::default().bg(theme::SELECTION_BACKGROUND),
+            )
+        } else if touched.is_empty() {
+            (
+                Style::default().fg(theme::ACCENT),
+                Style::default().fg(theme::TEXT),
+                Style::default(),
+            )
+        } else {
+            let muted = Style::default().fg(theme::MUTED_TEXT);
+            (muted, muted, Style::default())
+        };
+        let mut spans = vec![
+            Span::styled("  ", Style::default().bg(swatch)),
+            Span::styled(format!(" {}", layer.name), name),
+        ];
+        if !layer.summary.is_empty() {
+            let summary: String = layer.summary.chars().take(LEGEND_SUMMARY).collect();
+            let more = if layer.summary.chars().count() > LEGEND_SUMMARY {
+                "…"
+            } else {
+                ""
+            };
+            spans.push(Span::styled(format!(" {summary}{more}"), text));
+        }
+        rows.push(Line::from(spans).style(row));
+    }
+    rows
+}
+
+/// The commits that touched the line cursor's line, `mark`, newest first, as
+/// they are laid over one another: a row saying which commit each is, then
+/// the rest of its message.
+fn line_layers(layers: &Layers, mark: &[u16]) -> Vec<Line<'static>> {
+    if mark.is_empty() {
+        return vec![muted("no commit changed this line")];
+    }
+    mark.iter()
+        .rev()
+        .filter_map(|&index| {
+            let layer = layers.layers.get(usize::from(index))?;
+            let swatch = crate::layers::background(&[index], false).unwrap_or(Color::Reset);
+            let mut spans = vec![
+                Span::styled("  ", Style::default().bg(swatch)),
+                Span::styled(
+                    format!(" {}", layer.name),
+                    Style::default().fg(theme::ACCENT),
+                ),
+            ];
+            if !layer.date.is_empty() || !layer.author.is_empty() {
+                spans.push(Span::styled(
+                    format!(" {} · {}", layer.date, layer.author),
+                    Style::default().fg(theme::MUTED_TEXT),
+                ));
+            }
+            if !layer.summary.is_empty() {
+                spans.push(Span::styled(
+                    format!("  {}", layer.summary),
+                    Style::default().fg(theme::TEXT),
+                ));
+            }
+            let body = message_body(layer).into_iter().map(|line| {
+                // Under the commit's id, past its swatch.
+                Line::from(Span::styled(
+                    format!("   {line}"),
+                    Style::default().fg(theme::MUTED_TEXT),
+                ))
+            });
+            Some(std::iter::once(Line::from(spans)).chain(body))
+        })
+        .flatten()
+        .collect()
+}
+
+/// The lines of `layer`'s message shown after its summary, so that the
+/// whole message takes at most [`MESSAGE_LINES`]; the last is marked when
+/// there is more.
+fn message_body(layer: &crate::layers::Layer) -> Vec<String> {
+    let lines: Vec<&str> = layer.body.lines().collect();
+    let room = MESSAGE_LINES - 1;
+    let mut shown: Vec<String> = lines
+        .iter()
+        .take(room)
+        .map(|line| line.to_string())
+        .collect();
+    if lines.len() > room {
+        if let Some(last) = shown.last_mut() {
+            last.push_str(" …");
+        }
+    }
+    shown
+}
+
+/// The most lines of a commit's message, its summary included, shown for
+/// each commit under the line cursor.
+const MESSAGE_LINES: usize = 10;
+
+/// How much of a commit's summary the layers' legend shows.
+const LEGEND_SUMMARY: usize = 40;
+
+/// Draw the layers' legend in `area`. A row with a background of its own
+/// has it to the area's edge.
+fn render_legend(frame: &mut Frame, rows: Vec<Line<'static>>, area: Rect) {
+    let rows: Vec<_> = rows
+        .into_iter()
+        .map(|row| band(row, usize::from(area.width)))
+        .collect();
+    frame.render_widget(Paragraph::new(rows), area);
+}
+
+/// The layers that touched any line of the block of changes `cursor` is in:
+/// the run of added and removed lines around it. None when it is on no
+/// change.
+fn block_layers(layers: &Layers, text: &str, cursor: usize) -> Vec<u16> {
+    let lines: Vec<&str> = text.lines().collect();
+    // Within a hunk every line starting so is a change, or the note that
+    // a side has no newline at its end; file markers come before any hunk
+    // and are never marked.
+    let changed = |line: usize| {
+        lines
+            .get(line)
+            .is_some_and(|line| line.starts_with(['+', '-', '\\']))
+    };
+    if !lines
+        .get(cursor)
+        .is_some_and(|line| line.starts_with(['+', '-']))
+    {
+        return Vec::new();
+    }
+    let start = (0..cursor)
+        .rev()
+        .take_while(|&line| changed(line))
+        .last()
+        .unwrap_or(cursor);
+    let end = (cursor..lines.len())
+        .take_while(|&line| changed(line))
+        .last()
+        .unwrap_or(cursor);
+    let marks = layers.marks(text);
+    let mut touched: Vec<u16> = marks[start..=end.min(marks.len().saturating_sub(1))]
+        .iter()
+        .flatten()
+        .copied()
+        .collect();
+    touched.sort_unstable();
+    touched.dedup();
+    touched
+}
+
+/// As wide as the legend's longest row, with the padding and border the
+/// file tree has.
+fn legend_width(rows: &[Line<'_>]) -> u16 {
+    let longest = rows.iter().map(Line::width).max().unwrap_or(0);
+    u16::try_from(longest)
+        .unwrap_or(u16::MAX)
+        .saturating_add(FILE_TREE_PADDING + 1)
+}
+
 fn muted(text: &str) -> Line<'static> {
     Line::from(Span::styled(
         text.to_owned(),
@@ -1530,7 +1929,7 @@ index 1111111..2222222 100644
             "similarity index 100%\nrename from old\nrename to new",
         ] {
             let text = format!("diff --git a/old b/new\n{detail}\n");
-            let shown = patch_lines(&text, false, Tint::Full, true, 80, true);
+            let shown = patch_lines(&text, false, Tint::Full, true, None, 80, true);
             let shown = shown
                 .iter()
                 .map(ToString::to_string)
@@ -1540,9 +1939,309 @@ index 1111111..2222222 100644
         }
     }
 
+    /// With layers, each change is banded across the panel in its layers'
+    /// blend instead of green or red, removed rows are still known to hide,
+    /// and unchanged rows are left alone.
+    #[test]
+    fn layers_tint_each_change_by_the_commits_that_made_it() {
+        use crate::layers::{background, Layer};
+        let layer = |name: &str| Layer {
+            name: name.into(),
+            ..Layer::default()
+        };
+        let first = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n\
+                     @@ -1,2 +1,2 @@\n fn a() {}\n-fn b() {}\n+fn c() {}\n";
+        let second = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n\
+                      @@ -1,2 +1,3 @@\n fn a() {}\n-fn c() {}\n+fn c() {}\n+fn d() {}\n";
+        let layers =
+            Layers::from_steps(&[(layer("one"), first.into()), (layer("two"), second.into())]);
+        let backgrounds = |hide_removed| {
+            patch_lines(
+                DIFF,
+                hide_removed,
+                Tint::Full,
+                false,
+                Some(&layers),
+                40,
+                false,
+            )
+            .into_iter()
+            .map(|line| {
+                assert!(line.width() == 40 || line.style.bg.is_none());
+                line.style.bg
+            })
+            .collect::<Vec<_>>()
+        };
+        let (removed, both) = (background(&[0], true), background(&[0, 1], false));
+        assert_eq!(
+            &backgrounds(false)[3..],
+            [None, removed, both, both],
+            " fn a, -fn b, +fn c, +fn d"
+        );
+        assert_eq!(&backgrounds(true)[3..], [None, both, both]);
+    }
+
+    /// On a line in line selection, the commits that touched it are listed
+    /// at the bottom, newest first; on a line none changed, that is said.
+    #[test]
+    fn the_line_cursors_commits_are_listed_newest_first_at_the_bottom() {
+        use crate::layers::Layer;
+        use ratatui::{backend::TestBackend, Terminal};
+        let layer = |name: &str, summary: &str| Layer {
+            name: name.into(),
+            summary: summary.into(),
+            author: "Ada".into(),
+            date: "2 days ago".into(),
+            body: String::new(),
+        };
+        let first = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n\
+                     @@ -1,2 +1,2 @@\n fn a() {}\n-fn b() {}\n+fn c() {}\n";
+        let second = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n\
+                      @@ -1,2 +1,3 @@\n fn a() {}\n-fn c() {}\n+fn c() {}\n+fn d() {}\n";
+        let second_layer = Layer {
+            body: (1..=12).map(|n| format!("body {n}\n")).collect(),
+            ..layer("2222222", "second")
+        };
+        let layers = Layers::from_steps(&[
+            (layer("1111111", "first"), first.into()),
+            (second_layer, second.into()),
+        ]);
+        let bottom = |cursor: usize| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut view = CheckoutDiffView::unread(Block::default());
+                    view.diff = Ok(DIFF);
+                    view.layers = Some(Ok(&layers));
+                    view.line_cursor = Some(cursor);
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (28..40)
+                .map(|y| {
+                    (0..100)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                        // The diff's side, left of the legend's column.
+                        .split('│')
+                        .next()
+                        .unwrap_or_default()
+                        .trim_end()
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        // Line 7 is "+fn c() {}", laid by the second commit over the first.
+        // The strip is as tall as both commits' messages: a rule, the
+        // second commit's row and nine of its body's twelve lines, so ten
+        // lines of message, then the first commit's row.
+        let rows = bottom(7);
+        assert!(rows[0].contains('─'), "{rows:?}");
+        assert!(
+            rows[1].ends_with("2222222 2 days ago · Ada  second"),
+            "{rows:?}"
+        );
+        assert!(rows[2] == "   body 1", "{rows:?}");
+        assert!(rows[10] == "   body 9 …", "{rows:?}");
+        assert!(
+            rows[11].ends_with("1111111 2 days ago · Ada  first"),
+            "{rows:?}"
+        );
+        // On a line no commit changed, the strip is only as tall as saying so.
+        let rows = bottom(5);
+        assert!(rows[10].contains('─'), "{rows:?}");
+        assert_eq!(rows[11], "no commit changed this line", "{rows:?}");
+        assert!(rows[..10].iter().all(|row| !row.contains('─')), "{rows:?}");
+
+        // Where the strip grows over the cursor's line, the diff scrolls to
+        // keep it in sight.
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        let mut measured = CheckoutDiffFeedback::default();
+        terminal
+            .draw(|frame| {
+                let mut view = CheckoutDiffView::unread(Block::default());
+                view.diff = Ok(DIFF);
+                view.layers = Some(Ok(&layers));
+                view.line_cursor = Some(7);
+                measured = render(frame, &view, frame.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let cursor = (0..16).find(|&y| buffer[(0, y)].symbol() == LINE_CURSOR_MARKER);
+        assert!(cursor.is_some(), "the cursor is drawn: {buffer:?}");
+        assert!(measured.scroll.effective_scroll > 0);
+    }
+
+    /// In the per-file view, the files changed by the commits that touched
+    /// the block under the line cursor stand out in the file list, and the
+    /// others are muted.
+    #[test]
+    fn the_files_the_cursors_commits_changed_stand_out() {
+        use crate::layers::Layer;
+        use ratatui::{backend::TestBackend, Terminal};
+        let layer = |name: &str| Layer {
+            name: name.into(),
+            ..Layer::default()
+        };
+        let text = format!(
+            "{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old\n+new\n\
+             diff --git a/c.txt b/c.txt\n@@ -1 +1 @@\n-x\n+y\n"
+        );
+        let one = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n\
+                   @@ -1,2 +1,2 @@\n fn a() {}\n-fn b() {}\n+fn c() {}\n\
+                   diff --git a/c.txt b/c.txt\n--- a/c.txt\n+++ b/c.txt\n@@ -1 +1 @@\n-x\n+y\n";
+        let two = "diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-old\n+new\n";
+        let layers = Layers::from_steps(&[(layer("one"), one.into()), (layer("two"), two.into())]);
+        // The style of each listed file's name, with the cursor on `line` of
+        // the patch of the file at `selected` in the diff.
+        let names = |selected: usize, line: Option<usize>| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut view = CheckoutDiffView::unread(Block::default());
+                    view.diff = Ok(&text);
+                    view.per_file = true;
+                    view.selected_file = selected;
+                    view.layers = Some(Ok(&layers));
+                    view.line_cursor = line;
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            ["a.rs", "b.txt", "c.txt"].map(|name| {
+                (0..24)
+                    .find_map(|y| {
+                        let row: String = (0..30).map(|x| buffer[(x, y)].symbol()).collect();
+                        let x = row.find(name)?;
+                        let x = u16::try_from(row[..x].chars().count()).unwrap();
+                        // Only the file list's rows, not the patch's title.
+                        (row.contains('│') && row.find('│')? > row.find(name)?)
+                            .then(|| buffer[(x, y)].style())
+                    })
+                    .unwrap_or_else(|| panic!("{name} listed: {buffer:?}"))
+            })
+        };
+        let standing = |style: Style| style.add_modifier.contains(Modifier::BOLD);
+        let muted = |style: Style| style.fg == Some(theme::MUTED_TEXT);
+
+        // On b.txt's "+new", which only the second commit wrote: c.txt and
+        // a.rs, only the first's, are muted.
+        let [a, _, c] = names(1, Some(3));
+        assert!(muted(a) && muted(c), "{a:?} {c:?}");
+        // On a.rs's "+fn c() {}", the first commit's: c.txt stands out too.
+        let [_, b, c] = names(0, Some(7));
+        assert!(standing(c), "{c:?}");
+        assert!(muted(b), "{b:?}");
+        // On an unchanged line, or with no cursor, nothing is singled out.
+        for line in [Some(5), None] {
+            let [_, b, c] = names(0, line);
+            assert!(!standing(c) && !muted(c) && !muted(b), "{b:?} {c:?}");
+        }
+    }
+
+    /// The legend lists the layers a row each: in the per-file view in the
+    /// left pane under the file list, and in the combined diff, which has no
+    /// such pane, at the top left of the top bar before the header. In
+    /// line selection the commits that touched the block of changes under
+    /// the cursor stand out, and the others are muted.
+    #[test]
+    fn the_layers_legend_lists_each_commit_at_the_top_left() {
+        use crate::layers::{background, Layer};
+        use ratatui::{backend::TestBackend, Terminal};
+        let layer = |name: &str, summary: &str| Layer {
+            name: name.into(),
+            summary: summary.into(),
+            ..Layer::default()
+        };
+        let step = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n\
+                    @@ -1,2 +1,2 @@\n fn a() {}\n-fn b() {}\n+fn c() {}\n";
+        let layers = Layers::from_steps(&[
+            (layer("1111111", "first"), step.into()),
+            (layer("uncommitted", ""), String::new()),
+        ]);
+        for (per_file, cursor) in [
+            (false, None),
+            (true, None),
+            (false, Some(8)),
+            (false, Some(5)),
+        ] {
+            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut view = CheckoutDiffView::unread(Block::default());
+                    view.diff = Ok(DIFF);
+                    view.per_file = per_file;
+                    view.layers = Some(Ok(&layers));
+                    view.line_cursor = cursor;
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let row = |y: u16| -> String { (0..100).map(|x| buffer[(x, y)].symbol()).collect() };
+            let (top, left) = (0..24)
+                .find_map(|y| Some((y, row(y).find("layers, oldest first:")?)))
+                .unwrap_or_else(|| panic!("no legend in {buffer:?}"));
+            let x = u16::try_from(row(top)[..left].chars().count()).unwrap();
+            let border = (0..100)
+                .find(|&x| buffer[(x, top)].symbol() == "│")
+                .expect("a rule beside the legend");
+            let rule = (0..24).find(|&y| row(y).starts_with('─')).unwrap();
+            if per_file {
+                assert_eq!(x, 0, "in the left pane");
+                assert!(top > rule, "below the top bar's rule, at {rule}");
+                assert!(row(top - 1).starts_with('─'), "a rule above it");
+                let above: String = (rule..top)
+                    .flat_map(|y| row(y).chars().take(usize::from(border)).collect::<Vec<_>>())
+                    .collect();
+                assert!(above.contains("a.rs"), "the file list is above: {above}");
+            } else {
+                assert_eq!((x, top), (0, 0), "at the top left, in the top bar");
+                let header: String = row(top).chars().skip(usize::from(border) + 1).collect();
+                assert!(header.starts_with(" detached head"), "{header}");
+                assert!(
+                    rule > top + 2,
+                    "the legend is above the bar's rule, at {rule}"
+                );
+            }
+            let at = |y: u16| -> String { (x..100).map(|x| buffer[(x, y)].symbol()).collect() };
+            assert!(
+                at(top + 1).starts_with("   1111111 first"),
+                "{}",
+                at(top + 1)
+            );
+            assert!(at(top + 2).starts_with("   uncommitted"), "{}", at(top + 2));
+            for (offset, index) in [(1, 0), (2, 1)] {
+                assert_eq!(
+                    buffer[(x, top + offset)].bg,
+                    background(&[index], false).unwrap()
+                );
+            }
+            let (first, uncommitted) = (&buffer[(x + 3, top + 1)], &buffer[(x + 3, top + 2)]);
+            if cursor == Some(8) {
+                // "+fn d() {}", in the block "-fn b() {}" "+fn c() {}" begins,
+                // which only the first commit touched.
+                assert_eq!(first.bg, theme::SELECTION_BACKGROUND);
+                assert!(first.modifier.contains(Modifier::BOLD));
+                assert_eq!(
+                    buffer[(border - 1, top + 1)].bg,
+                    theme::SELECTION_BACKGROUND,
+                    "banded to the rule"
+                );
+                assert_eq!(uncommitted.fg, theme::MUTED_TEXT);
+                assert_ne!(uncommitted.bg, theme::SELECTION_BACKGROUND);
+            } else {
+                // On no block, as on " fn a() {}", or with no cursor.
+                assert_eq!(first.fg, theme::ACCENT);
+                assert_eq!(uncommitted.fg, theme::ACCENT);
+                assert_ne!(first.bg, theme::SELECTION_BACKGROUND);
+            }
+        }
+    }
+
     #[test]
     fn hiding_removals_keeps_added_indicators_and_original_line_numbers() {
-        let lines = patch_lines(DIFF, true, Tint::Full, true, 80, false);
+        let lines = patch_lines(DIFF, true, Tint::Full, true, None, 80, false);
         let text = lines
             .iter()
             .map(|line| {
@@ -1566,9 +2265,64 @@ index 1111111..2222222 100644
                 .count(),
             2
         );
-        assert!(patch_lines(DIFF, false, Tint::Full, true, 80, false)
+        assert!(patch_lines(DIFF, false, Tint::Full, true, None, 80, false)
             .iter()
             .any(|line| line.style.bg == Some(theme::DIFF_REMOVED_BACKGROUND)));
+    }
+
+    /// The per-file view's left pane holds the files, then the layers, then
+    /// the thumbnail at the bottom; put away, the thumbnail leaves the rest.
+    #[test]
+    fn the_left_pane_lists_files_then_layers_then_the_thumbnail() {
+        use crate::layers::Layer;
+        let layer = |name: &str| Layer {
+            name: name.into(),
+            ..Layer::default()
+        };
+        let layers = Layers::from_steps(&[(layer("1111111"), String::new())]);
+        let draw = |hidden| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut view = CheckoutDiffView::unread(Block::default());
+                    view.diff = Ok(DIFF);
+                    view.per_file = true;
+                    view.thumbnail = true;
+                    view.thumbnail_hidden = hidden;
+                    view.layers = Some(Ok(&layers));
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let first_row = |buffer: &ratatui::buffer::Buffer, text: &str| {
+            (0..40).find(|&y| {
+                (0..30)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains(text)
+            })
+        };
+        let map = |buffer: &ratatui::buffer::Buffer| {
+            (0..40).find(|&y| {
+                (0..30).any(|x| {
+                    [theme::DIFF_MAP_ADDED, theme::DIFF_MAP_REMOVED].contains(&buffer[(x, y)].bg)
+                })
+            })
+        };
+        let shown = draw(false);
+        let files = first_row(&shown, "a.rs").expect("the file list");
+        let legend = first_row(&shown, "layers, oldest first:").expect("the layers");
+        let thumbnail = map(&shown).expect("the thumbnail");
+        assert!(
+            files < legend && legend < thumbnail,
+            "{files} {legend} {thumbnail}"
+        );
+
+        let hidden = draw(true);
+        assert_eq!(map(&hidden), None, "the thumbnail is put away");
+        let legend = first_row(&hidden, "layers, oldest first:").expect("the layers");
+        assert!(first_row(&hidden, "a.rs").unwrap() < legend);
     }
 
     #[test]
@@ -1901,10 +2655,12 @@ index 1111111..2222222 100644
                         horizontal_scroll: 0,
                         per_file,
                         thumbnail: false,
+                        thumbnail_hidden: false,
                         hide_removed: false,
                         compact_dirs: true,
                         tint: Tint::Full,
                         word_highlights: true,
+                        layers: None,
                         selected_file,
                         file_list_offset: 0,
                         search,
@@ -2060,10 +2816,10 @@ index 1111111..2222222 100644
             format!("{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old second\n+new second\n");
         let ((output, _), viewport) = file_screen(Ok(&text), Some("main"), 0, true, 1);
         let rows = output.lines().collect::<Vec<_>>();
-        // The panel border, marker, widest row ("  a.rs [M]", 10),
-        // padding and tree border put the patch at column 16.
-        let tree = |row: &&str| row.chars().take(16).collect::<String>();
-        let patch = |row: &&str| row.chars().skip(16).collect::<String>();
+        // The panel border, the widest row ("2 files changed  +3 -2", 22),
+        // padding and tree border put the patch at column 26.
+        let tree = |row: &&str| row.chars().take(26).collect::<String>();
+        let patch = |row: &&str| row.chars().skip(26).collect::<String>();
         for name in ["▾ src/", "  a.rs [M]", "› b.txt"] {
             assert!(rows.iter().any(|row| tree(row).contains(name)), "{output}");
         }
@@ -2077,8 +2833,22 @@ index 1111111..2222222 100644
             "{output}"
         );
         assert!(!output.contains("fn c()"), "{output}");
-        assert!(output.contains("2 files changed"), "{output}");
-        assert_eq!(viewport, 9);
+        let stat = rows
+            .iter()
+            .position(|row| tree(row).contains("2 files changed  +3 -2"))
+            .expect(&output);
+        assert!(
+            tree(&rows[stat + 1]).contains("› b.txt"),
+            "atop the file list: {output}"
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.contains("files changed"))
+                .count(),
+            1,
+            "not in the header too: {output}"
+        );
+        assert_eq!(viewport, 10, "the header is a row shorter");
     }
 
     #[test]
@@ -2242,10 +3012,12 @@ index 1111111..2222222 100644
                             rendered_side: false,
                             horizontal_scroll: 0,
                             thumbnail: false,
+                            thumbnail_hidden: false,
                             hide_removed: false,
                             compact_dirs: true,
                             tint: Tint::Full,
                             word_highlights: true,
+                            layers: None,
                             selected_file,
                             file_list_offset: offset,
                             search: Default::default(),
@@ -2256,7 +3028,7 @@ index 1111111..2222222 100644
                         },
                         frame.area(),
                     );
-                    assert_eq!(measured.scroll.viewport, 19);
+                    assert_eq!(measured.scroll.viewport, 20);
                     offset = measured.file_list_offset;
                 })
                 .unwrap();
@@ -2552,10 +3324,12 @@ index 1111111..2222222 100644
                         rendered_side: false,
                         horizontal_scroll: 0,
                         thumbnail: false,
+                        thumbnail_hidden: false,
                         hide_removed: false,
                         compact_dirs: true,
                         tint: Tint::Full,
                         word_highlights: true,
+                        layers: None,
                         selected_file: 0,
                         file_list_offset: 0,
                         search: Default::default(),
@@ -2854,7 +3628,17 @@ mod split_tests {
         let mut terminal = Terminal::new(TestBackend::new(101, 8)).unwrap();
         terminal
             .draw(|frame| {
-                render_split(frame, patch, Tint::Full, true, frame.area(), 0, 0, false);
+                render_split(
+                    frame,
+                    patch,
+                    Tint::Full,
+                    true,
+                    None,
+                    frame.area(),
+                    0,
+                    0,
+                    false,
+                );
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
@@ -2883,7 +3667,17 @@ mod split_tests {
         let mut terminal = Terminal::new(TestBackend::new(101, 4)).unwrap();
         terminal
             .draw(|frame| {
-                render_split(frame, &patch, Tint::Full, true, frame.area(), 0, 32, false);
+                render_split(
+                    frame,
+                    &patch,
+                    Tint::Full,
+                    true,
+                    None,
+                    frame.area(),
+                    0,
+                    32,
+                    false,
+                );
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
@@ -2950,7 +3744,7 @@ mod split_tests {
                 }
             }
         }
-        let lines = patch_lines(patch, true, Tint::Half, true, 80, false);
+        let lines = patch_lines(patch, true, Tint::Half, true, None, 80, false);
         assert!(lines
             .iter()
             .flat_map(|l| &l.spans)
@@ -2968,7 +3762,17 @@ mod split_tests {
         let mut terminal = Terminal::new(TestBackend::new(81, 3)).unwrap();
         let frame = terminal
             .draw(|frame| {
-                render_split(frame, &patch, Tint::Full, true, frame.area(), 0, 30, false);
+                render_split(
+                    frame,
+                    &patch,
+                    Tint::Full,
+                    true,
+                    None,
+                    frame.area(),
+                    0,
+                    30,
+                    false,
+                );
             })
             .unwrap();
         let changed: Vec<_> = frame

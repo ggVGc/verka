@@ -1352,6 +1352,8 @@ mod tests {
             compact_dirs: true,
             tint: Default::default(),
             word_highlights: true,
+            layers: None,
+            thumbnail_hidden: false,
             selected_file: 0,
             file_list_offset: 0,
             search: Default::default(),

@@ -7,11 +7,15 @@ use std::process::Command;
 
 use anyhow::Context;
 use clap::Parser;
+// The terminal is set up with the same crossterm keys are read with, rather
+// than ratatui's own: crossterm reads ctrl-j as Enter unless it is the one
+// that put the terminal in raw mode.
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{
+use crossterm::execute;
+use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use ratatui::backend::CrosstermBackend;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Block;
@@ -51,10 +55,29 @@ fn main() -> anyhow::Result<()> {
             CheckoutDiff::read(target)
         }
     };
-    let mut terminal = ratatui::init();
+    let mut terminal = init().context("taking over the terminal")?;
     let result = run(&mut terminal, &mut diff);
-    ratatui::restore();
+    restore();
     result
+}
+
+/// Put the terminal in raw mode on the alternate screen, and have a panic
+/// put it back before saying what went wrong.
+fn init() -> io::Result<DefaultTerminal> {
+    enable_raw_mode()?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore();
+        hook(info);
+    }));
+    ratatui::Terminal::new(CrosstermBackend::new(io::stdout()))
+}
+
+/// Give the terminal back as it was before [`init`].
+fn restore() {
+    disable_raw_mode().ok();
+    execute!(io::stdout(), LeaveAlternateScreen, crossterm::cursor::Show).ok();
 }
 
 /// The patch at `path`, or on standard input for `-`, with its files opened
