@@ -34,28 +34,7 @@ impl ServerState {
         let mut checkout = self.session_checkout(&session.path, &session.workspace_id, id)?;
         // A Workspace can itself be a linked worktree, or the agent can move
         // into one. Neither requires a Styra-created checkout record.
-        let directory = if let Ok(interaction) = self.interaction(id) {
-            Some(interaction.working_tree.checkout())
-        } else if checkout
-            .as_ref()
-            .is_some_and(|checkout| checkout.path.is_none())
-        {
-            None
-        } else {
-            let (host, sandbox) = self.stored_workspace_mount(session)?;
-            let meta = journal::read_session_meta(&session.path)?;
-            let reported = journal::last_reported_cwd(&session.path, meta.protocol)?;
-            Some(
-                replayed_host_working_directory(
-                    reported.as_deref(),
-                    WorkspaceMount {
-                        host: &host,
-                        sandbox: &sandbox,
-                    },
-                )
-                .unwrap_or(host),
-            )
-        };
+        let directory = self.session_working_directory(session)?;
         if let Some(directory) = directory.filter(|directory| directory.exists()) {
             if let Some(repository) = self.inner.git.discover(&directory)? {
                 let main = repository
@@ -1202,6 +1181,91 @@ mod tests {
             })
             .unwrap();
         assert_eq!(fixture.state.diff_base(&id).unwrap(), Some(initial));
+    }
+
+    #[test]
+    fn comparison_branches_work_without_a_styra_checkout_record() {
+        let fixture = Fixture::new();
+        let external = fixture.host.join("external");
+        git(
+            &fixture.host,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "external",
+                external.to_str().unwrap(),
+            ],
+        );
+        // Its HEAD differs from the main checkout, so resolving against the
+        // wrong directory produces a different merge base.
+        git(&external, &["commit", "--allow-empty", "-m", "external"]);
+        let expected = git(&external, &["rev-parse", "HEAD"]);
+        for (root, reported) in [
+            (fixture.host.as_path(), None),
+            (external.as_path(), None),
+            (fixture.host.as_path(), Some(external.as_path())),
+        ] {
+            let workspace =
+                crate::workspace::create(fixture.state.store_root(), root, None).unwrap();
+            let selection = Selection::new(crate::agent::Provider::Codex);
+            let profile =
+                crate::agent::resolve_profile(&selection, &workspace_layout(root)).unwrap();
+            let (mut journal, id) = Journal::create_in_workspace(
+                fixture.state.store_root(),
+                &workspace.id,
+                &profile,
+                &selection,
+                None,
+            )
+            .unwrap();
+            if let Some(directory) = reported {
+                journal
+                    .record_agent_line(
+                        &serde_json::json!({ "result": { "cwd": directory } }).to_string(),
+                    )
+                    .unwrap();
+            }
+            let session = journal.path().parent().unwrap().to_path_buf();
+            drop(journal);
+            let Response::DiffBranches(branches) = fixture
+                .state
+                .handle(Request::DiffBranches { id: id.clone() })
+                .unwrap()
+            else {
+                panic!("expected branches");
+            };
+            assert!(branches.contains(&"main".into()));
+            assert!(branches.contains(&"external".into()));
+            fixture
+                .state
+                .handle(Request::SetDiffBranch {
+                    id: id.clone(),
+                    branch: Some("external".into()),
+                })
+                .unwrap();
+            let expected_base = if root == external || reported.is_some() {
+                expected.clone()
+            } else {
+                git(&fixture.host, &["rev-parse", "HEAD"])
+            };
+            let reopened = ServerState::with_git(
+                SystemGit::shared(),
+                fixture.state.store_root().to_path_buf(),
+            );
+            assert_eq!(
+                reopened.diff_base(&id).unwrap().unwrap(),
+                crate::protocol::DiffBase {
+                    base: expected_base,
+                    branch: Some("external".into()),
+                }
+            );
+            fixture
+                .state
+                .handle(Request::SetDiffBranch { id, branch: None })
+                .unwrap();
+            assert!(journal::read_session_checkout(&session).unwrap().is_none());
+        }
     }
 
     #[test]

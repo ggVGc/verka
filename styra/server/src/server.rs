@@ -1686,6 +1686,46 @@ impl ServerState {
         Ok(Some(checkout))
     }
 
+    /// Where the interaction currently works, or where its journal left it.
+    /// A removed managed checkout has no directory to fall back to. External
+    /// worktrees are resolved without creating a Styra checkout record.
+    fn session_working_directory(&self, summary: &SessionSummary) -> Result<Option<PathBuf>> {
+        if let Ok(interaction) = self.interaction(&summary.id) {
+            return Ok(Some(interaction.working_tree.checkout()));
+        }
+        if self
+            .session_checkout(&summary.path, &summary.workspace_id, &summary.id)?
+            .is_some_and(|checkout| checkout.path.is_none())
+        {
+            return Ok(None);
+        }
+        let (host, sandbox) = self.stored_workspace_mount(summary)?;
+        let meta = journal::read_session_meta(&summary.path)?;
+        let reported = journal::last_reported_cwd(&summary.path, meta.protocol)?;
+        Ok(Some(
+            replayed_host_working_directory(
+                reported.as_deref(),
+                WorkspaceMount {
+                    host: &host,
+                    sandbox: &sandbox,
+                },
+            )
+            .unwrap_or(host),
+        ))
+    }
+
+    /// The Git working tree diff mode reads, including external worktrees.
+    fn diff_checkout_path(&self, summary: &SessionSummary) -> Result<PathBuf> {
+        let directory = self
+            .session_working_directory(summary)?
+            .ok_or_else(|| anyhow::anyhow!("this interaction has no Git checkout"))?;
+        self.inner
+            .git
+            .discover(&directory)?
+            .map(|repository| repository.root)
+            .ok_or_else(|| anyhow::anyhow!("this interaction has no Git checkout"))
+    }
+
     /// What checkout diff mode compares with. A saved comparison branch
     /// takes precedence over the integration target. A checkout with a branch to
     /// integrate into is measured from its merge base with that branch, as
@@ -1695,17 +1735,14 @@ impl ServerState {
         let summary = self.stored_summary(id)?;
         let checkout = self.session_checkout(&summary.path, &summary.workspace_id, id)?;
         if let Some(branch) = journal::read_session_diff_branch(&summary.path)? {
-            let path = checkout
-                .as_ref()
-                .and_then(|checkout| checkout.path.as_deref())
-                .ok_or_else(|| anyhow::anyhow!("this interaction has no Git checkout"))?;
+            let path = self.diff_checkout_path(&summary)?;
             let tip = self
                 .inner
                 .git
-                .local_branch_commit(path, &branch)?
+                .local_branch_commit(&path, &branch)?
                 .ok_or_else(|| anyhow::anyhow!("comparison branch {branch} no longer exists"))?;
             return Ok(Some(crate::protocol::DiffBase {
-                base: self.inner.git.merge_base(path, &tip, "HEAD")?,
+                base: self.inner.git.merge_base(&path, &tip, "HEAD")?,
                 branch: Some(branch),
             }));
         }
@@ -4182,30 +4219,21 @@ impl ServerState {
         match request {
             Request::DiffBranches { id } => {
                 let summary = self.stored_summary(&id)?;
-                let checkout = self.session_checkout(&summary.path, &summary.workspace_id, &id)?;
-                let path = checkout
-                    .as_ref()
-                    .and_then(|checkout| checkout.path.as_deref())
-                    .ok_or_else(|| anyhow::anyhow!("this interaction has no Git checkout"))?;
-                Ok(Response::DiffBranches(self.inner.git.diff_branches(path)?))
+                let path = self.diff_checkout_path(&summary)?;
+                Ok(Response::DiffBranches(self.inner.git.diff_branches(&path)?))
             }
             Request::SetDiffBranch { id, branch } => {
                 let summary = self.stored_summary(&id)?;
                 if let Some(branch) = branch.as_deref() {
-                    let checkout =
-                        self.session_checkout(&summary.path, &summary.workspace_id, &id)?;
-                    let path = checkout
-                        .as_ref()
-                        .and_then(|checkout| checkout.path.as_deref())
-                        .ok_or_else(|| anyhow::anyhow!("this interaction has no Git checkout"))?;
+                    let path = self.diff_checkout_path(&summary)?;
                     let tip = self
                         .inner
                         .git
-                        .local_branch_commit(path, branch)?
+                        .local_branch_commit(&path, branch)?
                         .ok_or_else(|| {
                             anyhow::anyhow!("comparison branch {branch} does not exist")
                         })?;
-                    self.inner.git.merge_base(path, &tip, "HEAD")?;
+                    self.inner.git.merge_base(&path, &tip, "HEAD")?;
                 }
                 journal::store_session_diff_branch(&summary.path, branch)?;
                 Ok(Response::Accepted)
