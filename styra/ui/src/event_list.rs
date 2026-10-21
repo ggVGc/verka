@@ -1803,6 +1803,16 @@ pub fn summary_line(
 ) -> Line<'static> {
     let tag = entry.event.tag();
     let conversation_change = is_conversation_change(entry.event);
+    let branch_appearance = match entry.event {
+        AgentEvent::Branched { direction, .. } => Some(match direction {
+            styra_protocol::event::BranchDirection::To => ("branch →", theme::BRANCH_TO),
+            styra_protocol::event::BranchDirection::From => ("branch ←", theme::BRANCH_FROM),
+        }),
+        _ => None,
+    };
+    let change_color = branch_appearance
+        .map(|(_, color)| color)
+        .unwrap_or(theme::CONVERSATION_CHANGE);
     let is_conversation = matches!(
         entry.event,
         AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
@@ -1815,6 +1825,7 @@ pub fn summary_line(
         "  "
     };
     let display_tag = match entry.event {
+        AgentEvent::Branched { .. } => branch_appearance.unwrap().0,
         AgentEvent::UserMessage { .. } => "»",
         AgentEvent::AgentMessage { .. } => "«",
         AgentEvent::CommandStarted { .. } | AgentEvent::CommandCompleted { .. } => "Shell",
@@ -1880,7 +1891,7 @@ pub fn summary_line(
         ),
         _ if conversation_change => (
             Style::default()
-                .fg(theme::CONVERSATION_CHANGE)
+                .fg(change_color)
                 .add_modifier(Modifier::BOLD),
             "",
             Style::default(),
@@ -1904,7 +1915,7 @@ pub fn summary_line(
         summary_style
     };
     let mut spans = vec![
-        Span::styled(row_lead, Style::default().fg(theme::CONVERSATION_CHANGE)),
+        Span::styled(row_lead, Style::default().fg(change_color)),
         Span::styled(
             if is_conversation {
                 format!("{display_tag} ")
@@ -1912,7 +1923,9 @@ pub fn summary_line(
                 format!("{display_tag:<8}")
             },
             Style::default()
-                .fg(tag_color(tag))
+                .fg(branch_appearance
+                    .map(|(_, color)| color)
+                    .unwrap_or_else(|| tag_color(tag)))
                 .add_modifier(Modifier::BOLD),
         ),
     ];

@@ -8,6 +8,10 @@
 use crate::palette;
 use ratatui::style::Color;
 
+/// Outgoing branch links point to a child session; incoming links name its source.
+pub const BRANCH_TO: Color = palette::SOFT_CYAN;
+pub const BRANCH_FROM: Color = palette::PEACH;
+
 /// `Normal`.
 pub const TEXT: Color = palette::WHITE;
 /// `Visual` / `TabLine` text.
