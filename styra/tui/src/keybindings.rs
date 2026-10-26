@@ -47,6 +47,9 @@ bindings! { GLOBAL = "Global";
     GLOBAL_TRANSCRIPT: [Key::ch('t')] => Action::GlobalTranscript;
     GLOBAL_DETAILS: [Key::ctrl('s')] => Action::GlobalDetails;
     GLOBAL_JUMP_BACK: [Key::ctrl('o')] => Action::GlobalJumpBack;
+    GLOBAL_JUMP_FORWARD: [Key::ctrl('u')] => Action::GlobalJumpForward;
+    GLOBAL_INTERACTION_HISTORY: [Key::alt_code(KeyCode::Char('o'))]
+        => Action::GlobalInteractionHistory;
     GLOBAL_AUTO_COMMIT: [Key::ctrl('g')] => Action::GlobalAutoCommit;
     GLOBAL_ENTRY_LOG: [Key::ch('e')] => Action::GlobalEntryLog;
     GLOBAL_ENTRY_LOG_FOCUS: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]

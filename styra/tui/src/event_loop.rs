@@ -42,8 +42,12 @@ pub enum RunOutcome {
     },
     OpenSession(String),
     OpenBranch(String),
-    /// Reopen the Session viewed before the last [`RunOutcome::OpenSession`].
+    /// Move backward through explicitly entered interactions.
     JumpBack,
+    /// Move forward through explicitly entered interactions.
+    JumpForward,
+    /// Jump to an existing visit without rewriting the history.
+    JumpTo(usize),
     Reset,
     NewSession,
 }
@@ -491,6 +495,7 @@ fn restore_tag_picker_selection(app: &mut App) {
 }
 
 pub struct RunContext<'a> {
+    pub history: &'a mut crate::interaction_history::InteractionHistory,
     pub standing_launch: &'a LaunchPolicy,
     pub preferences_path: &'a Path,
     pub config: &'a dyn Configuration,
@@ -568,6 +573,7 @@ fn interaction_navigator_passthrough(key: crossterm::event::KeyEvent) -> bool {
         || keys::GLOBAL_STOP.matches(key)
         || keys::GLOBAL_NEXT_LIVE.matches(key)
         || keys::GLOBAL_NEW_SESSION.matches(key)
+        || keys::GLOBAL_INTERACTION_HISTORY.matches(key)
         // The jump narrows the navigator to the Workspaces it offers, so the
         // navigator stays open under it.
         || keys::GLOBAL_WORKSPACE_JUMP.matches(key)
@@ -907,6 +913,7 @@ fn run_rounds(
         standing_launch,
         preferences_path,
         config,
+        history,
     } = context;
     // The model column's ordering is remembered across runs, so pick it up
     // before the picker can be opened.
@@ -1052,6 +1059,37 @@ fn run_rounds(
                 Request::OpenSession(id) => return Ok(RunOutcome::OpenSession(id)),
                 Request::OpenBranch(id) => return Ok(RunOutcome::OpenBranch(id)),
                 Request::JumpBack => return Ok(RunOutcome::JumpBack),
+                Request::JumpForward => return Ok(RunOutcome::JumpForward),
+                Request::InteractionHistory => {
+                    if history.entries().is_empty() {
+                        app.show_warning("no interactions in history");
+                        continue;
+                    }
+                    let workspaces = client.list_workspaces().unwrap_or_default();
+                    let mut sessions = Vec::new();
+                    // Live rows supply their latest names. Stored Sessions fill
+                    // in history entries that have since stopped or completed.
+                    if history
+                        .entries()
+                        .iter()
+                        .any(|id| app.interactions.current(id).is_none())
+                    {
+                        for workspace in &workspaces {
+                            if let Ok(stored) = client.list_sessions(&workspace.id) {
+                                sessions.extend(stored);
+                            }
+                        }
+                    }
+                    let rows = crate::history_picker::rows(
+                        history,
+                        &app.interactions,
+                        &workspaces,
+                        &sessions,
+                    );
+                    if let Some(index) = crate::history_picker::run(terminal, &rows)? {
+                        return Ok(RunOutcome::JumpTo(index));
+                    }
+                }
                 Request::Sessions => {
                     let mut sessions = client.list_sessions(&workspace_id)?;
                     if sessions.is_empty() {
@@ -1181,6 +1219,7 @@ fn run_rounds(
                 Request::ShowInteraction(id) => {
                     if id == app.session_id {
                         app.set_view(crate::app::View::Events);
+                        history.record(&id);
                         continue;
                     }
                     let Some(interaction) = app.interactions.current(&id).cloned() else {
@@ -1188,7 +1227,9 @@ fn run_rounds(
                         continue;
                     };
                     make_interaction_current(app, live, client, standing_launch, interaction);
-                    if app.session_id != id {
+                    if app.session_id == id {
+                        history.record(&id);
+                    } else {
                         app.show_error(
                             "could not open that interaction; the log (ctrl-l) says why",
                         );
@@ -2455,9 +2496,13 @@ fn run_rounds(
             // Every other mapped key acts on the row under the cursor, so a move
             // still waiting out its settle is completed first rather than
             // abandoned.
+            let chosen = app.interactions.cursor(&app.session_id).to_owned();
             load_cursored_interaction(app, live, client, standing_launch);
             match key {
                 k if keys::INTERACTIONS_CLOSE.matches(k) => {
+                    if k.code == KeyCode::Enter && chosen == app.session_id {
+                        history.record(&app.session_id);
+                    }
                     app.interactions.close();
                     continue;
                 }
@@ -3013,6 +3058,8 @@ mod tests {
             (KeyCode::Char('b'), true),
             (KeyCode::F(12), true),
             (KeyCode::Left, true),
+            (KeyCode::Down, true),
+            (KeyCode::Char('j'), true),
             (KeyCode::Enter, false),
             (KeyCode::Esc, false),
             (KeyCode::Char('a'), false),
@@ -3025,6 +3072,8 @@ mod tests {
             app.interactions.show(Vec::new());
             let mut terminal = styra_ui::TestUi::new(100, 30).unwrap();
             terminal.script([Event::Key(crossterm::event::KeyEvent::from(code))]);
+            let mut history = crate::interaction_history::InteractionHistory::default();
+            history.record("previous");
             let result = run(
                 &mut terminal,
                 &mut app,
@@ -3035,11 +3084,56 @@ mod tests {
                     preferences_path: &std::env::temp_dir()
                         .join("styra-event-loop-no-preferences.toml"),
                     config: &crate::config::Defaults,
+                    history: &mut history,
                 },
             );
             assert!(result.is_err(), "the input script should be exhausted");
             assert_eq!(app.interactions.open, stays_open, "{code:?}");
+            // Only Enter records the selected row; closing or browsing does not.
+            history.arrive(0);
+            assert_eq!(
+                history.target("previous", true).map(|(_, id)| id),
+                (code == KeyCode::Enter).then_some("s1"),
+                "{code:?}"
+            );
         }
+    }
+
+    #[test]
+    fn history_picker_returns_a_visit_without_rewriting_history() {
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.enter_list();
+        let mut history = crate::interaction_history::InteractionHistory::default();
+        history.record("earlier");
+        history.record("s1");
+        let mut terminal = styra_ui::TestUi::new(100, 30).unwrap();
+        terminal.script([
+            Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('o'),
+                KeyModifiers::ALT,
+            )),
+            Event::Key(KeyCode::Char('e').into()),
+            Event::Key(KeyCode::Enter.into()),
+        ]);
+        let result = run(
+            &mut terminal,
+            &mut app,
+            &Client::in_process(std::sync::Arc::new(Unreachable::default())),
+            &mut Attachment::Detached,
+            RunContext {
+                standing_launch: &LaunchPolicy::default(),
+                preferences_path: &std::env::temp_dir()
+                    .join("styra-history-picker-no-preferences.toml"),
+                config: &crate::config::Defaults,
+                history: &mut history,
+            },
+        );
+        assert!(matches!(result, Ok(RunOutcome::JumpTo(0))));
+        assert_eq!(history.entries(), ["earlier", "s1"]);
+        assert_eq!(history.target("s1", false), Some((0, "earlier")));
     }
 
     /// Run the loop over a fullscreen diff of two files, pressing `keys`.
@@ -3077,6 +3171,7 @@ mod tests {
                 standing_launch: &LaunchPolicy::default(),
                 preferences_path: &preferences,
                 config: &crate::config::Defaults,
+                history: &mut crate::interaction_history::InteractionHistory::default(),
             },
         )
     }

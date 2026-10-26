@@ -224,6 +224,11 @@ pub trait Ui {
         show_deleted: bool,
     ) -> UiResult<RenderFeedback>;
 
+    fn render_fuzzy_picker(
+        &mut self,
+        view: &fuzzy_list::FuzzyListView<'_>,
+    ) -> UiResult<RenderFeedback>;
+
     fn render_worktree_picker(
         &mut self,
         view: &worktrees::WorktreePickerView<'_>,
@@ -394,6 +399,16 @@ where
     fn render_launcher(&mut self, view: &launcher::LauncherView) -> UiResult<RenderFeedback> {
         self.draw(|frame| {
             launcher::render_launcher(frame, view, frame.area());
+            RenderFeedback::default()
+        })
+    }
+
+    fn render_fuzzy_picker(
+        &mut self,
+        view: &fuzzy_list::FuzzyListView<'_>,
+    ) -> UiResult<RenderFeedback> {
+        self.draw(|frame| {
+            fuzzy_list::render_fuzzy_list(frame, view, frame.area());
             RenderFeedback::default()
         })
     }
@@ -652,6 +667,13 @@ where
 
     fn render_launcher(&mut self, view: &launcher::LauncherView) -> UiResult<RenderFeedback> {
         TerminalUi::render_launcher(self, view)
+    }
+
+    fn render_fuzzy_picker(
+        &mut self,
+        view: &fuzzy_list::FuzzyListView<'_>,
+    ) -> UiResult<RenderFeedback> {
+        TerminalUi::render_fuzzy_picker(self, view)
     }
 
     fn render_worktree_picker(

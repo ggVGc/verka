@@ -24,9 +24,11 @@ mod entry_log;
 mod event_loop;
 mod files;
 mod help;
+mod history_picker;
 mod ingest;
 mod input;
 mod insert;
+mod interaction_history;
 mod interactions;
 mod keybindings;
 mod keyboard;
@@ -506,9 +508,8 @@ fn main() -> Result<()> {
     // changes what this client views; server-owned Interactions continue. In
     // standalone mode the server owner's teardown ends them when this process
     // leaves, after the terminal has been restored below.
-    // Sessions left by following a branch marker or picking another Session,
-    // newest last, for Ctrl-O to return to.
-    let mut jumps: Vec<String> = Vec::new();
+    let mut history = interaction_history::InteractionHistory::default();
+    history.record(&app.session_id);
     let result = loop {
         // Every App this loop builds starts on the newest listing there is,
         // so its first frame has the fleet and nothing has to ask for it. An
@@ -526,6 +527,7 @@ fn main() -> Result<()> {
                 standing_launch: &launch,
                 preferences_path: &preferences_path,
                 config: &config,
+                history: &mut history,
             },
         ) {
             Ok(outcome) => outcome,
@@ -556,6 +558,9 @@ fn main() -> Result<()> {
                             new_app.launch.interaction = launch.clone();
                             app = new_app;
                             live = new_live;
+                            if !open_interactions {
+                                history.record(&app.session_id);
+                            }
                             if open_interactions {
                                 event_loop::open_interaction_navigator(
                                     &mut app,
@@ -580,39 +585,41 @@ fn main() -> Result<()> {
             // interaction for the Session being left remains server-owned.
             RunOutcome::OpenSession(session_id) => {
                 let left = app.session_id.clone();
-                if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id)
-                    && !left.is_empty()
-                    && left != session_id
-                {
-                    jumps.push(left);
+                if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id) {
+                    history.record(&left);
+                    history.record(&session_id);
                 }
             }
             RunOutcome::OpenBranch(session_id) => {
                 let left = app.session_id.clone();
                 if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id) {
-                    if !left.is_empty() && left != session_id {
-                        jumps.push(left);
-                    }
+                    history.record(&left);
+                    history.record(&session_id);
                     app.branch_needs_prompt_name = true;
                     app.enter_input();
                 }
             }
-            // Ctrl-O: walk back along the Sessions left by `OpenSession`,
-            // skipping any that are the one already on screen.
-            RunOutcome::JumpBack => {
-                let current = app.session_id.clone();
-                match std::iter::from_fn(|| jumps.pop()).find(|id| *id != current) {
-                    Some(session_id) => {
-                        open_session_view(
-                            &client,
-                            &launch,
-                            &fleet,
-                            &mut app,
-                            &mut live,
-                            &session_id,
-                        );
+            RunOutcome::JumpTo(index) => {
+                if let Some(session_id) = history.entries().get(index).cloned() {
+                    if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id) {
+                        history.arrive(index);
                     }
-                    None => app.show_warning("no previous interaction to go back to"),
+                }
+            }
+            RunOutcome::JumpBack | RunOutcome::JumpForward => {
+                let forward = matches!(outcome, RunOutcome::JumpForward);
+                if let Some((index, session_id)) = history.target(&app.session_id, forward) {
+                    let session_id = session_id.to_owned();
+                    if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id)
+                    {
+                        history.arrive(index);
+                    }
+                } else {
+                    app.show_warning(if forward {
+                        "no next interaction in history"
+                    } else {
+                        "no previous interaction in history"
+                    });
                 }
             }
             // Return to the blank start screen. Reset has already stopped the

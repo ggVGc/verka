@@ -389,9 +389,12 @@ pub enum Request {
     OpenSession(String),
     /// Open a newly created branch with the message box focused.
     OpenBranch(String),
-    /// Return to the Session viewed before the last [`Request::OpenSession`],
-    /// as Ctrl-O does in Vim's jump list.
+    /// Move backward through explicitly entered interactions.
     JumpBack,
+    /// Move forward through explicitly entered interactions.
+    JumpForward,
+    /// Choose an explicitly entered interaction from a fuzzy history list.
+    InteractionHistory,
     /// Open the server's live interactions above the main event timeline.
     Interactions,
     /// Choose among the Workspaces with live work — or, when `listed`, with

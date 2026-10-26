@@ -551,6 +551,8 @@ pub fn handle_list_key(
         }
         k if GLOBAL_DETAILS.matches(k) => return app.toggle_view(View::Driva),
         k if GLOBAL_JUMP_BACK.matches(k) => return app.ask(Request::JumpBack),
+        k if GLOBAL_JUMP_FORWARD.matches(k) => return app.ask(Request::JumpForward),
+        k if GLOBAL_INTERACTION_HISTORY.matches(k) => return app.ask(Request::InteractionHistory),
         k if GLOBAL_AUTO_COMMIT.matches(k) => return toggle_auto_commit(app),
         k if GLOBAL_FILES.matches(k) && app.view != View::Answer => return app.toggle_files(),
         k if GLOBAL_FILES_ALIAS.matches(k)
@@ -1764,6 +1766,15 @@ mod tests {
 
         press(&mut app, KeyCode::Char('N'), KeyModifiers::SHIFT);
         assert_eq!(app.take_request(), Some(Request::NextWorkingInteraction));
+
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
+        assert_eq!(app.take_request(), Some(Request::JumpBack));
+
+        press(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert_eq!(app.take_request(), Some(Request::JumpForward));
+
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::ALT);
+        assert_eq!(app.take_request(), Some(Request::InteractionHistory));
 
         let _ = std::fs::remove_dir_all(root);
     }
