@@ -686,6 +686,9 @@ fn make_interaction_current(
     session::save_composer(app, client, true);
     match session::attach_live_interaction(client, &id, &app.quota_noticed) {
         Ok((mut next, next_live)) => {
+            // Before adopting, which may reopen the preview or diff over it.
+            next.set_view(crate::app::View::Events);
+            next.focus = Focus::List;
             next.adopt(app.take_operator_state());
             next.launch.interaction = standing_launch.clone();
             // The Workspace list is only filled when the navigator is opened,
@@ -712,8 +715,6 @@ fn make_interaction_current(
             {
                 next.show_workspace(&workspace);
             }
-            next.set_view(crate::app::View::Events);
-            next.focus = Focus::List;
             *app = next;
             *live = next_live;
             app.interactions.rest();

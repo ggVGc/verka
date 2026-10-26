@@ -530,6 +530,7 @@ pub struct OperatorState {
     /// The preview panel's own display choices; see
     /// [`Preview::choices`](crate::preview::Preview::choices).
     preview: preview::Choices,
+    opened: Opened,
     link_display: LinkDisplay,
     recent_models: Vec<String>,
     /// The shape the next reply is to come back in. The message itself is
@@ -546,6 +547,18 @@ pub struct OperatorState {
     /// which replays its updates, announcements included — does not raise
     /// the same warning again.
     quota_noticed: HashSet<QuotaNotice>,
+}
+
+/// What the operator had open in place of the plain event list. Moving to
+/// another Interaction keeps it open, showing that Interaction's instead: the
+/// operator is comparing Interactions, not leaving the view.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Opened {
+    #[default]
+    Events,
+    Preview,
+    DiffPane,
+    DiffFullscreen,
 }
 
 /// One announced quota reading, as told apart from another: where it was
@@ -662,7 +675,17 @@ impl App {
     pub fn take_operator_state(&mut self) -> OperatorState {
         self.close_integration_prompt();
         self.clear_link_highlight();
+        let opened = if self.view == View::Preview {
+            Opened::Preview
+        } else if !self.diff_visible() || self.checkout_diff.is_none() {
+            Opened::Events
+        } else if self.view == View::CheckoutDiff {
+            Opened::DiffFullscreen
+        } else {
+            Opened::DiffPane
+        };
         OperatorState {
+            opened,
             interactions: std::mem::take(&mut self.interactions),
             integration_drafts: std::mem::take(&mut self.integration_drafts),
             all_events: self.timeline.all_events,
@@ -694,6 +717,23 @@ impl App {
         self.files.set_scope(state.file_show_all);
         self.quota = state.quota;
         self.quota_noticed.extend(state.quota_noticed);
+        // The diff is read from this Interaction's checkout, which only the
+        // event loop can reach; one without a checkout has none to show.
+        let has_checkout = self
+            .interactions
+            .current(&self.session_id)
+            .is_some_and(|interaction| interaction.checkout.is_some());
+        match state.opened {
+            Opened::Events => {}
+            Opened::Preview => self.set_view(View::Preview),
+            Opened::DiffPane if has_checkout => {
+                self.ask(Request::ShowDiff(self.session_id.clone()))
+            }
+            Opened::DiffFullscreen if has_checkout => {
+                self.ask(Request::ShowDiffFullscreen(self.session_id.clone()))
+            }
+            Opened::DiffPane | Opened::DiffFullscreen => {}
+        }
     }
 
     pub fn open_integration_prompt(&mut self) {
@@ -4094,6 +4134,72 @@ mod tests {
             assert!(next.link_highlight.is_none());
             assert_eq!(next.preview.open, open);
         }
+    }
+
+    /// Stepping through the live list with the full-screen preview or the diff
+    /// open keeps it open, now on the Interaction stepped to.
+    #[test]
+    fn the_open_preview_or_diff_stays_open_on_the_next_interaction() {
+        let target = styra_diff::DiffTarget {
+            worktree: std::path::PathBuf::from("/state/worktrees/session-1"),
+            branch: None,
+            base_branch: None,
+            base: "4bf5c35d".into(),
+            branch_point: true,
+        };
+        let next_screen = |checkout: bool| {
+            let mut next = app();
+            next.session_id = "session-2".into();
+            let mut interaction = crate::interactions::tests::interaction(
+                "session-2",
+                styra_protocol::InteractionActivity::Pending,
+            );
+            interaction.checkout = checkout.then(|| styra_protocol::CheckoutState {
+                worktree: std::path::PathBuf::from("/state/worktrees/session-2"),
+                repository: std::path::PathBuf::from("/home/me/project"),
+                branch: None,
+            });
+            next.interactions.items = vec![interaction];
+            next
+        };
+        let carry = |screen: &mut App, checkout: bool| {
+            let mut next = next_screen(checkout);
+            let mut state = screen.take_operator_state();
+            state.interactions = std::mem::take(&mut next.interactions);
+            next.adopt(state);
+            next
+        };
+
+        let mut screen = app();
+        screen.toggle_view(View::Preview);
+        let mut next = carry(&mut screen, true);
+        assert_eq!(next.view, View::Preview);
+        assert_eq!(next.take_request(), None);
+
+        let mut screen = app();
+        screen.checkout_diff = Some(styra_diff::CheckoutDiff::read(target.clone()));
+        screen.diff_preview = true;
+        let mut next = carry(&mut screen, true);
+        assert_eq!(
+            next.take_request(),
+            Some(Request::ShowDiff("session-2".into()))
+        );
+
+        let mut screen = app();
+        screen.checkout_diff = Some(styra_diff::CheckoutDiff::read(target.clone()));
+        screen.set_view(View::CheckoutDiff);
+        let mut next = carry(&mut screen, true);
+        assert_eq!(
+            next.take_request(),
+            Some(Request::ShowDiffFullscreen("session-2".into()))
+        );
+
+        // One without a checkout has no diff to show, so none is asked for.
+        let mut screen = app();
+        screen.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
+        screen.diff_preview = true;
+        let mut next = carry(&mut screen, false);
+        assert_eq!(next.take_request(), None);
     }
 
     #[test]
