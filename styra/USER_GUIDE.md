@@ -142,7 +142,7 @@ where `Space` keeps its own link menu.
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `r` / `R` (main interaction view) | run / test the project from the interaction's worktree, or the Workspace directory, in the configured terminal; see "Run and test actions" |
 | `a` / `A` / `Ctrl+V` | live interactions / sessions in this Workspace / Workspaces |
-| `v` | choose a Workspace with live interactions (typed at) and open the live list at its first; over the grid, the grid narrows to the highlighted Workspace, Enter keeps it and Esc restores the grid; `Ctrl-N` starts a new interaction in the highlighted Workspace |
+| `v` | choose a Workspace with live interactions (typed at) and open the live list at its first, narrowed to that Workspace; over the grid, the grid narrows to the highlighted Workspace, Enter keeps it and Esc restores the grid; `Ctrl-N` starts a new interaction in the highlighted Workspace |
 | `V` | as `v`, but every Workspace with an interaction the live list shows under its completion, stopped and tag filters; always opens the live list |
 | `o` | overview: every running and idle interaction as a grid of tiles |
 | `w` (not in details) | worktrees and the sessions in each; `Enter` opens the selected session |

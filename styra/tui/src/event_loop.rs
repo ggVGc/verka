@@ -2096,8 +2096,16 @@ fn run_rounds(
                     }
                     input::follow_overview_cursor(app);
                 }
+                // The chosen Workspace's first interaction is loaded outright,
+                // so the list can be narrowed to it: Workspace scope follows
+                // the Workspace on screen. A load that fails leaves the list in
+                // All, where the cursor's rest is still listed.
                 (workspace_jump::Outcome::Open(id), None) => {
                     open_interactions_in_workspace(app, client, &id)?;
+                    load_cursored_interaction(app, live, client, standing_launch);
+                    if app.workspace.id.as_deref() == Some(id.as_str()) {
+                        app.interactions.only_current_workspace = true;
+                    }
                 }
                 // A fresh interaction is asked for outright, as the Workspace
                 // picker's Ctrl-N asks for one. The summary the jump was built
