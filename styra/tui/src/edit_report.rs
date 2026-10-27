@@ -1,13 +1,14 @@
 //! Edit reports for the checkout diff: `E` has the server describe each file
 //! of the diff on screen — what was edited and why — and the per-file view
-//! shows the selected file's description above its patch.
+//! shows the selected file's description above its patch. `e` on the page of
+//! every description has the picked file described again on its own.
 //!
 //! Describing every file takes an agent a while, so the request is made off
 //! the terminal thread and the report is put into the diff on whichever round
 //! it arrives. The server keeps it with the Session, so a diff opened later,
 //! from this client or another, starts with it.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -28,8 +29,9 @@ type Answer = (String, Result<EditReport, String>);
 pub struct EditReports {
     send: Sender<Answer>,
     receive: Receiver<Answer>,
-    /// The Sessions a report is being written for.
-    pending: HashSet<String>,
+    /// The Sessions a report is being written for, each with the one file
+    /// being described again when it is only one.
+    pending: HashMap<String, Option<String>>,
 }
 
 impl EditReports {
@@ -38,12 +40,13 @@ impl EditReports {
         Self {
             send,
             receive,
-            pending: HashSet::new(),
+            pending: HashMap::new(),
         }
     }
 
-    /// Have each file of the diff on screen described.
-    pub fn start(&mut self, app: &mut App, client: &Client) {
+    /// Have each file of the diff on screen described, or only the file at
+    /// the path `only`, keeping the report's other descriptions.
+    pub fn start(&mut self, app: &mut App, client: &Client, only: Option<String>) {
         let id = app.session_id.clone();
         let Some(diff) = app.checkout_diff.as_ref() else {
             return;
@@ -51,18 +54,21 @@ impl EditReports {
         if id.is_empty() {
             return app.show_warning("no interaction to describe the edits of");
         }
-        if self.pending.contains(&id) {
+        if self.pending.contains_key(&id) {
             return app.show_action_message("already describing this interaction's edits");
         }
         let files = match &diff.diff {
-            Ok(text) => request_files(text),
+            Ok(text) => request_files(text, only.as_deref()),
             Err(error) => {
                 let message = format!("no diff to describe: {error}");
                 return app.show_error(message);
             }
         };
         if files.is_empty() {
-            return app.show_warning("no edited files to describe");
+            return app.show_warning(match &only {
+                Some(path) => format!("no edits of {path} to describe"),
+                None => "no edited files to describe".to_owned(),
+            });
         }
         let Some(base) = diff.target().map(|target| target.base.clone()) else {
             return app.show_warning("only a checkout's diff has edits to describe");
@@ -71,11 +77,12 @@ impl EditReports {
         let client = client.clone();
         let send = self.send.clone();
         let session = id.clone();
+        let keep_others = only.is_some();
         let spawned = thread::Builder::new()
             .name("styra-edit-report".into())
             .spawn(move || {
                 let report = client
-                    .generate_edit_report(&session, &base, files)
+                    .generate_edit_report(&session, &base, files, keep_others)
                     .map_err(|error| format!("{error:#}"));
                 // Gone only when the loop that asked has left; the server
                 // has kept the report for the next one regardless.
@@ -86,14 +93,21 @@ impl EditReports {
         }
         if let Some(diff) = app.checkout_diff.as_mut() {
             diff.report.pending = true;
+            diff.report.pending_file = only.clone();
             diff.report.hidden = false;
         }
-        self.pending.insert(id);
+        let message = match &only {
+            Some(path) => format!("describing the edits of {path}"),
+            None => {
+                let noun = if count == 1 { "file" } else { "files" };
+                format!(
+                    "describing the edits of {count} {noun} — the per-file view (l) shows each one"
+                )
+            }
+        };
+        self.pending.insert(id, only);
         app.describing_edits = self.pending.len();
-        let noun = if count == 1 { "file" } else { "files" };
-        app.show_action_message(format!(
-            "describing the edits of {count} {noun} — the per-file view (l) shows each one"
-        ));
+        app.show_action_message(message);
     }
 
     /// Put reports that have come into the diff on screen, if they are its.
@@ -101,7 +115,7 @@ impl EditReports {
     pub fn apply_ready(&mut self, app: &mut App) -> bool {
         let mut applied = false;
         while let Ok((id, report)) = self.receive.try_recv() {
-            self.pending.remove(&id);
+            let only = self.pending.remove(&id).flatten();
             app.describing_edits = self.pending.len();
             // The footer's count of work in the background has changed.
             applied = true;
@@ -115,12 +129,27 @@ impl EditReports {
             }
             if let Some(diff) = app.checkout_diff.as_mut() {
                 diff.report.pending = false;
+                diff.report.pending_file = None;
                 if let Ok(report) = &report {
                     diff.report.report = Some(for_view(report));
                 }
             }
-            match report {
-                Ok(report) => match report.failures.first() {
+            match (report, only) {
+                (Ok(report), Some(path)) => {
+                    if report.files.iter().any(|file| file.path == path) {
+                        app.show_action_message(format!("{path} described"))
+                    } else if let Some(failure) = report.failures.first() {
+                        app.show_warning(format!(
+                            "could not describe {path}: {failure} · e: try again"
+                        ))
+                    } else {
+                        app.show_warning(format!("the agent gave no description of {path}"))
+                    }
+                }
+                (Err(error), Some(path)) => {
+                    app.show_error(format!("could not describe the edits of {path}: {error}"))
+                }
+                (Ok(report), None) => match report.failures.first() {
                     None => app.show_action_message(format!(
                         "edit report ready: {} of {} files described",
                         report.files.len(),
@@ -132,7 +161,9 @@ impl EditReports {
                         report.requested
                     )),
                 },
-                Err(error) => app.show_error(format!("could not describe the edits: {error}")),
+                (Err(error), None) => {
+                    app.show_error(format!("could not describe the edits: {error}"))
+                }
             }
         }
         applied
@@ -145,7 +176,8 @@ impl EditReports {
         let Some(diff) = app.checkout_diff.as_mut() else {
             return;
         };
-        diff.report.pending = self.pending.contains(&id);
+        diff.report.pending = self.pending.contains_key(&id);
+        diff.report.pending_file = self.pending.get(&id).cloned().flatten();
         if id.is_empty() {
             return;
         }
@@ -158,10 +190,14 @@ impl EditReports {
     }
 }
 
-/// Each file of the diff `text`, as the view lists them, to be described:
-/// fingerprinted whole, and sent in part when long.
-fn request_files(text: &str) -> Vec<EditReportFile> {
-    let files = styra_diff::files::file_diffs(text);
+/// Each file of the diff `text`, as the view lists them, or only the one at
+/// the path `only`, to be described: fingerprinted whole, and sent in part
+/// when long.
+fn request_files(text: &str, only: Option<&str>) -> Vec<EditReportFile> {
+    let mut files = styra_diff::files::file_diffs(text);
+    if let Some(only) = only {
+        files.retain(|file| file.path == only);
+    }
     let budget = (REQUEST_BYTES / files.len().max(1)).min(PATCH_BYTES);
     files
         .into_iter()
@@ -214,7 +250,7 @@ mod tests {
             "é".repeat(PATCH_BYTES)
         );
         let text = format!("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n{long}");
-        let files = request_files(&text);
+        let files = request_files(&text, None);
 
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].path, "a.txt");
@@ -229,7 +265,12 @@ mod tests {
         assert_eq!(files[1].path, "long.txt");
         assert!(files[1].patch.len() <= PATCH_BYTES && files[1].patch.len() > PATCH_BYTES - 2);
         assert_eq!(files[1].fingerprint, styra_diff::report::fingerprint(&long));
-        assert!(request_files("").is_empty());
+        assert!(request_files("", None).is_empty());
+
+        let only = request_files(&text, Some("long.txt"));
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].path, "long.txt");
+        assert!(request_files(&text, Some("gone.txt")).is_empty());
     }
 
     #[test]

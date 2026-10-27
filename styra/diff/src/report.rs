@@ -27,8 +27,27 @@ pub struct ReportState {
     pub report: Option<Report>,
     /// A report is being written; it replaces this one when it comes.
     pub pending: bool,
+    /// While `pending`, the one file being described again, when it is only
+    /// one; the rest of the report stays as it is.
+    pub pending_file: Option<String>,
     /// The operator has put the report away.
     pub hidden: bool,
+}
+
+/// The page of every file's description, while it is open: the file
+/// selected on it, by its place in the whole diff, and how far it is
+/// scrolled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReportPage {
+    pub selected: usize,
+    pub scroll: u16,
+    /// Scroll the selected file's description into view when next drawn, as
+    /// after the selection moves. Otherwise the page scrolls freely, and the
+    /// selection goes to the nearest file still in view.
+    pub reveal: bool,
+    /// How far the selected file's patch is scrolled, in the bottom half of
+    /// the screen; `None` while it is not shown.
+    pub preview: Option<u16>,
 }
 
 /// What the view says about one file of the diff.
@@ -46,6 +65,11 @@ impl ReportState {
     /// Whether the view has anything of a report to show.
     pub(crate) fn shown(&self) -> bool {
         !self.hidden && (self.report.is_some() || self.pending)
+    }
+
+    /// Whether the file at `path` is being described.
+    pub(crate) fn describing(&self, path: &str) -> bool {
+        self.pending && self.pending_file.as_deref().is_none_or(|file| file == path)
     }
 
     pub(crate) fn describe(&self, path: &str, patch: &str) -> Described<'_> {
@@ -129,5 +153,15 @@ mod tests {
         );
         state.hidden = true;
         assert!(!state.shown());
+    }
+
+    #[test]
+    fn a_file_described_alone_is_the_only_one_being_described() {
+        let mut state = ReportState::default();
+        assert!(!state.describing("a.rs"));
+        state.pending = true;
+        assert!(state.describing("a.rs") && state.describing("b.rs"));
+        state.pending_file = Some("b.rs".into());
+        assert!(!state.describing("a.rs") && state.describing("b.rs"));
     }
 }

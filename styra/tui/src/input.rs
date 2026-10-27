@@ -130,7 +130,7 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
 /// `styra-diff` answers every key, the same way its own program does, and
 /// `i` starts a message about the file and line the diff is on and `q` quits
 /// Styra unless the diff's filter is being typed.
-/// `T` switches between the checkout's diff and the selected turn's. Tab
+/// `u` switches between the checkout's diff and the selected turn's. Tab
 /// hands navigation to the interaction when the diff is in a side pane, and
 /// fullscreen swaps the diff's header for the conversation's latest
 /// messages; `D` takes a side diff fullscreen as it is, turn diff and all. Other global bindings and the other views' keys do not act from
@@ -202,10 +202,11 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
             app.diff_turn = false;
         }
         Outcome::OpenFile => open_diff_file(app),
-        Outcome::GenerateReport if app.turn_diff_shown() => {
-            app.show_warning("edit reports describe the checkout's diff: T shows it")
+        Outcome::GenerateReport | Outcome::DescribeFile(_) if app.turn_diff_shown() => {
+            app.show_warning("edit reports describe the checkout's diff: u shows it")
         }
-        Outcome::GenerateReport => app.ask(Request::GenerateEditReport),
+        Outcome::GenerateReport => app.ask(Request::GenerateEditReport(None)),
+        Outcome::DescribeFile(path) => app.ask(Request::GenerateEditReport(Some(path))),
     }
 }
 
@@ -2714,7 +2715,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// `T` swaps the diff between the checkout's and the selected turn's, the
+    /// `u` swaps the diff between the checkout's and the selected turn's, the
     /// diff keys then acting on the turn's; closing the diff leaves the next
     /// one opened on the checkout's diff again.
     #[test]
@@ -2736,7 +2737,7 @@ mod tests {
         app.diff_preview = true;
         let press = |app: &mut App, code| press_list_key(app, &root, KeyEvent::from(code));
 
-        press(&mut app, KeyCode::Char('T'));
+        press(&mut app, KeyCode::Char('u'));
         assert!(app.turn_diff_shown());
         let turn = app.shown_diff().unwrap();
         assert!(turn.target().is_none());
@@ -2747,30 +2748,30 @@ mod tests {
         press(&mut app, KeyCode::Char('E'));
         assert!(app.take_request().is_none(), "no report for a turn diff");
 
-        press(&mut app, KeyCode::Char('T'));
+        press(&mut app, KeyCode::Char('u'));
         assert!(!app.turn_diff_shown());
         assert!(app.shown_diff().unwrap().target().is_some());
-        press(&mut app, KeyCode::Char('T'));
+        press(&mut app, KeyCode::Char('u'));
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Esc);
         assert!(!app.diff_visible());
         assert!(!app.diff_turn);
 
-        // `D` takes the turn diff fullscreen as it is, where `T` switches
+        // `D` takes the turn diff fullscreen as it is, where `u` switches
         // the same way, and leaving fullscreen forgets it.
         app.diff_preview = true;
-        press(&mut app, KeyCode::Char('T'));
+        press(&mut app, KeyCode::Char('u'));
         press(&mut app, KeyCode::Char('D'));
         assert_eq!(app.view, View::CheckoutDiff);
         assert!(app.turn_diff_shown());
         assert!(app.shown_diff().unwrap().per_file, "the same turn diff");
         let screen = crate::presentation::test_support::screen_sized(&app, 140, 30).all();
         assert!(screen.contains("change a"), "{screen}");
-        assert!(screen.contains("turn diff · T: full diff"), "{screen}");
-        press(&mut app, KeyCode::Char('T'));
+        assert!(screen.contains("turn diff · u: full diff"), "{screen}");
+        press(&mut app, KeyCode::Char('u'));
         assert!(!app.turn_diff_shown());
         assert!(app.shown_diff().unwrap().target().is_some());
-        press(&mut app, KeyCode::Char('T'));
+        press(&mut app, KeyCode::Char('u'));
         assert!(app.turn_diff_shown());
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Esc);
@@ -2905,6 +2906,8 @@ mod tests {
                         file_list_offset: 0,
             search: Default::default(),
             report: Default::default(),
+            report_page: None,
+            report_preview: false,
             line_cursor: None,
             find: Default::default(),
             find_from: None,
@@ -2957,7 +2960,7 @@ mod tests {
         press(&mut app, KeyCode::Char('e'));
         assert!(!app.checkout_diff.as_ref().unwrap().report.hidden);
         press(&mut app, KeyCode::Char('E'));
-        assert_eq!(app.take_request(), Some(Request::GenerateEditReport));
+        assert_eq!(app.take_request(), Some(Request::GenerateEditReport(None)));
         assert_eq!(app.take_request(), None);
         press(&mut app, KeyCode::Char('r'));
         assert!(app.checkout_diff.as_ref().unwrap().hide_removed);

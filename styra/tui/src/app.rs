@@ -379,8 +379,9 @@ pub enum Request {
     Integrate(String),
     GenerateIntegrationMessage,
     /// Have each file of the checkout diff on screen described, in an edit
-    /// report (see [`crate::edit_report`]).
-    GenerateEditReport,
+    /// report (see [`crate::edit_report`]), or only the file at this path,
+    /// keeping the report's other descriptions.
+    GenerateEditReport(Option<String>),
     Quit,
     /// Choose a Workspace, then one of its Sessions.
     Workspace,

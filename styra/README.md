@@ -262,7 +262,7 @@ standard input: `git show | styra-diff -p -`), opening its files from `DIR`.
 The view's keys live in that crate too, so both answer them the same way;
 while the view is open in Styra its navigation keys act, and Esc closes it.
 `D` also expands a diff already open in the preview pane to fullscreen.
-In the diff, in the preview pane or fullscreen, `T` switches between the
+In the diff, in the preview pane or fullscreen, `u` switches between the
 checkout's diff and the selected turn's (`D` takes either fullscreen as it is): the diff between the snapshots taken as the turn started and ended, or
 — a turn without both, or still running — the file changes the agent reported,
 with the message that started the turn above it. The turn diff follows the
@@ -289,13 +289,22 @@ using Git's rename similarity threshold.
 `E` in the diff writes an edit report: the server has the interaction's agent,
 on its cheapest model, describe each file of the diff — its main edits and why,
 from the patch, the interaction's first prompt, and the branch's commit
-messages. It runs in the background — the footer says so, whatever view is
-open — and is kept with the Session, so reopening the diff shows it again.
-Files are described a batch at a time, and any a batch failed or passed over
-are tried once more; what still fails is reported with its error. The per-file
-view shows the selected file's description above its patch (`e` hides or shows
-it), noting when the file has changed since it was described, or why describing
-it failed.
+messages. It runs in the background — the footer says so, whatever view is open
+— and is kept with the Session, so reopening the diff shows it again. Files are
+described a batch at a time, and any a batch failed or passed over are tried
+once more; what still fails is reported with its error. The per-file view shows
+the selected file's description above its patch (`e` hides or shows it), noting
+when the file has changed since it was described, or why describing it failed.
+`o` opens every file's description on one page, in the diff's order, saying
+which files the report leaves out. It opens on the file the diff is on; `j`/`k`
+(and `g`/`G`) pick a file, keeping it in view, `↑`/`↓` and PgUp/PgDn scroll,
+and `Enter` opens the picked file's patch in the per-file view. `p` shows the
+picked file's patch in the bottom half of the diff's area, following the
+selection, and `J`/`K` scroll it; the page opens with it shown or not as it was
+last left. `E` asks for a new report from it, `e` has only the picked file
+described again, keeping the other files' descriptions, and `o` or `Esc` closes
+it. Like everything the diff shows, the page stays within the diff's area,
+inside its frame, in the side pane as fullscreen.
 `Enter` (or `V`) in the diff selects lines: a cursor starts on the line at the
 top of the patch shown — one file's, or the combined diff — and `j`/`k`,
 PgUp/PgDn and `g`/`G` move it instead of the view; `Enter`, `V` or `Esc` leaves.

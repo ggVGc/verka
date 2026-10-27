@@ -132,17 +132,17 @@ pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrom
 /// the view in the title; `None` is the event list, which is the default
 /// view and so needs no name.
 /// The diff on screen, in the side panel or fullscreen: the checkout's, or —
-/// while `T` has it so — the selected turn's, with the message that started
+/// while `u` has it so — the selected turn's, with the message that started
 /// the turn above it. A turn diff has no edit report to write: that is the
 /// checkout's.
 fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
     let turn = app.turn_diff_shown();
     let title = if turn {
-        "turn diff · T: full diff · b: branch"
+        "turn diff · u: full diff · b: branch"
     } else if app.diff_turn_highlight {
-        "diff · H: turn highlight on · T: turn diff · b: branch"
+        "diff · H: turn highlight on · u: turn diff · b: branch"
     } else {
-        "diff · H: highlight turn · T: turn diff · b: branch"
+        "diff · H: highlight turn · u: turn diff · b: branch"
     };
     let mut chrome = panel_chrome(app, Some("diff"));
     chrome.suffix = Some(title.to_owned());
@@ -155,7 +155,7 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
         None => return None,
     };
     view.host_shortcuts = &[
-        ("T", "toggle selected turn / full checkout diff"),
+        ("u", "toggle selected turn / full checkout diff"),
         (
             "H",
             "toggle highlighting the selected turn in the full diff",
@@ -804,6 +804,18 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
         diff.rendered_side = side_by_side;
         diff.horizontal_scroll = horizontal_scroll;
     }
+    if let (Some((selected, scroll, preview)), Some(page)) = (
+        feedback.diff_report_page,
+        app.shown_diff_mut()
+            .and_then(|diff| diff.report_page.as_mut()),
+    ) {
+        *page = styra_diff::ReportPage {
+            selected,
+            scroll,
+            reveal: false,
+            preview,
+        };
+    }
     if let Some(offset) = feedback.diff_file_list_offset {
         if let Some(diff) = app.shown_diff_mut() {
             diff.file_list_offset = offset;
@@ -1361,6 +1373,47 @@ mod tests {
         }
     }
 
+    /// The report page opened from the side diff is drawn inside the side
+    /// pane's frame, where the diff is, and not over the frame or the rest of
+    /// the screen.
+    #[test]
+    fn the_side_diffs_report_page_stays_in_the_side_pane() {
+        let mut app = test_support::app("s1");
+        let mut diff = styra_diff::CheckoutDiff::read(styra_diff::DiffTarget {
+            worktree: "/no-such-styra-diff-checkout".into(),
+            branch: None,
+            base_branch: None,
+            base: "HEAD".into(),
+            branch_point: false,
+        });
+        diff.diff = Ok("diff --git a/a.rs b/a.rs\n@@ -1 +1 @@\n-old\n+new\n".into());
+        diff.report.report = Some(styra_diff::Report::default());
+        app.checkout_diff = Some(diff);
+        app.diff_preview = true;
+        crate::input::handle_diff_key(
+            &mut app,
+            crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Char('o')),
+        );
+        assert_eq!(app.view, View::Events, "the diff stays in its pane");
+        let screen = test_support::screen_sized(&app, 160, 30);
+        let column = |y, text| {
+            let row = screen.row(y);
+            row.find(text).map(|byte| row[..byte].chars().count())
+        };
+        assert!(
+            column(0, "diff · ").unwrap() >= 80,
+            "the pane's own frame stays above it: {}",
+            screen.all()
+        );
+        assert!(column(1, "Edit report").unwrap() >= 80, "{}", screen.all());
+        assert!(column(4, "▌ a.rs [M]").unwrap() >= 80, "{}", screen.all());
+        assert!(
+            column(1, "waiting for the agent").unwrap() < 80,
+            "the events beside it are left: {}",
+            screen.all()
+        );
+    }
+
     /// The diff view says what it compares before it shows the diff.
     #[test]
     fn the_checkout_diff_names_both_branches_above_the_diff() {
@@ -1397,6 +1450,8 @@ mod tests {
             file_list_offset: 0,
             search: Default::default(),
             report: Default::default(),
+            report_page: None,
+            report_preview: false,
             line_cursor: None,
             find: Default::default(),
             find_from: None,

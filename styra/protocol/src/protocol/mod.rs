@@ -357,6 +357,10 @@ pub enum Request {
         /// The commit the patches are measured from.
         base: String,
         files: Vec<EditReportFile>,
+        /// Keep the earlier report's descriptions of the files not sent,
+        /// replacing only those of the files sent: describing one file again.
+        #[serde(default)]
+        keep_others: bool,
     },
     /// The Session's last generated edit report, if it has one.
     EditReport {

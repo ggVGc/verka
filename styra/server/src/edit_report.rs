@@ -14,6 +14,8 @@
 //!
 //! The report is kept in the Session's directory, so it is there the next
 //! time the diff is opened, from any client, until the next one replaces it.
+//! A client can also have just some files described again, keeping the
+//! report's other descriptions.
 
 use super::*;
 use crate::errand::Errand;
@@ -46,6 +48,7 @@ impl ServerState {
         id: &str,
         base: &str,
         files: Vec<EditReportFile>,
+        keep_others: bool,
     ) -> Result<EditReport> {
         anyhow::ensure!(!files.is_empty(), "there are no edited files to describe");
         let session = self.stored_summary(id)?;
@@ -63,7 +66,7 @@ impl ServerState {
             task: session.first_prompt.as_deref().unwrap_or_default(),
             commits: &commits,
         };
-        let (mut described, mut failures) = describe_in_rounds(id, &files, |batch| {
+        let (described, mut failures) = describe_in_rounds(id, &files, |batch| {
             let answer = Errand::new(session.selection.provider, prompt(&context, batch))
                 .within(TIMEOUT)
                 .answer()?;
@@ -72,21 +75,16 @@ impl ServerState {
         if let (true, Some(error)) = (described.is_empty(), failures.pop()) {
             return Err(error.context("could not describe the edits"));
         }
+        let earlier = if keep_others {
+            read(&session.path)?.map_or_else(Vec::new, |report| report.files)
+        } else {
+            Vec::new()
+        };
         let report = EditReport {
             generated_at_ms: journal::now_ms(),
             base: base.to_owned(),
             requested: files.len(),
-            files: files
-                .into_iter()
-                .filter_map(|file| {
-                    let description = described.remove(&file.path)?;
-                    Some(FileEditReport {
-                        path: file.path,
-                        fingerprint: file.fingerprint,
-                        description,
-                    })
-                })
-                .collect(),
+            files: merged(earlier, files, described),
             failures: failures.iter().map(|error| format!("{error:#}")).collect(),
         };
         store(&session.path, &report)?;
@@ -138,6 +136,34 @@ fn describe_in_rounds(
     (described, failures)
 }
 
+/// Each of `files` the agent `described`, after the `earlier` report's
+/// descriptions of the files not sent again. A file sent again keeps its
+/// earlier description when the agent gave it none.
+fn merged(
+    earlier: Vec<FileEditReport>,
+    files: Vec<EditReportFile>,
+    mut described: HashMap<String, String>,
+) -> Vec<FileEditReport> {
+    let replaced: HashSet<String> = files
+        .iter()
+        .filter(|file| described.contains_key(&file.path))
+        .map(|file| file.path.clone())
+        .collect();
+    let fresh = files.into_iter().filter_map(|file| {
+        let description = described.remove(&file.path)?;
+        Some(FileEditReport {
+            path: file.path,
+            fingerprint: file.fingerprint,
+            description,
+        })
+    });
+    earlier
+        .into_iter()
+        .filter(|file| !replaced.contains(&file.path))
+        .chain(fresh)
+        .collect()
+}
+
 /// What the patches cannot say about themselves.
 struct Background<'a> {
     /// The Session's first prompt.
@@ -175,8 +201,7 @@ fn run_parallel<T: Sync, R: Send>(
     answer: impl Fn(&T) -> Result<R> + Sync,
 ) -> Vec<Result<R>> {
     let next = AtomicUsize::new(0);
-    let answers: Mutex<Vec<Option<Result<R>>>> =
-        Mutex::new(items.iter().map(|_| None).collect());
+    let answers: Mutex<Vec<Option<Result<R>>>> = Mutex::new(items.iter().map(|_| None).collect());
     std::thread::scope(|scope| {
         for _ in 0..PARALLEL.min(items.len()) {
             scope.spawn(|| loop {
@@ -274,10 +299,9 @@ fn store(session: &Path, report: &EditReport) -> Result<()> {
 fn read(session: &Path) -> Result<Option<EditReport>> {
     let path = session.join(EDIT_REPORT_FILE);
     match std::fs::read(&path) {
-        Ok(bytes) => Ok(Some(
-            serde_json::from_slice(&bytes)
-                .with_context(|| format!("reading the edit report at {}", path.display()))?,
-        )),
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).with_context(|| {
+            format!("reading the edit report at {}", path.display())
+        })?)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
     }
@@ -448,6 +472,37 @@ mod tests {
 
         let (_, _, asked) = rounds(&files, |_, _| Ok(vec!["a", "b"]));
         assert_eq!(asked, 1, "nothing left for a second round");
+    }
+
+    /// Describing some files again keeps the other files' descriptions, and
+    /// a file the agent left out this time its earlier one.
+    #[test]
+    fn files_described_again_replace_only_their_own_descriptions() {
+        let report = |path: &str, description: &str| FileEditReport {
+            path: path.into(),
+            fingerprint: format!("{path}-old"),
+            description: description.into(),
+        };
+        let earlier = vec![
+            report("a.rs", "Adds a."),
+            report("b.rs", "Adds b."),
+            report("c.rs", "Adds c."),
+        ];
+        let described = HashMap::from([("b.rs".to_owned(), "Fixes b.".to_owned())]);
+        let files = merged(earlier, vec![file("b.rs", 1), file("c.rs", 1)], described);
+        let shown: Vec<_> = files
+            .iter()
+            .map(|file| (file.path.as_str(), file.description.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("a.rs", "Adds a."),
+                ("c.rs", "Adds c."),
+                ("b.rs", "Fixes b.")
+            ]
+        );
+        assert_eq!(files[2].fingerprint, "b.rs-print");
     }
 
     #[test]

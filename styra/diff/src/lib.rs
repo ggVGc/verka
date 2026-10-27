@@ -23,6 +23,6 @@ mod state;
 mod view;
 
 pub use keys::Outcome;
-pub use report::{FileReport, Report, ReportState};
+pub use report::{FileReport, Report, ReportPage, ReportState};
 pub use state::{CheckoutDiff, DiffTarget, Source, Supplied};
 pub use view::{render, CheckoutDiffFeedback, CheckoutDiffView, Tint};

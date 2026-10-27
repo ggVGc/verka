@@ -72,7 +72,8 @@ defmodule Styra.Protocol do
           fields: [
             %{name: "id", required: true, type: %{kind: :string}},
             %{name: "base", required: true, type: %{kind: :string}},
-            %{name: "files", required: true, type: %{kind: :list, item: %{kind: :ref, name: "EditReportFile"}}}
+            %{name: "files", required: true, type: %{kind: :list, item: %{kind: :ref, name: "EditReportFile"}}},
+            %{name: "keep_others", required: false, type: %{kind: :boolean}}
           ]
         }},
         %{name: "edit_report", payload: %{
@@ -2684,9 +2685,10 @@ defmodule Styra.Protocol do
 
     Fields of `data`:
 
-      * `id   `  string
-      * `base `  string
-      * `files`  EditReportFile[]
+      * `id         `  string
+      * `base       `  string
+      * `files      `  EditReportFile[]
+      * `keep_others`  boolean  (optional)
     """
     def generate_edit_report(data), do: Styra.Protocol.build("generate_edit_report", data)
 

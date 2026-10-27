@@ -8,7 +8,7 @@
 
 use crate::files::{filtered_file_diffs, FileChange, FileDiff};
 use crate::layers::Layers;
-use crate::report::{Described, ReportState};
+use crate::report::{Described, ReportPage, ReportState};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -88,6 +88,9 @@ pub struct CheckoutDiffView<'a> {
     /// `None` where no report can be had, as in `styra-diff` on its own,
     /// which leaves its keys out of the shortcut legend too.
     pub report: Option<&'a ReportState>,
+    /// The page of every file's description, drawn over the view while it
+    /// is open.
+    pub report_page: Option<ReportPage>,
     /// Lines the host shows in place of the header, such as the latest
     /// messages of the conversation the diff belongs to. `None` keeps the
     /// header.
@@ -137,6 +140,7 @@ impl<'a> CheckoutDiffView<'a> {
             file_list_offset: 0,
             search: SearchView::default(),
             report: None,
+            report_page: None,
             conversation: None,
             intro: None,
             line_cursor: None,
@@ -181,6 +185,9 @@ pub struct CheckoutDiffFeedback {
     pub horizontal_scroll: u16,
     pub scroll: PreviewFeedback,
     pub file_list_offset: usize,
+    /// Where the report page's selection and scroll were held to, while it
+    /// is open.
+    pub report_page: Option<ReportPage>,
 }
 
 /// Styra draws the view as its main panel, which `styra-ui` cannot name.
@@ -191,6 +198,9 @@ impl Panel for CheckoutDiffView<'_> {
             scroll: measured.scroll,
             list_offset: Some(measured.file_list_offset),
             diff_layout: Some((measured.side_by_side, measured.horizontal_scroll)),
+            diff_report_page: measured
+                .report_page
+                .map(|page| (page.selected, page.scroll, page.preview)),
         }
     }
 }
@@ -319,10 +329,26 @@ fn file_tree_width(rows: &[(Option<usize>, Line<'_>)], available: u16) -> u16 {
 const SHORT_COMMIT: usize = 10;
 
 /// Draw the view, and return how far its diff can scroll.
+///
+/// The host's frame — its title, and the outline that says the view has the
+/// keys — is drawn here and only here: everything the view draws, the pages
+/// laid over it included, is drawn by [`render_inside`] in what is inside
+/// the frame, so nothing can cover it.
 pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> CheckoutDiffFeedback {
     let block = view.block.clone();
-    let mut inner = block.inner(area);
+    let inner = block.inner(area);
     frame.render_widget(block, area);
+    render_inside(frame, view, inner)
+}
+
+/// The view inside the host's frame, `area`; [`CheckoutDiffView::block`]
+/// is not for drawing here.
+fn render_inside(
+    frame: &mut Frame,
+    view: &CheckoutDiffView<'_>,
+    area: Rect,
+) -> CheckoutDiffFeedback {
+    let mut inner = area;
     if let Some(intro) = &view.intro {
         let paragraph = Paragraph::new(intro.clone()).wrap(Wrap { trim: false });
         // One more for the rule beneath it.
@@ -980,6 +1006,9 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         };
         render_legend(frame, legend_rows(layers, &focused), column);
     }
+    let report_page = view
+        .report_page
+        .map(|page| render_report_page(frame, view, area, page));
     if let Some(scroll) = view.help {
         render_shortcut_legend(frame, view, area, scroll);
     }
@@ -992,6 +1021,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             viewport: body.height,
         },
         file_list_offset,
+        report_page,
     }
 }
 
@@ -1004,7 +1034,8 @@ fn render_shortcut_legend(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: 
             crate::keys::BINDINGS
                 .iter()
                 .filter(|binding| {
-                    view.report.is_some() || !matches!(binding.label, "E" | "e (per-file view)")
+                    view.report.is_some()
+                        || !matches!(binding.label, "E" | "e (per-file view)" | "o")
                 })
                 .map(|binding| (binding.label, binding.description)),
         )
@@ -1024,6 +1055,263 @@ fn render_shortcut_legend(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: 
     let scroll = usize::from(scroll).min(limit).min(usize::from(u16::MAX)) as u16;
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph.scroll((scroll, 0)).block(block), area);
+}
+
+/// Every file of the diff with the edit report's description of it, in the
+/// diff's order, on one page drawn over the view, one file selected for
+/// opening. Returns where the selection and scroll were held to.
+fn render_report_page(
+    frame: &mut Frame,
+    view: &CheckoutDiffView<'_>,
+    area: Rect,
+    page: ReportPage,
+) -> ReportPage {
+    frame.render_widget(Clear, area);
+    let (area, below) = match page.preview {
+        Some(_) => {
+            let [top, bottom] =
+                Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .areas(area);
+            (top, Some(bottom))
+        }
+        None => (area, None),
+    };
+    let block = Block::bordered().title(
+        " Edit report · j/k: file · Enter: open it · e: describe it · p: diff below · ↑/↓ PgUp/PgDn: scroll · o / Esc: close ",
+    );
+    let inner = block.inner(area);
+    let width = usize::from(inner.width.saturating_sub(1));
+    let height = usize::from(inner.height);
+    let wrap = |line| wrap_rendered(line, width, 3);
+    let (summary, entries) = report_page_lines(view);
+    let mut lines: Vec<_> = summary.into_iter().flat_map(wrap).collect();
+    // Each file's rows among `lines`, and its name, which the rows start
+    // with: the selected one's is drawn again, marked.
+    let mut spans = Vec::new();
+    let mut names = Vec::new();
+    for (name, description) in entries {
+        lines.push(Line::default());
+        let start = lines.len();
+        lines.extend(wrap(name.clone()));
+        lines.extend(description.into_iter().flat_map(wrap));
+        spans.push(start..lines.len());
+        names.push(name);
+    }
+    let limit = lines.len().saturating_sub(height);
+    let mut scroll = usize::from(page.scroll).min(limit);
+    let mut selected = page.selected.min(spans.len().saturating_sub(1));
+    if let Some(entry) = spans.get(selected) {
+        if page.reveal {
+            // The rule above the file too, and the summary above the first.
+            let top = if selected == 0 { 0 } else { entry.start - 1 };
+            if entry.end > scroll + height {
+                scroll = (entry.end - height).min(top);
+            }
+            scroll = scroll.min(top);
+        } else if entry.end <= scroll {
+            selected = spans.partition_point(|entry| entry.end <= scroll);
+        } else if entry.start >= scroll + height {
+            selected = spans
+                .partition_point(|entry| entry.start < scroll + height)
+                .saturating_sub(1);
+        }
+    }
+    let scroll = scroll.min(limit);
+    if let (Some(entry), Some(mut name)) = (spans.get(selected), names.get(selected).cloned()) {
+        // Restyled, the name wraps onto as many rows as it did.
+        name.spans[1].style = name.spans[1].style.fg(theme::SELECTED_FILE_NAME);
+        let marked: Vec<_> = wrap(name);
+        let rows = entry.start..entry.start + marked.len();
+        lines.splice(rows, marked);
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0))
+            .block(block),
+        area,
+    );
+    if let Some(entry) = spans.get(selected) {
+        mark_entry(frame, inner, entry.start..entry.end, scroll);
+    }
+    let preview = page
+        .preview
+        .zip(below)
+        .map(|(preview, below)| render_report_preview(frame, view, selected, below, preview));
+    ReportPage {
+        selected,
+        scroll: u16::try_from(scroll).unwrap_or(u16::MAX),
+        reveal: false,
+        preview,
+    }
+}
+
+/// Mark the selected file's entry on the report page — its name and
+/// description, the page's rows `rows`, as far as they are in view in
+/// `inner` scrolled `scroll` rows down — with a band across it and a bar down
+/// its left edge, in the room every entry leaves for the bar.
+fn mark_entry(frame: &mut Frame, inner: Rect, rows: std::ops::Range<usize>, scroll: usize) {
+    let buffer = frame.buffer_mut();
+    let shown = scroll..scroll + usize::from(inner.height);
+    for row in rows.start.max(shown.start)..rows.end.min(shown.end) {
+        let y = inner.y + u16::try_from(row - scroll).unwrap_or(u16::MAX);
+        for x in inner.left()..inner.right() {
+            buffer[(x, y)].set_bg(theme::SELECTION_BACKGROUND);
+        }
+        buffer[(inner.x, y)]
+            .set_symbol(ENTRY_MARKER)
+            .set_fg(theme::ACCENT);
+    }
+}
+
+/// Marks the selected entry on the report page, down its left edge.
+const ENTRY_MARKER: &str = "▌";
+
+/// The patch of file `selected` of the diff, `scroll` rows down, in `area`
+/// below the report page, drawn as the per-file view draws it unified.
+/// Returns the scroll it was held to.
+fn render_report_preview(
+    frame: &mut Frame,
+    view: &CheckoutDiffView<'_>,
+    selected: usize,
+    area: Rect,
+    scroll: u16,
+) -> u16 {
+    let file = view
+        .diff
+        .ok()
+        .and_then(|text| crate::files::file_diffs(text).into_iter().nth(selected));
+    // Named, as the page below the list says nothing of which file it is.
+    let mut title = vec![Span::raw(" Diff · ")];
+    if let Some(file) = &file {
+        title.push(Span::styled(
+            file.path.to_owned(),
+            Style::default()
+                .fg(theme::SELECTED_FILE_NAME)
+                .add_modifier(Modifier::BOLD),
+        ));
+        title.push(change_marker(file.change()));
+        title.push(Span::raw(" · "));
+    }
+    title.push(Span::raw("J/K: scroll · p: hide "));
+    let block = Block::bordered().title(Line::from(title));
+    let inner = block.inner(area);
+    let width = usize::from(inner.width);
+    let mut lines = match file {
+        Some(file) => patch_lines(
+            file.patch,
+            view.hide_removed,
+            view.tint,
+            view.word_highlights,
+            view.layers.and_then(Result::ok),
+            width,
+            true,
+            None,
+        ),
+        None => vec![muted("  no file to show")],
+    };
+    fill_changed_rows(&mut lines, width);
+    let limit = u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .saturating_sub(inner.height);
+    let scroll = scroll.min(limit);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)).block(block), area);
+    scroll
+}
+
+/// A file on the report page: its name, and its description's lines.
+type ReportEntry = (Line<'static>, Vec<Line<'static>>);
+
+/// The report page's lines: what the report covers, then each file's name
+/// and description, for every file of the diff once there is a report. A
+/// file's name leaves room before it for the selection marker.
+fn report_page_lines(view: &CheckoutDiffView<'_>) -> (Vec<Line<'static>>, Vec<ReportEntry>) {
+    let muted = Style::default().fg(theme::MUTED_TEXT);
+    let note = |text: &str| Line::from(Span::styled(format!(" {text}"), muted));
+    let Some(report) = view.report else {
+        return (
+            vec![note("there is no edit report to write for this diff")],
+            Vec::new(),
+        );
+    };
+    let text = match view.diff {
+        Ok(text) => text,
+        Err(error) => return (vec![note(error)], Vec::new()),
+    };
+    let files = crate::files::file_diffs(text);
+    let described = files
+        .iter()
+        .filter(|file| {
+            matches!(
+                report.describe(file.path, file.patch),
+                Described::Described { .. }
+            )
+        })
+        .count();
+    let summary = vec![match (&report.report, report.pending) {
+        (_, true) => Line::from(Span::styled(
+            match &report.pending_file {
+                Some(path) => format!(" describing {path}'s edits…"),
+                None => " describing each file's edits…".to_owned(),
+            },
+            Style::default().fg(theme::ACCENT),
+        )),
+        (None, false) => note("no edit report yet · E: write one"),
+        (Some(_), false) => note(&format!(
+            "{described} of {} files described · E: describe them again",
+            files.len()
+        )),
+    }];
+    if report.report.is_none() {
+        return (summary, Vec::new());
+    }
+    let entries = files
+        .iter()
+        .map(|file| {
+            let name = Line::from(vec![
+                Span::raw(" ".repeat(Line::from(SELECTION_MARKER).width())),
+                Span::styled(
+                    file.path.to_owned(),
+                    Style::default()
+                        .fg(theme::DIRECTORY_NAME)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                change_marker(file.change()),
+            ]);
+            let mut lines = Vec::new();
+            match report.describe(file.path, file.patch) {
+                Described::Described { description, stale } => {
+                    lines.extend(markdown_block_lines_with_links(
+                        description,
+                        Style::default().fg(theme::TEXT),
+                        "   ",
+                        LinkDisplay::Compact,
+                    ));
+                    if stale {
+                        lines.push(note("  written before the file's latest edits"));
+                    }
+                }
+                Described::Missing { .. } if report.describing(file.path) => {}
+                Described::Missing { failure: None } => lines.push(note("  not described")),
+                Described::Missing {
+                    failure: Some(failure),
+                } => lines.push(Line::from(Span::styled(
+                    format!(
+                        "   describing it failed: {}",
+                        failure.lines().next().unwrap_or_default()
+                    ),
+                    Style::default().fg(theme::WARNING),
+                ))),
+            }
+            if report.pending_file.is_some() && report.describing(file.path) {
+                lines.push(Line::from(Span::styled(
+                    "   describing it again…",
+                    Style::default().fg(theme::ACCENT),
+                )));
+            }
+            (name, lines)
+        })
+        .collect();
+    (summary, entries)
 }
 
 fn prompt_marker() -> Span<'static> {
@@ -1575,7 +1863,7 @@ fn render_description(
             }
             lines
         }
-        Described::Missing { .. } if report.pending => Vec::new(),
+        Described::Missing { .. } if report.describing(file.path) => Vec::new(),
         Described::Missing { failure: None } => vec![Line::from(Span::styled(
             " the edit report does not describe this file · E: write a new one",
             muted,
@@ -1590,9 +1878,13 @@ fn render_description(
             Style::default().fg(theme::WARNING),
         ))],
     };
-    if report.pending {
+    if report.describing(file.path) {
         lines.push(Line::from(Span::styled(
-            " describing each file's edits…",
+            if report.pending_file.is_some() {
+                " describing this file's edits…"
+            } else {
+                " describing each file's edits…"
+            },
             Style::default().fg(theme::ACCENT),
         )));
     }
@@ -3182,6 +3474,7 @@ index 1111111..2222222 100644
                         file_list_offset: 0,
                         search,
                         report: None,
+                        report_page: None,
                         conversation: None,
                         intro: None,
                         line_cursor: None,
@@ -3296,6 +3589,255 @@ index 1111111..2222222 100644
         let (output, _) = report_screen(&described(DIFF), false);
         assert!(!output.contains("Replaces b"), "only per file: {output}");
         assert!(!output.contains("f: see it per file"), "{output}");
+    }
+
+    /// The report page lists every file with its description, in the diff's
+    /// order, over whichever view is open; it says which files the report
+    /// leaves out or wrote about before their latest edits.
+    #[test]
+    fn the_report_page_describes_every_file_on_one_page() {
+        let text = format!("{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old\n+new\n");
+        let page = |report: Option<&ReportState>, text: &str| {
+            let (width, height) = (100, 24);
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut view = CheckoutDiffView::unread(Block::bordered());
+                    view.diff = Ok(text);
+                    view.report = report;
+                    view.report_page = Some(ReportPage {
+                        selected: 1,
+                        scroll: 0,
+                        reveal: true,
+                        preview: None,
+                    });
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .chunks(width as usize)
+                .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let report = ReportState {
+            report: Some(crate::Report {
+                files: [(
+                    "src/a.rs".to_owned(),
+                    crate::FileReport {
+                        fingerprint: crate::report::fingerprint("an earlier patch"),
+                        description: "**Replaces** `b` with `c`.".into(),
+                    },
+                )]
+                .into(),
+                failures: Vec::new(),
+            }),
+            // The page shows what the per-file view has put away.
+            hidden: true,
+            ..Default::default()
+        };
+        let output = page(Some(&report), &text);
+        assert!(output.contains("Edit report"), "{output}");
+        assert!(output.contains("1 of 2 files described"), "{output}");
+        let a = output.find("src/a.rs [M]").unwrap();
+        let described = output.find("Replaces b with c.").unwrap();
+        let stale = output
+            .find("written before the file's latest edits")
+            .unwrap();
+        let b = output.find("b.txt [M]").unwrap();
+        let missing = output.find("not described").unwrap();
+        assert!(a < described && described < stale && stale < b && b < missing);
+        assert!(!output.contains("fn c()"), "drawn over the diff: {output}");
+        assert!(output.contains("▌ b.txt [M]"), "selected: {output}");
+        assert!(output.contains("▌  not described"), "all of it: {output}");
+        assert!(!output.contains("▌ src/a.rs"), "{output}");
+
+        let output = page(Some(&ReportState::default()), &text);
+        assert!(
+            output.contains("no edit report yet · E: write one"),
+            "{output}"
+        );
+        assert!(!output.contains("b.txt"), "{output}");
+
+        let output = page(None, &text);
+        assert!(output.contains("no edit report to write"), "{output}");
+    }
+
+    /// The report page keeps the selected file in view as the selection
+    /// moves, and when scrolled freely moves the selection to the nearest
+    /// file still in view. File names stand out from the descriptions, the
+    /// selected one most.
+    #[test]
+    fn the_report_page_keeps_its_selection_in_view() {
+        let text: String = (0..20)
+            .map(|n| format!("diff --git a/f{n:02} b/f{n:02}\n@@ -1 +1 @@\n-a\n+b\n"))
+            .collect();
+        let report = ReportState {
+            report: Some(crate::Report::default()),
+            ..Default::default()
+        };
+        // No host frame; 10 rows inside the page's border: the summary, then three rows a file —
+        // the rule above it, its name, and that it is not described.
+        let draw = |page: ReportPage| {
+            let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+            let mut measured = None;
+            terminal
+                .draw(|frame| {
+                    let mut view = CheckoutDiffView::unread(Block::default());
+                    view.diff = Ok(&text);
+                    view.report = Some(&report);
+                    view.report_page = Some(page);
+                    measured = render(frame, &view, frame.area()).report_page;
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (buffer, measured.unwrap())
+        };
+        let row_of = |buffer: &ratatui::buffer::Buffer, name: &str| {
+            (0..12).find(|&y| {
+                let row: String = (0..60).map(|x| buffer[(x, y)].symbol()).collect();
+                row.contains(name)
+            })
+        };
+        let selected = |selected, scroll, reveal| ReportPage {
+            selected,
+            scroll,
+            reveal,
+            preview: None,
+        };
+
+        let (buffer, page) = draw(selected(5, 0, true));
+        assert_eq!(page, selected(5, 9, false), "f05's last row at the bottom");
+        let y = row_of(&buffer, "▌ f05").unwrap();
+        assert_eq!(buffer[(3, y)].fg, theme::SELECTED_FILE_NAME);
+        // The band and the bar go down the whole entry, its description too,
+        // and no further.
+        for row in [y, y + 1] {
+            assert_eq!(buffer[(1, row)].symbol(), ENTRY_MARKER);
+            assert_eq!(buffer[(1, row)].fg, theme::ACCENT);
+            assert_eq!(buffer[(30, row)].bg, theme::SELECTION_BACKGROUND);
+        }
+        assert_ne!(buffer[(30, y - 1)].bg, theme::SELECTION_BACKGROUND);
+        let other = row_of(&buffer, "f04").unwrap();
+        assert_eq!(buffer[(3, other)].fg, theme::DIRECTORY_NAME);
+        assert_eq!(buffer[(4, other + 1)].fg, theme::MUTED_TEXT);
+        assert_ne!(buffer[(30, other)].bg, theme::SELECTION_BACKGROUND);
+
+        let (_, page) = draw(selected(3, 9, true));
+        assert_eq!(page.scroll, 9, "already in view");
+        let (_, page) = draw(selected(1, 9, true));
+        assert_eq!(page.scroll, 4, "up to the rule above it");
+        let (_, page) = draw(selected(0, 9, true));
+        assert_eq!(page.scroll, 0, "and the summary above the first");
+        let (_, page) = draw(selected(19, 0, true));
+        assert_eq!(page, selected(19, 51, false), "the last file at the bottom");
+
+        let (_, page) = draw(selected(0, 30, false));
+        assert_eq!(page, selected(9, 30, false), "the first file still in view");
+        let (_, page) = draw(selected(19, 3, false));
+        assert_eq!(page, selected(3, 3, false), "the last file in view");
+        let (_, page) = draw(selected(19, u16::MAX, false));
+        assert_eq!(page, selected(19, 51, false), "held to the end");
+    }
+
+    /// With its preview on, the report page takes the top half and the
+    /// selected file's patch the bottom, held to what it can scroll.
+    #[test]
+    fn the_report_page_shows_the_selected_files_patch_below() {
+        let text = format!("{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old\n+new\n");
+        let report = ReportState {
+            report: Some(crate::Report::default()),
+            ..Default::default()
+        };
+        let draw = |selected, preview| {
+            let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+            let mut measured = None;
+            terminal
+                .draw(|frame| {
+                    let mut view = CheckoutDiffView::unread(Block::bordered());
+                    view.diff = Ok(&text);
+                    view.report = Some(&report);
+                    view.report_page = Some(ReportPage {
+                        selected,
+                        scroll: 0,
+                        reveal: true,
+                        preview,
+                    });
+                    measured = render(frame, &view, frame.area()).report_page;
+                })
+                .unwrap();
+            let rows: Vec<String> = terminal
+                .backend()
+                .buffer()
+                .content()
+                .chunks(80)
+                .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+                .collect();
+            (rows, measured.unwrap().preview)
+        };
+        let row = |rows: &[String], text: &str| rows.iter().position(|row| row.contains(text));
+
+        let (rows, preview) = draw(0, None);
+        assert_eq!(preview, None);
+        assert_eq!(row(&rows, "J/K: scroll · p: hide"), None, "{rows:#?}");
+
+        let (rows, preview) = draw(0, Some(u16::MAX));
+        assert_eq!(preview, Some(0), "a short patch does not scroll");
+        assert!(row(&rows, "Edit report").unwrap() < 15);
+        assert_eq!(row(&rows, "J/K: scroll · p: hide"), Some(15), "{rows:#?}");
+        let added = row(&rows, "fn c()").unwrap();
+        assert!(added > 15, "{rows:#?}");
+        assert_eq!(row(&rows, "new"), None, "only the selected file's");
+
+        assert!(rows[15].contains("Diff · src/a.rs [M] · J/K"), "{rows:#?}");
+
+        let (rows, _) = draw(1, Some(0));
+        assert!(rows[15].contains("Diff · b.txt [M] · J/K"), "{rows:#?}");
+        assert!(row(&rows, "new").unwrap() > 15, "{rows:#?}");
+        assert_eq!(row(&rows, "fn c()"), None);
+    }
+
+    /// The host's frame stays as the host drew it — focus outline and all —
+    /// under the pages laid over the view, which take only what is inside it.
+    #[test]
+    fn pages_over_the_view_leave_the_hosts_frame() {
+        let outline = Style::default().fg(Color::Magenta);
+        let report = ReportState::default();
+        let pages: [fn(&mut CheckoutDiffView); 3] = [
+            |view| view.help = Some(0),
+            |view| view.report_page = Some(ReportPage::default()),
+            |view| {
+                view.report_page = Some(ReportPage {
+                    preview: Some(0),
+                    ..ReportPage::default()
+                })
+            },
+        ];
+        for page in pages {
+            let (width, height) = (60, 20);
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut view =
+                        CheckoutDiffView::unread(Block::bordered().border_style(outline));
+                    view.diff = Ok(DIFF);
+                    view.report = Some(&report);
+                    page(&mut view);
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let frame: Vec<_> = (0..width)
+                .flat_map(|x| [(x, 0), (x, height - 1)])
+                .chain((0..height).flat_map(|y| [(0, y), (width - 1, y)]))
+                .collect();
+            for (x, y) in frame {
+                assert_eq!(buffer[(x, y)].fg, Color::Magenta, "({x}, {y}): {buffer:?}");
+            }
+        }
     }
 
     #[test]
@@ -3617,6 +4159,7 @@ index 1111111..2222222 100644
                             file_list_offset: offset,
                             search: Default::default(),
                             report: None,
+                            report_page: None,
                             conversation: None,
                             intro: None,
                             line_cursor: None,
@@ -3936,6 +4479,7 @@ index 1111111..2222222 100644
                         file_list_offset: 0,
                         search: Default::default(),
                         report: None,
+                        report_page: None,
                         conversation: None,
                         intro: None,
                         line_cursor: None,

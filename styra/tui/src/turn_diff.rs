@@ -1,6 +1,6 @@
 //! The diff view's turn diff: what the selected message's turn changed, shown
 //! by `styra-diff` as a supplied diff in place of the checkout's whole diff
-//! while `T` has it so, in the side panel or fullscreen. `H` uses the same
+//! while `u` has it so, in the side panel or fullscreen. `H` uses the same
 //! turn patch to highlight matching changes within the checkout diff.
 //!
 //! The turn is the stretch of the conversation the selection is in (see

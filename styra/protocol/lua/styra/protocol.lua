@@ -63,6 +63,7 @@ M.types.Request = {
         { name = "id", required = true, type = { kind = "string" } },
         { name = "base", required = true, type = { kind = "string" } },
         { name = "files", required = true, type = { kind = "list", item = { kind = "ref", name = "EditReportFile" } } },
+        { name = "keep_others", required = false, type = { kind = "boolean" } },
       },
     } },
     { name = "edit_report", payload = {
@@ -2884,9 +2885,10 @@ end
 --- exactly as it shows them, so the report covers the files it lists.
 ---
 --- Fields of `data`:
----   id     string
----   base   string
----   files  EditReportFile[]
+---   id           string
+---   base         string
+---   files        EditReportFile[]
+---   keep_others  boolean  (optional)
 function M.request.generate_edit_report(data)
   return M.build("generate_edit_report", data)
 end

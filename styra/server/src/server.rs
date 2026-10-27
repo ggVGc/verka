@@ -4483,9 +4483,17 @@ impl ServerState {
             Request::GenerateIntegrationMessage { id } => Ok(Response::IntegrationMessage(
                 self.generate_integration_message(&id)?,
             )),
-            Request::GenerateEditReport { id, base, files } => Ok(Response::EditReport(Some(
-                self.generate_edit_report(&id, &base, files)?,
-            ))),
+            Request::GenerateEditReport {
+                id,
+                base,
+                files,
+                keep_others,
+            } => Ok(Response::EditReport(Some(self.generate_edit_report(
+                &id,
+                &base,
+                files,
+                keep_others,
+            )?))),
             Request::EditReport { id } => Ok(Response::EditReport(self.edit_report(&id)?)),
             Request::SessionIntegrationResult { id } => Ok(Response::SessionIntegrationResult(
                 self.integration_result(&id)?,

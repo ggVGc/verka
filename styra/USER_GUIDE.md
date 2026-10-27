@@ -382,7 +382,7 @@ collapses all, and `m` hides/shows minor events. With a preview open, side or
 full-screen, `↑`/`↓` scroll it ten lines and `PgUp`/`PgDn` half its height;
 in the full-screen preview `j`/`k` scroll too. What a turn changed is shown
 by the diff pane rather than the preview: with the diff open in the preview
-pane (`d`) or fullscreen (`D`), `T` switches it to the selected message's turn — the same stretch
+pane (`d`) or fullscreen (`D`), `u` switches it to the selected message's turn — the same stretch
 `e` lists — with the message that started the turn above the diff, and back to
 the checkout's whole diff. If the turn was snapshotted both as it started and
 as it ended (see snapshots above), the turn diff is the diff between those two

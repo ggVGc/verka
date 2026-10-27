@@ -18,6 +18,8 @@ enum Command {
     /// Styra's `d`, which opened the view, closing it again.
     Toggle,
     ToggleHelp,
+    /// Open the page of every file's description.
+    ReportPage,
     OpenFile,
     GenerateReport,
 }
@@ -163,6 +165,12 @@ pub const BINDINGS: &[Binding] = &[
         Command::View(Action::ToggleReport),
     ),
     bind(
+        &[KeyCode::Char('o')],
+        "o",
+        "show / hide every file's description on one page (j/k pick a file, Enter opens it, e describes it again, p shows its diff below, J/K scroll that)",
+        Command::ReportPage,
+    ),
+    bind(
         &[KeyCode::Char('t')],
         "t",
         "switch the unchanged rows' tint between full and half",
@@ -260,6 +268,9 @@ pub enum Outcome {
     /// Have each file's edits described, and put the report in
     /// [`CheckoutDiff::report`] when it comes.
     GenerateReport,
+    /// Have the edits of the file at this path described again, keeping the
+    /// report's other descriptions.
+    DescribeFile(String),
 }
 
 impl CheckoutDiff {
@@ -286,13 +297,78 @@ impl CheckoutDiff {
         if let Some(scroll) = self.help.as_mut() {
             match key.code {
                 KeyCode::Char('?') | KeyCode::Esc => self.help = None,
-                KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.saturating_add(1),
-                KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
-                KeyCode::PageDown => *scroll = scroll.saturating_add(10),
-                KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
-                KeyCode::Char('g') => *scroll = 0,
-                _ => {}
+                code => scroll_page(scroll, code),
             }
+            return Outcome::Handled;
+        }
+        // The page scrolls like the legend, and j/k pick a file on it to open,
+        // whose patch p shows below and J/K scroll. A report, or the picked
+        // file's description alone, can be asked for from it, and comes in
+        // where it is read.
+        if let Some(mut page) = self.report_page {
+            let paths: Vec<String> = self.diff.as_deref().map_or_else(
+                |_| Vec::new(),
+                |text| {
+                    crate::files::file_diffs(text)
+                        .iter()
+                        .map(|file| file.path.to_owned())
+                        .collect()
+                },
+            );
+            let last = paths.len().saturating_sub(1);
+            let selected = match key.code {
+                KeyCode::Char('o') | KeyCode::Esc => {
+                    self.report_page = None;
+                    return Outcome::Handled;
+                }
+                KeyCode::Char('E') => return Outcome::GenerateReport,
+                KeyCode::Char('e') => {
+                    return paths
+                        .get(page.selected)
+                        .map_or(Outcome::Handled, |path| Outcome::DescribeFile(path.clone()))
+                }
+                KeyCode::Enter => {
+                    self.report_page = None;
+                    self.open_file(page.selected.min(last));
+                    return Outcome::Handled;
+                }
+                KeyCode::Char('j') => Some(page.selected.saturating_add(1).min(last)),
+                KeyCode::Char('k') => Some(page.selected.saturating_sub(1)),
+                KeyCode::Char('g') => Some(0),
+                KeyCode::Char('G') => Some(last),
+                KeyCode::Char('p') => {
+                    page.preview = match page.preview {
+                        Some(_) => None,
+                        None => Some(0),
+                    };
+                    self.report_preview = page.preview.is_some();
+                    None
+                }
+                KeyCode::Char('J') => {
+                    page.preview = page
+                        .preview
+                        .map(|scroll| scroll.saturating_add(PREVIEW_STEP));
+                    None
+                }
+                KeyCode::Char('K') => {
+                    page.preview = page
+                        .preview
+                        .map(|scroll| scroll.saturating_sub(PREVIEW_STEP));
+                    None
+                }
+                code => {
+                    scroll_page(&mut page.scroll, code);
+                    page.reveal = false;
+                    None
+                }
+            };
+            if let Some(selected) = selected {
+                page.selected = selected;
+                page.reveal = true;
+                // Each file's patch is shown from its top.
+                page.preview = page.preview.map(|_| 0);
+            }
+            self.report_page = Some(page);
             return Outcome::Handled;
         }
         let Some(binding) = BINDINGS
@@ -304,6 +380,16 @@ impl CheckoutDiff {
         match binding.command {
             Command::ToggleHelp => {
                 self.help = Some(0);
+                Outcome::Handled
+            }
+            Command::ReportPage => {
+                // On the file the view is on.
+                self.report_page = Some(crate::ReportPage {
+                    selected: self.selected_file,
+                    scroll: 0,
+                    reveal: true,
+                    preview: self.report_preview.then_some(0),
+                });
                 Outcome::Handled
             }
             Command::View(action) => {
@@ -320,6 +406,22 @@ impl CheckoutDiff {
             Command::OpenFile => Outcome::OpenFile,
             Command::GenerateReport => Outcome::GenerateReport,
         }
+    }
+}
+
+/// Rows `J` and `K` scroll the report page's patch by.
+const PREVIEW_STEP: u16 = 3;
+
+/// Scroll a page drawn over the view — the shortcut legend, or the edit
+/// report's — by the reading keys; the drawing holds it to what fits.
+fn scroll_page(scroll: &mut u16, code: KeyCode) {
+    match code {
+        KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.saturating_add(1),
+        KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
+        KeyCode::PageDown => *scroll = scroll.saturating_add(10),
+        KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
+        KeyCode::Char('g') => *scroll = 0,
+        _ => {}
     }
 }
 
@@ -358,6 +460,75 @@ mod tests {
         press(&mut diff, KeyCode::Char('?'));
         press(&mut diff, KeyCode::Char('?'));
         assert_eq!(diff.help, None);
+    }
+
+    /// The report page is modal like the legend: j/k pick a file on it,
+    /// which it opens on, the other reading keys scroll it, a report can be
+    /// asked for from it, and Enter opens the picked file's patch.
+    #[test]
+    fn the_report_page_picks_a_file_to_open() {
+        let mut diff = diff();
+        let page = |diff: &CheckoutDiff| diff.report_page.unwrap();
+        press(&mut diff, KeyCode::Char('l'));
+        press(&mut diff, KeyCode::Char('j'));
+        press(&mut diff, KeyCode::Char('l'));
+        assert_eq!(press(&mut diff, KeyCode::Char('o')), Outcome::Handled);
+        assert_eq!((page(&diff).selected, page(&diff).reveal), (1, true));
+        press(&mut diff, KeyCode::PageDown);
+        assert_eq!((page(&diff).scroll, page(&diff).reveal), (10, false));
+        press(&mut diff, KeyCode::Char('j'));
+        assert_eq!((page(&diff).selected, page(&diff).reveal), (1, true));
+        press(&mut diff, KeyCode::Char('k'));
+        assert_eq!(page(&diff).selected, 0);
+        press(&mut diff, KeyCode::Char('G'));
+        assert_eq!(page(&diff).selected, 1);
+        press(&mut diff, KeyCode::Char('l'));
+        assert!(!diff.per_file, "the page has the keys");
+        assert_eq!(
+            press(&mut diff, KeyCode::Char('E')),
+            Outcome::GenerateReport
+        );
+        assert!(diff.report_page.is_some(), "open for the report to come");
+        assert_eq!(
+            press(&mut diff, KeyCode::Char('e')),
+            Outcome::DescribeFile("q.txt".into()),
+            "the picked file alone"
+        );
+        assert!(
+            diff.report_page.is_some(),
+            "open for its description to come"
+        );
+
+        assert_eq!(page(&diff).preview, None);
+        press(&mut diff, KeyCode::Char('K'));
+        assert_eq!(page(&diff).preview, None, "nothing to scroll");
+        press(&mut diff, KeyCode::Char('p'));
+        press(&mut diff, KeyCode::Char('J'));
+        press(&mut diff, KeyCode::Char('J'));
+        assert_eq!(page(&diff).preview, Some(6));
+        press(&mut diff, KeyCode::Char('K'));
+        assert_eq!(page(&diff).preview, Some(3));
+        press(&mut diff, KeyCode::Char('k'));
+        assert_eq!(page(&diff).preview, Some(0), "the next file from its top");
+        press(&mut diff, KeyCode::Char('j'));
+
+        assert_eq!(press(&mut diff, KeyCode::Enter), Outcome::Handled);
+        assert_eq!(diff.report_page, None);
+        assert!(diff.per_file);
+        assert_eq!(diff.selected_file, 1);
+
+        press(&mut diff, KeyCode::Char('o'));
+        press(&mut diff, KeyCode::Char('g'));
+        assert_eq!(press(&mut diff, KeyCode::Esc), Outcome::Handled);
+        assert_eq!(diff.report_page, None);
+        assert_eq!(diff.selected_file, 1, "closed without opening");
+
+        press(&mut diff, KeyCode::Char('o'));
+        assert_eq!(page(&diff).preview, Some(0), "it opens as it was left");
+        press(&mut diff, KeyCode::Char('p'));
+        press(&mut diff, KeyCode::Esc);
+        press(&mut diff, KeyCode::Char('o'));
+        assert_eq!(page(&diff).preview, None);
     }
 
     fn press(diff: &mut CheckoutDiff, code: KeyCode) -> Outcome {

@@ -245,7 +245,7 @@ fn handle(diff: &mut CheckoutDiff, key: KeyEvent) -> Step {
         // There is no Styra to go back to, so `d` does not quit.
         Outcome::Toggle => Step::Stay,
         Outcome::OpenFile => Step::Edit,
-        Outcome::GenerateReport => {
+        Outcome::GenerateReport | Outcome::DescribeFile(_) => {
             Step::Notice("edit reports are written in Styra, which has an agent to ask")
         }
         Outcome::Ignored if key.code == KeyCode::Char('q') => Step::Quit,

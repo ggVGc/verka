@@ -11,7 +11,7 @@ use styra_ui::search::Search;
 
 use crate::files::{filtered_file_diffs, position, FileDiff};
 use crate::layers::Layers;
-use crate::report::ReportState;
+use crate::report::{ReportPage, ReportState};
 use crate::view::{rows, CheckoutDiffFeedback, CheckoutDiffView, Row, Tint};
 
 /// What a diff of a checkout compares.
@@ -148,6 +148,11 @@ pub struct CheckoutDiff {
     pub search: Search,
     /// What each file was edited for, once the host has had it described.
     pub report: ReportState,
+    /// The page of every file's description, while it is open.
+    pub report_page: Option<ReportPage>,
+    /// Whether the report page shows the selected file's patch below it,
+    /// kept for the next time it opens.
+    pub report_preview: bool,
     /// The line the line cursor is on, by its place among the shown patch's
     /// lines; `None` unless lines are being selected.
     pub line_cursor: Option<usize>,
@@ -261,6 +266,8 @@ impl CheckoutDiff {
             file_list_offset: 0,
             search: Default::default(),
             report: ReportState::default(),
+            report_page: None,
+            report_preview: false,
             line_cursor: None,
             find: Search::default(),
             find_from: None,
@@ -408,6 +415,7 @@ impl CheckoutDiff {
             file_list_offset: self.file_list_offset,
             search: self.search.view(),
             report: Some(&self.report),
+            report_page: self.report_page,
             conversation: None,
             intro: None,
             line_cursor: self.line_cursor,
@@ -427,6 +435,20 @@ impl CheckoutDiff {
         self.scroll.note_limit(measured.scroll.limit);
         self.scroll.note_viewport(measured.scroll.viewport);
         self.file_list_offset = measured.file_list_offset;
+        if let (Some(page), Some(measured)) = (self.report_page.as_mut(), measured.report_page) {
+            *page = measured;
+        }
+    }
+
+    /// Show file `index` of the whole diff in the per-file view, from the
+    /// top of its patch, clearing a file filter that would hide it.
+    pub(crate) fn open_file(&mut self, index: usize) {
+        self.leave_lines();
+        self.show_files();
+        self.search.cancel();
+        self.selected_file = index;
+        self.file_list_offset = 0;
+        self.scroll.reset();
     }
 
     pub(crate) fn apply(&mut self, action: Action) {

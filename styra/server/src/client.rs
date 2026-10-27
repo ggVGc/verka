@@ -221,18 +221,21 @@ impl Client {
     }
 
     /// Describe each of `files` — what changed and why — and keep the report
-    /// with the Session. Takes as long as the errands it runs: call it off
-    /// any thread that has a screen to keep drawing.
+    /// with the Session, with the earlier report's other files when
+    /// `keep_others`. Takes as long as the errands it runs: call it off any
+    /// thread that has a screen to keep drawing.
     pub fn generate_edit_report(
         &self,
         id: &str,
         base: &str,
         files: Vec<EditReportFile>,
+        keep_others: bool,
     ) -> Result<EditReport> {
         match self.request(Request::GenerateEditReport {
             id: id.into(),
             base: base.into(),
             files,
+            keep_others,
         })? {
             Response::EditReport(Some(report)) => Ok(report),
             other => unexpected("edit_report", other),

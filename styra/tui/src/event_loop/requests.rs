@@ -237,7 +237,7 @@ impl Loop<'_> {
             Request::ShowDiff(id) => self.show_diff(&id, false, None),
             Request::ShowDiffFullscreen(id) => self.show_diff(&id, true, None),
             Request::ProjectAction(action) => run_project_action(app, client, self.config, action),
-            Request::GenerateEditReport => self.edit_reports.start(app, client),
+            Request::GenerateEditReport(only) => self.edit_reports.start(app, client, only),
             Request::OpenShell => {
                 match crate::terminal::open_shell(client, &app.session_id, self.config) {
                     Ok(program) => app.show_action_message(format!("opened shell in {program}")),

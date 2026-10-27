@@ -105,6 +105,9 @@ pub struct RenderFeedback {
     pub diff_file_list_offset: Option<usize>,
     /// Effective side-by-side layout and horizontal offset of the checkout diff.
     pub diff_layout: Option<(bool, u16)>,
+    /// The file selected on the checkout diff's report page, the page's
+    /// scroll and its file patch's, as drawn, while the page is open.
+    pub diff_report_page: Option<(usize, u16, Option<u16>)>,
     /// How many tiles each row of the overview held, top to bottom, when it
     /// was drawn.
     pub overview_rows: Option<Vec<usize>>,
@@ -391,6 +394,7 @@ where
                 navigator_offset: None,
                 diff_file_list_offset: None,
                 diff_layout: None,
+                diff_report_page: None,
                 overview_rows: None,
             }
         })
