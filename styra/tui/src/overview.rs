@@ -104,11 +104,10 @@ impl Overview {
         let from = self
             .selected_id(interactions, current, workspace_id)
             .unwrap_or(current);
-        interactions
-            .next_attention_or_live_in_order(
-                &interactions.overview_indices(self.scope(workspace_id)),
-                from,
-            )
+        interactions.next_attention_or_live_in_order(
+            &interactions.overview_indices(self.scope(workspace_id)),
+            from,
+        )
     }
 
     /// The Workspace a Workspace scope shows: the previewed one, if any, else

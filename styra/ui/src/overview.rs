@@ -920,7 +920,7 @@ mod tests {
         let (screen, _) = draw(&view, 60, 14);
         assert!(screen.contains("« Split the retry work off."), "{screen}");
         assert!(
-            screen.contains("Branch to:  ■  Retry backoff · paused"),
+            screen.contains("Branch to:  ■  Retry backoff  paused"),
             "{screen}"
         );
         assert!(screen.contains("« Backoff now doubles."), "{screen}");

@@ -95,7 +95,6 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
                 .filter(|other| other.branched_from.as_deref() == Some(interaction.id.as_str()))
                 .count(),
             source_of_selected: source_of_selected == Some(interaction.id.as_str()),
-            provider: interaction.selection.provider.as_str(),
             model: &interaction.selection.model,
             branch: interaction
                 .checkout

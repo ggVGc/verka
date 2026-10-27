@@ -1243,6 +1243,11 @@ pub struct WorktreeHeading {
 /// worktrees integrated into it — and within each checkout the branch tree —
 /// see [`branch_tree`].
 ///
+/// The sort reads bottom up while the headings still head from above: the
+/// item order is turned over, so the latest-messaged entry of each checkout
+/// is its last, and the Workspace and checkout holding the latest of all come
+/// last.
+///
 /// A worktree is headed when it holds more than one shown entry, or is
 /// integrated into, or integrates into, another worktree: an entry drawn among
 /// another worktree's rows has to say which one it works in, and one whose
@@ -1255,7 +1260,9 @@ fn display_tree(
     workspaces: &[WorkspaceSummary],
     visible: Vec<usize>,
 ) -> Vec<DisplayRow> {
-    let ordered = grouped_by_workspace(interactions, workspaces, visible);
+    let mut ordered = grouped_by_workspace(interactions, workspaces, visible);
+    // Each group stays contiguous when the whole list is reversed.
+    ordered.reverse();
     let mut out = Vec::with_capacity(ordered.len());
     for group in ordered.chunk_by(|left, right| {
         interactions[*left].workspace_id == interactions[*right].workspace_id
@@ -1551,20 +1558,21 @@ pub(crate) mod tests {
         );
         live.set_tag_filter(vec!["keep".into()], "item-00", None);
 
-        live.cursor_page("item-00", None, true);
+        // Display order: item-48 at the top, down to item-00 at the foot.
+        live.cursor_page("item-00", None, false);
         assert_eq!(live.cursor("item-00"), "item-20");
         assert!(live.pending("item-00").is_some());
         assert!(live.due("item-00").is_none());
-        live.cursor_page("item-00", None, true);
+        live.cursor_page("item-00", None, false);
         assert_eq!(live.cursor("item-00"), "item-40");
         for _ in 0..3 {
-            live.cursor_page("item-00", None, true);
+            live.cursor_page("item-00", None, false);
             assert_eq!(live.cursor("item-00"), "item-48");
         }
-        live.cursor_page("item-00", None, false);
+        live.cursor_page("item-00", None, true);
         assert_eq!(live.cursor("item-00"), "item-28");
         for _ in 0..4 {
-            live.cursor_page("item-00", None, false);
+            live.cursor_page("item-00", None, true);
         }
         assert_eq!(live.cursor("item-00"), "item-00");
         assert!(live.pending("item-00").is_none());
@@ -1696,7 +1704,7 @@ pub(crate) mod tests {
                 "0000000000400-paused"
             ]
         );
-        assert_eq!(live.display_indices(Some("workspace")), [0, 1, 2, 3]);
+        assert_eq!(live.display_indices(Some("workspace")), [3, 2, 1, 0]);
     }
 
     #[test]
@@ -1709,8 +1717,8 @@ pub(crate) mod tests {
             ],
             vec![],
         );
-        let next = live.next("one", Some("workspace")).unwrap();
-        assert_eq!(next.id, "two");
+        let previous = live.previous("one", Some("workspace")).unwrap();
+        assert_eq!(previous.id, "two");
         let mut refreshed_two = interaction("two", InteractionActivity::Pending);
         refreshed_two.last_message = Some("new response".into());
         live.refresh(vec![
@@ -2160,9 +2168,10 @@ pub(crate) mod tests {
             vec![],
         );
 
-        assert_eq!(live.next_idle_unseen("current", None).unwrap().id, "unseen");
-        assert_eq!(live.next_idle_unseen("unseen", None).unwrap().id, "later");
+        // Display order: later, busy, unseen, current.
+        assert_eq!(live.next_idle_unseen("current", None).unwrap().id, "later");
         assert_eq!(live.next_idle_unseen("later", None).unwrap().id, "unseen");
+        assert_eq!(live.next_idle_unseen("unseen", None).unwrap().id, "later");
     }
 
     /// The step between running interactions walks every live one — waiting on
@@ -2183,9 +2192,9 @@ pub(crate) mod tests {
         );
 
         // The step follows the list's order, wrapping at its end.
-        assert_eq!(live.next_live("current", None).unwrap().id, "waiting");
-        assert_eq!(live.next_live("waiting", None).unwrap().id, "background");
-        assert_eq!(live.next_live("background", None).unwrap().id, "current");
+        assert_eq!(live.next_live("current", None).unwrap().id, "background");
+        assert_eq!(live.next_live("background", None).unwrap().id, "waiting");
+        assert_eq!(live.next_live("waiting", None).unwrap().id, "current");
     }
 
     #[test]
@@ -2195,9 +2204,9 @@ pub(crate) mod tests {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("current", InteractionActivity::Running),
-                interaction("next-live", InteractionActivity::Running),
                 idle,
+                interaction("next-live", InteractionActivity::Running),
+                interaction("current", InteractionActivity::Running),
             ],
             vec![],
         );
@@ -2416,30 +2425,30 @@ pub(crate) mod tests {
             vec![],
         );
 
-        live.cursor_next("one", Some("workspace"));
-        live.cursor_next("one", Some("workspace"));
+        live.cursor_next("three", Some("workspace"));
+        live.cursor_next("three", Some("workspace"));
 
         // Two rows crossed, and neither of the interactions passed over — nor
         // the one now under the cursor — has been asked for yet.
-        assert_eq!(live.cursor("one"), "three");
+        assert_eq!(live.cursor("three"), "one");
         assert_eq!(
-            live.pending("one")
+            live.pending("three")
                 .map(|interaction| interaction.id.as_str()),
-            Some("three")
+            Some("one")
         );
-        assert!(live.due("one").is_none());
+        assert!(live.due("three").is_none());
 
         std::thread::sleep(LOAD_SETTLE + Duration::from_millis(20));
         assert_eq!(
-            live.due("one").map(|interaction| interaction.id.as_str()),
-            Some("three")
+            live.due("three").map(|interaction| interaction.id.as_str()),
+            Some("one")
         );
 
         // Once the load has landed the cursor is home again, so the settled
         // move is not made a second time.
         live.rest();
-        assert_eq!(live.cursor("three"), "three");
-        assert!(live.due("three").is_none());
+        assert_eq!(live.cursor("one"), "one");
+        assert!(live.due("one").is_none());
     }
 
     #[test]
@@ -2460,12 +2469,12 @@ pub(crate) mod tests {
         live.toggle_workspace_scope();
         let scope = Some("workspace");
 
-        live.cursor_last("one", scope);
+        live.cursor_first("one", scope);
         assert_eq!(live.cursor("one"), "three");
         assert!(live.pending("one").is_some());
         assert!(live.due("one").is_none());
 
-        live.cursor_first("one", scope);
+        live.cursor_last("one", scope);
         assert_eq!(live.cursor("one"), "one");
         assert!(live.pending("one").is_none());
 
@@ -2473,9 +2482,9 @@ pub(crate) mod tests {
         live.items[2].tags = vec!["match".into()];
         live.set_tag_filter(vec!["match".into()], "three", scope);
         live.cursor_last("three", scope);
-        assert_eq!(live.cursor("three"), "two");
-        live.cursor_first("three", scope);
         assert_eq!(live.cursor("three"), "one");
+        live.cursor_first("three", scope);
+        assert_eq!(live.cursor("three"), "two");
 
         live.set_tag_filter(vec!["missing".into()], "three", scope);
         live.rest();
@@ -2496,12 +2505,12 @@ pub(crate) mod tests {
             vec![],
         );
 
-        live.cursor_next("one", Some("workspace"));
-        live.cursor_previous("one", Some("workspace"));
+        live.cursor_next("two", Some("workspace"));
+        live.cursor_previous("two", Some("workspace"));
 
-        assert_eq!(live.cursor("one"), "one");
-        assert!(live.pending("one").is_none());
-        assert!(live.due("one").is_none());
+        assert_eq!(live.cursor("two"), "two");
+        assert!(live.pending("two").is_none());
+        assert!(live.due("two").is_none());
     }
 
     #[test]
@@ -2514,7 +2523,7 @@ pub(crate) mod tests {
             ],
             vec![],
         );
-        live.cursor_next("one", Some("workspace"));
+        live.cursor_previous("one", Some("workspace"));
 
         live.refresh(vec![interaction("one", InteractionActivity::Pending)]);
 
@@ -2529,9 +2538,9 @@ pub(crate) mod tests {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("current", InteractionActivity::Pending),
-                other,
                 interaction("next", InteractionActivity::Running),
+                other,
+                interaction("current", InteractionActivity::Pending),
             ],
             vec![],
         );
@@ -2582,17 +2591,17 @@ pub(crate) mod tests {
         };
         assert_eq!(
             ordered(&live),
-            ["feature-1", "feature-2", "main-1", "main-2", "other"]
+            ["other", "main-2", "main-1", "feature-2", "feature-1"]
         );
         assert_eq!(
-            live.next("feature-2", Some("workspace")).unwrap().id,
-            "main-1"
+            live.next("main-1", Some("workspace")).unwrap().id,
+            "feature-2"
         );
 
         live.toggle_workspace_scope();
         assert_eq!(
             ordered(&live),
-            ["feature-1", "feature-2", "main-1", "main-2"]
+            ["main-2", "main-1", "feature-2", "feature-1"]
         );
     }
 
@@ -2619,7 +2628,7 @@ pub(crate) mod tests {
 
     /// A branch sits beneath the interaction it came from, as it does in the
     /// Session picker, rather than wherever its creation would sort it — a
-    /// fresh branch is the newest, and would otherwise rise to the head of the
+    /// fresh branch is the newest, and would otherwise sink to the foot of the
     /// list, away from its source.
     #[test]
     fn a_branch_is_listed_beneath_its_source() {
@@ -2645,10 +2654,10 @@ pub(crate) mod tests {
         assert_eq!(
             display(&live, Some("workspace")),
             [
-                ("0000000000200-other", 0),
                 ("0000000000100-source", 0),
                 ("0000000000300-branch", 1),
                 ("0000000000400-twig", 2),
+                ("0000000000200-other", 0),
             ]
         );
         // Walking the list follows the tree the navigator draws.
@@ -2659,19 +2668,19 @@ pub(crate) mod tests {
             "0000000000300-branch"
         );
         assert_eq!(
-            live.next("0000000000200-other", Some("workspace"))
+            live.next("0000000000400-twig", Some("workspace"))
                 .unwrap()
                 .id,
-            "0000000000100-source"
+            "0000000000200-other"
         );
         live.toggle_workspace_scope();
         assert_eq!(
             display(&live, Some("workspace")),
             [
-                ("0000000000200-other", 0),
                 ("0000000000100-source", 0),
                 ("0000000000300-branch", 1),
                 ("0000000000400-twig", 2),
+                ("0000000000200-other", 0),
             ]
         );
     }
@@ -2692,12 +2701,12 @@ pub(crate) mod tests {
 
         assert_eq!(
             display(&live, Some("workspace")),
-            [("branch", 0), ("orphan", 0)]
+            [("orphan", 0), ("branch", 0)]
         );
         live.toggle_completed();
         assert_eq!(
             display(&live, Some("workspace")),
-            [("source", 0), ("branch", 1), ("orphan", 0)]
+            [("orphan", 0), ("source", 0), ("branch", 1)]
         );
     }
 
@@ -2776,18 +2785,18 @@ pub(crate) mod tests {
         assert_eq!(
             placements(&live),
             [
+                ("docs", 0, 0, None, rework.clone()),
+                ("review", 0, 1, into("main"), None),
+                ("rework", 0, 1, None, None),
+                ("jwt", 1, 1, None, None),
+                ("spike", 0, 2, into("auth"), rework),
+                ("tests", 0, 2, into("auth"), None),
                 ("tidy", 0, 0, None, None),
                 ("tidy-more", 1, 0, None, None),
-                ("rework", 0, 1, into("main"), None),
-                ("jwt", 1, 1, None, None),
-                ("review", 0, 1, None, None),
-                ("tests", 0, 2, into("auth"), None),
-                ("spike", 0, 2, into("auth"), rework.clone()),
-                ("docs", 0, 0, None, rework),
             ]
         );
         // Walking the list follows the same order.
-        assert_eq!(live.next("review", Some("workspace")).unwrap().id, "tests");
+        assert_eq!(live.next("jwt", Some("workspace")).unwrap().id, "spike");
     }
 
     /// A worktree made from one whose interactions are all hidden has no
@@ -2841,7 +2850,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             display(&live, Some("workspace")),
-            [("source", 0), ("sibling", 0), ("branch", 0)]
+            [("branch", 0), ("sibling", 0), ("source", 0)]
         );
     }
 
@@ -2871,28 +2880,24 @@ pub(crate) mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             ordered,
-            ["pending", "running", "other-pending", "other-running"]
+            ["other-running", "other-pending", "running", "pending"]
         );
 
         assert_eq!(
-            live.next("pending", Some("workspace")).unwrap().id,
-            "running"
-        );
-        assert_eq!(
-            live.next("running", Some("workspace")).unwrap().id,
+            live.next("other-running", Some("workspace")).unwrap().id,
             "other-pending"
         );
         assert_eq!(
-            live.previous("other-pending", Some("workspace"))
-                .unwrap()
-                .id,
+            live.next("other-pending", Some("workspace")).unwrap().id,
             "running"
         );
         assert_eq!(
-            live.previous("other-running", Some("workspace"))
-                .unwrap()
-                .id,
+            live.previous("running", Some("workspace")).unwrap().id,
             "other-pending"
+        );
+        assert_eq!(
+            live.previous("pending", Some("workspace")).unwrap().id,
+            "running"
         );
     }
 
@@ -2917,40 +2922,40 @@ pub(crate) mod tests {
         );
         let workspace = Some("workspace");
 
-        // Display order: pending, running | other-pending, other-running | third
+        // Display order: third | other-running, other-pending | running, pending
         assert_eq!(
-            live.next_workspace("pending", workspace).unwrap().id,
-            "other-pending"
+            live.next_workspace("third", workspace).unwrap().id,
+            "other-running"
         );
         assert_eq!(
-            live.next_workspace("running", workspace).unwrap().id,
-            "other-pending"
+            live.next_workspace("other-pending", workspace).unwrap().id,
+            "running"
         );
         assert_eq!(
             live.next_workspace("other-running", workspace).unwrap().id,
-            "third"
+            "running"
         );
-        assert!(live.next_workspace("third", workspace).is_none());
+        assert!(live.next_workspace("pending", workspace).is_none());
 
         // From the middle of a group, ctrl-k stops at that group's own first
         // entry before leaving it.
         assert_eq!(
-            live.previous_workspace("other-running", workspace)
-                .unwrap()
-                .id,
-            "other-pending"
-        );
-        assert_eq!(
             live.previous_workspace("other-pending", workspace)
                 .unwrap()
                 .id,
-            "pending"
+            "other-running"
         );
         assert_eq!(
-            live.previous_workspace("running", workspace).unwrap().id,
-            "pending"
+            live.previous_workspace("other-running", workspace)
+                .unwrap()
+                .id,
+            "third"
         );
-        assert!(live.previous_workspace("pending", workspace).is_none());
+        assert_eq!(
+            live.previous_workspace("pending", workspace).unwrap().id,
+            "running"
+        );
+        assert!(live.previous_workspace("third", workspace).is_none());
     }
 
     /// The group jump crosses more of the list per press than j/k, so it has
@@ -2972,16 +2977,16 @@ pub(crate) mod tests {
         );
         let workspace = Some("workspace");
 
-        live.cursor_next_workspace("pending", workspace);
-        live.cursor_next_workspace("pending", workspace);
+        live.cursor_previous_workspace("pending", workspace);
+        live.cursor_previous_workspace("pending", workspace);
 
         assert_eq!(live.cursor("pending"), "third");
         assert!(live.due("pending").is_none());
 
         // Back the way it came, onto the interaction already on screen: two
         // groups crossed in each direction, and nothing to load at the end.
-        live.cursor_previous_workspace("pending", workspace);
-        live.cursor_previous_workspace("pending", workspace);
+        live.cursor_next_workspace("pending", workspace);
+        live.cursor_next_workspace("pending", workspace);
         assert_eq!(live.cursor("pending"), "pending");
         assert!(live.pending("pending").is_none());
     }
@@ -3001,8 +3006,8 @@ pub(crate) mod tests {
         live.open(
             vec![
                 interaction("current", InteractionActivity::Pending),
-                first,
                 second,
+                first,
             ],
             vec![],
         );
@@ -3014,7 +3019,8 @@ pub(crate) mod tests {
     }
 
     /// A stopped Interaction stays in its own Workspace's group, in item
-    /// order: its row says that it stopped, so it needs no place of its own.
+    /// order read bottom up: its row says that it stopped, so it needs no
+    /// place of its own.
     #[test]
     fn stopped_interactions_stay_in_their_workspace_group() {
         let mut other_stopped = interaction("other-stopped", InteractionActivity::Stopped);
@@ -3040,13 +3046,13 @@ pub(crate) mod tests {
         };
         assert_eq!(
             ordered(&live),
-            ["pending", "stopped", "other-stopped", "other-running"]
+            ["other-running", "other-stopped", "stopped", "pending"]
         );
 
         // And in Workspace scope, where only this Workspace's entries are
-        // listed, in item order.
+        // listed, in item order read bottom up.
         live.toggle_workspace_scope();
-        assert_eq!(ordered(&live), ["pending", "stopped"]);
+        assert_eq!(ordered(&live), ["stopped", "pending"]);
     }
 
     #[test]
@@ -3198,12 +3204,12 @@ pub(crate) mod tests {
         for character in "docs".chars() {
             live.type_filter(Edit::Push(character), "one", Some("workspace"));
         }
-        assert_eq!(live.cursor("one"), "two");
+        assert_eq!(live.cursor("one"), "three");
 
         // Still matching as the term changes, so it stays put.
         live.cursor_next("one", Some("workspace"));
         live.type_filter(Edit::Backspace, "one", Some("workspace"));
-        assert_eq!(live.cursor("one"), "three");
+        assert_eq!(live.cursor("one"), "two");
     }
 
     #[test]

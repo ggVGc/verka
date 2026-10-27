@@ -366,11 +366,12 @@ mod tests {
             .handle_key(KeyCode::Char('d').into(), "")
             .unwrap();
         event_loop.carry_out_requests("").unwrap();
+        // The list sorts bottom up, so `s2` is drawn above `s1`.
         for id in ["s2", "s1"] {
             let key = if id == "s2" {
-                KeyCode::Down
-            } else {
                 KeyCode::Up
+            } else {
+                KeyCode::Down
             };
             event_loop.handle_key(key.into(), "").unwrap();
             assert_eq!(

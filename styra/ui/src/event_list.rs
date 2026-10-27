@@ -2678,7 +2678,7 @@ mod tests {
         // and the name said once.
         assert_eq!(shown.len(), 2, "{shown:#?}");
         assert!(
-            shown[0].contains("Branch to:  ■  Retry backoff · paused"),
+            shown[0].contains("Branch to:  ■  Retry backoff  paused"),
             "{shown:#?}"
         );
         assert!(shown[1].contains("« Backoff now doubles up to 30s."));

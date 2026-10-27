@@ -105,7 +105,7 @@ pub enum InteractionRow<'a> {
         /// The cursor's interaction names this one as its `branched_from`, so
         /// it is marked for the eye to find.
         source_of_selected: bool,
-        provider: &'a str,
+        /// The model's id, which names its provider too.
         model: &'a str,
         /// The Git branch checked out for this interaction. `None` means the
         /// interaction is not associated with a Git checkout; a detached
@@ -237,6 +237,10 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
         _ => block,
     };
     let inner = block.inner(area);
+    let tree = (0..view.rows.len())
+        .map(|index| tree_columns(&view.rows, index))
+        .collect::<Vec<_>>();
+    let widths = column_widths(view, &tree, inner.width.into());
     // Every other interaction under a heading is drawn on a faint stripe, so
     // the eye can follow a row across the pane and down to its message line.
     // The cursor's row is drawn on a slightly lighter tint in its place.
@@ -244,10 +248,15 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
     let mut items = view
         .rows
         .iter()
-        .enumerate()
-        .map(|(index, row)| {
-            let columns = tree_columns(&view.rows, index);
-            let mut item = row_item(row, view.all_workspaces, &columns, inner.width.into());
+        .zip(&tree)
+        .map(|(row, columns)| {
+            let mut item = row_item(
+                row,
+                view.all_workspaces,
+                columns,
+                inner.width.into(),
+                &widths,
+            );
             match row {
                 InteractionRow::Workspace(_) | InteractionRow::Directory { .. } => striped = false,
                 InteractionRow::Interaction {
@@ -439,15 +448,161 @@ fn tree_prefix(columns: &[bool], connected: bool) -> String {
         .collect()
 }
 
+/// How wide the first column of an interaction row is — its tree lines,
+/// status block and name — whatever the names in the list. A name that does
+/// not fit is cut short, so a long prompt cannot push the other columns out.
+const LEAD_COLUMN_WIDTH: usize = 40;
+
+/// How wide each aligned column of the interaction rows is drawn, so the
+/// branch, the tags, the model, and the state labels each
+/// start at the same place down the list. The first column is a set width —
+/// see [`LEAD_COLUMN_WIDTH`]. Each other is as wide as its widest entry, but
+/// no wider than its share of the pane. Every cell is held to its column's
+/// width — see [`fit_cell`] — so a longer entry is cut short rather than
+/// moving the rest of its row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ColumnWidths {
+    /// Whether any row is flagged as leaving work uncommitted, so every row
+    /// keeps room for the flag and the names start together.
+    uncommitted: bool,
+    lead: usize,
+    tags: usize,
+    branch: usize,
+    model: usize,
+}
+
+/// See [`ColumnWidths`]. `tree` is each row's [`tree_columns`], and `width`
+/// the pane's inner width.
+fn column_widths(
+    view: &InteractionNavigator<'_>,
+    tree: &[Vec<bool>],
+    width: usize,
+) -> ColumnWidths {
+    let mut widths = ColumnWidths {
+        uncommitted: view.rows.iter().any(|row| {
+            matches!(
+                row,
+                InteractionRow::Interaction {
+                    uncommitted: true,
+                    ..
+                }
+            )
+        }),
+        ..ColumnWidths::default()
+    };
+    for (row, columns) in view.rows.iter().zip(tree) {
+        if let Some(cells) = interaction_cells(row, view.all_workspaces, columns, &widths) {
+            widths.tags = widths.tags.max(spans_width(&cells.tags));
+            widths.branch = widths.branch.max(spans_width(&cells.branch));
+            widths.model = widths.model.max(spans_width(&cells.model));
+        }
+    }
+    // The columns leave room for a label after them, the model taking its
+    // share first, and the branch and then the tags what remains.
+    let lead = LEAD_COLUMN_WIDTH.min(width / 2);
+    let mut room = width.saturating_sub(lead + LABEL_ROOM);
+    let mut take = |natural: usize| {
+        let taken = natural.min(width / 4).min(room);
+        room -= taken;
+        taken
+    };
+    let model = take(widths.model);
+    let branch = take(widths.branch.min(BRANCH_COLUMN_LIMIT));
+    let tags = take(widths.tags);
+    ColumnWidths {
+        uncommitted: widths.uncommitted,
+        lead,
+        tags,
+        branch,
+        model,
+    }
+}
+
+/// The widest the branch column grows, the spaces setting it off included. A worktree drawn
+/// without a heading has its branch on its row, and an agent's branch is
+/// long — it is the target the other worktrees' headings name after `→` — so
+/// it is cut short here rather than taking the pane's room from the columns
+/// after it. Its start, which says what the work is, still shows.
+const BRANCH_COLUMN_LIMIT: usize = 32;
+
+/// How much of the row the aligned columns leave for the labels after them:
+/// enough for `  NEWLY IDLE`, so the state a row is in is not pushed off the
+/// edge of a narrow pane.
+const LABEL_ROOM: usize = 14;
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|span| span.content.width()).sum()
+}
+
+/// Holds the cell of `spans` from `start` on to exactly `width` cells: cut
+/// short with `…` where it is wider, and spaced out where it is narrower. So
+/// nothing in one cell can move the cells after it, and every column stays
+/// lined up whatever is in it.
+fn fit_cell(spans: &mut Vec<Span<'static>>, start: usize, width: usize) {
+    let drawn = spans_width(&spans[start..]);
+    if drawn > width {
+        // Room for the `…` the cut ends with, in the style of the span cut.
+        let budget = width.saturating_sub(1);
+        let mut used = 0;
+        let mut at = start;
+        while at < spans.len() {
+            let span_width = spans[at].content.width();
+            if used + span_width > budget {
+                break;
+            }
+            used += span_width;
+            at += 1;
+        }
+        let mut kept = String::new();
+        let style = spans.get(at).map_or_else(Style::default, |span| span.style);
+        if let Some(span) = spans.get(at) {
+            for c in span.content.chars() {
+                let c_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                if used + c_width > budget {
+                    break;
+                }
+                used += c_width;
+                kept.push(c);
+            }
+        }
+        spans.truncate(at);
+        if width > 0 {
+            kept.push('…');
+            used += 1;
+        }
+        spans.push(Span::styled(kept, style));
+        if used < width {
+            spans.push(Span::raw(" ".repeat(width - used)));
+        }
+    } else if drawn < width {
+        spans.push(Span::raw(" ".repeat(width - drawn)));
+    }
+}
+
+/// An interaction row's first line, in the columns [`ColumnWidths`] lines up,
+/// before the cursor's row is lifted and the others faded.
+struct InteractionCells {
+    /// The tree lines, status block and name.
+    lead: Vec<Span<'static>>,
+    /// Which span of `lead` is the name.
+    name_index: usize,
+    tags: Vec<Span<'static>>,
+    branch: Vec<Span<'static>>,
+    model: Vec<Span<'static>>,
+    labels: Vec<Span<'static>>,
+}
+
 /// `under_workspaces` says whether the list is drawn under Workspace
 /// headings, which every row then steps in beneath. `columns` are the
 /// worktree headings it is drawn beneath — see [`tree_columns`]. `width` is
 /// the pane's inner width, which a Workspace heading's rule runs out to.
+/// `widths` lines the interaction rows' columns up.
 fn row_item(
     row: &InteractionRow<'_>,
     under_workspaces: bool,
     columns: &[bool],
     width: usize,
+    widths: &ColumnWidths,
 ) -> Vec<Line<'static>> {
     // Bright, undimmed tree lines make membership readable independently of
     // heading colors, including when the heading has scrolled out of view.
@@ -488,9 +643,12 @@ fn row_item(
             // Where its work goes, quietly: the nesting already says so for a
             // worktree under another's heading, but not for one whose target
             // is not listed, nor once the heading above has scrolled away.
+            // The target starts where the rows' branches do, in the gap
+            // before the branch column, so it reads down the list with them.
             if let Some(into) = into {
+                fit_cell(&mut spans, 0, widths.lead.saturating_sub(1));
                 spans.push(Span::styled(
-                    format!("  → {into}"),
+                    format!(" → {into}"),
                     Style::default().fg(theme::MUTED_TEXT),
                 ));
             }
@@ -499,120 +657,47 @@ fn row_item(
         InteractionRow::Interaction { .. } => {}
     }
     let InteractionRow::Interaction {
-        name,
-        level,
         depth,
-        branched_from,
-        branches,
-        source_of_selected,
-        provider,
-        model,
-        branch,
-        expected_branch,
-        status,
         selected,
-        loading,
-        newly_idle,
-        stop_reason,
-        rate_limited,
-        uncommitted,
-        completion,
-        tags,
         last_message,
         ..
     } = row
     else {
         unreachable!()
     };
-    // A branch hangs from its source's row rather than joining the worktree's
-    // line itself, so the line only carries on past it.
-    let directory_edge = tree_prefix(columns, *depth == 0);
-    let edge = branch_indent(*depth);
-    let mut main = vec![
-        Span::styled(format!("{workspace_edge}{directory_edge}"), group_style),
-        Span::styled(edge.clone(), Style::default().fg(theme::INACTIVE)),
-        status_block(*status, *selected),
-        Span::raw(" "),
-    ];
-    // Work left uncommitted is flagged ahead of the prompt, where the eye
-    // starts on every row, rather than at the end of a line of labels.
-    if *uncommitted {
-        main.push(Span::styled(
-            "! ",
-            Style::default()
-                .fg(theme::UNCOMMITTED)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    // The prompt stays brighter than the gray message line beneath it. The
-    // cursor's prompt is bold and in its own color, whatever its status.
-    let name_style = if *selected {
-        Style::default()
-            .fg(theme::SELECTED_LIVE_INTERACTION_TEXT)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT)
+    let Some(cells) = interaction_cells(row, under_workspaces, columns, widths) else {
+        unreachable!()
     };
-    // The source of the cursor's branch is underlined, so a branch drawn
-    // under another checkout than its source's can still be traced to it.
-    let name_style = if *source_of_selected {
-        name_style.add_modifier(Modifier::UNDERLINED)
-    } else {
-        name_style
-    };
-    let name_index = main.len();
-    main.push(Span::styled(name.to_string(), name_style));
-    // Tags belong to the prompt they label, so they follow it directly.
-    if !tags.is_empty() {
-        main.push(Span::styled(
-            format!(" #{}", tags.join(" #")),
-            Style::default().fg(theme::INTERACTION_TAG),
-        ));
+    let InteractionCells {
+        lead: mut main,
+        name_index,
+        tags,
+        branch,
+        model,
+        labels,
+        ..
+    } = cells;
+    // The name, and the source after it, end the lead, so they are what a
+    // long lead loses.
+    fit_cell(&mut main, 0, widths.lead);
+    for (cell, width) in [
+        (branch, widths.branch),
+        (tags, widths.tags),
+        (model, widths.model),
+    ] {
+        let start = main.len();
+        main.extend(cell);
+        fit_cell(&mut main, start, width);
     }
-    // Where the conversation came from, and went, when the rows are not
-    // nested to say so: the tree is laid out by where the work goes.
-    if let Some(source) = branched_from {
-        main.push(Span::styled(
-            format!(" ⑂ {source}"),
-            Style::default().fg(theme::MUTED_TEXT),
-        ));
+    main.extend(labels);
+    // No trailing spaces where nothing follows to be lined up.
+    while main.len() > name_index + 1
+        && main
+            .last()
+            .is_some_and(|span| span.content.trim().is_empty())
+    {
+        main.pop();
     }
-    if *branches > 0 {
-        main.push(Span::styled(
-            format!(" ⑂{branches}"),
-            Style::default().fg(theme::MUTED_TEXT),
-        ));
-    }
-    if let Some(expected) = expected_branch {
-        main.push(Span::styled(
-            format!(
-                " · branch changed: {expected} → {}",
-                branch.unwrap_or("detached head")
-            ),
-            Style::default()
-                .fg(theme::UNCOMMITTED)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    // Nested rows still show a switched branch even beneath a worktree heading.
-    if let Some(branch) = branch.filter(|_| *level == 0 && expected_branch.is_none()) {
-        main.push(Span::styled(
-            format!(" · {branch}"),
-            Style::default().fg(theme::ACCENT),
-        ));
-    }
-    main.push(Span::styled(
-        format!(" · {provider} · {model}"),
-        Style::default().fg(theme::INTERACTION_STATUS_INFO),
-    ));
-    main.extend(state_labels(
-        *status,
-        stop_reason.as_deref(),
-        *loading,
-        rate_limited.as_deref(),
-        *newly_idle,
-        *completion,
-    ));
     // Everything after the name is lifted toward white and bolded on the
     // cursor's row, and faded on every other, so the cursor's row stands out.
     // The tree edges, status marker and name keep their base styles here;
@@ -629,6 +714,7 @@ fn row_item(
         span.style = adjust(span.style);
     }
     let message_style = adjust(message_style);
+    let edge = branch_indent(*depth);
     let mut lines = vec![Line::from(main)];
     if let Some(text) = last_message {
         let directory_continuation = tree_prefix(columns, false);
@@ -648,6 +734,168 @@ fn row_item(
         ]));
     }
     lines
+}
+
+/// The columns of an interaction row's first line — `None` for a heading.
+/// See [`row_item`] for the arguments.
+fn interaction_cells(
+    row: &InteractionRow<'_>,
+    under_workspaces: bool,
+    columns: &[bool],
+    widths: &ColumnWidths,
+) -> Option<InteractionCells> {
+    let InteractionRow::Interaction {
+        name,
+        level,
+        depth,
+        branched_from,
+        branches,
+        source_of_selected,
+        model,
+        branch,
+        expected_branch,
+        status,
+        selected,
+        loading,
+        newly_idle,
+        stop_reason,
+        rate_limited,
+        uncommitted,
+        completion,
+        tags,
+        ..
+    } = row
+    else {
+        return None;
+    };
+    let group_style = Style::default()
+        .fg(theme::TEXT)
+        .add_modifier(Modifier::BOLD);
+    let workspace_edge = if under_workspaces { " " } else { "" };
+    // A branch hangs from its source's row rather than joining the worktree's
+    // line itself, so the line only carries on past it.
+    let directory_edge = tree_prefix(columns, *depth == 0);
+    let edge = branch_indent(*depth);
+    let mut main = vec![
+        Span::styled(format!("{workspace_edge}{directory_edge}"), group_style),
+        Span::styled(edge.clone(), Style::default().fg(theme::INACTIVE)),
+        status_block(*status, *selected),
+        Span::raw(" "),
+    ];
+    // Work left uncommitted is flagged ahead of the prompt, where the eye
+    // starts on every row, rather than at the end of a line of labels.
+    if *uncommitted {
+        main.push(Span::styled(
+            "! ",
+            Style::default()
+                .fg(theme::UNCOMMITTED)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else if widths.uncommitted {
+        main.push(Span::raw("  "));
+    }
+    // The prompt stays brighter than the gray message line beneath it. The
+    // cursor's prompt is bold and in its own color, whatever its status.
+    let name_style = if *selected {
+        Style::default()
+            .fg(theme::SELECTED_LIVE_INTERACTION_TEXT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT)
+    };
+    // The source of the cursor's branch is underlined, so a branch drawn
+    // under another checkout than its source's can still be traced to it.
+    let name_style = if *source_of_selected {
+        name_style.add_modifier(Modifier::UNDERLINED)
+    } else {
+        name_style
+    };
+    // Where the conversation came from, and went, when the rows are not
+    // nested to say so — the tree is laid out by where the work goes — as an
+    // icon ahead of the name: `↳` for a branch of another interaction, `↱N`
+    // for one with N branches drawn elsewhere. Plain arrows rather than `⑂`,
+    // which few terminal fonts draw. The icon starts the name itself, so a
+    // row without one keeps no room for it.
+    let mut fork = String::new();
+    if branched_from.is_some() {
+        fork.push('↳');
+    }
+    if *branches > 0 {
+        fork.push_str(&format!("↱{branches}"));
+    }
+    if !fork.is_empty() {
+        main.push(Span::styled(
+            format!("{fork} "),
+            Style::default().fg(theme::MUTED_TEXT),
+        ));
+    }
+    let name_index = main.len();
+    // A prompt's line breaks and tabs are not drawn, which would run its
+    // words together; they read as the spaces they stand for.
+    let name = name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>();
+    main.push(Span::styled(name, name_style));
+    // The source is named after the name, in the first column, where it is
+    // the first thing a long row gives up.
+    if let Some(source) = branched_from {
+        main.push(Span::styled(
+            format!(" from {source}"),
+            Style::default().fg(theme::MUTED_TEXT),
+        ));
+    }
+    // Set off from the branch before them like every other column.
+    let mut tag_cell = Vec::new();
+    if !tags.is_empty() {
+        tag_cell.push(Span::styled(
+            format!("  #{}", tags.join(" #")),
+            Style::default().fg(theme::INTERACTION_TAG),
+        ));
+    }
+    let mut branch_cell = Vec::new();
+    // Worktree rows leave the branch to their heading.
+    if let Some(branch) = branch.filter(|_| *level == 0 && expected_branch.is_none()) {
+        branch_cell.push(Span::styled(
+            format!("  {branch}"),
+            Style::default().fg(theme::ACCENT),
+        ));
+    }
+    let model = vec![Span::styled(
+        format!("  {model}"),
+        Style::default().fg(theme::INTERACTION_STATUS_INFO),
+    )];
+    let mut labels = Vec::new();
+    // A switch away from the assigned branch is a warning, not the branch
+    // column's entry, so it is told in full among the labels rather than cut
+    // to the column. Nested rows still show it beneath a worktree heading.
+    if let Some(expected) = expected_branch {
+        labels.push(Span::styled(
+            format!(
+                "  branch changed: {expected} → {}",
+                branch.unwrap_or("detached head")
+            ),
+            Style::default()
+                .fg(theme::UNCOMMITTED)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    labels.extend(state_labels(
+        *status,
+        stop_reason.as_deref(),
+        *loading,
+        rate_limited.as_deref(),
+        *newly_idle,
+        *completion,
+    ));
+    Some(InteractionCells {
+        lead: main,
+        name_index,
+        tags: tag_cell,
+        branch: branch_cell,
+        model,
+        labels,
+    })
 }
 
 /// An interaction's last message as its row's second line has it, for any
@@ -696,17 +944,17 @@ pub(crate) fn state_labels(
             InteractionStatus::Stopped(tone) => tone.color(),
             _ => theme::INTERACTION_STATUS_INFO,
         };
-        spans.push(Span::styled(format!(" · {why}"), Style::default().fg(tone)));
+        spans.push(Span::styled(format!("  {why}"), Style::default().fg(tone)));
     }
     if loading {
         spans.push(Span::styled(
-            " · loading…",
+            "  loading…",
             Style::default().fg(theme::INACTIVE),
         ));
     }
     if matches!(status, InteractionStatus::IdleFailed) {
         spans.push(Span::styled(
-            " · TURN FAILED",
+            "  TURN FAILED",
             Style::default()
                 .fg(theme::ERROR)
                 .add_modifier(Modifier::BOLD),
@@ -714,7 +962,7 @@ pub(crate) fn state_labels(
     }
     if let Some(window) = rate_limited {
         spans.push(Span::styled(
-            format!(" · RATE LIMITED ({window})"),
+            format!("  RATE LIMITED ({window})"),
             Style::default()
                 .fg(theme::ERROR)
                 .add_modifier(Modifier::BOLD),
@@ -722,7 +970,7 @@ pub(crate) fn state_labels(
     }
     if newly_idle {
         spans.push(Span::styled(
-            " · NEWLY IDLE",
+            "  NEWLY IDLE",
             Style::default()
                 .fg(theme::SUCCESS)
                 .add_modifier(Modifier::BOLD),
@@ -731,12 +979,12 @@ pub(crate) fn state_labels(
     let badge = match completion {
         // Sealed by integration, which is the part worth reading.
         CompletionState::Sealed if status == InteractionStatus::Stopped(StopTone::Integrated) => {
-            Some((" · INTEGRATED", theme::STOP_INTEGRATED))
+            Some(("  INTEGRATED", theme::STOP_INTEGRATED))
         }
         CompletionState::Active => None,
-        CompletionState::Completed => Some((" · COMPLETED", theme::STOP_COMPLETED)),
-        CompletionState::Abandoned => Some((" · ABANDONED", theme::STOP_ABANDONED)),
-        CompletionState::Sealed => Some((" · SEALED", theme::STOP_SEALED)),
+        CompletionState::Completed => Some(("  COMPLETED", theme::STOP_COMPLETED)),
+        CompletionState::Abandoned => Some(("  ABANDONED", theme::STOP_ABANDONED)),
+        CompletionState::Sealed => Some(("  SEALED", theme::STOP_SEALED)),
     };
     if let Some((badge, color)) = badge {
         spans.push(Span::styled(
@@ -807,7 +1055,13 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
 
     fn rendered(view: &InteractionNavigator<'_>) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        rendered_at(view, 80)
+    }
+
+    /// The screen in a pane `width` cells wide, for a row too long for the
+    /// usual one.
+    fn rendered_at(view: &InteractionNavigator<'_>, width: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
         terminal
             .draw(|frame| {
                 render(frame, view, frame.area());
@@ -822,6 +1076,23 @@ mod tests {
             .collect()
     }
 
+    /// The rendered screen with each run of spaces cut to one, for checking
+    /// what follows what on a row regardless of how its columns are padded.
+    fn squeezed(screen: &str) -> String {
+        screen
+            .split(' ')
+            .filter(|word| !word.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// A lead column, padded out to the width it is held to in the test
+    /// pane: half the 78 cells inside its border, short of
+    /// [`LEAD_COLUMN_WIDTH`].
+    fn lead(text: &str) -> String {
+        format!("{text:<39}")
+    }
+
     fn row(
         name: &'static str,
         depth: usize,
@@ -834,7 +1105,6 @@ mod tests {
             branches: 0,
             source_of_selected: false,
             depth,
-            provider: "codex",
             model: "gpt-5",
             branch: None,
             expected_branch: None,
@@ -871,9 +1141,9 @@ mod tests {
                 rows: vec![switched],
                 ..many_rows(0)
             };
-            let screen = rendered(&view);
+            let screen = squeezed(&rendered(&view));
             assert!(
-                screen.contains(&format!("branch changed: assigned → {actual}")),
+                screen.contains("task gpt-5 branch changed: assi"),
                 "{screen}"
             );
         }
@@ -888,8 +1158,14 @@ mod tests {
             ..many_rows(0)
         };
         let screen = rendered(&view);
-        assert!(screen.contains("┃ ■  source · codex"), "{screen}");
-        assert!(screen.contains("┃  └─  ■  branch · codex"), "{screen}");
+        assert!(
+            screen.contains(&format!("┃{}  gpt-5", lead(" ■  source"))),
+            "{screen}"
+        );
+        assert!(
+            screen.contains(&format!("┃{}  gpt-5", lead("  └─  ■  branch"))),
+            "{screen}"
+        );
         assert!(screen.contains("┃         « forked"), "{screen}");
     }
 
@@ -913,7 +1189,6 @@ mod tests {
                     branches: 0,
                     source_of_selected: false,
                     depth: 0,
-                    provider: "codex",
                     model: "gpt-5",
                     branch: Some("fix"),
                     expected_branch: None,
@@ -931,13 +1206,13 @@ mod tests {
                 },
             ],
         };
-        let screen = rendered(&view);
+        let screen = rendered_at(&view, 120);
         assert!(screen.contains("Payments"), "{screen}");
         assert!(
-            screen.contains("repair checkout #bug #urgent · fix · codex · gpt-5"),
+            squeezed(&screen).contains("repair checkout fix #bug #urgent gpt-5 NEWLY IDLE"),
             "{screen}"
         );
-        assert!(screen.contains("· NEWLY IDLE"), "{screen}");
+        assert!(screen.contains("  NEWLY IDLE"), "{screen}");
         assert!(screen.contains("The checks are green."), "{screen}");
         assert_eq!(height(&view, 12), 5);
     }
@@ -955,7 +1230,6 @@ mod tests {
             branched_from: branched_from.map(Cow::Borrowed),
             branches: 0,
             source_of_selected: false,
-            provider: "claude",
             model: "sonnet",
             branch: Some("feature"),
             expected_branch: None,
@@ -1016,16 +1290,16 @@ mod tests {
         assert!(screen[1].starts_with("┃Payments ───"), "{screen:#?}");
         assert!(screen[1].ends_with("─┃"), "{screen:#?}");
         assert!(
-            screen[2].starts_with("┃  ●  alone · feature · claude"),
+            screen[2].starts_with(&format!("┃{}  feature  sonnet", lead("  ●  alone"))),
             "{screen:#?}"
         );
         assert!(screen[3].starts_with("┃ [checkout]"), "{screen:#?}");
         assert!(
-            screen[4].starts_with("┃ ├─  ●  first · claude "),
+            screen[4].starts_with(&format!("┃{}{:9}  sonnet ", lead(" ├─  ●  first"), "")),
             "{screen:#?}"
         );
         assert!(
-            screen[6].starts_with("┃ └─  ●  second · claude "),
+            screen[6].starts_with(&format!("┃{}{:9}  sonnet ", lead(" └─  ●  second"), "")),
             "{screen:#?}"
         );
 
@@ -1033,7 +1307,7 @@ mod tests {
         assert!(screen[7].starts_with("┃        « preview"), "{screen:#?}");
         assert!(screen[8].starts_with("┃ [other]"), "{screen:#?}");
         assert!(
-            screen[9].starts_with("┃ └─  ●  third · claude"),
+            screen[9].starts_with(&format!("┃{}{:9}  sonnet", lead(" └─  ●  third"), "")),
             "{screen:#?}"
         );
 
@@ -1049,17 +1323,17 @@ mod tests {
         };
         let screen = lines(&one);
         assert!(
-            screen[1].starts_with("┃ ●  alone · feature · claude"),
+            screen[1].starts_with(&format!("┃{}  feature  sonnet", lead(" ●  alone"))),
             "{screen:#?}"
         );
         assert!(screen[2].starts_with("┃[checkout]"), "{screen:#?}");
         assert!(
-            screen[3].starts_with("┃└─  ●  first · claude "),
+            screen[3].starts_with(&format!("┃{}{:9}  sonnet ", lead("└─  ●  first"), "")),
             "{screen:#?}"
         );
         assert!(screen[4].starts_with("┃       « preview"), "{screen:#?}");
         assert!(
-            screen[5].starts_with("┃ ●  outside · feature · claude"),
+            screen[5].starts_with(&format!("┃{}  feature  sonnet", lead(" ●  outside"))),
             "{screen:#?}"
         );
     }
@@ -1099,19 +1373,168 @@ mod tests {
             ..many_rows(0)
         };
         let screen = lines(&view);
+        // A fork icon starts the name it marks; the source a branch came from
+        // follows the name. With no branch on any row, a heading's arrow
+        // starts where the model does.
+        let row = |lead_text: &str, name: &str| {
+            format!("┃{}  sonnet", lead(&format!("{lead_text}  {name}")))
+        };
         let expected = [
-            "┃[auth-rework]  → main",
-            "┃├─  ●  rework ⑂1 · claude",
-            "┃│    └─  ●  try jwt · claude",
-            "┃├─  ●  review · claude",
-            "┃├─ [token-tests]  → styra/auth-rework",
-            "┃│  └─  ●  tests · claude",
-            "┃└─ [jwt-spike]  → styra/auth-rework",
-            "┃   └─  ●  spike ⑂ rework · claude",
+            format!("┃{:38} → main", "[auth-rework]"),
+            row("├─  ●", "↱1 rework"),
+            row("│    └─  ●", "try jwt"),
+            row("├─  ●", "review"),
+            format!("┃{:38} → styra/auth-rework", "├─ [token-tests]"),
+            row("│  └─  ●", "tests"),
+            format!("┃{:38} → styra/auth-rework", "└─ [jwt-spike]"),
+            row("   └─  ●", "↳ spike from rework"),
         ];
-        for (line, expected) in screen[1..].iter().zip(expected) {
-            assert!(line.starts_with(expected), "{screen:#?}");
+        for (line, expected) in screen[1..].iter().zip(&expected) {
+            assert!(line.starts_with(expected.as_str()), "{screen:#?}");
         }
+    }
+
+    /// An unheaded worktree's long agent branch — the target a heading names
+    /// after `→` — is cut to the branch column, so it moves no column after
+    /// it; a row with no branch of its own keeps the column empty.
+    #[test]
+    fn a_long_branch_is_cut_to_its_column() {
+        let mut long = placed("solo", 0, 0, None);
+        if let InteractionRow::Interaction { branch, .. } = &mut long {
+            *branch = Some("styra/align-live-interactions-columns-1792571015193");
+        }
+        let view = InteractionNavigator {
+            rows: vec![
+                placed("alone", 0, 0, None),
+                long,
+                directory("checkout", 0, Some("styra/align-live-interactions-columns")),
+                placed("first", 1, 0, None),
+            ],
+            ..many_rows(0)
+        };
+        let screen = lines(&view);
+        // The narrow test pane leaves the branch 17 cells after the model
+        // and room for a label.
+        assert!(
+            screen[1].starts_with(&format!("┃{}{:17}  sonnet", lead(" ●  alone"), "  feature")),
+            "{screen:#?}"
+        );
+        assert!(
+            screen[2].starts_with(&format!("┃{}  styra/align-li…  sonnet", lead(" ●  solo"))),
+            "{screen:#?}"
+        );
+        // The heading's merge target lines up with the rows' branches.
+        assert!(
+            screen[3].starts_with(&format!("┃{:38} → styra/align-live", "[checkout]")),
+            "{screen:#?}"
+        );
+        assert!(
+            screen[4].starts_with(&format!("┃{}{:17}  sonnet", lead("└─  ●  first"), "")),
+            "{screen:#?}"
+        );
+    }
+
+    /// The first column is a set width: a long name is cut short there, and
+    /// the branch and tags line up after it whatever the names.
+    #[test]
+    fn a_long_name_is_cut_at_the_first_column_and_tags_line_up() {
+        let bug = vec!["bug".to_owned()];
+        let mut long = placed(
+            "a prompt far too long to fit in the first column of the list",
+            0,
+            0,
+            None,
+        );
+        let mut short = placed("short", 0, 0, None);
+        for row in [&mut long, &mut short] {
+            if let InteractionRow::Interaction { tags, .. } = row {
+                *tags = &bug;
+            }
+        }
+        let view = InteractionNavigator {
+            rows: vec![long, short],
+            ..many_rows(0)
+        };
+        // Wide enough that the branch and tags after the name are not cut.
+        let screen = rendered_at(&view, 120)
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(120)
+            .map(|line| line.iter().collect::<String>())
+            .collect::<Vec<_>>();
+        assert!(
+            screen[1]
+                .starts_with("┃ ●  a prompt far too long to fit in the…  feature  #bug  sonnet"),
+            "{screen:#?}"
+        );
+        assert!(
+            screen[2].starts_with(&format!("┃{:40}  feature  #bug  sonnet", " ●  short")),
+            "{screen:#?}"
+        );
+    }
+
+    /// Where a cell's column, held to a share of the pane, is narrower than
+    /// the cell, the cell is cut short there: the columns after it stay where
+    /// every other row has them.
+    #[test]
+    fn a_cell_wider_than_its_column_is_cut_and_moves_nothing() {
+        let many = ["refactor", "performance", "urgent", "frontend", "backend"]
+            .map(String::from)
+            .to_vec();
+        let mut wide = placed("wide", 0, 0, None);
+        let mut narrow = placed("narrow", 0, 0, None);
+        if let InteractionRow::Interaction {
+            tags,
+            model,
+            stop_reason,
+            ..
+        } = &mut wide
+        {
+            *tags = &many;
+            *model = "gpt-5.1-codex-max-preview";
+            *stop_reason = Some("paused".into());
+        }
+        if let InteractionRow::Interaction { stop_reason, .. } = &mut narrow {
+            *stop_reason = Some("paused".into());
+        }
+        let view = InteractionNavigator {
+            rows: vec![wide, narrow],
+            ..many_rows(0)
+        };
+        for width in [80u16, 120] {
+            let screen = rendered_at(&view, width)
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(width.into())
+                .map(|line| line.iter().collect::<String>())
+                .collect::<Vec<_>>();
+            let at = |line: &str, needle: &str| {
+                line.find(needle)
+                    .map(|byte| line[..byte].chars().count())
+                    .unwrap_or_else(|| panic!("no {needle:?} in {screen:#?}"))
+            };
+            assert!(screen[1].contains('…'), "{screen:#?}");
+            for (wide, narrow) in [("  gpt", "  sonnet"), ("  paused", "  paused")] {
+                assert_eq!(at(&screen[1], wide), at(&screen[2], narrow), "{screen:#?}");
+            }
+        }
+    }
+
+    /// One row's uncommitted flag keeps room on every row, so the names
+    /// still start together; a prompt's line breaks read as spaces.
+    #[test]
+    fn names_line_up_beside_an_uncommitted_flag() {
+        let mut flagged = placed("flagged", 0, 0, None);
+        if let InteractionRow::Interaction { uncommitted, .. } = &mut flagged {
+            *uncommitted = true;
+        }
+        let view = InteractionNavigator {
+            rows: vec![flagged, placed("two\nlines", 0, 0, None)],
+            ..many_rows(0)
+        };
+        let screen = lines(&view);
+        assert!(screen[1].starts_with("┃ ●  ! flagged "), "{screen:#?}");
+        assert!(screen[2].starts_with("┃ ●    two lines "), "{screen:#?}");
     }
 
     /// A stopped entry is one the operator has to decide whether to resume,
@@ -1133,7 +1556,6 @@ mod tests {
                 branches: 0,
                 source_of_selected: false,
                 depth: 0,
-                provider: "claude",
                 model: "sonnet",
                 branch: None,
                 expected_branch: None,
@@ -1150,7 +1572,7 @@ mod tests {
                 last_message: None,
             }],
         };
-        assert!(rendered(&view).contains("repair checkout · claude · sonnet · paused"));
+        assert!(squeezed(&rendered(&view)).contains("repair checkout sonnet paused"));
     }
 
     /// A turn that failed leaves the agent idle and taking messages, but the
@@ -1172,7 +1594,6 @@ mod tests {
                 branches: 0,
                 source_of_selected: false,
                 depth: 0,
-                provider: "claude",
                 model: "sonnet",
                 branch: None,
                 expected_branch: None,
@@ -1189,7 +1610,7 @@ mod tests {
                 last_message: None,
             }],
         };
-        assert!(rendered(&view).contains("repair checkout · claude · sonnet · TURN FAILED"));
+        assert!(squeezed(&rendered(&view)).contains("repair checkout sonnet TURN FAILED"));
         assert_eq!(status_marker(InteractionStatus::IdleFailed).1, theme::ERROR);
     }
 
@@ -1213,7 +1634,6 @@ mod tests {
                 branches: 0,
                 source_of_selected: false,
                 depth: 0,
-                provider: "claude",
                 model: "sonnet",
                 branch: None,
                 expected_branch: None,
@@ -1230,8 +1650,8 @@ mod tests {
                 last_message: None,
             }],
         };
-        assert!(rendered(&view)
-            .contains("repair checkout · claude · sonnet · RATE LIMITED (five_hour)"));
+        assert!(squeezed(&rendered_at(&view, 120))
+            .contains("repair checkout sonnet RATE LIMITED (five_hour)"));
     }
 
     fn many_rows(selected: usize) -> InteractionNavigator<'static> {
@@ -1251,7 +1671,6 @@ mod tests {
                     branches: 0,
                     source_of_selected: false,
                     depth: 0,
-                    provider: "claude",
                     model: "sonnet",
                     branch: None,
                     expected_branch: None,
@@ -1363,7 +1782,7 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         // The first cell drawing `symbol` on line `y`: `t` starts each name,
-        // `c` the provider, `d` the message.
+        // `o` the model, `d` the message.
         let color = |symbol: &str, y: u16| {
             let x = (0..80)
                 .find(|&x| buffer[(x, y)].symbol() == symbol)
@@ -1388,12 +1807,12 @@ mod tests {
         // The cursor's row on lines 1 and 2, the next row on lines 3 and 4.
         assert_eq!(color("●", 1), theme::SUCCESS);
         assert_eq!(color("t", 1), theme::SELECTED_LIVE_INTERACTION_TEXT);
-        assert_eq!(color("c", 1), brightened(theme::INTERACTION_STATUS_INFO));
+        assert_eq!(color("o", 1), brightened(theme::INTERACTION_STATUS_INFO));
         assert_eq!(color("d", 2), brightened(theme::SUBORDINATE_TEXT));
         assert_eq!(color("●", 3), unselected(theme::SUCCESS));
         assert_eq!(color("t", 3), unselected(theme::TEXT));
         assert_eq!(
-            color("c", 3),
+            color("o", 3),
             unselected(faded(theme::INTERACTION_STATUS_INFO))
         );
         assert_eq!(color("d", 4), unselected(faded(theme::SUBORDINATE_TEXT)));
@@ -1427,9 +1846,9 @@ mod tests {
     #[test]
     fn each_completion_state_has_its_own_badge() {
         for (completion, badge) in [
-            (CompletionState::Completed, "· COMPLETED"),
-            (CompletionState::Abandoned, "· ABANDONED"),
-            (CompletionState::Sealed, "· SEALED"),
+            (CompletionState::Completed, "  COMPLETED"),
+            (CompletionState::Abandoned, "  ABANDONED"),
+            (CompletionState::Sealed, "  SEALED"),
         ] {
             let mut view = many_rows(0);
             view.rows.truncate(1);
@@ -1442,9 +1861,9 @@ mod tests {
             let screen = rendered(&view);
             assert!(screen.contains(badge), "{completion:?}: {screen}");
             for (other, other_badge) in [
-                (CompletionState::Completed, "· COMPLETED"),
-                (CompletionState::Abandoned, "· ABANDONED"),
-                (CompletionState::Sealed, "· SEALED"),
+                (CompletionState::Completed, "  COMPLETED"),
+                (CompletionState::Abandoned, "  ABANDONED"),
+                (CompletionState::Sealed, "  SEALED"),
             ] {
                 if other != completion {
                     assert!(!screen.contains(other_badge), "{completion:?}: {screen}");
@@ -1474,7 +1893,7 @@ mod tests {
         }
         let screen = rendered(&view);
         assert!(screen.contains("✓"), "{screen}");
-        assert!(screen.contains("· INTEGRATED"), "{screen}");
+        assert!(screen.contains("  INTEGRATED"), "{screen}");
         assert!(!screen.contains("SEALED"), "{screen}");
     }
 }

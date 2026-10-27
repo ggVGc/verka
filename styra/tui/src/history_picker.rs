@@ -166,7 +166,12 @@ mod tests {
             completed: Default::default(),
             integration: None,
         }];
-        let rows = rows(&history, &LiveInteractions::default(), &workspaces, &sessions);
+        let rows = rows(
+            &history,
+            &LiveInteractions::default(),
+            &workspaces,
+            &sessions,
+        );
         for query in ["cptl", "rpp", "session-a"] {
             assert_eq!(
                 run_keys(

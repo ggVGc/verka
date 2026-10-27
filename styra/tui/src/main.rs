@@ -601,7 +601,8 @@ fn main() -> Result<()> {
             }
             RunOutcome::JumpTo(index) => {
                 if let Some(session_id) = history.entries().get(index).cloned() {
-                    if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id) {
+                    if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id)
+                    {
                         history.arrive(index);
                     }
                 }
