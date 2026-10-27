@@ -439,9 +439,12 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                 .unwrap_or(u16::MAX)
                 .saturating_add(FILE_TREE_PADDING + 1)
         });
-        // The layers, beside or under the file list, with what the line
-        // cursor is over standing out.
-        let legend = view.layers.map(|layers| legend_rows(layers, &touched));
+        // Outside line selection, highlight all changes in the focused file.
+        let file_touched = match (view.line_cursor, view.layers, selected_file) {
+            (None, Some(Ok(layers)), Some(file)) => file_layers(layers, file.patch),
+            _ => touched.clone(),
+        };
+        let legend = view.layers.map(|layers| legend_rows(layers, &file_touched));
         let legend_wide = legend.as_deref().map_or(0, legend_width);
         // The files in a strip under the patch, no taller than they need,
         // nor than FILE_LIST_MAX_HEIGHT, nor than half the body. The
@@ -639,9 +642,6 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
     } else {
         body
     };
-    if let Some((layers, column)) = legend_area {
-        render_legend(frame, legend_rows(layers, &touched), column);
-    }
     let side_by_side = view.side_by_side && !view.hide_removed && body.width >= 81;
     let mut body = body;
     if view.side_by_side {
@@ -916,6 +916,29 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             usize::from(body.height),
             side_by_side,
         );
+    }
+    if let Some((layers, column)) = legend_area {
+        let focused = match (view.line_cursor, layers, shown) {
+            (None, Ok(layers), Ok(text)) => {
+                let rows = crate::split::source_rows(text, view.hide_removed, side_by_side, false);
+                let path = rows
+                    .iter()
+                    .skip(usize::from(effective))
+                    .find_map(|row| match row {
+                        Row::Line(line) => {
+                            crate::files::position(text, *line).map(|(path, _)| path)
+                        }
+                        _ => None,
+                    });
+                files
+                    .iter()
+                    .find(|(_, file)| Some(file.path) == path)
+                    .map(|(_, file)| file_layers(layers, file.patch))
+                    .unwrap_or_default()
+            }
+            _ => touched,
+        };
+        render_legend(frame, legend_rows(layers, &focused), column);
     }
     if let Some(scroll) = view.help {
         render_shortcut_legend(frame, view, area, scroll);
@@ -2090,6 +2113,14 @@ fn render_legend(frame: &mut Frame, rows: Vec<Line<'static>>, area: Rect) {
     frame.render_widget(Paragraph::new(rows), area);
 }
 
+/// All layers contributing changes to the focused file.
+fn file_layers(layers: &Layers, text: &str) -> Vec<u16> {
+    let mut touched: Vec<_> = layers.marks(text).into_iter().flatten().collect();
+    touched.sort_unstable();
+    touched.dedup();
+    touched
+}
+
 /// The layers that touched any line of the block of changes `cursor` is in:
 /// the run of added and removed lines around it. None when it is on no
 /// change.
@@ -2529,7 +2560,7 @@ index 1111111..2222222 100644
                 );
             }
             let (first, uncommitted) = (&buffer[(x + 3, top + 1)], &buffer[(x + 3, top + 2)]);
-            if cursor == Some(8) {
+            if cursor == Some(8) || cursor.is_none() {
                 // "+fn d() {}", in the block "-fn b() {}" "+fn c() {}" begins,
                 // which only the first commit touched.
                 assert_eq!(first.bg, theme::SELECTION_BACKGROUND);
@@ -2546,6 +2577,62 @@ index 1111111..2222222 100644
                 assert_eq!(first.fg, theme::ACCENT);
                 assert_eq!(uncommitted.fg, theme::ACCENT);
                 assert_ne!(first.bg, theme::SELECTION_BACKGROUND);
+            }
+        }
+    }
+
+    #[test]
+    fn file_focus_highlights_all_its_commits_and_follows_file_changes() {
+        use crate::layers::Layer;
+        let first = "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-old\n+new\n";
+        let second = "diff --git a/a.txt b/a.txt\n@@ -1,2 +1,2 @@\n new\n-before\n+after\n";
+        let other = "diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-x\n+y\n";
+        let layers = Layers::from_steps(
+            &[first, second, other]
+                .into_iter()
+                .enumerate()
+                .map(|(i, patch)| {
+                    (
+                        Layer {
+                            name: format!("commit{i}"),
+                            ..Layer::default()
+                        },
+                        patch.to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        let text = format!(
+            "diff --git a/a.txt b/a.txt\n@@ -1,2 +1,2 @@\n-old\n+new\n-before\n+after\n{other}"
+        );
+        for selected in [0, 1] {
+            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut view = CheckoutDiffView::unread(Block::default());
+                    view.diff = Ok(&text);
+                    view.per_file = true;
+                    view.selected_file = selected;
+                    view.layers = Some(Ok(&layers));
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            for index in 0..3 {
+                let name = format!("commit{index}");
+                let cell = (0..24)
+                    .find_map(|y| {
+                        let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
+                        row.find(&name).map(|x| &buffer[(x as u16, y)])
+                    })
+                    .expect("commit listed");
+                let highlighted = if selected == 0 { index < 2 } else { index == 2 };
+                assert_eq!(
+                    cell.bg == theme::SELECTION_BACKGROUND,
+                    highlighted,
+                    "{name}, file {selected}"
+                );
+                assert_eq!(cell.modifier.contains(Modifier::BOLD), highlighted);
             }
         }
     }
