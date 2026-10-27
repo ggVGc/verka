@@ -664,7 +664,7 @@ impl Loop<'_> {
         self.edit_reports.load(app, self.client);
         self.diff_refreshed = Instant::now();
         app.diff_preview = !fullscreen;
-        app.diff_interaction_focus = false;
+        app.diff_interaction_focus = !fullscreen && app.interactions.open;
         app.diff_turn = false;
         if fullscreen {
             app.set_view(View::CheckoutDiff);

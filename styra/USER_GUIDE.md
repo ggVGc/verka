@@ -174,6 +174,9 @@ again. `s` hides or shows every stopped interaction, completed ones included,
 leaving only those still taking messages; the list's title says
 `stopped hidden` while it is on. `m` shows or hides the line under each row
 quoting its last response; these lines are hidden by default.
+`d` toggles the selected interaction's diff pane while keeping the list open
+and focused. Moving to another interaction with the pane open keeps focus
+in the list as its diff loads.
 Completing or abandoning an interaction in the list moves to another
 live interaction in the same worktree first, then in the same Workspace, then
 to a stopped one in the same Workspace — the nearest row in the list each time.

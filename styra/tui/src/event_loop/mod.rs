@@ -260,6 +260,130 @@ mod tests {
     }
 
     #[test]
+    fn navigator_keeps_focus_when_toggling_diff_and_switching_interactions() {
+        struct DiffServer(Vec<styra_protocol::InteractionSummary>);
+        impl styra_server::InProcessServer for DiffServer {
+            fn handle(
+                &self,
+                request: styra_protocol::Request,
+            ) -> anyhow::Result<styra_protocol::Response> {
+                match request {
+                    styra_protocol::Request::DiffBase { id } => {
+                        assert!(self.0.iter().any(|row| row.id == id));
+                        Ok(styra_protocol::Response::DiffBase(Some(
+                            styra_protocol::DiffBase {
+                                base: "HEAD".into(),
+                                branch: None,
+                            },
+                        )))
+                    }
+                    styra_protocol::Request::LoadInteraction { id } => {
+                        Ok(styra_protocol::Response::InteractionLoaded(
+                            styra_protocol::LoadedInteraction {
+                                summary: self.0.iter().find(|row| row.id == id).unwrap().clone(),
+                                updates: styra_protocol::Updates {
+                                    updates: Vec::new(),
+                                    next: 0,
+                                },
+                                queued: Vec::new(),
+                            },
+                        ))
+                    }
+                    _ => anyhow::bail!("unexpected request"),
+                }
+            }
+
+            fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.enter_list();
+        let mut interaction = crate::interactions::tests::interaction(
+            "s1",
+            styra_protocol::InteractionActivity::Pending,
+        );
+        let checkout = tempfile::tempdir().unwrap();
+        interaction.checkout = Some(styra_protocol::CheckoutState {
+            worktree: checkout.path().to_owned(),
+            repository: checkout.path().to_owned(),
+            branch: None,
+        });
+        let mut other = interaction.clone();
+        other.id = "s2".into();
+        let interactions = vec![interaction, other];
+        app.interactions.open(interactions.clone(), Vec::new());
+        let mut terminal = styra_ui::TestUi::new(100, 30).unwrap();
+        let client = Client::in_process(std::sync::Arc::new(DiffServer(interactions)));
+        let mut live = Attachment::Detached;
+        let mut history = InteractionHistory::default();
+        let launch = LaunchPolicy::default();
+        let preferences = checkout.path().join("preferences.toml");
+        let mut event_loop = Loop::new(
+            &mut terminal,
+            &mut app,
+            &client,
+            &mut live,
+            RunContext {
+                standing_launch: &launch,
+                preferences_path: &preferences,
+                config: &crate::config::Defaults,
+                history: &mut history,
+            },
+        )
+        .unwrap();
+
+        for visible in [true, false, true, false] {
+            event_loop
+                .handle_key(KeyCode::Char('d').into(), "")
+                .unwrap();
+            event_loop.carry_out_requests("").unwrap();
+            assert_eq!(event_loop.app.diff_visible(), visible);
+            assert!(event_loop.app.interactions.open);
+            assert_eq!(event_loop.app.focus, crate::app::Focus::List);
+            assert!(!event_loop.app.diff_focused());
+            assert!(event_loop.app.take_request().is_none());
+        }
+
+        event_loop
+            .handle_key(KeyCode::Char('d').into(), "")
+            .unwrap();
+        event_loop.carry_out_requests("").unwrap();
+        for id in ["s2", "s1"] {
+            let key = if id == "s2" {
+                KeyCode::Down
+            } else {
+                KeyCode::Up
+            };
+            event_loop.handle_key(key.into(), "").unwrap();
+            assert_eq!(
+                event_loop
+                    .app
+                    .interactions
+                    .cursor(&event_loop.app.session_id),
+                id
+            );
+            navigation::load_cursored_interaction(
+                event_loop.app,
+                event_loop.live,
+                event_loop.client,
+                event_loop.standing_launch,
+            );
+            assert_eq!(event_loop.app.session_id, id);
+            assert!(event_loop.app.diff_interaction_focus);
+            event_loop.carry_out_requests("").unwrap();
+            assert!(event_loop.app.diff_visible());
+            assert!(event_loop.app.interactions.open);
+            assert_eq!(event_loop.app.focus, crate::app::Focus::List);
+            assert!(!event_loop.app.diff_focused());
+        }
+    }
+
+    #[test]
     fn only_mapped_keys_dismiss_the_interaction_navigator() {
         for (code, stays_open) in [
             (KeyCode::Char('b'), true),

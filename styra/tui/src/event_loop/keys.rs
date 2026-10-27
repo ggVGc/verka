@@ -111,6 +111,7 @@ fn reference_available(app: &App) -> bool {
 /// interaction it lands on, while Ctrl-N starts a new interaction.
 pub(super) fn interaction_navigator_passthrough(key: KeyEvent) -> bool {
     keys::GLOBAL_FOCUS_MESSAGE.matches(key)
+        || keys::GLOBAL_DIFF.matches(key)
         || keys::GLOBAL_REBASE.matches(key)
         || keys::GLOBAL_STOP.matches(key)
         || keys::GLOBAL_NEXT_LIVE.matches(key)
@@ -557,6 +558,11 @@ impl Loop<'_> {
         self.load_cursored_interaction();
         let app = &mut *self.app;
         match key {
+            k if keys::GLOBAL_DIFF.matches(k) && app.diff_visible() => {
+                app.diff_preview = false;
+                app.diff_interaction_focus = false;
+                app.diff_turn = false;
+            }
             k if keys::INTERACTIONS_CLOSE.matches(k) => {
                 if k.code == KeyCode::Enter && chosen == app.session_id {
                     self.history.record(&app.session_id);

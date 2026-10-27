@@ -732,6 +732,9 @@ impl App {
             Opened::Events => {}
             Opened::Preview => self.set_view(View::Preview),
             Opened::DiffPane if has_checkout => {
+                // Browsing the live list keeps its keys while the new
+                // interaction's diff is loaded.
+                self.diff_interaction_focus = self.interactions.open;
                 self.ask(Request::ShowDiff(self.session_id.clone()))
             }
             Opened::DiffFullscreen if has_checkout => {
