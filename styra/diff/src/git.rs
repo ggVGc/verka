@@ -51,7 +51,7 @@ pub(crate) fn worktree_tree(worktree: &Path) -> Result<String, String> {
 
 /// A commit as the layers say who made it, when, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Commit {
+pub struct Commit {
     pub id: String,
     pub author: String,
     /// When it was made, as `git log` says it relative to now.
@@ -66,6 +66,15 @@ pub(crate) struct Commit {
 /// following first parents. None when `base` is a snapshot tree rather than
 /// a commit, or `HEAD` has no commit.
 pub(crate) fn commits_since(worktree: &Path, base: &str) -> Vec<Commit> {
+    read_commits(worktree, base, true)
+}
+
+/// Every commit reachable from HEAD but not from the comparison base.
+pub fn commits_between(worktree: &Path, base: &str) -> Vec<Commit> {
+    read_commits(worktree, base, false)
+}
+
+fn read_commits(worktree: &Path, base: &str, first_parent: bool) -> Vec<Commit> {
     if git(worktree, &["cat-file", "-t", base]).as_deref() != Ok("commit") {
         return Vec::new();
     }
@@ -75,7 +84,11 @@ pub(crate) fn commits_since(worktree: &Path, base: &str) -> Vec<Commit> {
         &[
             "log",
             "--reverse",
-            "--first-parent",
+            if first_parent {
+                "--first-parent"
+            } else {
+                "--topo-order"
+            },
             // Unit separators between fields and record separators between
             // commits, which no message holds, as a body runs over lines.
             "--format=%H%x1f%an%x1f%ar%x1f%s%x1f%b%x1e",
@@ -115,6 +128,23 @@ pub(crate) fn step_diff(worktree: &Path, from: &str, to: &str) -> Result<String,
             "--unified=2147483647",
             from,
             to,
+            "--",
+        ],
+    )
+}
+
+/// A commit's own changes against its first parent, including merge commits.
+pub fn commit_diff(worktree: &Path, commit: &str) -> Result<String, String> {
+    let parent = format!("{commit}^1");
+    git(
+        worktree,
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--find-renames",
+            &parent,
+            commit,
             "--",
         ],
     )
@@ -242,6 +272,134 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         git(&root, &["init", "-q", "-b", "main"]);
         root
+    }
+
+    #[test]
+    fn commit_browser_previews_each_patch_and_restores_all_changes() {
+        use crate::{CheckoutDiff, Outcome};
+        use crossterm::event::{KeyCode, KeyEvent};
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("base.txt"), "base\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        let base = git(root, &["rev-parse", "HEAD"]);
+        std::fs::write(root.join("first.txt"), "first\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "first commit"]);
+        let first = git(root, &["rev-parse", "HEAD"]);
+        std::fs::write(root.join("second.txt"), "second\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "second commit"]);
+        std::fs::write(root.join("dirty.txt"), "dirty\n").unwrap();
+        let index = std::fs::read(root.join(".git/index")).unwrap();
+        let mut view = CheckoutDiff::read(DiffTarget {
+            worktree: root.into(),
+            branch: None,
+            base_branch: None,
+            base: base.clone(),
+            branch_point: false,
+        });
+        let all = view.diff.clone();
+        assert_eq!(view.commits.entries.len(), 2);
+        let press = |view: &mut CheckoutDiff, code| view.handle_key(KeyEvent::from(code));
+        press(&mut view, KeyCode::Char('h'));
+        assert!(view.commits.focused);
+        view.involved_layers = Some(vec![0]);
+        press(&mut view, KeyCode::Char('j'));
+        assert!(view.involved_layers.is_none());
+        assert_eq!(view.commits.entries[view.commits.selected - 1].id, first);
+        let patch = view.diff.as_deref().unwrap();
+        assert!(patch.contains("first.txt"));
+        assert!(!patch.contains("second.txt"));
+        assert!(!patch.contains("dirty.txt"));
+        press(&mut view, KeyCode::Down);
+        assert!(view.diff.as_deref().unwrap().contains("second.txt"));
+        assert!(!view.diff.as_deref().unwrap().contains("first.txt"));
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| {
+                crate::render(
+                    frame,
+                    &view.view(ratatui::widgets::Block::default()),
+                    frame.area(),
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let screen: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(screen.contains("first commit"));
+        assert!(screen.contains("second commit"));
+        assert!(screen.contains("All changes"));
+
+        press(&mut view, KeyCode::Enter);
+        assert!(!view.commits.focused);
+        assert!(view.line_cursor.is_none());
+        // The descriptions page keeps its own shortcut and modal navigation.
+        press(&mut view, KeyCode::Char('o'));
+        assert!(view.report_page.is_some());
+        let selected_commit = view.commits.selected;
+        press(&mut view, KeyCode::Char('j'));
+        assert_eq!(view.commits.selected, selected_commit);
+        press(&mut view, KeyCode::Esc);
+        assert!(view.report_page.is_none());
+        assert_eq!(std::fs::read(root.join(".git/index")).unwrap(), index);
+        // Refreshing after another commit retains the selected commit's patch.
+        let selected_patch = view.diff.clone();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "third commit"]);
+        assert!(view.refresh());
+        assert_eq!(view.commits.entries.len(), 3);
+        assert_eq!(view.diff, selected_patch);
+        assert_eq!(press(&mut view, KeyCode::Esc), Outcome::Handled);
+        assert_eq!(view.commits.selected, 0);
+        assert_eq!(view.diff, all);
+        press(&mut view, KeyCode::Tab);
+        press(&mut view, KeyCode::Char('G'));
+        assert_eq!(view.commits.selected, 3);
+        press(&mut view, KeyCode::Char('h'));
+        assert!(!view.commits.open);
+        assert_eq!(view.diff, all);
+        // Rewriting history drops a selection that no longer belongs to the range.
+        press(&mut view, KeyCode::Char('h'));
+        press(&mut view, KeyCode::Char('G'));
+        git(root, &["reset", "--soft", &base]);
+        assert!(view.refresh());
+        assert!(view.commits.entries.is_empty());
+        assert_eq!(view.commits.selected, 0);
+    }
+
+    #[test]
+    fn commit_browser_includes_side_branch_commits_and_merge_patch() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let base = git(root, &["rev-parse", "HEAD"]);
+        git(root, &["checkout", "-qb", "side"]);
+        std::fs::write(root.join("side.txt"), "side\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "side commit"]);
+        git(root, &["checkout", "-q", "main"]);
+        git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "merge side", "side"],
+        );
+        let commits = commits_between(root, &base);
+        assert_eq!(
+            commits
+                .iter()
+                .map(|c| c.summary.as_str())
+                .collect::<Vec<_>>(),
+            ["side commit", "merge side"]
+        );
+        assert!(commit_diff(root, &commits[1].id).unwrap().contains("+side"));
+        assert_eq!(commits_since(root, &base).len(), 1);
+        let tree = git(root, &["rev-parse", "HEAD^{tree}"]);
+        assert!(commits_between(root, &tree).is_empty());
     }
 
     /// Committed and uncommitted work both count: the diff is of the working

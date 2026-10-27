@@ -1419,6 +1419,7 @@ mod tests {
     fn the_checkout_diff_names_both_branches_above_the_diff() {
         let mut app = test_support::app("s1");
         app.checkout_diff = Some(styra_diff::CheckoutDiff {
+            commits: Default::default(),
             source: styra_diff::Source::Checkout(styra_diff::DiffTarget {
                 worktree: "/state/worktrees/styra-7".into(),
                 branch: Some("styra/rename".into()),

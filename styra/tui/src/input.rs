@@ -136,6 +136,15 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
 /// messages; `D` takes a side diff fullscreen as it is, turn diff and all. Other global bindings and the other views' keys do not act from
 /// it.
 pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
+    // The commit browser owns its navigation and Enter before host actions.
+    if let Some(diff) = app.shown_diff_mut() {
+        if diff.commits.open
+            && (diff.commits.focused || key.code == KeyCode::Tab)
+            && diff.handle_key(key) == Outcome::Handled
+        {
+            return;
+        }
+    }
     if handle_diff_focus_key(app, key) {
         return;
     }
@@ -219,7 +228,9 @@ pub fn handle_diff_focus_key(app: &mut App, key: KeyEvent) -> bool {
         || !matches!(app.view, View::Events | View::Files)
         || app.search.typing()
         || app.interactions.typing_filter()
-        || app.shown_diff().is_some_and(|diff| diff.typing())
+        || app.shown_diff().is_some_and(|diff| {
+            diff.typing() || (diff.commits.open && !app.diff_interaction_focus)
+        })
     {
         return false;
     }
@@ -2884,6 +2895,7 @@ mod tests {
         app.enter_list();
         app.view = View::CheckoutDiff;
         app.checkout_diff = Some(styra_diff::CheckoutDiff {
+            commits: Default::default(),
             source: styra_diff::Source::Checkout(diffable_target()),
             diff: Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n".into()),
             base_names: Vec::new(),
@@ -2916,6 +2928,16 @@ mod tests {
         diff.scroll.note_limit(100);
         diff.scroll.note_viewport(30);
         let press = |app: &mut App, code| press_list_key(app, &root, KeyEvent::from(code));
+        press(&mut app, KeyCode::Char('h'));
+        assert!(app.checkout_diff.as_ref().unwrap().commits.focused);
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.checkout_diff.as_ref().unwrap().commits.focused);
+        assert!(app.checkout_diff.as_ref().unwrap().line_cursor.is_none());
+        press(&mut app, KeyCode::Tab);
+        assert!(app.checkout_diff.as_ref().unwrap().commits.focused);
+        assert!(!app.diff_conversation, "Tab belongs to the open commit list");
+        press(&mut app, KeyCode::Char('h'));
+        assert!(!app.checkout_diff.as_ref().unwrap().commits.open);
         press(&mut app, KeyCode::Down);
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
         assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);

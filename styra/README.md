@@ -261,6 +261,12 @@ the current branch left `BASE`, or against `HEAD` when no base is given, and
 standard input: `git show | styra-diff -p -`), opening its files from `DIR`.
 The view's keys live in that crate too, so both answer them the same way;
 while the view is open in Styra its navigation keys act, and Esc closes it.
+`h` opens the checkout diff's commit list, oldest first, between the comparison
+base and HEAD. `j`/`k` or the arrows preview only the focused commit's changes;
+Enter returns focus to the patch and Tab returns to the list. Select “All
+changes”, press Esc, or close the list with `h` to restore the full comparison,
+including uncommitted changes. Merge commits show their changes against their
+first parent. Supplied patches and snapshot tree baselines have no commit history.
 `D` also expands a diff already open in the preview pane to fullscreen.
 In the diff, in the preview pane or fullscreen, `u` switches between the
 checkout's diff and the selected turn's (`D` takes either fullscreen as it is): the diff between the snapshots taken as the turn started and ended, or

@@ -20,6 +20,7 @@ enum Command {
     ToggleHelp,
     /// Open the page of every file's description.
     ReportPage,
+    ToggleCommits,
     OpenFile,
     GenerateReport,
 }
@@ -50,6 +51,8 @@ const fn bind(
 
 /// Every key the view answers, in the order a reference lists them.
 pub const BINDINGS: &[Binding] = &[
+    bind(&[KeyCode::Char('h')], "h", "open / close commits (j/k: preview, Enter: focus patch, Tab: focus list, Esc: all changes)", Command::ToggleCommits),
+
     bind(
         &[KeyCode::Char('?')],
         "?",
@@ -274,6 +277,14 @@ pub enum Outcome {
 }
 
 impl CheckoutDiff {
+    fn clear_commit(&mut self) -> bool {
+        if self.commits.selected == 0 {
+            return false;
+        }
+        self.select_commit(0);
+        true
+    }
+
     /// Answer one key. The prompts for text to find and for the file-name
     /// filter take every key while they are open; otherwise the key is looked
     /// up in [`BINDINGS`].
@@ -371,6 +382,32 @@ impl CheckoutDiff {
             self.report_page = Some(page);
             return Outcome::Handled;
         }
+        if self.commits.open && key.code == KeyCode::Tab {
+            self.commits.focused = !self.commits.focused;
+            return Outcome::Handled;
+        }
+        if self.commits.open && self.commits.focused {
+            let selected = self.commits.selected;
+            let last = self.commits.entries.len();
+            match key.code {
+                KeyCode::Down | KeyCode::Char('j') => self.select_commit((selected + 1).min(last)),
+                KeyCode::Up | KeyCode::Char('k') => self.select_commit(selected.saturating_sub(1)),
+                KeyCode::PageDown => self.select_commit(selected.saturating_add(5).min(last)),
+                KeyCode::PageUp => self.select_commit(selected.saturating_sub(5)),
+                KeyCode::Char('g') => self.select_commit(0),
+                KeyCode::Char('G') => self.select_commit(last),
+                KeyCode::Enter => self.commits.focused = false,
+                KeyCode::Esc => {
+                    self.select_commit(0);
+                    self.commits.focused = false;
+                }
+                KeyCode::Char('h') | KeyCode::Char('?') => {}
+                _ => return Outcome::Handled,
+            }
+            if !matches!(key.code, KeyCode::Char('h') | KeyCode::Char('?')) {
+                return Outcome::Handled;
+            }
+        }
         let Some(binding) = BINDINGS
             .iter()
             .find(|binding| binding.codes.contains(&key.code))
@@ -378,6 +415,16 @@ impl CheckoutDiff {
             return Outcome::Ignored;
         };
         match binding.command {
+            Command::ToggleCommits => {
+                if self.target().is_some() {
+                    self.commits.open = !self.commits.open;
+                    self.commits.focused = self.commits.open;
+                    if !self.commits.open {
+                        self.select_commit(0);
+                    }
+                }
+                Outcome::Handled
+            }
             Command::ToggleHelp => {
                 self.help = Some(0);
                 Outcome::Handled
@@ -397,7 +444,10 @@ impl CheckoutDiff {
                 Outcome::Handled
             }
             Command::ClearFilterOrClose
-                if self.clear_find() || self.leave_lines() || self.clear_filter() =>
+                if self.clear_find()
+                    || self.leave_lines()
+                    || self.clear_filter()
+                    || self.clear_commit() =>
             {
                 Outcome::Handled
             }

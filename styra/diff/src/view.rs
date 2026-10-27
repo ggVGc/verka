@@ -25,6 +25,7 @@ use styra_ui::search::SearchView;
 use styra_ui::theme;
 
 pub struct CheckoutDiffView<'a> {
+    pub commits: Option<&'a crate::state::Commits>,
     /// Prompts attached to files and lines in this session.
     pub prompts: Vec<crate::Prompt>,
     /// The frame drawn around the view: Styra's panel chrome, or a plain
@@ -111,6 +112,7 @@ impl<'a> CheckoutDiffView<'a> {
     pub fn unread(block: Block<'a>) -> Self {
         Self {
             block,
+            commits: None,
             worktree: Path::new(""),
             branch: None,
             base_branch: None,
@@ -349,6 +351,13 @@ fn render_inside(
     area: Rect,
 ) -> CheckoutDiffFeedback {
     let mut inner = area;
+    if let Some(commits) = view.commits.filter(|commits| commits.open) {
+        let height = (commits.entries.len().saturating_add(3).min(10) as u16).min(inner.height / 3);
+        let [list, rest] =
+            Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).areas(inner);
+        render_commits(frame, commits, list);
+        inner = rest;
+    }
     if let Some(intro) = &view.intro {
         let paragraph = Paragraph::new(intro.clone()).wrap(Wrap { trim: false });
         // One more for the rule beneath it.
@@ -1023,6 +1032,43 @@ fn render_inside(
         file_list_offset,
         report_page,
     }
+}
+
+fn render_commits(frame: &mut Frame, commits: &crate::state::Commits, area: Rect) {
+    let mut items = vec![ListItem::new("All changes (including uncommitted)")];
+    items.extend(commits.entries.iter().map(|commit| {
+        ListItem::new(format!(
+            "{} {} · {} · {}",
+            &commit.id[..7.min(commit.id.len())],
+            commit.summary,
+            commit.author,
+            commit.date
+        ))
+    }));
+    let title = if commits.focused {
+        " Commits · j/k: preview · Enter: patch · Esc: all changes "
+    } else {
+        " Commits · Tab: focus · h: close "
+    };
+    let widget = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .title(title)
+                .border_style(Style::default().fg(if commits.focused {
+                    theme::ACCENT
+                } else {
+                    theme::INACTIVE
+                })),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("› ");
+    let mut state = ListState::default().with_selected(Some(commits.selected));
+    frame.render_stateful_widget(widget, area, &mut state);
 }
 
 fn render_shortcut_legend(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect, scroll: u16) {
@@ -2175,6 +2221,21 @@ fn header_lines(view: &CheckoutDiffView<'_>) -> Vec<Line<'static>> {
         Some(label) => supplied_lines(label, view.worktree, strong),
         None => comparison_lines(view, strong),
     };
+    if let Some(commit) = view.commits.and_then(|commits| {
+        commits
+            .selected
+            .checked_sub(1)
+            .and_then(|i| commits.entries.get(i))
+    }) {
+        lines.push(Line::styled(
+            format!(
+                "commit {} · {}",
+                &commit.id[..7.min(commit.id.len())],
+                commit.summary
+            ),
+            strong,
+        ));
+    }
     // The per-file view says it atop its file list instead.
     if let (Ok(text), false) = (view.diff, view.per_file) {
         lines.push(stat_line(text));
@@ -3445,6 +3506,7 @@ index 1111111..2222222 100644
                     frame,
                     &CheckoutDiffView {
                         host_shortcuts: &[],
+                        commits: None,
                         block: Block::bordered(),
                         worktree: Path::new("/state/worktrees/styra-7"),
                         branch: Some("styra/rename"),
@@ -4130,6 +4192,7 @@ index 1111111..2222222 100644
                         frame,
                         &CheckoutDiffView {
                             host_shortcuts: &[],
+                            commits: None,
                             block: Block::bordered(),
                             worktree: Path::new("/w"),
                             branch: None,
@@ -4450,6 +4513,7 @@ index 1111111..2222222 100644
                     frame,
                     &CheckoutDiffView {
                         host_shortcuts: &[],
+                        commits: None,
                         block: Block::bordered(),
                         worktree: Path::new("/w"),
                         branch: None,

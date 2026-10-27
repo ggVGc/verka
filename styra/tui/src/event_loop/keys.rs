@@ -512,7 +512,9 @@ impl Loop<'_> {
     /// A key for the focused diff, which owns the keyboard.
     fn diff_key(&mut self, key: KeyEvent) {
         let app = &mut *self.app;
-        if keys::DIFF_BRANCH.matches(key) && !app.shown_diff().is_some_and(|diff| diff.typing()) {
+        if keys::DIFF_BRANCH.matches(key)
+            && !app.shown_diff().is_some_and(|diff| diff.typing() || diff.commits.focused)
+        {
             match self.client.diff_branches(&app.session_id) {
                 Ok(branches) => {
                     app.diff_branch_picker = Some(crate::checkout_diff::BranchPicker::new(

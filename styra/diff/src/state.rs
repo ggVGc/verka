@@ -109,9 +109,19 @@ pub(crate) enum Action {
     Last,
 }
 
+/// The commit browser. Row zero restores the complete comparison.
+#[derive(Default)]
+pub struct Commits {
+    pub entries: Vec<crate::git::Commit>,
+    pub open: bool,
+    pub focused: bool,
+    pub selected: usize,
+}
+
 /// A diff read for the view, and how far it is scrolled.
 pub struct CheckoutDiff {
     pub source: Source,
+    pub commits: Commits,
     /// `git diff`'s output, or the supplied diff, or why there is none.
     pub diff: Result<String, String>,
     /// The branches and tags at the base commit, read with the diff. Always
@@ -232,7 +242,10 @@ impl CheckoutDiff {
     pub fn read(target: DiffTarget) -> Self {
         let diff = crate::git::diff(&target.worktree, &target.base);
         let base_names = crate::git::names_at(&target.worktree, &target.base);
-        Self::new(Source::Checkout(target), diff, base_names)
+        let entries = crate::git::commits_between(&target.worktree, &target.base);
+        let mut view = Self::new(Source::Checkout(target), diff, base_names);
+        view.commits.entries = entries;
+        view
     }
 
     /// Show `diff` — a Git-style patch, one `diff --git` header per file —
@@ -245,6 +258,7 @@ impl CheckoutDiff {
     fn new(source: Source, diff: Result<String, String>, base_names: Vec<String>) -> Self {
         Self {
             source,
+            commits: Commits::default(),
             diff,
             base_names,
             scroll: Scroll::default(),
@@ -274,6 +288,33 @@ impl CheckoutDiff {
         }
     }
 
+    pub(crate) fn select_commit(&mut self, selected: usize) {
+        if selected == self.commits.selected {
+            return;
+        }
+        let Some(target) = self.target() else {
+            return;
+        };
+        let patch = if selected == 0 {
+            crate::git::diff(&target.worktree, &target.base)
+        } else if let Some(commit) = self.commits.entries.get(selected - 1) {
+            crate::git::commit_diff(&target.worktree, &commit.id)
+        } else {
+            return;
+        };
+        self.commits.selected = selected;
+        self.involved_layers = None;
+        self.search.cancel();
+        self.find.cancel();
+        self.line_cursor = None;
+        self.replace(patch);
+        self.selected_file = 0;
+        self.file_list_offset = 0;
+        self.scroll.reset();
+        self.combined_scroll.reset();
+        self.horizontal_scroll = 0;
+    }
+
     /// What a checkout's diff compares; `None` for a supplied diff.
     pub fn target(&self) -> Option<&DiffTarget> {
         match &self.source {
@@ -300,7 +341,22 @@ impl CheckoutDiff {
         let Source::Checkout(target) = &self.source else {
             return false;
         };
-        let diff = crate::git::diff(&target.worktree, &target.base);
+        let selected = self
+            .commits
+            .selected
+            .checked_sub(1)
+            .and_then(|i| self.commits.entries.get(i))
+            .map(|c| c.id.clone());
+        let entries = crate::git::commits_between(&target.worktree, &target.base);
+        let changed = entries != self.commits.entries;
+        self.commits.selected = selected
+            .and_then(|id| entries.iter().position(|c| c.id == id))
+            .map_or(0, |i| i + 1);
+        self.commits.entries = entries;
+        let diff = match self.commits.selected.checked_sub(1) {
+            Some(i) => crate::git::commit_diff(&target.worktree, &self.commits.entries[i].id),
+            None => crate::git::diff(&target.worktree, &target.base),
+        };
         self.base_names = crate::git::names_at(&target.worktree, &target.base);
         let mut layered = false;
         if self.layers.is_some() {
@@ -312,7 +368,7 @@ impl CheckoutDiff {
                 layered = true;
             }
         }
-        self.replace(diff) || layered
+        self.replace(diff) || layered || changed
     }
 
     /// Show `diff` in place of the one shown, keeping the view where it is as
@@ -380,6 +436,7 @@ impl CheckoutDiff {
         };
         CheckoutDiffView {
             block,
+            commits: Some(&self.commits),
             worktree: self.root().unwrap_or(Path::new("")),
             branch: target.and_then(|target| target.branch.as_deref()),
             base_branch: target.and_then(|target| target.base_branch.as_deref()),
@@ -406,15 +463,19 @@ impl CheckoutDiff {
             files_below: false,
             tint: self.tint,
             word_highlights: self.word_highlights,
-            layers: self.layers.as_ref().map(|layers| match layers {
-                Ok(layers) => Ok(layers),
-                Err(error) => Err(error.as_str()),
-            }),
+            layers: self
+                .layers
+                .as_ref()
+                .filter(|_| self.commits.selected == 0)
+                .map(|layers| match layers {
+                    Ok(layers) => Ok(layers),
+                    Err(error) => Err(error.as_str()),
+                }),
             involved_layers: self.involved_layers.as_deref(),
             selected_file: self.selected_file,
             file_list_offset: self.file_list_offset,
             search: self.search.view(),
-            report: Some(&self.report),
+            report: (self.commits.selected == 0).then_some(&self.report),
             report_page: self.report_page,
             conversation: None,
             intro: None,
@@ -565,7 +626,10 @@ impl CheckoutDiff {
                 }
             }
             Action::ToggleInvolved => {
-                if self.involved_layers.take().is_none() && self.per_file {
+                if self.involved_layers.take().is_none()
+                    && self.per_file
+                    && self.commits.selected == 0
+                {
                     if let (Some(Ok(layers)), Some(text)) = (&self.layers, self.shown_text()) {
                         let touched = match self.line_cursor {
                             Some(cursor) => crate::view::block_layers(layers, text, cursor),

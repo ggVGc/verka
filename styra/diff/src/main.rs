@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn the_view_keys_are_styras() {
         let mut diff = diff();
-        for key in ['r', 'l', 'j', 'c', 't'] {
+        for key in ['r', 'l', 'j', 'C', 't'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Step::Stay);
         }
         assert!(diff.hide_removed);
