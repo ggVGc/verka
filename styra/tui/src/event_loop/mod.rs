@@ -270,6 +270,12 @@ mod tests {
                 match request {
                     styra_protocol::Request::DiffBase { id } => {
                         assert!(self.0.iter().any(|row| row.id == id));
+                        if id == "no-snapshot" {
+                            return Ok(styra_protocol::Response::DiffBase(None));
+                        }
+                        if id == "diff-error" {
+                            anyhow::bail!("could not read diff baseline");
+                        }
                         Ok(styra_protocol::Response::DiffBase(Some(
                             styra_protocol::DiffBase {
                                 base: "HEAD".into(),
@@ -315,7 +321,14 @@ mod tests {
         });
         let mut other = interaction.clone();
         other.id = "s2".into();
-        let interactions = vec![interaction, other];
+        let mut no_snapshot = interaction.clone();
+        no_snapshot.id = "no-snapshot".into();
+        let mut no_checkout = interaction.clone();
+        no_checkout.id = "no-checkout".into();
+        no_checkout.checkout = None;
+        let mut diff_error = interaction.clone();
+        diff_error.id = "diff-error".into();
+        let interactions = vec![interaction, other, no_snapshot, no_checkout, diff_error];
         app.interactions.open(interactions.clone(), Vec::new());
         let mut terminal = styra_ui::TestUi::new(100, 30).unwrap();
         let client = Client::in_process(std::sync::Arc::new(DiffServer(interactions)));
@@ -379,6 +392,60 @@ mod tests {
             assert!(event_loop.app.diff_visible());
             assert!(event_loop.app.interactions.open);
             assert_eq!(event_loop.app.focus, crate::app::Focus::List);
+            assert!(!event_loop.app.diff_focused());
+        }
+
+        // Missing baselines, checkouts and server failures must not disable
+        // the pane for the next interaction with a diff.
+        for id in ["no-snapshot", "no-checkout", "diff-error", "s1"] {
+            let current = event_loop.app.session_id.clone();
+            event_loop
+                .app
+                .interactions
+                .move_cursor_to(id.into(), &current);
+            navigation::load_cursored_interaction(
+                event_loop.app,
+                event_loop.live,
+                event_loop.client,
+                event_loop.standing_launch,
+            );
+            event_loop.carry_out_requests("").unwrap();
+            assert_eq!(event_loop.app.session_id, id);
+            assert!(event_loop.app.diff_visible(), "{id}");
+            assert_eq!(event_loop.app.checkout_diff.is_some(), id == "s1");
+            assert!(event_loop.app.interactions.open);
+            assert!(!event_loop.app.diff_focused());
+        }
+
+        // An explicit toggle still disables the pane on later rows. It can
+        // also be enabled on a row without a checkout for the next valid row.
+        for (id, toggle, visible, loaded) in [
+            ("no-checkout", true, false, false),
+            ("s1", false, false, false),
+            ("no-checkout", true, true, false),
+            ("s1", false, true, true),
+        ] {
+            let current = event_loop.app.session_id.clone();
+            event_loop
+                .app
+                .interactions
+                .move_cursor_to(id.into(), &current);
+            navigation::load_cursored_interaction(
+                event_loop.app,
+                event_loop.live,
+                event_loop.client,
+                event_loop.standing_launch,
+            );
+            event_loop.carry_out_requests("").unwrap();
+            if toggle {
+                event_loop
+                    .handle_key(KeyCode::Char('d').into(), "")
+                    .unwrap();
+                event_loop.carry_out_requests("").unwrap();
+            }
+            assert_eq!(event_loop.app.diff_visible(), visible, "{id}");
+            assert_eq!(event_loop.app.checkout_diff.is_some(), loaded, "{id}");
+            assert!(event_loop.app.interactions.open);
             assert!(!event_loop.app.diff_focused());
         }
     }

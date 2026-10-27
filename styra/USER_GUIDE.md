@@ -177,6 +177,8 @@ quoting its last response; these lines are hidden by default.
 `d` toggles the selected interaction's diff pane while keeping the list open
 and focused. Moving to another interaction with the pane open keeps focus
 in the list as its diff loads.
+An interaction without a checkout or snapshot keeps this setting, so the pane
+opens again on the next interaction that has a diff.
 Completing or abandoning an interaction in the list moves to another
 live interaction in the same worktree first, then in the same Workspace, then
 to a stopped one in the same Workspace — the nearest row in the list each time.

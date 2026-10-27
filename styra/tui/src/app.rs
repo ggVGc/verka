@@ -682,7 +682,7 @@ impl App {
         self.clear_link_highlight();
         let opened = if self.view == View::Preview {
             Opened::Preview
-        } else if !self.diff_visible() || self.checkout_diff.is_none() {
+        } else if !self.diff_visible() {
             Opened::Events
         } else if self.view == View::CheckoutDiff {
             Opened::DiffFullscreen
@@ -731,16 +731,21 @@ impl App {
         match state.opened {
             Opened::Events => {}
             Opened::Preview => self.set_view(View::Preview),
-            Opened::DiffPane if has_checkout => {
+            Opened::DiffPane => {
+                // Keep the pane enabled even when this interaction cannot
+                // provide a diff, so the next interaction tries again.
+                self.diff_preview = true;
                 // Browsing the live list keeps its keys while the new
                 // interaction's diff is loaded.
                 self.diff_interaction_focus = self.interactions.open;
-                self.ask(Request::ShowDiff(self.session_id.clone()))
+                if has_checkout {
+                    self.ask(Request::ShowDiff(self.session_id.clone()));
+                }
             }
             Opened::DiffFullscreen if has_checkout => {
                 self.ask(Request::ShowDiffFullscreen(self.session_id.clone()))
             }
-            Opened::DiffPane | Opened::DiffFullscreen => {}
+            Opened::DiffFullscreen => {}
         }
     }
 
@@ -4208,6 +4213,14 @@ mod tests {
         screen.diff_preview = true;
         let mut next = carry(&mut screen, false);
         assert_eq!(next.take_request(), None);
+        assert!(next.diff_preview);
+        assert!(next.checkout_diff.is_none());
+        // The pane preference survives a row which cannot load any diff.
+        let mut after = carry(&mut next, true);
+        assert_eq!(
+            after.take_request(),
+            Some(Request::ShowDiff("session-2".into()))
+        );
     }
 
     #[test]

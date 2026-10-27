@@ -563,6 +563,13 @@ impl Loop<'_> {
                 app.diff_interaction_focus = false;
                 app.diff_turn = false;
             }
+            k if keys::GLOBAL_DIFF.matches(k) => {
+                // Opening the pane is a display choice even if loading this
+                // interaction's diff fails. Keep it for the next row.
+                app.diff_preview = true;
+                app.diff_interaction_focus = true;
+                return Ok(Handled::Pass);
+            }
             k if keys::INTERACTIONS_CLOSE.matches(k) => {
                 if k.code == KeyCode::Enter && chosen == app.session_id {
                     self.history.record(&app.session_id);
