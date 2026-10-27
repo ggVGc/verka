@@ -79,6 +79,8 @@ pub(crate) enum Action {
     /// Tint each change by the commits that made it, or by whether it adds
     /// or removes again.
     ToggleLayers,
+    /// Restrict the file list to the currently highlighted commits.
+    ToggleInvolved,
     /// Put the per-file view's edit report away, or bring it back.
     ToggleReport,
     /// Fold the file tree's directories that hold no files of their own and
@@ -139,6 +141,8 @@ pub struct CheckoutDiff {
     /// The commits the diff was made in, or why they could not be read,
     /// while its changes are tinted by them; `None` otherwise.
     pub layers: Option<Result<Layers, String>>,
+    /// Commits pinned when the involved-files filter was enabled.
+    pub involved_layers: Option<Vec<u16>>,
     pub selected_file: usize,
     pub file_list_offset: usize,
     pub search: Search,
@@ -251,6 +255,7 @@ impl CheckoutDiff {
             tint: Tint::Full,
             word_highlights: true,
             layers: None,
+            involved_layers: None,
             thumbnail_hidden: false,
             selected_file: 0,
             file_list_offset: 0,
@@ -296,6 +301,7 @@ impl CheckoutDiff {
                 Layers::reread(self.layers.as_ref(), &target.worktree, &target.base)
             {
                 self.layers = Some(layers);
+                self.involved_layers = None;
                 layered = true;
             }
         }
@@ -397,6 +403,7 @@ impl CheckoutDiff {
                 Ok(layers) => Ok(layers),
                 Err(error) => Err(error.as_str()),
             }),
+            involved_layers: self.involved_layers.as_deref(),
             selected_file: self.selected_file,
             file_list_offset: self.file_list_offset,
             search: self.search.view(),
@@ -528,11 +535,26 @@ impl CheckoutDiff {
             Action::ToggleWords => self.word_highlights = !self.word_highlights,
             Action::ToggleThumbnail => self.thumbnail_hidden = !self.thumbnail_hidden,
             Action::ToggleLayers => {
+                self.involved_layers = None;
                 self.layers = match (&self.layers, self.target()) {
                     (Some(_), _) => None,
                     (None, Some(target)) => Some(Layers::read(&target.worktree, &target.base)),
                     (None, None) => Some(Err("a supplied diff has no commits to layer".into())),
                 }
+            }
+            Action::ToggleInvolved => {
+                if self.involved_layers.take().is_none() && self.per_file {
+                    if let (Some(Ok(layers)), Some(text)) = (&self.layers, self.shown_text()) {
+                        let touched = match self.line_cursor {
+                            Some(cursor) => crate::view::block_layers(layers, text, cursor),
+                            None => layers.file_layers(text),
+                        };
+                        if !touched.is_empty() {
+                            self.involved_layers = Some(touched);
+                        }
+                    }
+                }
+                self.update_search();
             }
             Action::CycleTint => self.tint = self.tint.next(),
             Action::ToggleCompactDirs => self.compact_dirs = !self.compact_dirs,
@@ -642,6 +664,10 @@ impl CheckoutDiff {
     /// Drop a standing file-name filter, saying whether there was one: Esc
     /// clears it before it means anything else to the host.
     pub(crate) fn clear_filter(&mut self) -> bool {
+        if self.per_file && self.involved_layers.take().is_some() {
+            self.update_search();
+            return true;
+        }
         if !(self.per_file && self.search.query().is_some()) {
             return false;
         }
@@ -839,10 +865,20 @@ impl CheckoutDiff {
     }
 
     fn visible_files(&self) -> Vec<(usize, FileDiff<'_>)> {
-        self.diff
+        let mut files = self
+            .diff
             .as_ref()
             .map(|text| filtered_file_diffs(text, self.search.query()))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if let (Some(touched), Some(Ok(layers))) = (&self.involved_layers, &self.layers) {
+            files.retain(|(_, file)| {
+                layers
+                    .file_layers(file.patch)
+                    .iter()
+                    .any(|i| touched.contains(i))
+            });
+        }
+        files
     }
 
     /// Keep a visible selection as the filter changes, retaining its file
@@ -987,6 +1023,103 @@ mod tests {
         );
         diff.scroll.note_limit(100);
         diff
+    }
+
+    #[test]
+    fn involved_filter_pins_commits_and_keeps_navigation_and_counts_in_sync() {
+        use crate::layers::Layer;
+        use ratatui::{backend::TestBackend, Terminal};
+        let a = "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+A\n";
+        let moved = "diff --git a/old.txt b/b.txt\nsimilarity index 100%\nrename from old.txt\nrename to b.txt\n";
+        let b = "diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-b\n+B\n";
+        let c = "diff --git a/c.txt b/c.txt\n@@ -1 +1 @@\n-c\n+C\n";
+        let mut diff = two_files();
+        diff.diff = Ok(format!("{a}{moved}{c}"));
+        diff.layers = Some(Ok(Layers::from_steps(&[
+            (
+                Layer {
+                    name: "first".into(),
+                    ..Layer::default()
+                },
+                format!("{a}{moved}"),
+            ),
+            (
+                Layer {
+                    name: "second".into(),
+                    ..Layer::default()
+                },
+                format!("{b}{c}"),
+            ),
+        ])));
+        diff.per_file = true;
+        let names = |diff: &CheckoutDiff| {
+            diff.visible_files()
+                .iter()
+                .map(|(_, file)| file.path.to_owned())
+                .collect::<Vec<_>>()
+        };
+        let drawn = |diff: &CheckoutDiff, files_below| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut view = diff.view(Block::default());
+                    view.files_below = files_below;
+                    crate::view::render(frame, &view, frame.area());
+                })
+                .unwrap();
+            (0..30)
+                .map(|y| {
+                    (0..120)
+                        .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        for below in [false, true] {
+            let shown = drawn(&diff, below);
+            assert!(shown.contains("2/3 files involved · c: filter"), "{shown}");
+        }
+        diff.handle_key(KeyCode::Char('c').into());
+        assert_eq!(diff.involved_layers, Some(vec![0]));
+        assert_eq!(names(&diff), ["a.txt", "b.txt"]);
+        for below in [false, true] {
+            let shown = drawn(&diff, below);
+            assert!(
+                shown.contains("2/3 files involved · c: show all"),
+                "{shown}"
+            );
+            assert!(!shown.contains("c.txt"), "{shown}");
+        }
+        diff.apply(Action::Down);
+        assert_eq!(diff.selected_file, 1);
+        assert!(diff.shown_text().unwrap().contains("rename to b.txt"));
+        // b also belongs to the second commit, but browsing it keeps the
+        // original set pinned rather than pulling c into the list.
+        assert_eq!(names(&diff), ["a.txt", "b.txt"]);
+        diff.apply(Action::Down);
+        assert_eq!(diff.selected_file, 1);
+        diff.apply(Action::Search);
+        diff.search_key(KeyCode::Char('b').into());
+        diff.search_key(KeyCode::Enter.into());
+        assert_eq!(names(&diff), ["b.txt"]);
+        diff.handle_key(KeyCode::Char('c').into());
+        assert!(diff.involved_layers.is_none());
+        assert_eq!(names(&diff), ["b.txt"]);
+        assert!(diff.clear_filter());
+        assert_eq!(names(&diff), ["a.txt", "b.txt", "c.txt"]);
+        diff.selected_file = 0;
+        diff.line_cursor = Some(3);
+        diff.handle_key(KeyCode::Char('c').into());
+        assert_eq!(diff.involved_layers, Some(vec![0]));
+        diff.handle_key(KeyCode::Esc.into());
+        assert!(diff.line_cursor.is_none());
+        diff.handle_key(KeyCode::Esc.into());
+        assert!(diff.involved_layers.is_none());
+        assert_eq!(names(&diff).len(), 3);
+        diff.layers = None;
+        diff.handle_key(KeyCode::Char('c').into());
+        assert!(diff.involved_layers.is_none());
     }
 
     #[test]

@@ -78,6 +78,8 @@ pub struct CheckoutDiffView<'a> {
     /// While changes are tinted by the commits that made them, those
     /// commits, or why they could not be read.
     pub layers: Option<Result<&'a Layers, &'a str>>,
+    /// Commits pinned by the involved-files filter.
+    pub involved_layers: Option<&'a [u16]>,
     pub selected_file: usize,
     /// First visible row in the file tree, retained between frames.
     pub file_list_offset: usize,
@@ -130,6 +132,7 @@ impl<'a> CheckoutDiffView<'a> {
             tint: Tint::Full,
             word_highlights: true,
             layers: None,
+            involved_layers: None,
             selected_file: 0,
             file_list_offset: 0,
             search: SearchView::default(),
@@ -390,11 +393,21 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         None => (top, None),
     };
     frame.render_widget(Paragraph::new(header), top);
-    let files = view
+    let mut files = view
         .diff
         .ok()
         .map(|text| filtered_file_diffs(text, view.search.query))
         .unwrap_or_default();
+    if view.per_file {
+        if let (Some(touched), Some(Ok(layers))) = (view.involved_layers, view.layers) {
+            files.retain(|(_, file)| {
+                layers
+                    .file_layers(file.patch)
+                    .iter()
+                    .any(|i| touched.contains(i))
+            });
+        }
+    }
     let selected_file = view
         .per_file
         .then(|| {
@@ -441,10 +454,38 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
         });
         // Outside line selection, highlight all changes in the focused file.
         let file_touched = match (view.line_cursor, view.layers, selected_file) {
-            (None, Some(Ok(layers)), Some(file)) => file_layers(layers, file.patch),
+            (None, Some(Ok(layers)), Some(file)) => layers.file_layers(file.patch),
             _ => touched.clone(),
         };
-        let legend = view.layers.map(|layers| legend_rows(layers, &file_touched));
+        let file_touched = view.involved_layers.unwrap_or(&file_touched);
+        let legend = view.layers.map(|layers| {
+            let mut rows = legend_rows(layers, file_touched);
+            if let (Ok(layers), Ok(text)) = (layers, view.diff) {
+                let files = filtered_file_diffs(text, view.search.query);
+                let involved = files
+                    .iter()
+                    .filter(|(_, file)| {
+                        layers
+                            .file_layers(file.patch)
+                            .iter()
+                            .any(|i| file_touched.contains(i))
+                    })
+                    .count();
+                let action = if view.involved_layers.is_some() {
+                    "show all"
+                } else {
+                    "filter"
+                };
+                rows.insert(
+                    0,
+                    muted(&format!(
+                        "{involved}/{} files involved · c: {action}",
+                        files.len()
+                    )),
+                );
+            }
+            rows
+        });
         let legend_wide = legend.as_deref().map_or(0, legend_width);
         // The files in a strip under the patch, no taller than they need,
         // nor than FILE_LIST_MAX_HEIGHT, nor than half the body. The
@@ -579,7 +620,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
             .position(|(index, _)| *index == Some(view.selected_file));
         // The files those commits changed stand out, and the others are
         // muted, as the commits are in the legend.
-        if let (Some(Ok(layers)), false) = (view.layers, touched.is_empty()) {
+        if let (Some(Ok(layers)), false) = (view.layers, file_touched.is_empty()) {
             for (index, line) in &mut rows {
                 let Some(file) = index.and_then(|index| {
                     files
@@ -590,10 +631,9 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                     continue;
                 };
                 let changed = layers
-                    .marks(file.patch)
+                    .file_layers(file.patch)
                     .iter()
-                    .flatten()
-                    .any(|layer| touched.contains(layer));
+                    .any(|layer| file_touched.contains(layer));
                 if let Some(name) = line.spans.first_mut() {
                     name.style = if changed {
                         name.style.fg(theme::TEXT).add_modifier(Modifier::BOLD)
@@ -933,7 +973,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
                 files
                     .iter()
                     .find(|(_, file)| Some(file.path) == path)
-                    .map(|(_, file)| file_layers(layers, file.patch))
+                    .map(|(_, file)| layers.file_layers(file.patch))
                     .unwrap_or_default()
             }
             _ => touched,
@@ -2113,18 +2153,10 @@ fn render_legend(frame: &mut Frame, rows: Vec<Line<'static>>, area: Rect) {
     frame.render_widget(Paragraph::new(rows), area);
 }
 
-/// All layers contributing changes to the focused file.
-fn file_layers(layers: &Layers, text: &str) -> Vec<u16> {
-    let mut touched: Vec<_> = layers.marks(text).into_iter().flatten().collect();
-    touched.sort_unstable();
-    touched.dedup();
-    touched
-}
-
 /// The layers that touched any line of the block of changes `cursor` is in:
 /// the run of added and removed lines around it. None when it is on no
 /// change.
-fn block_layers(layers: &Layers, text: &str, cursor: usize) -> Vec<u16> {
+pub(crate) fn block_layers(layers: &Layers, text: &str, cursor: usize) -> Vec<u16> {
     let lines: Vec<&str> = text.lines().collect();
     // Within a hunk every line starting so is a change, or the note that
     // a side has no newline at its end; file markers come before any hunk
@@ -2415,9 +2447,8 @@ index 1111111..2222222 100644
         assert!(measured.scroll.effective_scroll > 0);
     }
 
-    /// In the per-file view, the files changed by the commits that touched
-    /// the block under the line cursor stand out in the file list, and the
-    /// others are muted.
+    /// Files sharing the focused file's or line block's commits stand out
+    /// in the file list, including files moved without edits.
     #[test]
     fn the_files_the_cursors_commits_changed_stand_out() {
         use crate::layers::Layer;
@@ -2426,15 +2457,19 @@ index 1111111..2222222 100644
             name: name.into(),
             ..Layer::default()
         };
+        let moved = "diff --git a/old.txt b/moved.txt\nsimilarity index 100%\nrename from old.txt\nrename to moved.txt\n";
         let text = format!(
             "{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old\n+new\n\
-             diff --git a/c.txt b/c.txt\n@@ -1 +1 @@\n-x\n+y\n"
+             diff --git a/c.txt b/c.txt\n@@ -1 +1 @@\n-x\n+y\n{moved}"
         );
         let one = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n\
                    @@ -1,2 +1,2 @@\n fn a() {}\n-fn b() {}\n+fn c() {}\n\
                    diff --git a/c.txt b/c.txt\n--- a/c.txt\n+++ b/c.txt\n@@ -1 +1 @@\n-x\n+y\n";
         let two = "diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-old\n+new\n";
-        let layers = Layers::from_steps(&[(layer("one"), one.into()), (layer("two"), two.into())]);
+        let layers = Layers::from_steps(&[
+            (layer("one"), format!("{one}{moved}")),
+            (layer("two"), two.into()),
+        ]);
         // The style of each listed file's name, with the cursor on `line` of
         // the patch of the file at `selected` in the diff.
         let names = |selected: usize, line: Option<usize>| {
@@ -2451,10 +2486,10 @@ index 1111111..2222222 100644
                 })
                 .unwrap();
             let buffer = terminal.backend().buffer().clone();
-            ["a.rs", "b.txt", "c.txt"].map(|name| {
+            ["a.rs", "b.txt", "c.txt", "moved.txt"].map(|name| {
                 (0..24)
                     .find_map(|y| {
-                        let row: String = (0..30).map(|x| buffer[(x, y)].symbol()).collect();
+                        let row: String = (0..50).map(|x| buffer[(x, y)].symbol()).collect();
                         let x = row.find(name)?;
                         let x = u16::try_from(row[..x].chars().count()).unwrap();
                         // Only the file list's rows, not the patch's title.
@@ -2469,16 +2504,33 @@ index 1111111..2222222 100644
 
         // On b.txt's "+new", which only the second commit wrote: c.txt and
         // a.rs, only the first's, are muted.
-        let [a, _, c] = names(1, Some(3));
-        assert!(muted(a) && muted(c), "{a:?} {c:?}");
+        let [a, _, c, moved] = names(1, Some(3));
+        assert!(
+            muted(a) && muted(c) && muted(moved),
+            "{a:?} {c:?} {moved:?}"
+        );
         // On a.rs's "+fn c() {}", the first commit's: c.txt stands out too.
-        let [_, b, c] = names(0, Some(7));
-        assert!(standing(c), "{c:?}");
+        let [_, b, c, moved] = names(0, Some(7));
+        assert!(standing(c) && standing(moved), "{c:?} {moved:?}");
         assert!(muted(b), "{b:?}");
-        // On an unchanged line, or with no cursor, nothing is singled out.
-        for line in [Some(5), None] {
-            let [_, b, c] = names(0, line);
-            assert!(!standing(c) && !muted(c) && !muted(b), "{b:?} {c:?}");
+        // Without a line cursor, use all commits contributing to the file.
+        let [_, b, c, moved] = names(0, None);
+        assert!(
+            standing(c) && standing(moved) && muted(b),
+            "{b:?} {c:?} {moved:?}"
+        );
+        // A move without edits also focuses the other files in its commit.
+        let [a, b, c, _] = names(3, None);
+        assert!(standing(a) && standing(c) && muted(b), "{a:?} {b:?} {c:?}");
+        let [a, _, c, moved] = names(1, None);
+        assert!(
+            muted(a) && muted(c) && muted(moved),
+            "{a:?} {c:?} {moved:?}"
+        );
+        // On an unchanged line, nothing is singled out.
+        let [_, b, c, moved] = names(0, Some(5));
+        for style in [b, c, moved] {
+            assert!(!standing(style) && !muted(style), "{style:?}");
         }
     }
 
@@ -2532,7 +2584,11 @@ index 1111111..2222222 100644
             if per_file {
                 assert_eq!(x, 0, "in the left pane");
                 assert!(top > rule, "below the top bar's rule, at {rule}");
-                assert!(row(top - 1).starts_with('─'), "a rule above it");
+                assert!(
+                    row(top - 1).contains("files involved · c:"),
+                    "count above the commits"
+                );
+                assert!(row(top - 2).starts_with('─'), "a rule above the count");
                 let above: String = (rule..top)
                     .flat_map(|y| row(y).chars().take(usize::from(border)).collect::<Vec<_>>())
                     .collect();
@@ -2633,6 +2689,60 @@ index 1111111..2222222 100644
                     "{name}, file {selected}"
                 );
                 assert_eq!(cell.modifier.contains(Modifier::BOLD), highlighted);
+            }
+        }
+    }
+
+    #[test]
+    fn file_focus_highlights_a_move_without_edits() {
+        use crate::layers::Layer;
+        let moved = "diff --git a/old.txt b/new.txt\nsimilarity index 100%\nrename from old.txt\nrename to new.txt\n";
+        let other = "diff --git a/other.txt b/other.txt\n@@ -1 +1 @@\n-old\n+new\n";
+        let layers = Layers::from_steps(&[
+            (
+                Layer {
+                    name: "move_commit".into(),
+                    ..Layer::default()
+                },
+                moved.into(),
+            ),
+            (
+                Layer {
+                    name: "edit_commit".into(),
+                    ..Layer::default()
+                },
+                other.into(),
+            ),
+        ]);
+        let text = format!("{moved}{other}");
+        for per_file in [false, true] {
+            for files_below in [false, true] {
+                let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        let mut view = CheckoutDiffView::unread(Block::default());
+                        view.diff = Ok(&text);
+                        view.per_file = per_file;
+                        view.files_below = files_below;
+                        view.layers = Some(Ok(&layers));
+                        render(frame, &view, frame.area());
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                for (name, highlighted) in [("move_commit", true), ("edit_commit", false)] {
+                    let cell = (0..24)
+                        .find_map(|y| {
+                            let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
+                            row.find(name).map(|x| &buffer[(x as u16, y)])
+                        })
+                        .expect("commit listed");
+                    assert_eq!(
+                        cell.bg == theme::SELECTION_BACKGROUND,
+                        highlighted,
+                        "{name}, per_file={per_file}, files_below={files_below}"
+                    );
+                    assert_eq!(cell.modifier.contains(Modifier::BOLD), highlighted);
+                }
             }
         }
     }
@@ -3067,6 +3177,7 @@ index 1111111..2222222 100644
                         tint: Tint::Full,
                         word_highlights: true,
                         layers: None,
+                        involved_layers: None,
                         selected_file,
                         file_list_offset: 0,
                         search,
@@ -3501,6 +3612,7 @@ index 1111111..2222222 100644
                             tint: Tint::Full,
                             word_highlights: true,
                             layers: None,
+                            involved_layers: None,
                             selected_file,
                             file_list_offset: offset,
                             search: Default::default(),
@@ -3819,6 +3931,7 @@ index 1111111..2222222 100644
                         tint: Tint::Full,
                         word_highlights: true,
                         layers: None,
+                        involved_layers: None,
                         selected_file: 0,
                         file_list_offset: 0,
                         search: Default::default(),

@@ -46,6 +46,8 @@ pub struct Layers {
     /// For each file at the base, the layer that removed each of its lines
     /// that some layer did, by line number.
     removed: HashMap<String, HashMap<u32, u16>>,
+    /// For each file at its current path, the layers that moved it.
+    moved: HashMap<String, Vec<u16>>,
 }
 
 /// How far, in tenths, a removed line's tint is darkened from an added
@@ -131,6 +133,12 @@ impl Layers {
         Self {
             layers: steps.iter().map(|(layer, _)| layer.clone()).collect(),
             states: Vec::new(),
+            moved: tracker
+                .files
+                .iter()
+                .filter(|(_, file)| !file.moves.is_empty())
+                .map(|(path, file)| (path.clone(), file.moves.clone()))
+                .collect(),
             added: tracker
                 .files
                 .into_iter()
@@ -141,6 +149,20 @@ impl Layers {
                 .collect(),
             removed: tracker.removed,
         }
+    }
+
+    /// All layers contributing line changes or moves to the focused file.
+    pub(crate) fn file_layers(&self, text: &str) -> Vec<u16> {
+        let mut touched: Vec<_> = self.marks(text).into_iter().flatten().collect();
+        for file in file_diffs(text) {
+            let (_, new) = sides(file.patch);
+            if let Some(moved) = new.and_then(|path| self.moved.get(path)) {
+                touched.extend(moved);
+            }
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        touched
     }
 
     /// For each line of `text`, a diff of the base against the working tree
@@ -274,6 +296,8 @@ struct File {
     /// Its lines, once a layer has changed them; until then they are all
     /// still the base's, however many there are.
     lines: Option<Vec<Line>>,
+    /// The layers that moved the file, retained across edits and later moves.
+    moves: Vec<u16>,
 }
 
 /// Every file the layers laid so far have touched.
@@ -296,12 +320,17 @@ impl Tracker {
                 Some(old) => self.files.remove(old).unwrap_or_else(|| File {
                     base: Some(old.to_owned()),
                     lines: None,
+                    moves: Vec::new(),
                 }),
                 None => File {
                     base: None,
                     lines: Some(Vec::new()),
+                    moves: Vec::new(),
                 },
             };
+            if old.is_some() && new.is_some() && old != new {
+                tracked.moves.push(layer);
+            }
             self.apply(layer, &mut tracked, file.patch);
             // Put back once every file has been taken, so a file moved onto
             // the path of another that moved on is not taken for it.
@@ -559,6 +588,29 @@ mod tests {
         assert_eq!(marks, [&[0][..], &[]]);
         assert_eq!(layers.removed["gone"], HashMap::from([(1, 0)]));
         assert_eq!(layers.removed["f"], HashMap::from([(1, 0)]));
+    }
+
+    #[test]
+    fn file_layers_include_moves_through_later_edits_and_moves() {
+        let moved = "diff --git a/old name b/new name\nsimilarity index 100%\nrename from old name\nrename to new name\n";
+        let edited = "diff --git a/new name b/new name\n--- a/new name\n+++ b/new name\n@@ -1 +1 @@\n-old\n+new\n";
+        let moved_again = "diff --git a/new name b/final name\nsimilarity index 100%\nrename from new name\nrename to final name\n";
+        let unrelated = "diff --git a/other b/other\n@@ -1 +1 @@\n-x\n+y\n";
+        let mut steps = vec![(layer("move"), moved.into())];
+        let layers = Layers::from_steps(&steps);
+        assert_eq!(layers.file_layers(moved), [0]);
+        assert!(layers.marks(moved).iter().all(Vec::is_empty));
+
+        steps.extend([
+            (layer("edit"), edited.into()),
+            (layer("move again"), moved_again.into()),
+            (layer("other"), unrelated.into()),
+        ]);
+        let layers = Layers::from_steps(&steps);
+        let combined = "diff --git a/old name b/final name\nrename from old name\nrename to final name\n--- a/old name\n+++ b/final name\n@@ -1 +1 @@\n-old\n+new\n";
+        assert_eq!(layers.file_layers(combined), [0, 1, 2]);
+        assert_eq!(layers.file_layers(unrelated), [3]);
+        assert_eq!(layers.marks(combined).last().unwrap(), &[1]);
     }
 
     #[test]

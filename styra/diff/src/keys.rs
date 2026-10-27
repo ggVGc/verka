@@ -115,14 +115,20 @@ pub const BINDINGS: &[Binding] = &[
         Command::View(Action::ToggleLayers),
     ),
     bind(
+        &[KeyCode::Char('c')],
+        "c (per-file view)",
+        "toggle only files involved in the highlighted commits (Esc clears)",
+        Command::View(Action::ToggleInvolved),
+    ),
+    bind(
         &[KeyCode::Char('r')],
         "r",
         "toggle visibility of removed diff lines",
         Command::View(Action::ToggleRemoved),
     ),
     bind(
-        &[KeyCode::Char('c')],
-        "c (per-file view)",
+        &[KeyCode::Char('C')],
+        "C (per-file view)",
         "fold / unfold directories holding no files of their own",
         Command::View(Action::ToggleCompactDirs),
     ),
@@ -384,7 +390,7 @@ mod tests {
     #[test]
     fn view_keys_act_and_the_rest_go_to_the_host() {
         let mut diff = diff();
-        for key in ['r', 'l', 'j', 'c', 't', 'e', 'w', 'L', 'm'] {
+        for key in ['r', 'l', 'j', 'C', 't', 'e', 'w', 'L', 'm'] {
             assert_eq!(press(&mut diff, KeyCode::Char(key)), Outcome::Handled);
         }
         assert!(!diff.word_highlights);

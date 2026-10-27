@@ -1391,6 +1391,7 @@ mod tests {
             tint: Default::default(),
             word_highlights: true,
             layers: None,
+            involved_layers: None,
             thumbnail_hidden: false,
             selected_file: 0,
             file_list_offset: 0,

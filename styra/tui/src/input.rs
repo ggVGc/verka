@@ -2899,6 +2899,7 @@ mod tests {
             tint: Default::default(),
             word_highlights: true,
             layers: None,
+            involved_layers: None,
             thumbnail_hidden: false,
             selected_file: 0,
                         file_list_offset: 0,
@@ -2938,10 +2939,10 @@ mod tests {
         let diff = app.checkout_diff.as_mut().unwrap();
         diff.scroll.note_limit(100);
         diff.scroll.note_viewport(30);
-        press(&mut app, KeyCode::Char('c'));
+        press(&mut app, KeyCode::Char('C'));
         assert!(!app.checkout_diff.as_ref().unwrap().compact_dirs);
-        assert_eq!(app.view, View::CheckoutDiff, "c is the diff's here");
-        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.view, View::CheckoutDiff, "C is the diff's here");
+        press(&mut app, KeyCode::Char('C'));
         assert!(app.checkout_diff.as_ref().unwrap().compact_dirs);
         press(&mut app, KeyCode::Char('t'));
         assert_eq!(
