@@ -89,6 +89,7 @@ impl EditReports {
             diff.report.hidden = false;
         }
         self.pending.insert(id);
+        app.describing_edits = self.pending.len();
         let noun = if count == 1 { "file" } else { "files" };
         app.show_action_message(format!(
             "describing the edits of {count} {noun} — the per-file view (l) shows each one"
@@ -101,10 +102,17 @@ impl EditReports {
         let mut applied = false;
         while let Ok((id, report)) = self.receive.try_recv() {
             self.pending.remove(&id);
+            app.describing_edits = self.pending.len();
+            // The footer's count of work in the background has changed.
+            applied = true;
             if id != app.session_id {
+                if let Err(error) = &report {
+                    app.push_log(LogEntry::warn(format!(
+                        "could not describe the edits of {id}: {error}"
+                    )));
+                }
                 continue;
             }
-            applied = true;
             if let Some(diff) = app.checkout_diff.as_mut() {
                 diff.report.pending = false;
                 if let Ok(report) = &report {
@@ -112,11 +120,18 @@ impl EditReports {
                 }
             }
             match report {
-                Ok(report) => app.show_action_message(format!(
-                    "edit report ready: {} of {} files described",
-                    report.files.len(),
-                    report.requested
-                )),
+                Ok(report) => match report.failures.first() {
+                    None => app.show_action_message(format!(
+                        "edit report ready: {} of {} files described",
+                        report.files.len(),
+                        report.requested
+                    )),
+                    Some(failure) => app.show_warning(format!(
+                        "edit report: {} of {} files described — {failure} · E: try again",
+                        report.files.len(),
+                        report.requested
+                    )),
+                },
                 Err(error) => app.show_error(format!("could not describe the edits: {error}")),
             }
         }
@@ -182,6 +197,7 @@ fn for_view(report: &EditReport) -> styra_diff::Report {
                 )
             })
             .collect(),
+        failures: report.failures.clone(),
     }
 }
 
@@ -227,9 +243,11 @@ mod tests {
                 description: "Adds a.".into(),
             }],
             requested: 1,
+            failures: vec!["timed out".into()],
         };
         let shown = for_view(&report);
         assert_eq!(shown.files["a.rs"].description, "Adds a.");
         assert_eq!(shown.files["a.rs"].fingerprint, "f");
+        assert_eq!(shown.failures, ["timed out"]);
     }
 }

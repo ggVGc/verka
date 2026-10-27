@@ -216,6 +216,10 @@ pub struct App {
     /// worker but not yet acknowledged. Policy controls pause while nonzero so
     /// a second toggle cannot be derived from a stale server snapshot.
     pub workspace_launch_pending: usize,
+    /// Interactions whose edits the server is describing, which the footer
+    /// shows from whichever view the operator is in: the report takes a while,
+    /// and its interaction may no longer be the one on screen.
+    pub describing_edits: usize,
     /// A mount was added or removed while the interaction was idle, so its
     /// running sandbox no longer matches the policy. The event loop restarts it
     /// once any Workspace edit has been stored; see [`App::note_mount_change`].
@@ -598,6 +602,7 @@ impl App {
             launcher: None,
             template_picker: None,
             workspace_launch_pending: 0,
+            describing_edits: 0,
             restart_for_mounts: false,
             recent_models: Vec::new(),
             workspace: Location::default(),

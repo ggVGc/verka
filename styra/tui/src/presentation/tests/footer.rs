@@ -64,6 +64,20 @@ mod tests {
         assert!(rendered(&app).contains("R rate-limit retry: on"));
     }
 
+    /// An edit report takes a while and is asked for from the diff, which the
+    /// operator may well leave; the footer keeps saying it is being written.
+    #[test]
+    fn footer_reports_edits_being_described() {
+        let mut app = test_support::app("s1");
+        assert!(!rendered(&app).contains("describing edits"));
+
+        app.describing_edits = 1;
+        assert!(rendered(&app).contains("⟳ describing edits"));
+
+        app.describing_edits = 2;
+        assert!(rendered(&app).contains("describing edits of 2 interactions"));
+    }
+
     /// Committing turns is on by default in a worktree, so the footer has to
     /// say so for the operator to know that branch's history is being written
     /// to.

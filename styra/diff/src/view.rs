@@ -1512,10 +1512,19 @@ fn render_description(
             }
             lines
         }
-        Described::Missing if report.pending => Vec::new(),
-        Described::Missing => vec![Line::from(Span::styled(
+        Described::Missing { .. } if report.pending => Vec::new(),
+        Described::Missing { failure: None } => vec![Line::from(Span::styled(
             " the edit report does not describe this file · E: write a new one",
             muted,
+        ))],
+        Described::Missing {
+            failure: Some(failure),
+        } => vec![Line::from(Span::styled(
+            format!(
+                " describing this file failed: {} · E: try again",
+                failure.lines().next().unwrap_or_default()
+            ),
+            Style::default().fg(theme::WARNING),
         ))],
     };
     if report.pending {
@@ -3043,6 +3052,7 @@ index 1111111..2222222 100644
                     },
                 )]
                 .into(),
+                failures: Vec::new(),
             }),
             ..Default::default()
         };
@@ -3066,6 +3076,17 @@ index 1111111..2222222 100644
         let (output, _) = report_screen(&pending, true);
         assert!(output.contains("Replaces b"), "{output}");
         assert!(output.contains("describing each file's edits…"), "{output}");
+
+        // A file the report is missing because describing it failed says why.
+        let mut failed = described(DIFF);
+        let report = failed.report.as_mut().unwrap();
+        report.files.clear();
+        report.failures = vec!["the errand timed out\nafter 180s".into()];
+        let (output, _) = report_screen(&failed, true);
+        assert!(
+            output.contains("describing this file failed: the errand timed out · E: try again"),
+            "{output}"
+        );
 
         let mut hidden = described(DIFF);
         hidden.hidden = true;

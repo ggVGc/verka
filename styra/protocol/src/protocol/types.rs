@@ -47,6 +47,11 @@ pub struct EditReport {
     pub files: Vec<FileEditReport>,
     /// How many files were sent to be described.
     pub requested: usize,
+    /// Why files were left undescribed after the server retried them: each
+    /// error an errand ended with. Empty when every file the agent was asked
+    /// about came back described, or only skipped without an error.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

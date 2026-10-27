@@ -8,7 +8,9 @@
 //! asks the operator's agent, as an [`Errand`], to describe each file. Files go
 //! out in batches, a few at a time: a large diff costs a handful of errands
 //! rather than one per file, and no batch is so large that its files crowd
-//! each other out.
+//! each other out. Files a round leaves undescribed, because their batch
+//! failed or the agent passed over them, get one more; the errors of what is
+//! still missing after that are kept in the report for the client to show.
 //!
 //! The report is kept in the Session's directory, so it is there the next
 //! time the diff is opened, from any client, until the next one replaces it.
@@ -30,6 +32,8 @@ const BATCH_CHARS: usize = 30_000;
 const BATCH_FILES: usize = 20;
 /// The most of the task, and of the commit messages, each errand is shown.
 const CONTEXT_CHARS: usize = 4_000;
+/// Times a file is put to an errand before it is left undescribed.
+const ROUNDS: usize = 2;
 /// Errands run at once.
 const PARALLEL: usize = 4;
 /// Longer than an errand's default: describing a batch of patches is more
@@ -59,22 +63,13 @@ impl ServerState {
             task: session.first_prompt.as_deref().unwrap_or_default(),
             commits: &commits,
         };
-        let batches = batches(&files);
-        let answers = run_parallel(&batches, |batch| {
+        let (mut described, mut failures) = describe_in_rounds(id, &files, |batch| {
             let answer = Errand::new(session.selection.provider, prompt(&context, batch))
                 .within(TIMEOUT)
                 .answer()?;
             descriptions(&answer).context("the agent did not answer with a description per file")
         });
-        let mut described = HashMap::new();
-        let mut failure = None;
-        for answer in answers {
-            match answer {
-                Ok(answer) => described.extend(answer),
-                Err(error) => failure = failure.or(Some(error)),
-            }
-        }
-        if let (true, Some(error)) = (described.is_empty(), failure) {
+        if let (true, Some(error)) = (described.is_empty(), failures.pop()) {
             return Err(error.context("could not describe the edits"));
         }
         let report = EditReport {
@@ -92,6 +87,7 @@ impl ServerState {
                     })
                 })
                 .collect(),
+            failures: failures.iter().map(|error| format!("{error:#}")).collect(),
         };
         store(&session.path, &report)?;
         Ok(report)
@@ -100,6 +96,46 @@ impl ServerState {
     pub(super) fn edit_report(&self, id: &str) -> Result<Option<EditReport>> {
         read(&self.stored_summary(id)?.path)
     }
+}
+
+/// `files` described by `describe`, a batch at a time, with whatever a round
+/// leaves undescribed put to the next, up to [`ROUNDS`]: a batch can fail
+/// whole — a timeout, an answer that is not JSON — and an agent can pass over
+/// a file or misspell its path. Returns the descriptions by path, and the
+/// errors of the last round run, which are what explain the files still
+/// missing.
+fn describe_in_rounds(
+    id: &str,
+    files: &[EditReportFile],
+    describe: impl Fn(&[&EditReportFile]) -> Result<HashMap<String, String>> + Sync,
+) -> (HashMap<String, String>, Vec<anyhow::Error>) {
+    let mut described = HashMap::new();
+    let mut failures = Vec::new();
+    let mut left: Vec<&EditReportFile> = files.iter().collect();
+    for round in 1..=ROUNDS {
+        if left.is_empty() {
+            break;
+        }
+        failures.clear();
+        let batches = batches(&left);
+        let answers = run_parallel(&batches, |batch| describe(batch));
+        for (batch, answer) in batches.iter().zip(answers) {
+            match answer {
+                Ok(answer) => described.extend(answer),
+                Err(error) => {
+                    tracing::warn!(
+                        session_id = id,
+                        round,
+                        files = batch.len(),
+                        "describing a batch of edits failed: {error:#}"
+                    );
+                    failures.push(error);
+                }
+            }
+        }
+        left.retain(|file| !described.contains_key(&file.path));
+    }
+    (described, failures)
 }
 
 /// What the patches cannot say about themselves.
@@ -113,10 +149,10 @@ struct Background<'a> {
 /// `files` in order, grouped so no group is longer than [`BATCH_CHARS`] or
 /// has more than [`BATCH_FILES`] files; a file longer than that on its own
 /// gets a group to itself.
-fn batches(files: &[EditReportFile]) -> Vec<Vec<&EditReportFile>> {
+fn batches<'a>(files: &[&'a EditReportFile]) -> Vec<Vec<&'a EditReportFile>> {
     let mut batches: Vec<Vec<&EditReportFile>> = Vec::new();
     let mut size = 0;
-    for file in files {
+    for &file in files {
         let length = file.patch.len().min(PATCH_CHARS);
         match batches.last_mut() {
             Some(batch) if size + length <= BATCH_CHARS && batch.len() < BATCH_FILES => {
@@ -278,11 +314,12 @@ mod tests {
             file("d", 100),
         ];
         assert_eq!(
-            paths(&batches(&files)),
+            paths(&batches(&files.iter().collect::<Vec<_>>())),
             [vec!["a", "b", "c"], vec!["huge", "d"]]
         );
 
         let many: Vec<_> = (0..45).map(|index| file(&index.to_string(), 10)).collect();
+        let many: Vec<_> = many.iter().collect();
         let sizes: Vec<_> = batches(&many).iter().map(Vec::len).collect();
         assert_eq!(sizes, [20, 20, 5]);
         assert!(batches(&[]).is_empty());
@@ -360,6 +397,59 @@ mod tests {
         assert_eq!(answers.len(), 9);
     }
 
+    /// The paths `describe_in_rounds` came back with described, sorted, its
+    /// errors, and how many batches it asked about.
+    fn rounds(
+        files: &[EditReportFile],
+        describe: impl Fn(&[&str], usize) -> Result<Vec<&'static str>> + Sync,
+    ) -> (Vec<String>, Vec<String>, usize) {
+        let asked = AtomicUsize::new(0);
+        let (described, failures) = describe_in_rounds("s", files, |batch| {
+            let call = asked.fetch_add(1, Ordering::Relaxed) + 1;
+            let paths: Vec<_> = batch.iter().map(|file| file.path.as_str()).collect();
+            Ok(describe(&paths, call)?
+                .into_iter()
+                .map(|path| (path.to_owned(), format!("Edits {path}.")))
+                .collect())
+        });
+        let mut described: Vec<_> = described.into_keys().collect();
+        described.sort();
+        let failures = failures.iter().map(ToString::to_string).collect();
+        (described, failures, asked.into_inner())
+    }
+
+    /// A batch that fails, and a file its batch's answer passes over, are put
+    /// to the agent again; what fails every round is left out, with the last
+    /// round's error and none of an earlier one's.
+    #[test]
+    fn what_a_round_leaves_undescribed_is_tried_again() {
+        let files = [file("a", 10), file("b", 10)];
+        let (described, failures, asked) = rounds(&files, |_, call| match call {
+            1 => anyhow::bail!("not JSON"),
+            _ => Ok(vec!["a", "b"]),
+        });
+        assert_eq!(
+            (described, failures, asked),
+            (vec!["a".into(), "b".into()], vec![], 2)
+        );
+
+        let (described, failures, asked) = rounds(&files, |paths, _| {
+            assert!(!paths.is_empty());
+            Ok(vec!["a"])
+        });
+        assert_eq!(described, ["a"]);
+        assert!(failures.is_empty(), "passed over, not failed");
+        assert_eq!(asked, 2, "b alone, the second time");
+
+        let (described, failures, asked) =
+            rounds(&files, |_, call| anyhow::bail!("timed out {call}"));
+        assert!(described.is_empty());
+        assert_eq!((failures, asked), (vec!["timed out 2".to_owned()], 2));
+
+        let (_, _, asked) = rounds(&files, |_, _| Ok(vec!["a", "b"]));
+        assert_eq!(asked, 1, "nothing left for a second round");
+    }
+
     #[test]
     fn a_report_is_kept_with_the_session_until_replaced() {
         let session = tempfile::tempdir().unwrap();
@@ -373,6 +463,7 @@ mod tests {
                 description: "Adds a.".into(),
             }],
             requested: 2,
+            failures: vec!["the errand timed out".into()],
         };
         store(session.path(), &report).unwrap();
         assert_eq!(read(session.path()).unwrap().as_ref(), Some(&report));

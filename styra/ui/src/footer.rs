@@ -29,6 +29,9 @@ pub struct FooterView<'a> {
     /// Whether the interaction shown commits each turn's work as it goes
     /// idle.
     pub auto_commit: bool,
+    /// Work the client started that is still going on in the background,
+    /// in the operator's words; `None` when there is none.
+    pub background: Option<&'a str>,
 }
 
 pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
@@ -49,10 +52,20 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         .unwrap_or_default()
         .min(area.width.saturating_sub(quota_width + retry_width) as usize)
         as u16;
+    let background = view.background.map(|work| format!(" ⟳ {work} "));
+    let background_width = background
+        .as_deref()
+        .map(UnicodeWidthStr::width)
+        .unwrap_or_default()
+        .min(
+            area.width
+                .saturating_sub(quota_width + retry_width + commit_width) as usize,
+        ) as u16;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(0),
+            Constraint::Length(background_width),
             Constraint::Length(quota_width),
             Constraint::Length(retry_width),
             Constraint::Length(commit_width),
@@ -89,7 +102,17 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
                 Span::styled(segment.text.clone(), style)
             })
             .collect::<Vec<_>>();
-        frame.render_widget(Paragraph::new(Line::from(spans)).right_aligned(), chunks[1]);
+        frame.render_widget(Paragraph::new(Line::from(spans)).right_aligned(), chunks[2]);
+    }
+    if let Some(background) = background {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                background,
+                Style::default().fg(theme::MUTED_WARNING),
+            )))
+            .right_aligned(),
+            chunks[1],
+        );
     }
     if let Some(retry) = retry {
         frame.render_widget(
@@ -98,7 +121,7 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
                 Style::default().fg(theme::SUCCESS),
             )))
             .right_aligned(),
-            chunks[2],
+            chunks[3],
         );
     }
     if let Some(commit) = commit {
@@ -108,7 +131,7 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
                 Style::default().fg(theme::SUCCESS),
             )))
             .right_aligned(),
-            chunks[3],
+            chunks[4],
         );
     }
 }
@@ -167,12 +190,14 @@ mod tests {
                 quota: &quota,
                 auto_retry: true,
                 auto_commit: true,
+                background: Some("describing edits"),
             },
         );
         for expected in [
             "codex: 80%",
             "rate-limit retry: on",
             "^G auto-commit",
+            "⟳ describing edits",
             "/workspace",
         ] {
             assert!(output.contains(expected), "missing {expected}: {output}");

@@ -289,10 +289,13 @@ using Git's rename similarity threshold.
 `E` in the diff writes an edit report: the server has the interaction's agent,
 on its cheapest model, describe each file of the diff — its main edits and why,
 from the patch, the interaction's first prompt, and the branch's commit
-messages. It runs in the background and is kept with the Session, so reopening
-the diff shows it again. The per-file view shows the selected file's
-description above its patch (`e` hides or shows it), noting when the file has
-changed since it was described.
+messages. It runs in the background — the footer says so, whatever view is
+open — and is kept with the Session, so reopening the diff shows it again.
+Files are described a batch at a time, and any a batch failed or passed over
+are tried once more; what still fails is reported with its error. The per-file
+view shows the selected file's description above its patch (`e` hides or shows
+it), noting when the file has changed since it was described, or why describing
+it failed.
 `Enter` (or `V`) in the diff selects lines: a cursor starts on the line at the
 top of the patch shown — one file's, or the combined diff — and `j`/`k`,
 PgUp/PgDn and `g`/`G` move it instead of the view; `Enter`, `V` or `Esc` leaves.

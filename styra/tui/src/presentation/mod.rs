@@ -687,6 +687,11 @@ fn draw_main(
         })
         .unwrap_or_default();
     let quota_alert = quota::alert(app);
+    let background = match app.describing_edits {
+        0 => None,
+        1 => Some("describing edits".to_owned()),
+        count => Some(format!("describing edits of {count} interactions")),
+    };
     let footer = styra_ui::footer::FooterView {
         working_directory: &working_directory,
         quota: &quota_alert,
@@ -694,6 +699,7 @@ fn draw_main(
         auto_commit: app.auto_commit && !app.session_id.is_empty(),
         // Shown on the blank screen too: there it is the choice the first
         // message's interaction will be created with.
+        background: background.as_deref(),
     };
     let launcher = app.launcher.as_ref().map(launcher_view);
     let capture = app.recording.as_ref().map(recording);

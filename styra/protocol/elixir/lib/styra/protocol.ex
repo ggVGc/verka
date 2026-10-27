@@ -877,7 +877,8 @@ defmodule Styra.Protocol do
         %{name: "generated_at_ms", required: true, type: %{kind: :number, integer: true}},
         %{name: "base", required: true, type: %{kind: :string}},
         %{name: "files", required: true, type: %{kind: :list, item: %{kind: :ref, name: "FileEditReport"}}},
-        %{name: "requested", required: true, type: %{kind: :number, integer: true}}
+        %{name: "requested", required: true, type: %{kind: :number, integer: true}},
+        %{name: "failures", required: false, type: %{kind: :list, item: %{kind: :string}}}
       ]
     },
 

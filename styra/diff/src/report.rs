@@ -9,6 +9,9 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Report {
     pub files: HashMap<String, FileReport>,
+    /// Why files went undescribed, as the host was told: empty when the
+    /// agent only passed over them, or described them all.
+    pub failures: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,8 +37,9 @@ pub(crate) enum Described<'a> {
     /// Its description, and whether the patch has changed since it was
     /// written.
     Described { description: &'a str, stale: bool },
-    /// The report does not cover it.
-    Missing,
+    /// The report does not cover it, and the first reason given for files
+    /// going undescribed, if there was one.
+    Missing { failure: Option<&'a str> },
 }
 
 impl ReportState {
@@ -54,7 +58,13 @@ impl ReportState {
                 description: &file.description,
                 stale: file.fingerprint != fingerprint(patch),
             },
-            None => Described::Missing,
+            None => Described::Missing {
+                failure: self
+                    .report
+                    .as_ref()
+                    .and_then(|report| report.failures.first())
+                    .map(String::as_str),
+            },
         }
     }
 }
@@ -88,7 +98,10 @@ mod tests {
         assert!(!state.shown());
         state.pending = true;
         assert!(state.shown());
-        assert_eq!(state.describe("a.rs", "+a\n"), Described::Missing);
+        assert_eq!(
+            state.describe("a.rs", "+a\n"),
+            Described::Missing { failure: None }
+        );
 
         state.report = Some(Report {
             files: HashMap::from([(
@@ -98,6 +111,7 @@ mod tests {
                     description: "Adds a.".into(),
                 },
             )]),
+            failures: Vec::new(),
         });
         assert_eq!(
             state.describe("a.rs", "+a\n"),
