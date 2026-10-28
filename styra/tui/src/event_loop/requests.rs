@@ -649,6 +649,9 @@ impl Loop<'_> {
                 return;
             }
         };
+        // Reopening the pane already open, as a switch of interaction does,
+        // leaves the keys with whichever side had them.
+        let reopened = !fullscreen && at.is_none() && app.diff_preview;
         let diff = match at {
             Some((path, line)) => {
                 let mut diff = styra_diff::CheckoutDiff::read(target);
@@ -663,8 +666,10 @@ impl Loop<'_> {
         app.checkout_diff = Some(diff);
         self.edit_reports.load(app, self.client);
         self.diff_refreshed = Instant::now();
+        if !reopened {
+            app.diff_interaction_focus = !fullscreen && app.interactions.open;
+        }
         app.diff_preview = !fullscreen;
-        app.diff_interaction_focus = !fullscreen && app.interactions.open;
         app.diff_turn = false;
         if fullscreen {
             app.set_view(View::CheckoutDiff);

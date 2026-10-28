@@ -449,6 +449,31 @@ mod tests {
             assert!(event_loop.app.interactions.open);
             assert!(!event_loop.app.diff_focused());
         }
+
+        // With the navigator closed, as `n` steps, whichever side had the
+        // keys keeps them on the next interaction.
+        event_loop.app.interactions.close();
+        for interaction_focus in [true, false] {
+            event_loop.app.diff_interaction_focus = interaction_focus;
+            for id in ["s2", "s1"] {
+                let current = event_loop.app.session_id.clone();
+                event_loop
+                    .app
+                    .interactions
+                    .move_cursor_to(id.into(), &current);
+                navigation::load_cursored_interaction(
+                    event_loop.app,
+                    event_loop.live,
+                    event_loop.client,
+                    event_loop.standing_launch,
+                );
+                event_loop.carry_out_requests("").unwrap();
+                assert_eq!(event_loop.app.session_id, id);
+                assert!(event_loop.app.diff_visible(), "{id}");
+                assert!(!event_loop.app.interactions.open);
+                assert_eq!(event_loop.app.diff_focused(), !interaction_focus, "{id}");
+            }
+        }
     }
 
     #[test]

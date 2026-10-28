@@ -554,6 +554,10 @@ pub struct OperatorState {
     /// which replays its updates, announcements included — does not raise
     /// the same warning again.
     quota_noticed: HashSet<QuotaNotice>,
+    /// Whether the interaction, rather than the side diff, had the keys, so
+    /// stepping to another interaction with the pane open does not hand them
+    /// to its diff.
+    diff_interaction_focus: bool,
 }
 
 /// What the operator had open in place of the plain event list. Moving to
@@ -704,6 +708,7 @@ impl App {
             file_show_all: self.files.shows_all(),
             quota: std::mem::take(&mut self.quota),
             quota_noticed: std::mem::take(&mut self.quota_noticed),
+            diff_interaction_focus: self.diff_interaction_focus,
         }
     }
 
@@ -738,9 +743,11 @@ impl App {
                 // Keep the pane enabled even when this interaction cannot
                 // provide a diff, so the next interaction tries again.
                 self.diff_preview = true;
-                // Browsing the live list keeps its keys while the new
-                // interaction's diff is loaded.
-                self.diff_interaction_focus = self.interactions.open;
+                // Whichever side had the keys keeps them; browsing the live
+                // list keeps its keys while the new interaction's diff is
+                // loaded.
+                self.diff_interaction_focus =
+                    state.diff_interaction_focus || self.interactions.open;
                 if has_checkout {
                     self.ask(Request::ShowDiff(self.session_id.clone()));
                 }
