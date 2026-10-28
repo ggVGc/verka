@@ -1215,7 +1215,8 @@ fn same_checkout(
 /// made from another one's branch — which is what it is integrated back into —
 /// is headed beneath that one's heading. Where the conversation came from is
 /// told within that: a branch working in the same checkout as its source hangs
-/// beneath it, and one working anywhere else names its source instead.
+/// beneath it, and one working anywhere else names its source instead, its
+/// checkout following the source's — see [`follow_sources`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DisplayRow {
     /// The entry's index in [`LiveInteractions::items`].
@@ -1246,8 +1247,9 @@ pub struct WorktreeHeading {
 /// `visible` laid out as [`DisplayRow`]s, in the order the navigator draws
 /// them: each Workspace's entries together, each checkout in the order it
 /// first appears — the main checkout unheaded, each worktree followed by the
-/// worktrees integrated into it — and within each checkout the branch tree —
-/// see [`branch_tree`].
+/// worktrees integrated into it, or following the entry it was branched from
+/// — see [`follow_sources`] — and within each checkout the branch tree — see
+/// [`branch_tree`].
 ///
 /// The sort reads bottom up while the headings still head from above: the
 /// item order is turned over, so the latest-messaged entry of each checkout
@@ -1332,7 +1334,10 @@ fn display_tree(
             .filter(|at| parents[*at].is_none())
             .chain(0..worktrees.len());
         let mut placed = vec![false; worktrees.len()];
+        // Each root worktree with the worktrees nested beneath it.
+        let mut blocks = Vec::new();
         for root in roots {
+            let mut block = Vec::new();
             let mut stack = vec![(root, 0)];
             while let Some((at, nesting)) = stack.pop() {
                 if placed[at] {
@@ -1350,12 +1355,107 @@ fn display_tree(
                 } else {
                     (0, None)
                 };
-                branch_tree(interactions, rows, level, heading, &mut out);
+                branch_tree(interactions, rows, level, heading, &mut block);
                 stack.extend(children[at].iter().rev().map(|child| (*child, nesting + 1)));
+            }
+            if !block.is_empty() {
+                blocks.push(block);
+            }
+        }
+        follow_sources(interactions, blocks, &mut out);
+    }
+    out
+}
+
+/// `blocks`, one Workspace's root worktrees each with those nested beneath it,
+/// appended to `out` in their order, except that one whose first branched entry
+/// came from an entry shown in another block is moved to follow that source:
+/// directly after it and its branches when it stands unheaded at the root, as
+/// the branch would hang beneath it in a shared checkout, and after its whole
+/// block when it is headed, rather than splitting its worktree's rows. A
+/// malformed loop of those sources has no root, so its blocks are placed in
+/// their existing order rather than lost.
+fn follow_sources(
+    interactions: &[InteractionSummary],
+    blocks: Vec<Vec<DisplayRow>>,
+    out: &mut Vec<DisplayRow>,
+) {
+    let block_of = |id: &str| {
+        blocks
+            .iter()
+            .position(|block| block.iter().any(|row| interactions[row.index].id == id))
+    };
+    let sources: Vec<Option<(usize, String)>> = blocks
+        .iter()
+        .enumerate()
+        .map(|(at, block)| {
+            block.iter().find_map(|row| {
+                let source = row.branched_from.as_ref()?;
+                block_of(source)
+                    .filter(|other| *other != at)
+                    .map(|other| (other, source.clone()))
+            })
+        })
+        .collect();
+
+    fn place(
+        at: usize,
+        blocks: &[Vec<DisplayRow>],
+        sources: &[Option<(usize, String)>],
+        interactions: &[InteractionSummary],
+        placed: &mut [bool],
+        out: &mut Vec<DisplayRow>,
+    ) {
+        if placed[at] {
+            return;
+        }
+        placed[at] = true;
+        let rows = &blocks[at];
+        let following = |id: &str| -> Vec<usize> {
+            (0..blocks.len())
+                .filter(|other| {
+                    sources[*other]
+                        .as_ref()
+                        .is_some_and(|(block, source)| *block == at && source == id)
+                })
+                .collect()
+        };
+        // The rows the source's followers come after, by their source.
+        let mut pending: Vec<(usize, &str)> = Vec::new();
+        for (row_at, row) in rows.iter().enumerate() {
+            let id = interactions[row.index].id.as_str();
+            let end = if row.level == 0 {
+                row_at
+                    + rows[row_at + 1..]
+                        .iter()
+                        .take_while(|after| after.level == 0 && after.depth > row.depth)
+                        .count()
+            } else {
+                rows.len() - 1
+            };
+            pending.push((end, id));
+            out.push(row.clone());
+            let due: Vec<&str> = pending
+                .iter()
+                .filter(|(end, _)| *end == row_at)
+                .map(|(_, id)| *id)
+                .collect();
+            pending.retain(|(end, _)| *end != row_at);
+            for id in due {
+                for follower in following(id) {
+                    place(follower, blocks, sources, interactions, placed, out);
+                }
             }
         }
     }
-    out
+
+    let mut placed = vec![false; blocks.len()];
+    let roots = (0..blocks.len())
+        .filter(|at| sources[*at].is_none())
+        .chain(0..blocks.len());
+    for at in roots {
+        place(at, &blocks, &sources, interactions, &mut placed, out);
+    }
 }
 
 /// `rows`, the entries working in one checkout, laid out so each branch sits
@@ -2791,18 +2891,52 @@ pub(crate) mod tests {
         assert_eq!(
             placements(&live),
             [
-                ("docs", 0, 0, None, rework.clone()),
                 ("review", 0, 1, into("main"), None),
                 ("rework", 0, 1, None, None),
                 ("jwt", 1, 1, None, None),
-                ("spike", 0, 2, into("auth"), rework),
+                ("spike", 0, 2, into("auth"), rework.clone()),
                 ("tests", 0, 2, into("auth"), None),
+                // Follows its source's worktree rather than splitting it.
+                ("docs", 0, 0, None, rework),
                 ("tidy", 0, 0, None, None),
                 ("tidy-more", 1, 0, None, None),
             ]
         );
         // Walking the list follows the same order.
         assert_eq!(live.next("jwt", Some("workspace")).unwrap().id, "spike");
+    }
+
+    /// A branch working in a worktree of its own still follows the entry it
+    /// came from, past that entry's branches in its own checkout, rather than
+    /// sorting wherever its worktree would on its own.
+    #[test]
+    fn a_branch_in_another_worktree_follows_its_source() {
+        use InteractionActivity::Pending;
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("newest", Pending),
+                worktree(branched("twig", Pending, "spike"), "twig", "main"),
+                worktree(branched("spike", Pending, "source"), "spike", "main"),
+                branched("nested", Pending, "source"),
+                interaction("source", Pending),
+                interaction("oldest", Pending),
+            ],
+            vec![],
+        );
+        let source = |id: &str| Some(id.to_owned());
+        assert_eq!(
+            placements(&live),
+            [
+                ("oldest", 0, 0, None, None),
+                ("source", 0, 0, None, None),
+                ("nested", 1, 0, None, None),
+                ("spike", 0, 0, None, source("source")),
+                ("twig", 0, 0, None, source("spike")),
+                ("newest", 0, 0, None, None),
+            ]
+        );
+        assert_eq!(live.next("nested", Some("workspace")).unwrap().id, "spike");
     }
 
     /// A worktree made from one whose interactions are all hidden has no
@@ -2831,8 +2965,8 @@ pub(crate) mod tests {
     }
 
     /// Interactions sharing a worktree stay together under its heading: a
-    /// branch is not nested beneath a source among them, which would put it
-    /// between them, nor taken out of a group of its own.
+    /// branch working elsewhere is not nested beneath a source among them,
+    /// which would put it between them, but follows the whole worktree.
     #[test]
     fn a_branch_does_not_break_up_a_shared_worktree() {
         let in_worktree = |mut interaction: InteractionSummary| {
@@ -2856,7 +2990,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             display(&live, Some("workspace")),
-            [("branch", 0), ("sibling", 0), ("source", 0)]
+            [("sibling", 0), ("source", 0), ("branch", 0)]
         );
     }
 
