@@ -255,10 +255,19 @@ pub(crate) fn launcher_view(
     launcher: &crate::launcher::Launcher,
 ) -> styra_ui::launcher::LauncherView {
     styra_ui::launcher::LauncherView {
+        title: launcher.choice.title().to_owned(),
+        hint: launcher.choice.hint().to_owned(),
         selection: crate::launcher::label(&launcher.selection()),
         provider_locked: launcher.provider_locked,
         rows: launcher.labels(),
         list: launcher.list.clone(),
+        effort: (launcher.choice == crate::launcher::Choice::ModelEffort).then(|| {
+            styra_ui::launcher::EffortView {
+                rows: launcher.effort_labels(),
+                list: launcher.effort_list.clone(),
+                focused: launcher.active == crate::launcher::Field::Effort,
+            }
+        }),
     }
 }
 

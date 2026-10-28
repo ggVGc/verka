@@ -1,25 +1,33 @@
-//! The launch picker: one narrowing list of whole `agent:model/effort`
-//! triples, with the selection it would confirm spelled out along its top
-//! border so the operator sees exactly what it is selecting.
+//! Launch and focused selection pickers, with the selection they would
+//! confirm spelled out along the top border.
 
 use crate::fuzzy_list::{render_fuzzy_list, FuzzyList, FuzzyListView};
 use crate::theme;
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Clear};
 use ratatui::Frame;
 
 pub struct LauncherView {
+    pub title: String,
+    pub hint: String,
     /// The triple the picker would confirm, drawn in the title.
     pub selection: String,
     /// Whether a live session pins the agent. The list then holds only that
     /// agent's rows, and the title says why it is the only one on offer.
     pub provider_locked: bool,
-    /// Every launchable triple, in the order the list offers them.
+    /// Labels for the choices, in the order the list offers them.
     pub rows: Vec<String>,
     /// The query typed at the list and the cursor among what it left standing.
     pub list: FuzzyList,
+    pub effort: Option<EffortView>,
+}
+
+pub struct EffortView {
+    pub rows: Vec<String>,
+    pub list: FuzzyList,
+    pub focused: bool,
 }
 
 /// How tall the list is allowed to grow. The catalog crossed with the ladders
@@ -38,10 +46,13 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
     );
     let desired_height = (launcher.rows.len() as u16)
         .min(MAX_ROWS)
-        .saturating_add(2)
+        .saturating_add(if launcher.effort.is_some() { 4 } else { 2 })
         .max(4);
     let height = desired_height.min(area.height);
-    let width = area.width.saturating_sub(4).min(60);
+    let width = area
+        .width
+        .saturating_sub(4)
+        .min(if launcher.effort.is_some() { 96 } else { 60 });
     let area = Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
         y: area.y + area.height.saturating_sub(height) / 2,
@@ -51,10 +62,50 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
     frame.render_widget(Clear, area);
 
     let title = if launcher.provider_locked {
-        " styra · launch · agent fixed · "
+        format!(" styra · {} · agent fixed · ", launcher.title)
     } else {
-        " styra · launch · "
+        format!(" styra · {} · ", launcher.title)
     };
+    if let Some(effort) = &launcher.effort {
+        let block = Block::bordered()
+            .title(format!("{title}{} ", launcher.selection))
+            .title_bottom(" ctrl-o model · ctrl-e effort · Enter select · Esc cancel ");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(inner);
+        render_fuzzy_list(
+            frame,
+            &FuzzyListView {
+                title: " Models · ctrl-o ",
+                rows: &launcher.rows,
+                list: &launcher.list,
+                focused: !effort.focused,
+                empty_note: NO_ROWS,
+                hint: if effort.focused {
+                    " ctrl-o to focus "
+                } else {
+                    " type to narrow "
+                },
+            },
+            panes[0],
+        );
+        render_fuzzy_list(
+            frame,
+            &FuzzyListView {
+                title: " Effort · ctrl-e ",
+                rows: &effort.rows,
+                list: &effort.list,
+                focused: effort.focused,
+                empty_note: "not supported",
+                hint: "",
+            },
+            panes[1],
+        );
+        return;
+    }
     render_fuzzy_list(
         frame,
         &FuzzyListView {
@@ -65,7 +116,7 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
             empty_note: NO_ROWS,
             // The list is the whole picker, so its own border carries what the
             // picker has to say: the keys, and the query being typed.
-            hint: " type to narrow · ? keys ",
+            hint: &launcher.hint,
         },
         area,
     );
@@ -73,7 +124,7 @@ pub fn render_launcher(frame: &mut Frame, launcher: &LauncherView, area: Rect) {
 
 /// What the list shows when there is nothing to launch at all. Unreachable
 /// while either agent has a catalog, but a blank box would read as a bug.
-pub const NO_ROWS: &str = "no models on offer";
+pub const NO_ROWS: &str = "no matching choices";
 
 #[cfg(test)]
 mod tests {
@@ -95,9 +146,12 @@ mod tests {
     fn view() -> LauncherView {
         let rows = rows();
         LauncherView {
+            title: "launch".into(),
+            hint: " type to narrow · ? keys ".into(),
             selection: "codex:gpt-5.6-sol/minimal".into(),
             provider_locked: false,
             list: FuzzyList::at(&rows, 0),
+            effort: None,
             rows,
         }
     }
@@ -158,6 +212,33 @@ mod tests {
         let mut view = view();
         view.provider_locked = true;
         assert!(rendered(&view).contains("agent fixed"));
+    }
+
+    #[test]
+    fn shows_separate_model_and_effort_lists_with_independent_filters() {
+        let mut view = view();
+        view.title = "model / effort".into();
+        view.rows = vec!["model-sol".into(), "model-astra".into()];
+        view.list = FuzzyList::at(&view.rows, 0);
+        view.list.push('s');
+        view.list.push('o');
+        view.list.push('l');
+        let rows = vec!["low".into(), "high".into()];
+        let mut list = FuzzyList::at(&rows, 1);
+        for ch in "high".chars() {
+            list.push(ch);
+        }
+        view.effort = Some(EffortView {
+            rows,
+            list,
+            focused: true,
+        });
+        let screen = rendered(&view);
+        for expected in ["Models", "Effort", "model-sol", "high", "/sol", "/high"] {
+            assert!(screen.contains(expected), "missing {expected}: {screen}");
+        }
+        assert!(!screen.contains("model-astra"));
+        assert!(!screen.contains("low"));
     }
 
     /// The list says how it is driven: it is typed at, not stepped through,

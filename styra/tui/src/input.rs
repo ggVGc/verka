@@ -1326,6 +1326,14 @@ pub fn handle_input_key(
         }
         k if EDITOR_DELETE_WORD.matches(k) => app.composer.delete_word(),
         k if EDITOR_LAUNCHER.matches(k) => app.open_launcher(),
+        k if EDITOR_CYCLE_PROVIDER.matches(k) => app.open_provider_picker(),
+        k if EDITOR_CYCLE_MODEL.matches(k) => app.open_model_picker(),
+        k if EDITOR_CYCLE_EFFORT.matches(k) => {
+            app.open_model_picker();
+            if let Some(picker) = app.launcher.as_mut() {
+                picker.active = crate::launcher::Field::Effort;
+            }
+        }
         // Naming a file is part of writing the message, so it opens from the
         // box rather than from the driva view that the grant it may ask for
         // would otherwise have to be made in.
@@ -1529,6 +1537,132 @@ mod tests {
             handle_insert_key(app, KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
         handle_insert_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn selection_shortcuts_open_fuzzy_pickers_and_apply_only_on_enter() {
+        use crate::launcher::{self, Choice};
+        use styra_protocol::agent::{Provider, Selection};
+
+        let root = tempfile::tempdir().unwrap();
+        let preferences = root.path().join("defaults.json");
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        let mut live = Attachment::Detached;
+        let active_list = |picker: &launcher::Launcher| {
+            if picker.choice == Choice::ModelEffort && picker.active == launcher::Field::Effort {
+                (picker.effort_list.clone(), picker.effort_labels())
+            } else {
+                (picker.list.clone(), picker.labels())
+            }
+        };
+        for (shortcut, choice) in [
+            ('p', Choice::Provider),
+            ('o', Choice::ModelEffort),
+            ('e', Choice::ModelEffort),
+        ] {
+            let provider = Provider::Codex;
+            let model = &provider.models()[0];
+            let original = Selection {
+                provider,
+                model: model.id.to_owned(),
+                effort: model.efforts[0],
+            };
+            let mut app = App::pending(original.clone());
+            app.enter_input();
+            app.composer.insert("draft message");
+            let key = KeyEvent::new(KeyCode::Char(shortcut), KeyModifiers::CONTROL);
+            handle_input_key(&mut app, &client, "workspace", &mut live, key);
+            assert_eq!(app.launcher.as_ref().unwrap().choice, choice);
+            assert_eq!(app.selection, original);
+            assert!(app.take_request().is_none());
+
+            // The same chord advances, including ctrl-p which normally moves up.
+            launcher::handle_key(&mut app, key, &preferences);
+            let picker = app.launcher.as_ref().unwrap();
+            let chosen = picker.selection();
+            assert_ne!(chosen, original);
+            assert_eq!(app.selection, original);
+            assert!(app.take_request().is_none());
+
+            let count = active_list(app.launcher.as_ref().unwrap()).1.len();
+            for _ in 0..count {
+                launcher::handle_key(&mut app, key, &preferences);
+            }
+            let picker = app.launcher.as_ref().unwrap();
+            let (_, labels) = active_list(picker);
+            assert_eq!(labels[active_list(picker).0.selected], labels[1]);
+            assert_eq!(app.selection, original);
+
+            // Narrow to the highlighted row; typing and navigation are previews.
+            let query = active_list(app.launcher.as_ref().unwrap()).1[1].clone();
+            for ch in query.chars() {
+                launcher::handle_key(&mut app, KeyCode::Char(ch).into(), &preferences);
+            }
+            let filtered = app.launcher.as_ref().unwrap().selection();
+            if shortcut == 'o' {
+                assert_eq!(filtered.model, chosen.model);
+            } else {
+                assert_eq!(filtered, chosen);
+            }
+            assert_eq!(app.selection, original);
+            let picker = app.launcher.as_ref().unwrap();
+            let (list, labels) = active_list(picker);
+            let matches = list.matches(&labels);
+            let next = (list.selected + 1) % matches.len();
+            launcher::handle_key(&mut app, key, &preferences);
+            let picker = app.launcher.as_ref().unwrap();
+            let (list, _) = active_list(picker);
+            assert_eq!(list.selected, next);
+            assert_eq!(list.query, query);
+            let chosen = picker.selection();
+            assert_eq!(app.selection, original);
+            launcher::handle_key(&mut app, KeyCode::Enter.into(), &preferences);
+            assert_eq!(app.selection, chosen);
+            assert_eq!(app.composer.message(), "draft message");
+            assert_eq!(app.focus, crate::app::Focus::Input);
+            assert!(app.launcher.is_none());
+            assert!(app.take_request().is_none());
+        }
+    }
+
+    #[test]
+    fn escape_cancels_filtered_selection_pickers_and_empty_results_do_not_apply() {
+        use crate::launcher;
+        use styra_protocol::agent::{Provider, Selection};
+
+        let root = tempfile::tempdir().unwrap();
+        let preferences = root.path().join("defaults.json");
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        let mut live = Attachment::Detached;
+        for shortcut in ['p', 'o', 'e'] {
+            let original = Selection::new(Provider::Codex);
+            let mut app = App::pending(original.clone());
+            app.enter_input();
+            handle_input_key(
+                &mut app,
+                &client,
+                "workspace",
+                &mut live,
+                KeyEvent::new(KeyCode::Char(shortcut), KeyModifiers::CONTROL),
+            );
+            for ch in "no-such-choice".chars() {
+                launcher::handle_key(&mut app, KeyCode::Char(ch).into(), &preferences);
+            }
+            launcher::handle_key(&mut app, KeyCode::Enter.into(), &preferences);
+            assert!(app.launcher.is_some(), "empty results cannot be selected");
+            launcher::handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+                &preferences,
+            );
+            assert!(app.launcher.is_some(), "only Enter selects a choice");
+            launcher::handle_key(&mut app, KeyCode::Esc.into(), &preferences);
+            assert!(app.launcher.is_none(), "one Esc cancels a filtered picker");
+            assert_eq!(app.selection, original);
+            assert!(app.take_request().is_none());
+            assert!(app.recent_models.is_empty());
+            assert!(!preferences.exists());
+        }
     }
 
     #[test]

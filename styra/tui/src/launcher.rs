@@ -1,14 +1,10 @@
 //! The launch picker: the agent, model, and reasoning effort the *next* session
 //! will start with.
 //!
-//! One list, not three columns. What a launch needs is a whole
-//! `agent:model/effort` triple, and the columns made the operator assemble one
-//! out of three cursors — while the constraint between them (a rung belongs to
-//! a model, not to an agent) had to be enforced move by move. Offering the
-//! triples themselves makes every row a launchable selection by construction,
-//! and the list narrows as it is typed at, so `chk45` reaches
-//! `claude:claude-haiku-4-5-20251001` without a single step through the
-//! catalog.
+//! The full launcher offers whole `agent:model/effort` triples. The message
+//! editor's shortcuts open a provider list or separate model and effort lists
+//! in one selector. Each list keeps its own filter; typing edits the list most
+//! recently touched. Navigation only previews a selection; Enter applies it.
 //!
 //! [`App`](crate::app::App) carries an open picker as `launcher`; this module
 //! owns both its state and keyboard handling. [`crate::presentation::launcher`]
@@ -16,7 +12,7 @@
 
 use crossterm::event::KeyEvent;
 use std::path::Path;
-use styra_protocol::agent::{Provider, Selection, PROVIDERS};
+use styra_protocol::agent::{Effort, Provider, Selection, PROVIDERS};
 use styra_protocol::LogEntry;
 use styra_ui::fuzzy_list::FuzzyList;
 use styra_ui::query::Edit;
@@ -24,6 +20,47 @@ use styra_ui::query::Edit;
 use crate::app::App;
 use crate::keybindings as keys;
 use crate::preferences;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Choice {
+    Launch,
+    Provider,
+    ModelEffort,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    Model,
+    Effort,
+}
+
+impl Choice {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Launch => "launch",
+            Self::Provider => "provider",
+            Self::ModelEffort => "model / effort",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::Launch => " type to narrow · ? keys ",
+            Self::Provider => " ctrl-p/↓ next · type filter · Enter select · Esc cancel ",
+            Self::ModelEffort => " ctrl-o/e next · type filter · Enter select · Esc cancel ",
+        }
+    }
+
+    fn repeats(self, key: KeyEvent) -> bool {
+        match self {
+            Self::Launch => false,
+            Self::Provider => keys::EDITOR_CYCLE_PROVIDER.matches(key),
+            Self::ModelEffort => {
+                keys::EDITOR_CYCLE_MODEL.matches(key) || keys::EDITOR_CYCLE_EFFORT.matches(key)
+            }
+        }
+    }
+}
 
 /// Apply a key to the open launch picker.
 ///
@@ -36,12 +73,21 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
         return;
     };
     match key {
+        k if launcher.choice == Choice::ModelEffort && keys::EDITOR_CYCLE_MODEL.matches(k) => {
+            launcher.active = Field::Model;
+            launcher.cycle_next();
+        }
+        k if launcher.choice == Choice::ModelEffort && keys::EDITOR_CYCLE_EFFORT.matches(k) => {
+            launcher.active = Field::Effort;
+            launcher.cycle_next();
+        }
+        k if launcher.choice.repeats(k) => launcher.cycle_next(),
         k if keys::LAUNCHER_NEXT.matches(k) => launcher.next(),
         k if keys::LAUNCHER_PREV.matches(k) => launcher.prev(),
         k if keys::LAUNCHER_PAGE_DOWN.matches(k) => launcher.page_down(),
         k if keys::LAUNCHER_PAGE_UP.matches(k) => launcher.page_up(),
         k if keys::LAUNCHER_SELECT.matches(k) => confirm(app, preferences_path),
-        k if keys::LAUNCHER_DEFAULT.matches(k) => {
+        k if keys::LAUNCHER_DEFAULT.matches(k) && launcher.choice == Choice::Launch => {
             confirm(app, preferences_path);
             if let Err(error) = preferences::save_selection(preferences_path, &app.selection) {
                 app.push_log(LogEntry::error(format!(
@@ -49,11 +95,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
                 )));
             }
         }
-        // Esc widens the list back out before it closes it: a query narrowed
-        // too far is the common reason to press it, and abandoning the whole
-        // picker to retype the choice is not what was meant.
         k if keys::LAUNCHER_CANCEL.matches(k) => {
-            if launcher.is_filtering() {
+            if launcher.choice == Choice::Launch && launcher.is_filtering() {
                 launcher.clear_query();
             } else {
                 app.cancel_launcher();
@@ -73,6 +116,9 @@ fn confirm(app: &mut App, preferences_path: &Path) {
     let Some(launcher) = app.launcher.as_ref() else {
         return;
     };
+    if !launcher.has_selection() {
+        return;
+    }
     // A provider conversion keeps app.selection unchanged until the server
     // answers, but the confirmed model is already the one to remember.
     let model = launcher.selection().model;
@@ -100,14 +146,15 @@ pub fn label(selection: &Selection) -> String {
 
 /// The picker itself.
 ///
-/// It edits a pending choice, not a running session — confirming it only
-/// records the selection, and the operator's own first message still starts the
-/// agent. Every row is a whole [`Selection`] built out of the providers' own
-/// catalogs and ladders, so no reachable row names a combination an agent would
-/// refuse, and there is nothing for a row meaning "whatever the agent is
-/// configured for" to express.
+/// Navigation edits a pending choice. The focused model/effort selector keeps
+/// separate cursors and queries, with the effort list derived from the selected
+/// model. The full launcher and provider picker use one list of selections.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Launcher {
+    pub choice: Choice,
+    pub active: Field,
+    pub effort_list: FuzzyList,
+    fallback_effort: Effort,
     /// Every launchable triple, in the order the list offers them. Fixed for
     /// the life of the picker: the catalogs do not change while it is open, and
     /// narrowing is the query's job, not the row set's.
@@ -179,6 +226,10 @@ impl Launcher {
             .position(|row| row == selection)
             .unwrap_or_default();
         Self {
+            choice: Choice::Launch,
+            active: Field::Model,
+            effort_list: FuzzyList::default(),
+            fallback_effort: selection.effort,
             // Filtering keeps the recency order above rather than ranking by
             // match, so the models in use stay first however little is typed.
             list: FuzzyList::at(&labels, at).keeping_order(),
@@ -191,13 +242,81 @@ impl Launcher {
 
     /// The rows, as the list shows and matches them.
     pub fn labels(&self) -> Vec<String> {
-        labels_of(&self.rows)
+        self.rows
+            .iter()
+            .map(|row| match self.choice {
+                Choice::Launch | Choice::Provider => label(row),
+                Choice::ModelEffort => row.model.clone(),
+            })
+            .collect()
     }
 
-    /// What the picker currently describes. Every row is a whole selection, so
-    /// this needs no assembling; a query matching nothing leaves no row under
-    /// the cursor, and the selection the picker opened on stands.
-    pub fn selection(&self) -> Selection {
+    /// A provider or model/effort picker; editing it never applies a change.
+    pub fn for_choice(selection: &Selection, choice: Choice, live: bool) -> Self {
+        let provider = selection.provider;
+        let mut rows: Vec<Selection> = match choice {
+            Choice::Provider => PROVIDERS
+                .iter()
+                .map(|provider| {
+                    if *provider == selection.provider {
+                        selection.clone()
+                    } else {
+                        Selection::new(*provider)
+                    }
+                })
+                .collect(),
+            Choice::ModelEffort => provider
+                .models()
+                .iter()
+                .filter(|model| {
+                    !live
+                        || provider != Provider::Claude
+                        || model.efforts.is_empty()
+                        || model.efforts.contains(&selection.effort)
+                })
+                .map(|model| {
+                    let mut row = selection.clone();
+                    if provider
+                        .model(&selection.model)
+                        .is_some_and(|current| current.id == model.id)
+                    {
+                        return row;
+                    }
+                    row.model = model.id.to_owned();
+                    if !model.efforts.is_empty() && !model.efforts.contains(&row.effort) {
+                        row.effort = provider.default_effort_for(model.id);
+                    }
+                    row
+                })
+                .collect(),
+            Choice::Launch => return Self::from_selection(selection, &[], live),
+        };
+        if !rows.contains(selection) {
+            rows.push(selection.clone());
+        }
+        let at = rows
+            .iter()
+            .position(|row| row == selection)
+            .unwrap_or_default();
+        let mut picker = Self {
+            choice,
+            active: Field::Model,
+            effort_list: FuzzyList::default(),
+            fallback_effort: selection.effort,
+            rows,
+            list: FuzzyList::default(),
+            opened_on: selection.clone(),
+            provider_locked: live,
+            recent_models: Vec::new(),
+        };
+        picker.list = FuzzyList::at(&picker.labels(), at).keeping_order();
+        picker.sync_effort(selection.effort);
+        picker
+    }
+
+    /// The selected model row, falling back to the opening selection when the
+    /// model query matches nothing. Confirmation checks for a matching row.
+    fn model_selection(&self) -> Selection {
         self.list
             .selected_row(&self.labels())
             .and_then(|row| self.rows.get(row))
@@ -205,41 +324,111 @@ impl Launcher {
             .unwrap_or_else(|| self.opened_on.clone())
     }
 
-    /// Step the cursor down the rows the query left standing, holding at the
-    /// last of them.
+    pub fn selection(&self) -> Selection {
+        let mut selection = self.model_selection();
+        if self.choice == Choice::ModelEffort {
+            let efforts = self.efforts();
+            selection.effort = self
+                .effort_list
+                .selected_row(&self.effort_labels())
+                .and_then(|row| efforts.get(row))
+                .copied()
+                .unwrap_or(self.fallback_effort);
+        }
+        selection
+    }
+
+    fn efforts(&self) -> Vec<Effort> {
+        let model = self.model_selection();
+        let efforts = model.provider.efforts_for(&model.model);
+        if self.provider_locked && model.provider == Provider::Claude {
+            efforts
+                .iter()
+                .copied()
+                .filter(|effort| *effort == self.opened_on.effort)
+                .collect()
+        } else {
+            efforts.to_vec()
+        }
+    }
+
+    pub fn effort_labels(&self) -> Vec<String> {
+        self.efforts()
+            .iter()
+            .map(|effort| effort.as_str().to_owned())
+            .collect()
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.list.selected_row(&self.labels()).is_some()
+            && (self.choice != Choice::ModelEffort
+                || self.efforts().is_empty()
+                || self
+                    .effort_list
+                    .selected_row(&self.effort_labels())
+                    .is_some())
+    }
+
+    fn sync_effort(&mut self, previous: Effort) {
+        if self.choice != Choice::ModelEffort {
+            return;
+        }
+        let model = self.model_selection();
+        let efforts = self.efforts();
+        let desired = if efforts.is_empty() || efforts.contains(&previous) {
+            previous
+        } else {
+            model.provider.default_effort_for(&model.model)
+        };
+        self.fallback_effort = desired;
+        let labels = self.effort_labels();
+        self.effort_list.selected = self
+            .effort_list
+            .matches(&labels)
+            .iter()
+            .position(|found| efforts[found.index] == desired)
+            .unwrap_or_default();
+    }
+
+    fn edit_active(&mut self, edit: impl FnOnce(&mut FuzzyList, &[String])) {
+        if self.choice == Choice::ModelEffort && self.active == Field::Effort {
+            let labels = self.effort_labels();
+            edit(&mut self.effort_list, &labels);
+        } else {
+            let effort = self.selection().effort;
+            let labels = self.labels();
+            edit(&mut self.list, &labels);
+            self.sync_effort(effort);
+        }
+    }
+
     pub fn next(&mut self) {
-        let labels = self.labels();
-        self.list.next(&labels);
+        self.edit_active(|list, labels| list.next(labels));
     }
 
-    /// Step the cursor up the rows the query left standing, holding at the
-    /// first of them.
+    fn cycle_next(&mut self) {
+        self.edit_active(|list, labels| {
+            let count = list.matches(labels).len();
+            if count > 0 {
+                list.selected = (list.selected.min(count - 1) + 1) % count;
+            }
+        });
+    }
+
     pub fn prev(&mut self) {
-        let labels = self.labels();
-        self.list.prev(&labels);
+        self.edit_active(|list, labels| list.prev(labels));
     }
 
-    /// Move the cursor a page down the rows the query left standing. The list
-    /// is every triple both agents offer, which is long enough that stepping
-    /// is not the only way across it.
     pub fn page_down(&mut self) {
-        let labels = self.labels();
-        self.list.page_down(&labels);
+        self.edit_active(|list, labels| list.page_down(labels));
     }
 
-    /// Move the cursor a page up the rows the query left standing.
     pub fn page_up(&mut self) {
-        let labels = self.labels();
-        self.list.page_up(&labels);
+        self.edit_active(|list, labels| list.page_up(labels));
     }
 
-    /// Make a change typed into the query, as every search field takes it
-    /// (see [`styra_ui::query`]). A word deleted is one part of a name:
-    /// `claude:claude-opus-5/high` back to `claude:claude-opus-5/`. Typing a
-    /// triple is typing an identifier, and a mistyped rung should not cost the
-    /// agent and model in front of it.
     pub fn type_query(&mut self, edit: Edit) {
-        self.list.edit(edit);
+        self.edit_active(|list, _| list.edit(edit));
     }
 
     /// Whether anything has been typed.
@@ -306,6 +495,114 @@ mod tests {
             validate_selection(&selection).unwrap_or_else(|error| {
                 panic!("{} is not launchable: {error:#}", selection.name())
             });
+        }
+    }
+
+    #[test]
+    fn separate_lists_offer_each_model_and_its_supported_efforts() {
+        for provider in PROVIDERS {
+            let selection = Selection::new(provider);
+            let mut picker = Launcher::for_choice(&selection, Choice::ModelEffort, false);
+            assert_eq!(picker.selection(), selection);
+            assert_eq!(picker.labels().len(), provider.models().len());
+            for (index, model) in provider.models().iter().enumerate() {
+                picker.list.selected = index;
+                picker.sync_effort(selection.effort);
+                assert_eq!(picker.selection().model, model.id);
+                assert_eq!(picker.efforts(), model.efforts);
+                for effort_index in 0..model.efforts.len().max(1) {
+                    picker.effort_list.selected = effort_index;
+                    validate_selection(&picker.selection()).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn changing_model_preserves_effort_when_supported_and_adapts_shorter_ladders() {
+        for provider in PROVIDERS {
+            let mut selection = Selection::new(provider);
+            selection.effort = *provider.efforts().last().unwrap();
+            let mut picker = Launcher::for_choice(&selection, Choice::ModelEffort, false);
+            for index in 0..picker.rows.len() {
+                picker.list.selected = index;
+                picker.sync_effort(selection.effort);
+                let chosen = picker.selection();
+                let efforts = provider.efforts_for(&chosen.model);
+                if efforts.is_empty() || efforts.contains(&selection.effort) {
+                    assert_eq!(chosen.effort, selection.effort);
+                } else {
+                    assert_eq!(chosen.effort, provider.default_effort_for(&chosen.model));
+                }
+                validate_selection(&chosen).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn ctrl_keys_target_separate_lists_and_filters_until_enter_applies_both() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("defaults.json");
+        let original = Selection::new(Provider::Codex);
+        let mut app = App::pending(original.clone());
+        app.open_model_picker();
+        let model_query = original.model.clone();
+        for ch in model_query.chars() {
+            handle_key(&mut app, KeyCode::Char(ch).into(), &path);
+        }
+        let model = app.launcher.as_ref().unwrap().selection().model;
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &path,
+        );
+        assert_eq!(app.launcher.as_ref().unwrap().selection().model, model);
+        for ch in "high".chars() {
+            handle_key(&mut app, KeyCode::Char(ch).into(), &path);
+        }
+        let picker = app.launcher.as_ref().unwrap();
+        assert_eq!(picker.active, Field::Effort);
+        assert_eq!(picker.list.query, model_query);
+        assert_eq!(picker.effort_list.query, "high");
+        let effort = picker.selection().effort;
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+            &path,
+        );
+        handle_key(&mut app, KeyCode::Backspace.into(), &path);
+        let picker = app.launcher.as_ref().unwrap();
+        assert_eq!(picker.active, Field::Model);
+        assert_eq!(picker.list.query, &model_query[..model_query.len() - 1]);
+        assert_eq!(picker.effort_list.query, "high");
+        assert_eq!(picker.selection().effort, effort);
+        assert_eq!(app.selection, original);
+        assert!(app.take_request().is_none());
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &path,
+        );
+        let chosen = app.launcher.as_ref().unwrap().selection();
+        handle_key(&mut app, KeyCode::Enter.into(), &path);
+        assert_eq!(app.selection, chosen);
+        assert!(app.launcher.is_none());
+    }
+
+    #[test]
+    fn focused_pickers_keep_custom_models_and_aliases_on_open() {
+        for model in ["custom-model", "opus"] {
+            let selection = Selection::parse(&format!("claude:{model}/high")).unwrap();
+            for choice in [Choice::Provider, Choice::ModelEffort] {
+                let picker = Launcher::for_choice(&selection, choice, false);
+                assert_eq!(picker.selection(), selection);
+                let labels = picker.labels();
+                let mut unique = labels.clone();
+                unique.sort();
+                unique.dedup();
+                assert_eq!(unique.len(), labels.len());
+            }
         }
     }
 

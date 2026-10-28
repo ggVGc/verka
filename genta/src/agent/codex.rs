@@ -26,8 +26,8 @@ const EXECUTABLE: &str = "codex";
 /// variants rather than general coding models.
 const MODELS: &[ModelSpec] = &[
     current("gpt-6-astra"),
-    current("gpt-6-sol"),
     current("gpt-6.1-sol"),
+    current("gpt-6-sol"),
     current("gpt-5.6-sol"),
     current("gpt-5.6-terra"),
     current("gpt-5.6-luna"),

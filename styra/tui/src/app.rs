@@ -15,6 +15,8 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use styra_protocol::agent::PROVIDERS;
 use styra_protocol::agent::{Provider, Selection};
 use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode};
 use styra_protocol::Contract;
@@ -34,7 +36,7 @@ use crate::ingest;
 use crate::insert::Prompt;
 use crate::interactions::LiveInteractions;
 use crate::launch::{self, Launch};
-use crate::launcher::Launcher;
+use crate::launcher::{Choice, Launcher};
 use crate::link_menu::LinkMenu;
 use crate::notices::Notices;
 use crate::outbox::Outbox;
@@ -842,7 +844,33 @@ impl App {
         let Some(launcher) = self.launcher.take() else {
             return;
         };
-        let mut selection = launcher.selection();
+        self.confirm_selection(launcher.selection());
+    }
+
+    /// Open a provider picker without changing the current selection.
+    pub fn open_provider_picker(&mut self) {
+        if self.agent_is_live() {
+            return self.show_warning("stop the interaction before switching provider");
+        }
+        self.open_choice_picker(Choice::Provider);
+    }
+
+    pub fn open_model_picker(&mut self) {
+        if !self.can_configure_launch() {
+            return self.show_warning("wait for the turn to finish before changing model");
+        }
+        self.open_choice_picker(Choice::ModelEffort);
+    }
+
+    fn open_choice_picker(&mut self, choice: Choice) {
+        self.launcher = Some(Launcher::for_choice(
+            &self.selection,
+            choice,
+            self.agent_is_live(),
+        ));
+    }
+
+    fn confirm_selection(&mut self, mut selection: Selection) {
         let live = self.agent_is_live();
         if selection.provider != self.selection.provider {
             // The picker never gives a live session's agent column the keys, so
@@ -3030,6 +3058,39 @@ mod tests {
         assert_eq!(app.selection.provider, Provider::Claude);
     }
 
+    #[test]
+    fn cycling_provider_converts_a_stopped_interaction_to_the_next_defaults() {
+        let mut app = app();
+        app.activity.status = Status::Stopped(StopReason::Paused);
+        let previous = app.selection.clone();
+
+        app.open_provider_picker();
+        assert_eq!(app.selection, previous);
+        assert!(app.take_request().is_none());
+        app.launcher.as_mut().unwrap().next();
+        app.confirm_launcher();
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ConvertProvider(Selection::new(Provider::Claude)))
+        );
+        assert_eq!(app.selection, previous);
+    }
+
+    #[test]
+    fn cycling_provider_keeps_a_live_interactions_selection() {
+        for status in [Status::Running, Status::Idle(IdleReason::TurnComplete)] {
+            let mut app = app();
+            app.activity.status = status;
+            let previous = app.selection.clone();
+
+            app.open_provider_picker();
+
+            assert_eq!(app.selection, previous);
+            assert!(app.take_request().is_none());
+        }
+    }
+
     /// Nothing has been launched, so there is no history to convert and no
     /// sibling Session to make — the agent is simply set.
     #[test]
@@ -3128,6 +3189,69 @@ mod tests {
         app.confirm_launcher();
 
         assert_eq!(app.take_request(), None);
+    }
+
+    #[test]
+    fn model_pickers_apply_valid_selections_to_idle_providers_only_on_confirmation() {
+        for provider in PROVIDERS {
+            let mut selection = Selection::new(provider);
+            selection.effort = *provider.efforts().last().unwrap();
+            let mut app = App::new(selection, "session-1");
+            app.activity.status = Status::Idle(IdleReason::TurnComplete);
+            app.open_model_picker();
+            let labels = app.launcher.as_ref().unwrap().labels();
+            for label in labels {
+                let previous = app.selection.clone();
+                app.open_model_picker();
+                let picker = app.launcher.as_mut().unwrap();
+                for ch in label.chars() {
+                    picker.type_query(styra_ui::query::Edit::Push(ch));
+                }
+                let chosen = picker.selection();
+                assert_eq!(app.selection, previous);
+                assert!(app.take_request().is_none());
+                app.confirm_launcher();
+                assert_eq!(app.selection, chosen);
+                styra_protocol::agent::validate_selection(&app.selection).unwrap();
+                if provider == Provider::Claude {
+                    assert_eq!(app.selection.effort, previous.effort);
+                }
+                assert_eq!(
+                    app.take_request(),
+                    (app.selection != previous).then_some(Request::ApplySelection)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cycling_models_during_a_running_turn_keeps_the_selection() {
+        let mut app = app();
+        app.activity.status = Status::Running;
+        let original = app.selection.clone();
+        app.open_model_picker();
+        assert_eq!(app.selection, original);
+        assert!(app.take_request().is_none());
+    }
+
+    #[test]
+    fn combined_picker_keeps_live_claude_effort_fixed_and_offers_other_models() {
+        let mut app = App::new(Selection::new(Provider::Claude), "session-1");
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
+        let original = app.selection.clone();
+        app.open_model_picker();
+        let picker = app.launcher.as_mut().unwrap();
+        let labels = picker.labels();
+        let mut other_model = false;
+        for index in 0..labels.len() {
+            picker.list.selected = index;
+            let row = picker.selection();
+            assert_eq!(row.effort, original.effort);
+            other_model |= row.model != original.model;
+        }
+        assert!(other_model);
+        assert_eq!(app.selection, original);
+        assert!(app.take_request().is_none());
     }
 
     #[test]

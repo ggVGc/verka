@@ -228,6 +228,12 @@ bindings! { MESSAGE_EDITOR = "Message editor";
     EDITOR_BOX_LEAVE: [Key::code(KeyCode::Esc)] ("choosing a box") => Action::EditorBoxLeave;
     EDITOR_LAUNCHER: [Key::ctrl('l')]
         => Action::EditorLauncher;
+    EDITOR_CYCLE_PROVIDER: [Key::ctrl('p')]
+        => Action::EditorCycleProvider;
+    EDITOR_CYCLE_MODEL: [Key::ctrl('o')]
+        => Action::EditorCycleModel;
+    EDITOR_CYCLE_EFFORT: [Key::ctrl('e')]
+        => Action::EditorCycleEffort;
     EDITOR_INSERT_PATH: [Key::ctrl('f')] => Action::EditorInsertPath;
     EDITOR_AUTO_COMMIT: [Key::ctrl('g')] => Action::GlobalAutoCommit;
     EDITOR_MOUNT_READABLE: [Key::ch('r')] ("unmounted path") => Action::EditorMountReadable;
