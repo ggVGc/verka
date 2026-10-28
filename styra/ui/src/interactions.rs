@@ -346,6 +346,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
 /// The first line to draw. The view stays where it was while the cursor moves
 /// inside it, and scrolls only as far as it takes to keep [`SCROLL_MARGIN`]
 /// rows showing past the cursor, fewer where the pane is too short for them.
+/// With no selection, show the newest entries at the bottom.
 fn scroll_offset(
     view: &InteractionNavigator<'_>,
     selected: Option<usize>,
@@ -356,7 +357,7 @@ fn scroll_offset(
     let last = total.saturating_sub(viewport);
     let mut offset = view.requested_offset.min(last);
     let Some(selected) = selected else {
-        return offset;
+        return last;
     };
     let lines = |rows: &[InteractionRow<'_>]| rows.iter().map(row_height).sum::<usize>();
     let start = lines(&view.rows[..selected]);
@@ -1722,6 +1723,25 @@ mod tests {
         assert!(!screen.contains("task 2 "), "{screen}");
         assert!(lines[0].contains("6 more lines"), "{screen}");
         assert!(!lines[11].contains("more line"), "{screen}");
+    }
+
+    #[test]
+    fn an_unselected_list_shows_the_bottom() {
+        // An index outside the list leaves every interaction unselected.
+        assert_eq!(drawn_offset(usize::MAX, 0), 6);
+        assert_eq!(drawn_offset(usize::MAX, 2), 6);
+        let screen = rendered(&many_rows(usize::MAX));
+        assert!(screen.contains("task 7"), "{screen}");
+        assert!(!screen.contains("task 0"), "{screen}");
+    }
+
+    #[test]
+    fn an_unselected_list_that_fits_starts_at_the_top() {
+        let mut view = many_rows(usize::MAX);
+        view.rows.truncate(2);
+        assert_eq!(scroll_offset(&view, None, 10, 4), 0);
+        view.rows.clear();
+        assert_eq!(scroll_offset(&view, None, 10, 0), 0);
     }
 
     /// The line [`render`] draws [`many_rows`] from, in a pane ten lines tall
