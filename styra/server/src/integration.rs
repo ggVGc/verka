@@ -283,10 +283,40 @@ impl ServerState {
         )).answer()
     }
 
+    fn ensure_branches_closed(&self, session: &SessionSummary) -> Result<()> {
+        let sessions =
+            journal::list_workspace_sessions(&self.inner.store_root, &session.workspace_id)?;
+        let mut children: HashMap<&str, Vec<&SessionSummary>> = HashMap::new();
+        for branch in &sessions {
+            if let Some(origin) = &branch.origin {
+                children.entry(&origin.session_id).or_default().push(branch);
+            }
+        }
+        let mut pending = vec![session.id.as_str()];
+        let mut visited = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            for branch in children.get(id).into_iter().flatten() {
+                anyhow::ensure!(
+                    branch.completed.is_done(),
+                    "cannot integrate this interaction while branch {} ({}) is still open; complete, abandon, or integrate it first",
+                    branch.name.as_deref().unwrap_or(&branch.id),
+                    branch.id
+                );
+                // A finished branch can still have unfinished branches of its own.
+                pending.push(&branch.id);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn start_integration(&self, id: &str, message: &str) -> Result<()> {
         self.ensure_not_integrating(id)?;
         anyhow::ensure!(!message.trim().is_empty(), "enter a squash commit message");
         let (session, checkout, source) = self.integration_checkout(id)?;
+        self.ensure_branches_closed(&session)?;
         let record = session.path.join(journal::INTEGRATION_FILE);
         anyhow::ensure!(
             journal::read_queued_messages(&session.path)?.is_empty(),
@@ -436,6 +466,7 @@ impl ServerState {
 
     fn run_integration(&self, id: &str, mut progress: Progress) -> Result<()> {
         let (session, checkout, source) = self.integration_checkout(id)?;
+        self.ensure_branches_closed(&session)?;
         let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
         if progress.commit.is_some() && checkout.path.is_none() {
             return self.set_session_completion(id, CompletionState::Sealed);
@@ -1380,6 +1411,84 @@ mod tests {
             std::fs::write(self.path().join("feature"), "two\n").unwrap();
             SystemGit.commit_all(self.path(), "feature two").unwrap();
         }
+
+        fn branch_record(&self, parent: &str, completed: CompletionState) -> (String, PathBuf) {
+            let session = self.state.stored_summary(&self.id).unwrap();
+            let selection = Selection::new(crate::agent::Provider::Codex);
+            let profile =
+                crate::agent::resolve_profile(&selection, &workspace_layout(&self.host)).unwrap();
+            let (journal, id) = Journal::create_in_workspace(
+                self.state.store_root(),
+                &session.workspace_id,
+                &profile,
+                &selection,
+                Some("Child branch".into()),
+            )
+            .unwrap();
+            let path = journal.path().parent().unwrap().to_path_buf();
+            drop(journal);
+            journal::store_session_origin(
+                &path,
+                SessionOrigin {
+                    session_id: parent.into(),
+                    provider: selection.provider,
+                    at_ms: None,
+                    history: Default::default(),
+                },
+            )
+            .unwrap();
+            journal::store_session_completed(&path, completed).unwrap();
+            (id, path)
+        }
+    }
+
+    #[test]
+    fn integration_requires_all_descendant_branches_to_be_closed() {
+        let fixture = Fixture::new();
+        fixture.feature();
+        let (parent, _) = fixture.branch_record(&fixture.id, CompletionState::Completed);
+        fixture.branch_record(&fixture.id, CompletionState::Sealed);
+        fixture.branch_record("another-interaction", CompletionState::Active);
+        let source = git(&fixture.host, &["rev-parse", "main"]);
+        for (parent, completed) in [
+            (&fixture.id, CompletionState::Completed),
+            (&parent, CompletionState::Abandoned),
+        ] {
+            let (branch, path) = fixture.branch_record(parent, CompletionState::Active);
+            for error in [
+                fixture
+                    .state
+                    .start_integration(&fixture.id, "message")
+                    .unwrap_err(),
+                fixture
+                    .state
+                    .run_integration(&fixture.id, fixture.progress())
+                    .unwrap_err(),
+            ] {
+                let message = error.to_string();
+                assert!(message.contains("still open"), "{message}");
+                assert!(message.contains(&branch), "{message}");
+            }
+            assert_eq!(git(&fixture.host, &["rev-parse", "main"]), source);
+            assert!(fixture.path().exists());
+            assert!(!fixture.session.join(journal::INTEGRATION_FILE).exists());
+            assert!(!fixture
+                .state
+                .inner
+                .integrating
+                .lock()
+                .unwrap()
+                .contains(&fixture.id));
+            journal::store_session_completed(&path, completed).unwrap();
+        }
+        fixture
+            .state
+            .run_integration(&fixture.id, fixture.progress())
+            .unwrap();
+        assert_eq!(
+            journal::read_session_completed(&fixture.session).unwrap(),
+            CompletionState::Sealed
+        );
     }
 
     fn wait_for_rebase(fixture: &Fixture) -> crate::protocol::RebaseStatus {
