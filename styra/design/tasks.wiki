@@ -1,0 +1,8 @@
+- Example use - Tasks from bullet/number-list in interaction log:
+  - Ask for review
+  - Get N items which can be acted on
+  - Want to create a task from each of these and associate those tasks with the workspace, tracking where they came from
+  - Execute work for each task, in new interactions with controlled context. Register and track when work is done.
+  - Created tasks might be displayed inline inside interaction logs:
+    - State should then be updated as tasks are worked on, as with branches.
+- Eventually connected to linka as the task backend
