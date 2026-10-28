@@ -14,6 +14,7 @@ use crate::keybindings::{self as keys, Window};
 use crate::launch::LaunchScope;
 use crate::presentation;
 use crate::session::{is_recent_session, session_tree_depths, sort_sessions_tree, SessionOrder};
+use styra_ui::fuzzy_list::FuzzyList;
 use styra_ui::query::Edit;
 use styra_ui::Ui;
 
@@ -455,25 +456,21 @@ fn picker_sessions(
     order: SessionOrder,
     filter: Option<&str>,
 ) -> Vec<styra_protocol::SessionSummary> {
-    let filter = filter
-        .map(str::to_lowercase)
-        .filter(|filter| !filter.is_empty());
-    let mut displayed = sessions
+    let eligible = sessions
         .iter()
         .filter(|session| {
             (showing_all || is_recent_session(session, now_ms))
                 && (show_completed || !session.completed.is_done())
-                && filter.as_ref().is_none_or(|filter| {
-                    session
-                        .name
-                        .as_deref()
-                        .into_iter()
-                        .chain(session.first_prompt.as_deref())
-                        .any(|text| text.to_lowercase().contains(filter))
-                })
         })
         .cloned()
         .collect::<Vec<_>>();
+    let mut displayed = fuzzy_filter(&eligible, filter, |session| {
+        [session.name.as_deref(), session.first_prompt.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ")
+    });
     sort_sessions_tree(&mut displayed, order);
     displayed
 }
@@ -930,42 +927,31 @@ fn read_text(
     }
 }
 
-/// The Workspaces the filter leaves on screen, in the order they were sorted
-/// into on entry.
-///
-/// A Workspace is matched on its name alone — the operator-facing name, or the
-/// host directory name standing in for it when there is none.
+/// Narrow a catalog with the same matcher as the live pickers, preserving
+/// its own ordering (recency or session-tree order) rather than ranking it.
+fn fuzzy_filter<T: Clone>(
+    items: &[T],
+    filter: Option<&str>,
+    text: impl Fn(&T) -> String,
+) -> Vec<T> {
+    let rows = items.iter().map(text).collect::<Vec<_>>();
+    FuzzyList {
+        query: filter.unwrap_or_default().to_owned(),
+        ..FuzzyList::default().keeping_order()
+    }
+    .matches(&rows)
+    .into_iter()
+    .map(|found| items[found.index].clone())
+    .collect()
+}
+
+/// Workspaces matched on their displayed name and host path, in the order
+/// they were sorted into on entry.
 fn picker_workspaces(
     workspaces: &[WorkspaceSummary],
     filter: Option<&str>,
 ) -> Vec<WorkspaceSummary> {
-    let filter = filter
-        .map(str::to_lowercase)
-        .filter(|filter| !filter.is_empty());
-    workspaces
-        .iter()
-        .filter(|workspace| {
-            filter
-                .as_ref()
-                .is_none_or(|filter| workspace_matches(workspace, filter))
-        })
-        .cloned()
-        .collect()
-}
-
-/// Whether `filter`, already lowercased, appears in the Workspace's displayed
-/// name or its host path. An unnamed Workspace shows its directory name in
-/// place of a name, which the host path already covers.
-fn workspace_matches(workspace: &WorkspaceSummary, filter: &str) -> bool {
-    workspace
-        .name
-        .as_ref()
-        .is_some_and(|name| name.to_lowercase().contains(filter))
-        || workspace
-            .host_path
-            .to_string_lossy()
-            .to_lowercase()
-            .contains(filter)
+    fuzzy_filter(workspaces, filter, crate::workspace::search_text)
 }
 
 /// Root-loop-owned state for the Driva template chooser. `templates` is `None`
@@ -1410,6 +1396,32 @@ mod tests {
             by_path.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
             vec!["w-1"]
         );
+    }
+
+    #[test]
+    fn workspace_and_session_filters_accept_noncontiguous_queries() {
+        let mut named = workspace("billing", 1);
+        named.name = Some("Payments API".into());
+        assert_eq!(
+            picker_workspaces(&[named.clone()], Some("PMTS")),
+            [named.clone()]
+        );
+        assert_eq!(
+            picker_workspaces(&[named.clone()], Some("/HM/BLG")),
+            [named]
+        );
+
+        let mut session = session("migration");
+        session.first_prompt = Some("Investigate checkout timeout".into());
+        let matches = picker_sessions(
+            &[session.clone()],
+            true,
+            false,
+            unix_now_ms(),
+            SessionOrder::LastActivity,
+            Some("IVGT"),
+        );
+        assert_eq!(matches, [session]);
     }
 
     #[test]

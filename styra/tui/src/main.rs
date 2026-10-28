@@ -387,7 +387,7 @@ fn main() -> Result<()> {
                     Ok(client.workspace(&workspace.id).unwrap_or(workspace))
                 }
                 picker::WorkspaceChoice::CreateCurrentDirectory => {
-                    session::create_workspace(&client, current_directory, None)
+                    session::workspace_for_host(&client, &current_directory)
                 }
             };
             let workspace = match workspace {
@@ -700,7 +700,7 @@ fn workspace_without_list(
         Some(workspace) => Ok(client
             .workspace(&workspace.id)
             .unwrap_or_else(|_| workspace.clone())),
-        None => session::create_workspace(client, current_directory, None),
+        None => session::workspace_for_host(client, &current_directory),
     }
 }
 

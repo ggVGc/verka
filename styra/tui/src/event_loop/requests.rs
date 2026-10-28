@@ -16,7 +16,7 @@ use crate::config::Configuration;
 use crate::launch::LaunchScope;
 use crate::picker;
 use crate::session::{self, Attachment};
-use crate::workspace_jump::{self, WorkspaceJump};
+use crate::workspace_jump::WorkspaceJump;
 use styra_protocol::LogEntry;
 use styra_server::Client;
 
@@ -296,14 +296,16 @@ impl Loop<'_> {
             }
             picker::WorkspaceChoice::CreateCurrentDirectory => {
                 let host_path = session::resolve_workspace(None)?;
-                session::create_workspace(client, host_path, None)?
+                session::workspace_for_host(client, &host_path)?
             }
         };
         // A Workspace with work in flight is entered at that work, the
         // way `v` enters it: the live list opens with the cursor on the
         // Workspace's first Interaction, so the operator sees the rest
         // of the live list without being asked which Session they meant.
-        if workspace_jump::has_live_work(&app.interactions.items, &workspace.id) {
+        if crate::interactions::first_live_in_workspace(&app.interactions.items, &workspace.id)
+            .is_some()
+        {
             open_interactions_in_workspace(app, client, &workspace.id)?;
             return Ok(None);
         }

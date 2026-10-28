@@ -43,9 +43,12 @@ impl WorkspaceJump {
     /// messages — what the overview would tile — in the order `workspaces`
     /// lists them.
     pub fn new(workspaces: &[WorkspaceSummary], interactions: &[InteractionSummary]) -> Self {
-        Self::counting(workspaces, interactions, "live", |interaction| {
-            interaction.activity.accepting() && !interaction.completed.is_done()
-        })
+        Self::counting(
+            workspaces,
+            interactions,
+            "live",
+            crate::interactions::is_live,
+        )
     }
 
     /// The Workspaces with at least one Interaction for which `listed` holds —
@@ -79,7 +82,7 @@ impl WorkspaceJump {
             ids.push(workspace.id.clone());
             rows.push(format!(
                 "{} ({count} {label})",
-                crate::workspace::display_name(workspace)
+                crate::workspace::search_text(workspace)
             ));
         }
         Self {
@@ -142,22 +145,6 @@ impl WorkspaceJump {
     }
 }
 
-/// Whether `workspace_id` has an Interaction the jump would land on: one whose
-/// agent still takes messages, as the overview tiles. The Workspace picker
-/// asks the same question, so choosing a Workspace there lands where `v`
-/// would.
-pub fn has_live_work(interactions: &[InteractionSummary], workspace_id: &str) -> bool {
-    interactions
-        .iter()
-        .any(|interaction| is_live_in(interaction, workspace_id))
-}
-
-fn is_live_in(interaction: &InteractionSummary, workspace_id: &str) -> bool {
-    interaction.workspace_id == workspace_id
-        && interaction.activity.accepting()
-        && !interaction.completed.is_done()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,7 +192,27 @@ mod tests {
             in_workspace("4", "c", InteractionActivity::Pending),
         ];
         let jump = WorkspaceJump::new(&workspaces, &interactions);
-        assert_eq!(jump.rows(), ["alpha (2 live)", "gamma (1 live)"]);
+        assert_eq!(
+            jump.rows(),
+            ["alpha · /src/a (2 live)", "gamma · /src/c (1 live)"]
+        );
+    }
+
+    #[test]
+    fn finished_work_does_not_offer_a_workspace_in_the_live_jump() {
+        let workspaces = [workspace("a", "alpha")];
+        let mut finished = in_workspace("1", "a", InteractionActivity::Pending);
+        finished.completed = styra_protocol::CompletionState::Completed;
+        assert!(WorkspaceJump::new(&workspaces, &[finished]).is_empty());
+    }
+
+    #[test]
+    fn a_named_workspace_can_be_found_by_its_directory_with_a_fuzzy_query() {
+        let workspaces = [workspace("billing", "Payments")];
+        let interactions = [in_workspace("1", "billing", InteractionActivity::Running)];
+        let mut jump = WorkspaceJump::new(&workspaces, &interactions);
+        jump.list.query = "/SRC/BLG".into();
+        assert_eq!(jump.selected(), Some("billing"));
     }
 
     #[test]
@@ -217,11 +224,14 @@ mod tests {
             in_workspace("3", "b", InteractionActivity::Stopped),
         ];
         let jump = WorkspaceJump::listed(&workspaces, &interactions, |_| true);
-        assert_eq!(jump.rows(), ["alpha (1 listed)", "beta (2 listed)"]);
+        assert_eq!(
+            jump.rows(),
+            ["alpha · /src/a (1 listed)", "beta · /src/b (2 listed)"]
+        );
         let jump = WorkspaceJump::listed(&workspaces, &interactions, |interaction| {
             interaction.activity.accepting()
         });
-        assert_eq!(jump.rows(), ["alpha (1 listed)"]);
+        assert_eq!(jump.rows(), ["alpha · /src/a (1 listed)"]);
     }
 
     #[test]

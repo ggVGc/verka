@@ -1116,6 +1116,12 @@ impl LiveInteractions {
     }
 }
 
+/// Unfinished work whose agent can still receive messages. Shared by startup
+/// selection, Workspace entry and the live Workspace jump.
+pub fn is_live(interaction: &InteractionSummary) -> bool {
+    interaction.activity.accepting() && !interaction.completed.is_done()
+}
+
 /// The Interaction to land on when entering `workspace_id`: the one an
 /// operator most recently turned to, so arriving returns to the work they were
 /// last on. Among those the server cannot tell apart — none turned to since it
@@ -1123,8 +1129,8 @@ impl LiveInteractions {
 /// wins a tie. This also counts opening an Interaction, while the navigator
 /// sorts by the most recent operator message.
 ///
-/// Stopped Interactions are not candidates. Entering a Workspace should land on
-/// work that can still be talked to, and a stopped Interaction is reached the
+/// Stopped and completed Interactions are not candidates. Entering a Workspace
+/// should land on work that can still be talked to; a stopped Interaction is reached the
 /// same way it always was, through the Session picker.
 pub fn first_live_in_workspace(
     interactions: &[InteractionSummary],
@@ -1147,7 +1153,7 @@ fn first_live_where(
 ) -> Option<InteractionSummary> {
     let mut live = interactions
         .iter()
-        .filter(|interaction| interaction.activity.accepting() && candidate(interaction))
+        .filter(|interaction| is_live(interaction) && candidate(interaction))
         .cloned()
         .collect::<Vec<_>>();
     sort_interactions(&mut live);
@@ -3116,6 +3122,25 @@ pub(crate) mod tests {
                 .id,
             "running"
         );
+    }
+
+    #[test]
+    fn completed_work_is_not_a_live_workspace_entry_even_when_its_agent_accepts() {
+        for completed in [CompletionState::Completed, CompletionState::Abandoned] {
+            let mut finished = interaction("finished", InteractionActivity::Pending);
+            finished.completed = completed;
+            finished.interacted_at_ms = 100;
+            let unfinished = interaction("unfinished", InteractionActivity::Running);
+            let items = [finished.clone(), unfinished];
+
+            assert_eq!(
+                first_live_in_workspace(&items, "workspace").unwrap().id,
+                "unfinished"
+            );
+            assert_eq!(first_live(&items).unwrap().id, "unfinished");
+            assert!(first_live_in_workspace(&[finished.clone()], "workspace").is_none());
+            assert!(first_live(&[finished]).is_none());
+        }
     }
 
     #[test]

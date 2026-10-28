@@ -133,6 +133,16 @@ pub fn display_name(workspace: &WorkspaceSummary) -> String {
     })
 }
 
+/// The searchable Workspace label shared by the picker and live jump.
+/// Include the host path so named Workspaces remain findable by directory.
+pub fn search_text(workspace: &WorkspaceSummary) -> String {
+    format!(
+        "{} · {}",
+        display_name(workspace),
+        workspace.host_path.display()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

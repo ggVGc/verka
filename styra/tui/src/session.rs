@@ -1596,6 +1596,44 @@ mod tests {
     }
 
     #[test]
+    fn opening_the_same_directory_reuses_its_workspace_even_through_a_symlink() {
+        struct WorkspaceServer(PathBuf);
+        impl styra_server::InProcessServer for WorkspaceServer {
+            fn handle(&self, request: styra_protocol::Request) -> Result<styra_protocol::Response> {
+                use styra_protocol::{Request, Response};
+                use styra_server::workspace;
+                Ok(match request {
+                    Request::ListWorkspaces => Response::Workspaces(workspace::list(&self.0)?),
+                    Request::Workspace { id } => Response::Workspace(workspace::get(&self.0, &id)?),
+                    Request::CreateWorkspace(request) => Response::WorkspaceCreated(
+                        workspace::create(&self.0, &request.host_path, request.name)?,
+                    ),
+                    _ => anyhow::bail!("unexpected request"),
+                })
+            }
+
+            fn shutdown(&self) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let host = root.path().join("host");
+        std::fs::create_dir(&host).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&host, &alias).unwrap();
+        let client = Client::in_process(std::sync::Arc::new(WorkspaceServer(
+            root.path().join("store"),
+        )));
+
+        let created = workspace_for_host(&client, &host).unwrap();
+        let reopened = workspace_for_host(&client, &alias).unwrap();
+
+        assert_eq!(reopened.id, created.id);
+        assert_eq!(client.list_workspaces().unwrap().len(), 1);
+    }
+
+    #[test]
     fn finds_the_workspace_associated_with_the_host_directory() {
         let workspaces = vec![
             workspace("w-other", "/home/op/other"),
