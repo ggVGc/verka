@@ -1,3 +1,10 @@
+
+- [ ] Split out styra and styra-diff into separate repos
+  - [ ] Write proper readme for styra
+  - [ ] Rename styra-diff
+- [ ] Merge styra-tui and styra-ui again:
+  - [ ] Introduce a "brain" crate, which tui uses. Can then possibly be used to power a separate interface, like web, from same business logic.
+
 - [ ] Big styra refactor:
   - Separate the rendering so that the application renders into a target interface describing the UI
   - That interface is implemented using ratatui
