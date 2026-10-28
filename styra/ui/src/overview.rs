@@ -1,10 +1,9 @@
 //! The overview: every active interaction laid out as a tile in a grid, so
 //! the whole fleet can be watched at once instead of one row at a time.
 
-use crate::chrome::StopTone;
 #[cfg(doc)]
 use crate::event_list::EventEntry;
-use crate::event_list::{faded_style, message_rows, BranchLink};
+use crate::event_list::{faded_style, message_rows, status_tail, BranchLink, EventListStatus};
 use crate::interactions::{status_marker, InteractionStatus};
 use crate::markdown::LinkDisplay;
 use crate::search::{self, SearchView};
@@ -21,8 +20,8 @@ use styra_protocol::Contract;
 /// Narrower than this and a tile cannot hold its name and selection on a line
 /// each, so the grid takes fewer columns instead.
 const MIN_TILE_WIDTH: u16 = 38;
-/// Room for the border, the three description lines and two of the message.
-/// Shorter than this and the grid scrolls instead.
+/// Room for the border, the two description lines, two of the message and
+/// the status tail. Shorter than this and the grid scrolls instead.
 const MIN_TILE_HEIGHT: u16 = 7;
 /// How far, in tenths, a tile off the cursor fades toward the background, as
 /// far as the navigator fades its rows off the cursor.
@@ -36,9 +35,9 @@ pub struct OverviewTile<'a> {
     /// As [`crate::interactions::InteractionRow::Interaction::branch`].
     pub branch: Option<&'a str>,
     pub status: InteractionStatus,
-    /// How long a working interaction has been at it. `None` for one waiting
-    /// on the operator, which the event list does not time either.
-    pub elapsed: Option<String>,
+    /// The line its own event list ends with, drawn under the messages as
+    /// the list draws it under the last entry.
+    pub tail: EventListStatus,
     /// The interaction this client is attached to.
     pub current: bool,
     pub newly_idle: bool,
@@ -344,8 +343,8 @@ fn render_tile(
             tile.selection.to_string(),
             Style::default().fg(theme::INTERACTION_STATUS_INFO),
         )),
-        status_line(tile),
     ];
+    lines.extend(marks_line(tile));
     if !tile.tags.is_empty() {
         lines.push(Line::from(Span::styled(
             format!("#{}", tile.tags.join(" #")),
@@ -364,7 +363,9 @@ fn render_tile(
             ..inner
         },
     );
-    let room = inner.height - description_height;
+    let tail = status_tail(&tile.tail);
+    let tail_height = u16::from(!tail.spans.is_empty()).min(inner.height - description_height);
+    let room = inner.height - description_height - tail_height;
     // The latest message first, then as many before it as fit whole above
     // it. A latest one too long for the room is shown from its start. Each
     // is drawn as the event list draws it, already wrapped to the width.
@@ -394,6 +395,16 @@ fn render_tile(
             ..inner
         },
     );
+    // Right under the messages, as the list has it right under its last
+    // entry, or along the bottom when they fill the room.
+    frame.render_widget(
+        Paragraph::new(tail),
+        Rect {
+            y: inner.y + description_height + used.min(usize::from(room)) as u16,
+            height: tail_height,
+            ..inner
+        },
+    );
     if !selected {
         fade(frame, area);
     }
@@ -418,51 +429,43 @@ fn fade(frame: &mut Frame, area: Rect) {
     }
 }
 
-/// What the interaction is doing, and the marks that ask for the operator.
-fn status_line(tile: &OverviewTile<'_>) -> Line<'static> {
-    let (word, color) = match tile.status {
-        InteractionStatus::Running { .. } => ("running", theme::RUNNING),
-        InteractionStatus::Background => ("background task", theme::MUTED_WARNING),
-        InteractionStatus::Pending | InteractionStatus::Idle => ("idle", theme::SUCCESS),
-        InteractionStatus::IdleFailed => ("idle · turn failed", theme::ERROR),
-        InteractionStatus::Stopped(tone @ StopTone::Integrated) => ("integrated", tone.color()),
-        InteractionStatus::Stopped(tone @ StopTone::IntegrationPending) => {
-            ("integrated · cleanup pending", tone.color())
-        }
-        InteractionStatus::Stopped(tone) => ("stopped", tone.color()),
-        InteractionStatus::Error => ("failed", theme::ERROR),
-        InteractionStatus::Ended => ("ended", theme::INACTIVE),
-    };
-    let mut spans = vec![Span::styled(word, Style::default().fg(color))];
-    if let Some(elapsed) = &tile.elapsed {
-        spans.push(Span::styled(
-            format!(" {elapsed}"),
-            Style::default().fg(color),
-        ));
-    }
+/// The marks that ask for the operator, or `None` when there are none. What
+/// the interaction is doing is the status tail's to say.
+fn marks_line(tile: &OverviewTile<'_>) -> Option<Line<'static>> {
+    let mut marks = Vec::new();
     if let Some(window) = &tile.rate_limited {
-        spans.push(Span::styled(
-            format!(" · RATE LIMITED ({window})"),
+        marks.push(Span::styled(
+            format!("RATE LIMITED ({window})"),
             Style::default()
                 .fg(theme::ERROR)
                 .add_modifier(Modifier::BOLD),
         ));
     }
     if tile.newly_idle {
-        spans.push(Span::styled(
-            " · NEWLY IDLE",
+        marks.push(Span::styled(
+            "NEWLY IDLE",
             Style::default()
                 .fg(theme::SUCCESS)
                 .add_modifier(Modifier::BOLD),
         ));
     }
     if tile.uncommitted {
-        spans.push(Span::styled(
-            " · uncommitted",
+        marks.push(Span::styled(
+            "uncommitted",
             Style::default().fg(theme::UNCOMMITTED),
         ));
     }
-    Line::from(spans)
+    if marks.is_empty() {
+        return None;
+    }
+    let mut spans = Vec::new();
+    for mark in marks {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" · "));
+        }
+        spans.push(mark);
+    }
+    Some(Line::from(spans))
 }
 
 #[cfg(test)]
@@ -477,7 +480,10 @@ mod tests {
             selection: "claude:claude-opus-5/high".into(),
             branch: None,
             status,
-            elapsed: None,
+            tail: EventListStatus::Idle {
+                reason: None,
+                failed: false,
+            },
             current: false,
             newly_idle: false,
             rate_limited: None,
@@ -635,8 +641,12 @@ mod tests {
         let tags = vec!["bug".to_owned()];
         let mut working = tile("repair checkout", InteractionStatus::Running { events: 1 });
         working.branch = Some("styra/fix");
-        working.elapsed = Some("2m14s".into());
         working.tags = &tags;
+        working.tail = EventListStatus::Running {
+            elapsed: std::time::Duration::from_secs(134),
+            quiet: None,
+            events: 1,
+        };
         working.messages = vec![agent("The checks are green.")];
         let mut waiting = tile("write the docs", InteractionStatus::Idle);
         waiting.newly_idle = true;
@@ -653,11 +663,15 @@ mod tests {
         assert_eq!(feedback.rows, vec![2], "{screen}");
         assert!(screen.contains("·●· repair checkout"), "{screen}");
         assert!(screen.contains("Payments · styra/fix"), "{screen}");
-        assert!(screen.contains("running 2m14s"), "{screen}");
+        assert!(screen.contains("·●· working 2m14s"), "{screen}");
+        assert!(
+            !screen.contains("┃running"),
+            "the status is the tail's alone\n{screen}"
+        );
         assert!(screen.contains("#bug"), "{screen}");
         assert!(screen.contains("« The checks are green."), "{screen}");
         assert!(screen.contains("● write the docs"), "{screen}");
-        assert!(screen.contains("idle · NEWLY IDLE"), "{screen}");
+        assert!(screen.contains("NEWLY IDLE"), "{screen}");
         assert!(screen.contains("1 running · 1 idle"), "{screen}");
     }
 
@@ -685,7 +699,8 @@ mod tests {
             links: LinkDisplay::Compact,
             search: SearchView::default(),
         };
-        // Three description lines and three of messages inside the borders.
+        // Two description lines, three of messages and the status tail
+        // inside the borders.
         let (screen, _) = draw(&view, 40, 10);
         assert!(screen.contains("» fix the checkout"), "{screen}");
         assert!(screen.contains("« newer"), "{screen}");
@@ -728,6 +743,47 @@ mod tests {
         let row = |text: &str| screen.lines().position(|line| line.contains(text));
         assert!(row("Two flaky") < row("checkout"), "{screen}");
         assert!(row("checkout") < row("refund"), "{screen}");
+    }
+
+    /// Each tile ends with its event list's status tail, right under its
+    /// messages, or along the bottom when they fill the tile.
+    #[test]
+    fn tiles_end_with_the_event_list_status_tail() {
+        let mut working = tile("working", InteractionStatus::Running { events: 1 });
+        working.tail = EventListStatus::Running {
+            elapsed: std::time::Duration::from_secs(134),
+            quiet: None,
+            events: 1,
+        };
+        working.messages = vec![agent("Running the checks.")];
+        let mut chatty = tile("chatty", InteractionStatus::Idle);
+        chatty.tail = EventListStatus::Idle {
+            reason: Some("interrupted".into()),
+            failed: false,
+        };
+        chatty.messages = (0..20).map(|n| agent(&format!("message {n}"))).collect();
+        let view = OverviewView {
+            running_only: false,
+            workspace_scope: None,
+            tiles: vec![working, chatty],
+            selected: 0,
+            links: LinkDisplay::Compact,
+            search: SearchView::default(),
+        };
+        let (screen, _) = draw(&view, 100, 14);
+        let row = |text: &str| screen.lines().position(|line| line.contains(text));
+        assert!(screen.contains("working 2m14s"), "{screen}");
+        assert_eq!(
+            row("working 2m14s"),
+            row("Running the checks.").map(|row| row + 1),
+            "{screen}"
+        );
+        assert!(screen.contains("── idle · interrupted ──"), "{screen}");
+        assert_eq!(
+            row("message 19"),
+            row("idle · interrupted").map(|row| row - 1)
+        );
+        assert_eq!(row("idle · interrupted"), Some(11), "{screen}");
     }
 
     #[test]

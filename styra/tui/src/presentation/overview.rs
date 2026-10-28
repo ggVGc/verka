@@ -1,6 +1,6 @@
 //! Mapping from the live-interaction snapshot to the overview's tiles.
 
-use crate::activity::{IdleReason, Status};
+use crate::activity::{IdleReason, Progress, Status};
 use crate::app::App;
 use std::borrow::Cow;
 use std::time::Duration;
@@ -71,7 +71,7 @@ fn tile<'a>(app: &'a App, interaction: &'a InteractionSummary, now_ms: u64) -> O
             .as_ref()
             .map(|checkout| checkout.branch.as_deref().unwrap_or("detached head")),
         status: super::interactions::status(&reported, interaction),
-        elapsed: elapsed(interaction, now_ms),
+        tail: tail(app, interaction, &reported, now_ms),
         current: interaction.id == app.session_id,
         newly_idle: interaction.activity == InteractionActivity::Pending && interaction.idle_unseen,
         rate_limited,
@@ -114,6 +114,32 @@ fn messages<'a>(app: &'a App, interaction: &'a InteractionSummary) -> Vec<Overvi
         .collect()
 }
 
+/// The status tail its own event list ends with. The attached interaction's
+/// is that very one; the others' are read off the snapshot, which does not
+/// say when their agents were last heard from.
+fn tail(
+    app: &App,
+    interaction: &InteractionSummary,
+    reported: &Status,
+    now_ms: u64,
+) -> styra_ui::event_list::EventListStatus {
+    if interaction.id == app.session_id {
+        return super::list::status(&app.activity.status, app.activity.progress());
+    }
+    let in_status = match interaction.activity_since_ms {
+        0 => Duration::ZERO,
+        since => Duration::from_millis(now_ms.saturating_sub(since)),
+    };
+    super::list::status(
+        reported,
+        Progress {
+            in_status,
+            since_event: None,
+            events: interaction.events,
+        },
+    )
+}
+
 /// How long a working interaction has been at its turn, by the server's
 /// clock — the same figure the attached one's title shows. Idle ones are not
 /// timed, as they are not in the title.
@@ -132,10 +158,20 @@ fn elapsed(interaction: &InteractionSummary, now_ms: u64) -> Option<String> {
 /// Every figure on the grid the clock moves, for [`super::clock_reading`].
 pub(crate) fn clock_reading(app: &App) -> String {
     let now_ms = super::quota::now_ms();
-    app.overview
-        .indices(&app.interactions, app.workspace.id.as_deref())
+    let indices = app
+        .overview
+        .indices(&app.interactions, app.workspace.id.as_deref());
+    // The attached tile's tail is timed by this client's clock, as its event
+    // list's is, rather than the server's.
+    let attached = indices
+        .iter()
+        .any(|index| app.interactions.items[*index].id == app.session_id)
+        .then(|| super::status_elapsed(app))
+        .flatten();
+    indices
         .into_iter()
         .filter_map(|index| elapsed(&app.interactions.items[index], now_ms))
+        .chain(attached)
         .collect::<Vec<_>>()
         .join(" ")
 }

@@ -900,7 +900,9 @@ fn why(reason: &Option<String>) -> String {
         .unwrap_or_default()
 }
 
-fn status_tail(status: &EventListStatus) -> Line<'static> {
+/// The line under the last entry saying what the interaction is doing; the
+/// overview draws the same one under each tile's messages.
+pub fn status_tail(status: &EventListStatus) -> Line<'static> {
     let (text, color) = match status {
         EventListStatus::Pending => (
             "  … waiting for your first message".to_string(),

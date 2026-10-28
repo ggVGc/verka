@@ -69,6 +69,35 @@ pub(crate) fn branch_provider_switch(
     }
 }
 
+/// The status tail under the last entry, from where the interaction is and
+/// how far along it is there.
+pub(super) fn status(
+    status: &Status,
+    progress: crate::activity::Progress,
+) -> styra_ui::event_list::EventListStatus {
+    match status {
+        Status::Pending => styra_ui::event_list::EventListStatus::Pending,
+        Status::Running => styra_ui::event_list::EventListStatus::Running {
+            elapsed: progress.in_status,
+            quiet: progress.since_event,
+            events: progress.events,
+        },
+        Status::Idle(why) => styra_ui::event_list::EventListStatus::Idle {
+            reason: status.reason_label(),
+            failed: matches!(why, crate::activity::IdleReason::Failed { .. }),
+        },
+        Status::Background => styra_ui::event_list::EventListStatus::Background {
+            elapsed: progress.in_status,
+        },
+        Status::Stopped(why) => styra_ui::event_list::EventListStatus::Stopped {
+            elapsed: progress.in_status,
+            reason: status.reason_label(),
+            tone: super::stop_tone(why),
+        },
+        Status::Ended { .. } => styra_ui::event_list::EventListStatus::Ended,
+    }
+}
+
 pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
     let branch_point = app.timeline.branch_point();
     let entries = app
@@ -102,28 +131,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
             }
         })
         .collect();
-    let progress = app.activity.progress();
-    let status = match app.activity.status {
-        Status::Pending => styra_ui::event_list::EventListStatus::Pending,
-        Status::Running => styra_ui::event_list::EventListStatus::Running {
-            elapsed: progress.in_status,
-            quiet: progress.since_event,
-            events: progress.events,
-        },
-        Status::Idle(ref why) => styra_ui::event_list::EventListStatus::Idle {
-            reason: app.activity.status.reason_label(),
-            failed: matches!(why, crate::activity::IdleReason::Failed { .. }),
-        },
-        Status::Background => styra_ui::event_list::EventListStatus::Background {
-            elapsed: progress.in_status,
-        },
-        Status::Stopped(ref why) => styra_ui::event_list::EventListStatus::Stopped {
-            elapsed: progress.in_status,
-            reason: app.activity.status.reason_label(),
-            tone: super::stop_tone(why),
-        },
-        Status::Ended { .. } => styra_ui::event_list::EventListStatus::Ended,
-    };
+    let status = status(&app.activity.status, app.activity.progress());
     let usage = app.activity.latest_usage.as_ref().map(|usage| {
         (
             usage.input_tokens,
