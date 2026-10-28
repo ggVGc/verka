@@ -10,7 +10,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
-use unicode_width::UnicodeWidthChar;
 
 use crate::theme;
 
@@ -256,7 +255,7 @@ pub fn display(input: &ModalInput<'_>, width: u16) -> InputDisplay {
 fn rule(index: usize, current: bool, choosing: bool, width: usize) -> Line<'static> {
     let marker = if current && choosing { "▶" } else { "─" };
     let label = format!("{marker}─ {} ", index + 1);
-    let fill = width.saturating_sub(label.chars().count());
+    let fill = width.saturating_sub(crate::text::width(&label));
     let style = if current {
         Style::default()
             .fg(theme::ACCENT)
@@ -268,23 +267,7 @@ fn rule(index: usize, current: bool, choosing: bool, width: usize) -> Line<'stat
 }
 
 pub(crate) fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for logical_line in text.split('\n') {
-        let mut current = String::new();
-        let mut current_width = 0;
-        for ch in logical_line.chars() {
-            let ch_width = ch.width().unwrap_or(0);
-            if current_width > 0 && current_width + ch_width > width {
-                lines.push(Line::from(Span::styled(current, style)));
-                current = String::new();
-                current_width = 0;
-            }
-            current.push(ch);
-            current_width += ch_width;
-        }
-        lines.push(Line::from(Span::styled(current, style)));
-    }
-    lines
+    crate::text::wrap_input(text, width, style)
 }
 
 #[cfg(test)]

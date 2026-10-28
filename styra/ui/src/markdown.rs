@@ -219,11 +219,14 @@ pub fn syntax_highlighted_code_lines(
 
 /// [`syntax_highlighted_code_lines`] proper, behind its cache.
 fn highlight_code(text: &str, language: &str, indent: &str) -> Option<Vec<Line<'static>>> {
+    // Match plain code rendering: each tab occupies four spaces. Expand before
+    // either highlighter so tabs cannot collapse when Ratatui draws the spans.
+    let text = text.replace('\t', "    ");
     if matches!(
         language.to_ascii_lowercase().as_str(),
         "elixir" | "ex" | "exs"
     ) {
-        return highlight_elixir(text, indent);
+        return highlight_elixir(&text, indent);
     }
     // A four-backtick wrapper also permits source which itself contains a
     // normal three-backtick fence.
@@ -536,7 +539,7 @@ pub fn structural_indent(line: &Line<'_>) -> Option<usize> {
         .map(|span| span.content.as_ref())
         .collect();
     let trimmed = text.trim_start();
-    let leading = text.chars().count() - trimmed.chars().count();
+    let leading = crate::text::width(&text[..text.len() - trimmed.len()]);
     if is_table_row(trimmed) {
         return Some(leading);
     }
@@ -1188,6 +1191,22 @@ mod tests {
             text_of(&rust),
             "asking again has to give the same rendering back"
         );
+    }
+
+    #[test]
+    fn highlighted_code_expands_tabs_like_plain_code() {
+        for (language, source, expected) in [
+            ("rust", "\tlet\tvalue = 1;", "      let    value = 1;"),
+            ("elixir", "\tvalue\t= :ok", "      value    = :ok"),
+        ] {
+            let lines = syntax_highlighted_code_lines(source, Some(language), "  ")
+                .expect("known language");
+            let expanded = source.replace('\t', "    ");
+            let spaces = syntax_highlighted_code_lines(&expanded, Some(language), "  ")
+                .expect("known language");
+            assert_eq!(text_of(&lines), text_of(&spaces), "{language}");
+            assert_eq!(text_of(&lines)[0].0, expected, "{language}");
+        }
     }
 
     #[test]

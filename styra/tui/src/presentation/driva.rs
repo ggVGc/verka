@@ -90,6 +90,10 @@ pub(crate) fn view(app: &App) -> styra_ui::driva::DrivaView<'_> {
                 None => "Workspace directory unavailable".into(),
             }
         }),
+        project_action_keys: [
+            crate::keybindings::EVENTS_RUN.keys_label(),
+            crate::keybindings::EVENTS_TEST.keys_label(),
+        ],
         selection_name: app.selection.name(),
         session_id: &app.session_id,
         session_name: app.interactions.name(&app.session_id),

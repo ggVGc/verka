@@ -7,7 +7,6 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use std::collections::BTreeSet;
-use std::path::Path;
 
 /// Display-ready path structure. Display strings are owned because converting
 /// platform paths may be lossy; file contents remain separate and borrowed.
@@ -148,8 +147,9 @@ pub fn render_content(
         ),
         FileContent::Ready(content) => {
             let content = content.replace('\t', "    ");
+            let language = file_language(title);
             let mut lines =
-                crate::markdown::syntax_highlighted_code_lines(&content, file_language(title), "")
+                crate::markdown::syntax_highlighted_code_lines(&content, language.as_deref(), "")
                     .unwrap_or_else(|| {
                         content
                             .lines()
@@ -215,13 +215,9 @@ pub fn render_content(
     }
 }
 
-/// The TextMate grammar name for a previewed filename. Link targets can carry
-/// `:line[:column]`, so peel those numeric suffixes before asking `Path` for
-/// its extension. An extension without a name of its own here is passed on
-/// as written, as is the whole name of a file without one (`Makefile`): the
-/// highlighter looks grammars up by the extensions they claim, and falls back
-/// to plain text for one none does.
-fn file_language(title: Option<&str>) -> Option<&str> {
+/// Link targets can carry `:line[:column]`; strip those numeric suffixes
+/// before using the shared filename-to-grammar lookup.
+fn file_language(title: Option<&str>) -> Option<String> {
     let mut path = title?;
     for _ in 0..2 {
         let Some((before, suffix)) = path.rsplit_once(':') else {
@@ -232,32 +228,7 @@ fn file_language(title: Option<&str>) -> Option<&str> {
         }
         path = before;
     }
-    let path = Path::new(path);
-    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
-        return path.file_name()?.to_str();
-    };
-    match extension.to_ascii_lowercase().as_str() {
-        "rs" => Some("rust"),
-        "py" => Some("python"),
-        "js" | "jsx" => Some("javascript"),
-        "ts" | "tsx" => Some("typescript"),
-        "json" => Some("json"),
-        "toml" => Some("toml"),
-        "yaml" | "yml" => Some("yaml"),
-        "sh" | "bash" | "zsh" => Some("bash"),
-        "c" | "h" => Some("c"),
-        "cc" | "cpp" | "cxx" | "hpp" => Some("cpp"),
-        "go" => Some("go"),
-        "java" => Some("java"),
-        "rb" => Some("ruby"),
-        "php" => Some("php"),
-        "sql" => Some("sql"),
-        "html" | "htm" => Some("html"),
-        "css" => Some("css"),
-        "md" | "mdx" => Some("markdown"),
-        "xml" => Some("xml"),
-        _ => Some(extension),
-    }
+    crate::language::from_path(path)
 }
 
 #[cfg(test)]
@@ -342,10 +313,21 @@ mod tests {
 
     #[test]
     fn file_extensions_select_the_syntax_grammar_even_with_a_location_suffix() {
-        assert_eq!(file_language(Some("src/main.rs:12")), Some("rust"));
-        assert_eq!(file_language(Some("web/app.tsx:8:3")), Some("typescript"));
-        assert_eq!(file_language(Some("lib/styra.ex:4")), Some("ex"));
-        assert_eq!(file_language(Some("Makefile")), Some("Makefile"));
+        assert_eq!(
+            file_language(Some("src/main.rs:12")).as_deref(),
+            Some("rust")
+        );
+        assert_eq!(
+            file_language(Some("web/app.tsx:8:3")).as_deref(),
+            Some("typescript")
+        );
+        assert_eq!(file_language(Some("lib/styra.ex:4")).as_deref(), Some("ex"));
+        assert_eq!(file_language(Some("lib/styra.EX:4")).as_deref(), Some("ex"));
+        assert_eq!(
+            file_language(Some("src/main.RS:12")).as_deref(),
+            Some("rust")
+        );
+        assert_eq!(file_language(Some("Makefile")).as_deref(), Some("Makefile"));
     }
 
     #[test]

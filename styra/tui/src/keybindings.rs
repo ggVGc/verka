@@ -6,16 +6,16 @@
 
 use crate::actions::Action;
 pub(crate) use crate::keyboard::ReferenceRow;
-use crate::keyboard::{bindings, Binding, Key};
+use crate::keyboard::{bindings, Binding, Key, Windows};
 use crossterm::event::KeyCode;
 
 bindings! { GLOBAL = "Global";
     HELP: [Key::ch('?')] => Action::Help;
     // A highlighted link keeps Space for its own menu of actions.
     GLOBAL_ACTION_MENU: [Key::ch(' ')] => Action::GlobalActionMenu;
-    GLOBAL_FOCUS_MESSAGE: [Key::ch('i')] => Action::GlobalFocusMessage;
+    GLOBAL_FOCUS_MESSAGE: [Key::ch('i')] except [Window::Preview] => Action::GlobalFocusMessage;
     GLOBAL_LEAVE_MESSAGE: [Key::code(KeyCode::Esc)] => Action::GlobalLeaveMessage;
-    GLOBAL_BACK: [Key::code(KeyCode::Esc)] ("other views") => Action::GlobalBack;
+    GLOBAL_BACK: [Key::code(KeyCode::Esc)] except [Window::Events] => Action::GlobalBack;
     GLOBAL_QUIT: [Key::ch('q')] => Action::GlobalQuit;
     GLOBAL_INTERRUPT: [Key::ch('s')] => Action::GlobalInterrupt;
     GLOBAL_STOP: [Key::ch('S')] => Action::GlobalStop;
@@ -27,14 +27,14 @@ bindings! { GLOBAL = "Global";
     GLOBAL_SHELL: [Key::ch('!')] => Action::GlobalShell;
     GLOBAL_DIRECTORY: [Key::ch('~')] => Action::GlobalDirectory;
     GLOBAL_DIFF: [Key::ch('d')] ("checkout with a branch point") => Action::GlobalDiff;
-    GLOBAL_DIFF_FULLSCREEN: [Key::ch('D')] ("not in details") => Action::GlobalDiffFullscreen;
+    GLOBAL_DIFF_FULLSCREEN: [Key::ch('D')] => Action::GlobalDiffFullscreen;
     GLOBAL_INTERACTIONS: [Key::ch('a')] => Action::GlobalInteractions;
     GLOBAL_OVERVIEW: [Key::ch('o')] => Action::GlobalOverview;
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
     GLOBAL_WORKSPACES: [Key::ctrl('v')] => Action::GlobalWorkspaces;
-    GLOBAL_WORKSPACE_JUMP: [Key::ch('v')] ("not in raw") => Action::GlobalWorkspaceJump;
+    GLOBAL_WORKSPACE_JUMP: [Key::ch('v')] => Action::GlobalWorkspaceJump;
     GLOBAL_WORKSPACE_JUMP_LISTED: [Key::ch('V')] => Action::GlobalWorkspaceJumpListed;
-    GLOBAL_WORKTREES: [Key::ch('w')] ("not in details") => Action::GlobalWorktrees;
+    GLOBAL_WORKTREES: [Key::ch('w')] => Action::GlobalWorktrees;
     GLOBAL_SESSION_WORKTREE: [Key::ctrl('w')] ("existing session")
         => Action::GlobalSessionWorktree;
     GLOBAL_TAGS: [Key::ch('T')] => Action::GlobalTags;
@@ -52,14 +52,11 @@ bindings! { GLOBAL = "Global";
         => Action::GlobalInteractionHistory;
     GLOBAL_AUTO_COMMIT: [Key::ctrl('g')] => Action::GlobalAutoCommit;
     GLOBAL_ENTRY_LOG: [Key::ch('e')] => Action::GlobalEntryLog;
-    GLOBAL_ENTRY_LOG_FOCUS: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]
-        => Action::GlobalEntryLogFocus;
     GLOBAL_QUOTA: [Key::ch('Q')] => Action::GlobalQuota;
-    GLOBAL_PROCESSES_PANE: [Key::ch('h')] ("not in overview") => Action::GlobalProcessesPane;
+    GLOBAL_PROCESSES_PANE: [Key::ch('h')] => Action::GlobalProcessesPane;
     GLOBAL_PROCESSES: [Key::ch('H')] => Action::GlobalProcesses;
     GLOBAL_FILES: [Key::ch('F')] => Action::GlobalFiles;
-    GLOBAL_FILES_ALIAS: [Key::ch('f')] ("other views")
-        => Action::GlobalFiles;
+    GLOBAL_FILES_ALIAS: [Key::ch('f')] => Action::GlobalFiles;
     GLOBAL_ANSWER: [Key::ch('X')] => Action::GlobalAnswer;
     GLOBAL_PREVIEW: [Key::ch('P')] => Action::GlobalPreview;
     GLOBAL_COPY_CONVERSATION: [Key::ch('Y')] => Action::GlobalCopyConversation;
@@ -81,6 +78,8 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_LINK_MENU: [Key::ch(' ')] ("link highlighted") => Action::EventsLinkMenu;
     EVENTS_TOGGLE_EXPAND: [Key::code(KeyCode::Enter)]
         => Action::EventsToggleExpand;
+    EVENTS_ENTRY_LOG_FOCUS: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)]
+        ("entry log open") => Action::EventsEntryLogFocus;
     EVENTS_EXPAND_ONLY: [Key::ch('O')] => Action::EventsExpandOnly;
     EVENTS_EXPAND_ALL: [Key::ch('R')] as "z R" => Action::EventsExpandAll;
     EVENTS_COLLAPSE_ALL: [Key::ch('M')] as "z M" => Action::EventsCollapseAll;
@@ -106,19 +105,18 @@ bindings! { EVENTS = "Events and previews";
 bindings! { READING = "Raw, messages, log, quota, processes, and transcript";
     READING_DOWN: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::ReadingDown;
     READING_UP: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::ReadingUp;
-    READING_FIRST: [Key::ch('g')] => Action::ReadingFirst;
-    READING_LAST: [Key::ch('G')] => Action::ReadingLast;
-    READING_LINKS: [Key::ch('f')] ("transcript")
-        => Action::ReadingLinks;
-    READING_ALL_EVENTS: [Key::ch('c')] ("transcript")
-        => Action::ReadingAllEvents;
-    READING_RETRY: [Key::ch('R')] ("quota")
-        => Action::ReadingRetry;
-    READING_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::ReadingPageDown;
-    READING_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::ReadingPageUp;
-    READING_PROVIDER_RAW: [Key::ch('v')] ("raw")
-        => Action::ReadingProviderRaw;
-    READING_COPY: [Key::ch('y')] ("raw, messages, processes") => Action::ReadingCopy;
+    READING_FIRST: [Key::ch('g')] except [Window::Quota] => Action::ReadingFirst;
+    READING_LAST: [Key::ch('G')] except [Window::Quota] => Action::ReadingLast;
+    READING_LINKS: [Key::ch('f')] in [Window::Transcript] => Action::ReadingLinks;
+    READING_ALL_EVENTS: [Key::ch('c')] in [Window::Transcript] => Action::ReadingAllEvents;
+    READING_RETRY: [Key::ch('R')] in [Window::Quota] => Action::ReadingRetry;
+    READING_PAGE_DOWN: [Key::code(KeyCode::PageDown)] in [Window::Raw, Window::Messages]
+        => Action::ReadingPageDown;
+    READING_PAGE_UP: [Key::code(KeyCode::PageUp)] in [Window::Raw, Window::Messages]
+        => Action::ReadingPageUp;
+    READING_PROVIDER_RAW: [Key::ch('v')] in [Window::Raw] => Action::ReadingProviderRaw;
+    READING_COPY: [Key::ch('y')] in [Window::Raw, Window::Messages, Window::Processes]
+        => Action::ReadingCopy;
 }
 
 bindings! { CHECKOUT_DIFF = "Diff";
@@ -577,6 +575,33 @@ impl Window {
         )
     }
 
+    /// Whether this window's own section takes `key` from the global one: a
+    /// view's own command on a key wins over the global command on the same
+    /// key. A binding narrowed by a note (a link highlighted, the preview
+    /// open) only holds its key some of the time, so it does not take it, and
+    /// nor does the second key of a chord.
+    pub(crate) fn claims(self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(own) = self.sections().first() else {
+            return false;
+        };
+        own.first() != GLOBAL.first()
+            && own.iter().any(|row| {
+                matches!(row, ReferenceRow::Binding(binding)
+                    if binding.note().is_none()
+                        && !is_chord(binding)
+                        && binding.matches_in(key, self))
+            })
+    }
+
+    /// Whether `binding`, listed in `section`, acts in this window: it is not
+    /// narrowed to other windows, and its key is not one this window's own
+    /// section claims.
+    fn offers(self, section: &[ReferenceRow], binding: &Binding) -> bool {
+        binding.applies_in(self)
+            && !(section.first() == GLOBAL.first()
+                && binding.press().is_some_and(|key| self.claims(key)))
+    }
+
     /// What the action menu offers here: the reference's bindings that a
     /// keypress reaches from the list, most specific first, each command once.
     ///
@@ -594,6 +619,7 @@ impl Window {
                     continue;
                 };
                 if binding.press().is_none()
+                    || !self.offers(section, binding)
                     || matches!(
                         binding.action(),
                         Action::GlobalActionMenu
@@ -628,17 +654,25 @@ impl Window {
             if !rows.is_empty() {
                 rows.push(ReferenceRow::Blank);
             }
-            rows.extend_from_slice(section);
+            rows.extend(section.iter().copied().filter(|row| match row {
+                ReferenceRow::Binding(binding) => self.offers(section, binding),
+                _ => true,
+            }));
         }
         rows
     }
 }
 
+/// Whether `binding` is the second key of a chord, reached only after
+/// [`EVENTS_FOLD_PREFIX`].
+fn is_chord(binding: &Binding) -> bool {
+    [EVENTS_EXPAND_ALL, EVENTS_COLLAPSE_ALL].contains(binding)
+}
+
 /// The keypresses that run `binding`, in order: its first key, after the
 /// prefix of the chord it completes.
 pub(crate) fn presses(binding: &Binding) -> Vec<crossterm::event::KeyEvent> {
-    let prefix = [EVENTS_EXPAND_ALL, EVENTS_COLLAPSE_ALL]
-        .contains(binding)
+    let prefix = is_chord(binding)
         .then(|| EVENTS_FOLD_PREFIX.press())
         .flatten();
     prefix.into_iter().chain(binding.press()).collect()
@@ -796,6 +830,60 @@ mod reference_tests {
             .any(|binding| binding.action() == Action::OverviewSearch));
         assert!(!Window::Launcher.has_action_menu());
         assert!(!Window::ActionMenu.has_action_menu());
+    }
+
+    /// A global command whose key the window's own section takes, or that is
+    /// narrowed to other windows, is neither listed nor offered there: the
+    /// menu would press a key that does something else.
+    #[test]
+    fn a_window_offers_only_the_commands_its_keys_reach() {
+        let offers = |window: Window, action: Action| {
+            let listed = window.reference().iter().any(
+                |row| matches!(row, ReferenceRow::Binding(binding) if binding.action() == action),
+            );
+            let offered = window
+                .actions()
+                .iter()
+                .any(|binding| binding.action() == action);
+            assert_eq!(listed, offered, "{} lists what it offers", window.name());
+            offered
+        };
+        // Taken by the view's own keys.
+        assert!(!offers(Window::Driva, Action::GlobalDiffFullscreen));
+        assert!(!offers(Window::Driva, Action::GlobalWorktrees));
+        assert!(!offers(Window::Driva, Action::GlobalIntegrate));
+        assert!(!offers(Window::Driva, Action::GlobalTags));
+        assert!(!offers(Window::Files, Action::GlobalEntryLog));
+        assert!(!offers(Window::Files, Action::GlobalInteractions));
+        assert!(!offers(Window::Raw, Action::GlobalWorkspaceJump));
+        assert!(!offers(Window::Overview, Action::GlobalLauncher));
+        assert!(!offers(Window::Interactions, Action::GlobalInterrupt));
+        // Narrowed to other windows.
+        assert!(!offers(Window::Events, Action::GlobalBack));
+        assert!(!offers(Window::Preview, Action::GlobalFocusMessage));
+        assert!(!offers(Window::Log, Action::ReadingPageDown));
+        assert!(!offers(Window::Log, Action::ReadingProviderRaw));
+        assert!(!offers(Window::Quota, Action::ReadingFirst));
+        // Still there where nothing takes the key.
+        assert!(offers(Window::Raw, Action::GlobalFiles));
+        assert!(offers(Window::Raw, Action::GlobalTags));
+        assert!(offers(Window::Raw, Action::ReadingPageDown));
+        assert!(offers(Window::Driva, Action::GlobalBack));
+        assert!(offers(Window::Events, Action::GlobalWorktrees));
+        // The answer view takes `F`, so files is offered on its other key.
+        let files: Vec<String> = Window::Answer
+            .actions()
+            .iter()
+            .filter(|binding| binding.action() == Action::GlobalFiles)
+            .map(|binding| binding.keys_label())
+            .collect();
+        assert_eq!(files, ["f"]);
+        // A conditional key and a chord's second key take nothing.
+        assert!(
+            offers(Window::Events, Action::GlobalMessages),
+            "z M is a chord"
+        );
+        assert!(!Window::Events.claims(KeyEvent::from(KeyCode::Char('M'))));
     }
 
     /// A chord is run by pressing its prefix first, as the operator would.

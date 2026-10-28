@@ -417,6 +417,19 @@ mod tests {
     }
 
     #[test]
+    fn unicode_preview_scroll_counts_each_wrapped_row_once() {
+        let lines = wrap_preview_lines(
+            vec![Line::from("界界界界界界界"), Line::from("e\u{301}👩‍💻界")],
+            6,
+            2,
+            0,
+        );
+        assert!(lines.iter().all(|line| line.width() <= 6));
+        assert_eq!(lines.len(), 4);
+        assert_eq!(preview_scroll_limit(&lines, 6, 2), 2);
+    }
+
+    #[test]
     fn a_path_under_the_workspace_starts_with_a_muted_shorthand() {
         for path in [
             "/tmp/styra/workspace/src/retry.rs",

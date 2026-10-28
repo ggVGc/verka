@@ -20,7 +20,7 @@ use styra_diff::Outcome;
 use styra_protocol::{CompletionState, Contract, LogEntry, ProjectAction};
 use styra_server::Client;
 use styra_ui::fuzzy_list::FuzzyList;
-use styra_ui::query::Edit;
+use styra_ui::query::{Edit, Words};
 
 /// Keys for the event list's `/` search prompt. It is modal — every printable
 /// key is part of the term, including the letters bound to commands on the
@@ -54,17 +54,7 @@ pub fn handle_retarget_prompt_key(app: &mut App, client: &Client, key: KeyEvent)
                 .unwrap_or(history.len() - 1);
             *text = history[index].branch.clone();
         }
-        KeyCode::Backspace => {
-            text.pop();
-        }
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
-        KeyCode::Char(c)
-            if !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-        {
-            text.push(c)
-        }
         KeyCode::Enter if !text.trim().is_empty() => {
             let branch = text.trim().to_owned();
             let restore = history.iter().any(|saved| saved.branch == branch);
@@ -78,7 +68,11 @@ pub fn handle_retarget_prompt_key(app: &mut App, client: &Client, key: KeyEvent)
                 app.ask(Request::Retarget(branch));
             }
         }
-        _ => {}
+        _ => {
+            if let Some(edit) = Edit::from_key(key) {
+                edit.apply(text);
+            }
+        }
     }
 }
 
@@ -87,16 +81,6 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
         KeyCode::Esc => app.close_integration_prompt(),
         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.ask(Request::GenerateIntegrationMessage)
-        }
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some(message) = app.integration_prompt.as_mut() {
-                while message.ends_with(char::is_whitespace) {
-                    message.pop();
-                }
-                while !message.is_empty() && !message.ends_with(char::is_whitespace) {
-                    message.pop();
-                }
-            }
         }
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
             if let Some(message) = app.integration_prompt.as_mut() {
@@ -112,17 +96,13 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
                 app.ask(Request::Integrate(message.clone()));
             }
         }
-        KeyCode::Backspace => {
-            if let Some(message) = app.integration_prompt.as_mut() {
-                message.pop();
+        _ => {
+            if let (Some(edit), Some(message)) =
+                (Edit::from_key(key), app.integration_prompt.as_mut())
+            {
+                edit.apply_with(message, Words::Prose);
             }
         }
-        KeyCode::Char(ch) if !ch.is_control() => {
-            if let Some(message) = app.integration_prompt.as_mut() {
-                message.push(ch);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -262,17 +242,11 @@ pub fn handle_mount_prompt_key(app: &mut App, key: KeyEvent) {
         // Shift-Tab climbs back out of the directory Tab went into.
         KeyCode::BackTab => delete_prompt_path_part(app),
         KeyCode::Char('w') if control => delete_prompt_path_part(app),
-        KeyCode::Backspace => {
-            if let Some(text) = app.launch.prompt.as_mut() {
-                text.pop();
+        _ => {
+            if let (Some(edit), Some(text)) = (Edit::from_key(key), app.launch.prompt.as_mut()) {
+                edit.apply(text);
             }
         }
-        KeyCode::Char(ch) if !ch.is_control() && !control => {
-            if let Some(text) = app.launch.prompt.as_mut() {
-                text.push(ch);
-            }
-        }
-        _ => {}
     }
     launch::refresh_paths(app);
 }
@@ -306,23 +280,13 @@ pub fn handle_command_prompt_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => launch::cancel_command_prompt(app),
         KeyCode::Enter => launch::confirm_command_prompt(app),
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some((_, text)) = app.launch.command_prompt.as_mut() {
-                let kept = text.trim_end().rfind(' ').map_or(0, |space| space + 1);
-                text.truncate(kept);
+        _ => {
+            if let (Some(edit), Some((_, text))) =
+                (Edit::from_key(key), app.launch.command_prompt.as_mut())
+            {
+                edit.apply_with(text, Words::Prose);
             }
         }
-        KeyCode::Backspace => {
-            if let Some((_, text)) = app.launch.command_prompt.as_mut() {
-                text.pop();
-            }
-        }
-        KeyCode::Char(ch) if !ch.is_control() => {
-            if let Some((_, text)) = app.launch.command_prompt.as_mut() {
-                text.push(ch);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -351,17 +315,13 @@ pub fn handle_git_repository_prompt_key(app: &mut App, client: &Client, key: Key
                 Err(error) => app.show_error(format!("could not set Git checkout: {error:#}")),
             }
         }
-        KeyCode::Backspace => {
-            if let Some(text) = app.git_repository_prompt.as_mut() {
-                text.pop();
+        _ => {
+            if let (Some(edit), Some(text)) =
+                (Edit::from_key(key), app.git_repository_prompt.as_mut())
+            {
+                edit.apply(text);
             }
         }
-        KeyCode::Char(ch) if !ch.is_control() => {
-            if let Some(text) = app.git_repository_prompt.as_mut() {
-                text.push(ch);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -474,14 +434,20 @@ pub fn handle_list_key(
     if app.view == View::Overview && handle_overview_key(app, key) {
         return;
     }
+    let window = crate::presentation::view_window(app.view);
     match key {
+        // A view's own command on a key wins over the global one on the same
+        // key — details keeps `D`, `w` and `I`, files `e` and `a`, and so on.
+        // The reference and the action menu ask the same question, so neither
+        // offers a global command its key would not reach here.
+        k if window.claims(k) => {}
         k if GLOBAL_QUIT.matches(k) => return app.ask(Request::Quit),
         // The event list is the bottom of the stack every other view is
         // opened over, so Esc goes straight back to it from any of them. The
         // modals that claim Esc for themselves (prompts, pickers, the
         // navigator, the reference) are answered before this is reached. A
         // link highlight is cleared first, as it is on the event list.
-        k if GLOBAL_BACK.matches(k) && app.view != View::Events => {
+        k if GLOBAL_BACK.matches_in(k, window) => {
             if app.link_highlight.is_some() {
                 return app.clear_link_highlight();
             }
@@ -519,18 +485,11 @@ pub fn handle_list_key(
         // interaction — a finished one still has a directory to look at.
         k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
         // `d` opens the diff in the preview; `D` opens it fullscreen.
-        // The details view keeps `D` for saving the launch default.
         k if GLOBAL_DIFF.matches(k) => return ask_for_diff(app, false),
-        k if GLOBAL_DIFF_FULLSCREEN.matches(k) && app.view != View::Driva => {
-            return ask_for_diff(app, true)
-        }
+        k if GLOBAL_DIFF_FULLSCREEN.matches(k) => return ask_for_diff(app, true),
         // Not from the preview. The overview takes `i` itself, for the tile
         // under its cursor.
-        k if GLOBAL_FOCUS_MESSAGE.matches(k)
-            && !matches!(app.view, View::Preview | View::Overview) =>
-        {
-            return app.enter_input()
-        }
+        k if GLOBAL_FOCUS_MESSAGE.matches_in(k, window) => return app.enter_input(),
         // Global, unlike `y`: what it copies is the session's exchange, which
         // does not change with the view the operator happens to be in.
         k if GLOBAL_COPY_CONVERSATION.matches(k) => return copy_conversation(app),
@@ -556,41 +515,28 @@ pub fn handle_list_key(
         }
         k if GLOBAL_TRANSCRIPT.matches(k) => return app.toggle_view(View::Transcript),
         // `e` toggles the pane below the event list. The files and answer
-        // views keep the key for opening the editor, which is the one thing
-        // `e` already meant there.
-        k if GLOBAL_ENTRY_LOG.matches(k) && !matches!(app.view, View::Files | View::Answer) => {
-            return app.toggle_entry_log()
-        }
+        // views keep the key for opening the editor.
+        k if GLOBAL_ENTRY_LOG.matches(k) => return app.toggle_entry_log(),
         k if GLOBAL_DETAILS.matches(k) => return app.toggle_view(View::Driva),
         k if GLOBAL_JUMP_BACK.matches(k) => return app.ask(Request::JumpBack),
         k if GLOBAL_JUMP_FORWARD.matches(k) => return app.ask(Request::JumpForward),
         k if GLOBAL_INTERACTION_HISTORY.matches(k) => return app.ask(Request::InteractionHistory),
         k if GLOBAL_AUTO_COMMIT.matches(k) => return toggle_auto_commit(app),
-        k if GLOBAL_FILES.matches(k) && app.view != View::Answer => return app.toggle_files(),
-        k if GLOBAL_FILES_ALIAS.matches(k)
-            && !matches!(app.view, View::Events | View::Transcript | View::Preview) =>
-        {
-            return app.toggle_files()
-        }
+        k if GLOBAL_FILES.matches(k) || GLOBAL_FILES_ALIAS.matches(k) => return app.toggle_files(),
         k if GLOBAL_ANSWER.matches(k) => return app.toggle_answer(),
         k if GLOBAL_PREVIEW.matches(k) => return app.toggle_view(View::Preview),
         k if GLOBAL_NEW_SESSION.matches(k) => return app.ask(Request::NewSession),
-        k if GLOBAL_INTERACTIONS.matches(k) && app.view != View::Files => {
-            return app.ask(Request::Interactions)
-        }
+        k if GLOBAL_INTERACTIONS.matches(k) => return app.ask(Request::Interactions),
         k if GLOBAL_OVERVIEW.matches(k) => return app.toggle_overview(),
         k if GLOBAL_WORKSPACES.matches(k) => return app.ask(Request::Workspace),
-        // The raw view keeps `v` for switching to the provider's own record.
-        k if GLOBAL_WORKSPACE_JUMP.matches(k) && app.view != View::Raw => {
+        k if GLOBAL_WORKSPACE_JUMP.matches(k) => {
             return app.ask(Request::WorkspaceJump { listed: false })
         }
         k if GLOBAL_WORKSPACE_JUMP_LISTED.matches(k) => {
             return app.ask(Request::WorkspaceJump { listed: true })
         }
-        // Details keeps `w` for the network toggle it already meant there.
-        k if GLOBAL_WORKTREES.matches(k) && app.view != View::Driva => {
-            return app.ask(Request::Worktrees)
-        }
+        k if GLOBAL_WORKTREES.matches(k) => return app.ask(Request::Worktrees),
+        k if GLOBAL_TAGS.matches(k) => return edit_current_interaction_tags(app, client),
         k if GLOBAL_SESSION_WORKTREE.matches(k) && !app.session_id.is_empty() => {
             return app.ask(Request::CreateWorktree { message: None })
         }
@@ -605,7 +551,6 @@ pub fn handle_list_key(
         View::Events => match key {
             k if EVENTS_RUN.matches(k) => app.ask(Request::ProjectAction(ProjectAction::Run)),
             k if EVENTS_TEST.matches(k) => app.ask(Request::ProjectAction(ProjectAction::Test)),
-            k if GLOBAL_TAGS.matches(k) => edit_current_interaction_tags(app, client),
             k if EVENTS_LINKS.matches(k) => app.highlight_first_link(),
             k if EVENTS_SEARCH.matches(k) => app.search.open(),
             // A search that stands after the prompt has closed is cleared
@@ -633,7 +578,7 @@ pub fn handle_list_key(
             }
             // The Events screen shows two windows when the entry-log pane is
             // open, and Tab is what moves the navigation keys between them.
-            k if GLOBAL_ENTRY_LOG_FOCUS.matches(k) && app.entry_log.open => {
+            k if EVENTS_ENTRY_LOG_FOCUS.matches(k) && app.entry_log.open => {
                 app.toggle_entry_log_focus()
             }
             // With the pane holding the keys, the movement keys walk its
@@ -1766,6 +1711,64 @@ mod tests {
             app.git_repository_prompt.as_deref(),
             Some(root.join("repository").to_string_lossy().as_ref())
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A view's own key wins over the global command on the same key, as the
+    /// reference and the action menu say: `I` in details is the inherit
+    /// toggle, not integration.
+    #[test]
+    fn a_views_own_key_wins_over_the_global_one() {
+        let root = tree("own-key-wins");
+        let mut app = app(&root);
+        app.enter_list();
+        app.session_id = "session-1".into();
+        app.toggle_view(View::Driva);
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+
+        assert!(app.integration_prompt.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `T` is global, so it edits the interaction's tags from the reading
+    /// views too, not only from the event list.
+    #[test]
+    fn tags_are_edited_from_a_reading_view() {
+        let root = tree("tags-from-raw");
+        let mut app = app(&root);
+        app.enter_list();
+        app.session_id = "session-1".into();
+        app.toggle_view(View::Raw);
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+
+        // With no server to answer, reaching the tag editor shows as its
+        // failure to list the interactions.
+        assert!(app
+            .notices
+            .iter()
+            .any(|notice| notice.text.contains("could not list interactions")));
         let _ = std::fs::remove_dir_all(root);
     }
 

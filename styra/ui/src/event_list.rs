@@ -10,6 +10,7 @@ use crate::markdown::{
 };
 use crate::render_cache::{Memo, Weigh};
 use crate::search::{self, SearchView};
+use crate::text::{self, wrap_line};
 use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -201,6 +202,10 @@ pub struct EntryLogView<'a> {
     pub requested_scroll: u16,
     pub protocol: Protocol,
     pub links: LinkDisplay,
+    /// The keys that move focus between the pane and the list, and that close
+    /// it, as the client has them bound.
+    pub focus_key: String,
+    pub close_key: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -215,15 +220,16 @@ pub fn render_entry_log(
     area: Rect,
 ) -> EntryLogFeedback {
     use ratatui::widgets::{Block, Borders};
+    let (focus, close) = (&view.focus_key, &view.close_key);
     let (border, title) = if view.focused {
         (
             theme::ACCENT,
-            " entry log · Tab: back to the list · E: close ",
+            format!(" entry log · {focus}: back to the list · {close}: close "),
         )
     } else {
         (
             theme::INACTIVE,
-            " entry log · follows selection · Tab: read it · E: close ",
+            format!(" entry log · follows selection · {focus}: read it · {close}: close "),
         )
     };
     let mut block = Block::default()
@@ -1376,55 +1382,27 @@ fn selected_summary_line(
 /// Clip one logical line to `width` columns, marking the cut with `…`. When
 /// the line carries a trailing fold marker it is kept at the right edge, so a
 /// clipped row still shows that there is more to expand into.
-fn truncate_line(line: Line<'static>, width: usize, has_marker: bool) -> Line<'static> {
-    if width == 0 {
+fn truncate_line(mut line: Line<'static>, width: usize, has_marker: bool) -> Line<'static> {
+    if line.width() <= width {
         return line;
     }
-    let mut spans = line.spans;
-    let marker = if has_marker && spans.len() > 1 {
-        spans.pop()
+    let marker = if has_marker && line.spans.len() > 1 {
+        line.spans.pop()
     } else {
         None
     };
-    let marker_width = marker
-        .as_ref()
-        .map(|span| span.content.chars().count())
-        .unwrap_or(0);
-    let total: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-    if total + marker_width <= width {
-        spans.extend(marker);
-        return Line::from(spans);
-    }
-
-    // Room for the ellipsis and the marker, both of which sit outside the text.
-    let budget = width.saturating_sub(marker_width + 1);
-    let mut kept: Vec<Span<'static>> = Vec::new();
-    let mut used = 0usize;
-    for span in spans {
-        let span_width = span.content.chars().count();
-        if used + span_width <= budget {
-            used += span_width;
-            kept.push(span);
-            continue;
-        }
-        let take = budget - used;
-        if take > 0 {
-            let end = span
-                .content
-                .char_indices()
-                .nth(take)
-                .map(|(i, _)| i)
-                .unwrap_or(span.content.len());
-            kept.push(Span::styled(span.content[..end].to_owned(), span.style));
-        }
-        break;
-    }
-    kept.push(Span::styled(
-        "…",
-        Style::default().fg(theme::ADDITIONAL_INFO),
-    ));
-    kept.extend(marker);
-    Line::from(kept)
+    // Even a very narrow pane must fit both the cut text and its marker.
+    let marker = text::clip(
+        Line::from(marker.into_iter().collect::<Vec<_>>()),
+        width.saturating_sub(1),
+    );
+    let mut clipped = text::truncate(
+        line,
+        width.saturating_sub(marker.width()),
+        Some(Style::default().fg(theme::ADDITIONAL_INFO)),
+    );
+    clipped.spans.extend(marker.spans);
+    clipped
 }
 
 /// Wrap a rendered line at the pane edge, aligning its continuation rows
@@ -1514,11 +1492,11 @@ fn resize_rendered_table(table: &[Line<'static>], width: usize) -> Option<Vec<Li
     }
     let top_text = line_text(top);
     let trimmed = top_text.trim_start();
-    let prefix_width = top_text.len() - trimmed.len();
+    let prefix_width = text::width(&top_text[..top_text.len() - trimmed.len()]);
     let inside = trimmed.strip_prefix('┌')?.strip_suffix('┐')?;
     let mut column_widths: Vec<usize> = inside
         .split('┬')
-        .map(|segment| segment.chars().count().checked_sub(2))
+        .map(|segment| text::width(segment).checked_sub(2))
         .collect::<Option<_>>()?;
     if column_widths.is_empty() {
         return None;
@@ -1671,109 +1649,6 @@ fn trim_cell(mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
         last.content = last.content.trim_end().to_owned().into();
     }
     spans
-}
-
-/// Word-wrap one logical line to `width` columns, preserving each span's
-/// style across the break. Continuation rows use a hanging indent so message
-/// text stays aligned with the text following its `«`/`»` marker (and detail
-/// rows retain their body indent) instead of jumping to the far-left edge.
-/// `List` does not wrap on its own, so long lines would otherwise be clipped.
-fn wrap_line(line: Line<'static>, width: usize, continuation_indent: usize) -> Vec<Line<'static>> {
-    if width == 0 {
-        return vec![line];
-    }
-
-    let mut lines = Vec::new();
-    let mut current: Vec<Span<'static>> = Vec::new();
-    let mut current_width = 0usize;
-    let continuation_indent = continuation_indent.min(width.saturating_sub(1));
-
-    let start_continuation = |current: &mut Vec<Span<'static>>, current_width: &mut usize| {
-        if continuation_indent > 0 {
-            current.push(Span::raw(" ".repeat(continuation_indent)));
-            *current_width = continuation_indent;
-        }
-    };
-
-    for span in line.spans {
-        let style = span.style;
-        for token in split_keep_whitespace(&span.content) {
-            let token_width = token.chars().count();
-
-            if token == " " {
-                if current_width + token_width > width {
-                    if !current.is_empty() {
-                        lines.push(Line::from(std::mem::take(&mut current)));
-                        current_width = 0;
-                        start_continuation(&mut current, &mut current_width);
-                    }
-                    continue;
-                }
-                current.push(Span::styled(token, style));
-                current_width += token_width;
-                continue;
-            }
-
-            // A token that would not fit even on a continuation row of its
-            // own has to be hard-split; wrapping it whole would push it past
-            // the pane edge, where the widget clips it out of sight.
-            if token_width > width.saturating_sub(continuation_indent) {
-                let mut remaining = token.as_str();
-                while !remaining.is_empty() {
-                    if current_width >= width {
-                        lines.push(Line::from(std::mem::take(&mut current)));
-                        current_width = 0;
-                        start_continuation(&mut current, &mut current_width);
-                    }
-                    let take = width - current_width;
-                    let split_at = remaining
-                        .char_indices()
-                        .nth(take)
-                        .map(|(i, _)| i)
-                        .unwrap_or(remaining.len());
-                    let (chunk, rest) = remaining.split_at(split_at);
-                    current.push(Span::styled(chunk.to_owned(), style));
-                    current_width += chunk.chars().count();
-                    remaining = rest;
-                }
-                continue;
-            }
-
-            if current_width + token_width > width && !current.is_empty() {
-                lines.push(Line::from(std::mem::take(&mut current)));
-                current_width = 0;
-                start_continuation(&mut current, &mut current_width);
-            }
-            current.push(Span::styled(token, style));
-            current_width += token_width;
-        }
-    }
-
-    if !current.is_empty() || lines.is_empty() {
-        lines.push(Line::from(current));
-    }
-    lines
-}
-
-/// Split into words and single-space tokens, so a wrap can drop a leading
-/// space on the next line without losing the boundary information.
-fn split_keep_whitespace(s: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut word = String::new();
-    for ch in s.chars() {
-        if ch == ' ' {
-            if !word.is_empty() {
-                tokens.push(std::mem::take(&mut word));
-            }
-            tokens.push(" ".to_owned());
-        } else {
-            word.push(ch);
-        }
-    }
-    if !word.is_empty() {
-        tokens.push(word);
-    }
-    tokens
 }
 
 /// Where an entry's header is displayed.
@@ -2813,6 +2688,43 @@ mod tests {
         assert_eq!(format_tokens(126_400), "126k");
         assert_eq!(format_tokens(1_350_000), "1.3M");
         assert_eq!(format_tokens(12_000_000), "12M");
+    }
+
+    #[test]
+    fn unicode_summary_keeps_its_fold_marker_inside_the_pane() {
+        let line = Line::from(vec![Span::raw("界界e\u{301}👩‍💻xyz"), Span::raw(" [+]")]);
+        let clipped = truncate_line(line.clone(), 10, true);
+        assert_eq!(clipped.to_string(), "界界e\u{301}… [+]");
+        for width in 0..12 {
+            assert!(truncate_line(line.clone(), width, true).width() <= width);
+        }
+    }
+
+    #[test]
+    fn unicode_table_cells_and_prefix_stay_aligned_after_resizing() {
+        let markdown =
+            "| 名前 | Description |\n|---|---|\n| 界界界界 | e\u{301}👩‍💻説明説明説明説明 |";
+        // The prefix is one character but two terminal columns.
+        let lines = markdown_block_lines(markdown, Style::default(), "　");
+        let wrapped = wrap_log_lines(lines, 22, 0);
+        assert!(wrapped.iter().all(|line| line.width() == 22));
+        let body: Vec<_> = wrapped
+            .iter()
+            .filter(|line| line.to_string().trim_start().starts_with('│'))
+            .collect();
+        assert!(!body.is_empty());
+        let border_columns = |line: &Line<'_>| {
+            let text = line.to_string();
+            text.match_indices('│')
+                .map(|(byte, _)| text::width(&text[..byte]))
+                .collect::<Vec<_>>()
+        };
+        let expected = border_columns(body[0]);
+        assert_eq!(expected.len(), 3);
+        assert!(body.iter().all(|line| border_columns(line) == expected));
+        let rendered: String = wrapped.iter().map(ToString::to_string).collect();
+        assert!(rendered.contains("e\u{301}"));
+        assert!(rendered.contains("👩‍💻"));
     }
 
     #[test]

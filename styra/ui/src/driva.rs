@@ -188,6 +188,9 @@ pub struct DrivaView<'a> {
     pub activity: DrivaActivity,
     /// Effective host commands, resolved independently of the agent's sandbox.
     pub project_commands: [String; 2],
+    /// The keys that run each project command from the event list, as the
+    /// client has them bound.
+    pub project_action_keys: [String; 2],
     pub selection_name: String,
     pub session_id: &'a str,
     pub session_name: Option<&'a str>,
@@ -1482,11 +1485,12 @@ fn project_action_lines(app: &DrivaView) -> Vec<Line<'static>> {
     ProjectAction::ALL
         .into_iter()
         .map(|action| {
-            let label = match action {
-                ProjectAction::Run => "run (E)",
-                ProjectAction::Test => "test (Ctrl+E)",
+            let (name, index) = match action {
+                ProjectAction::Run => ("run", 0),
+                ProjectAction::Test => ("test", 1),
             };
-            detail_field_line(label, &effective_command_label(app, action))
+            let label = format!("{name} ({})", app.project_action_keys[index]);
+            detail_field_line(&label, &effective_command_label(app, action))
         })
         .collect()
 }
@@ -1930,6 +1934,7 @@ mod tests {
                     .unwrap_or("not configured")
                     .to_owned()
             }),
+            project_action_keys: ["r".into(), "R".into()],
             selection_name: "codex".into(),
             session_id: "s1",
             session_name: None,

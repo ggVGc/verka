@@ -106,28 +106,16 @@ pub fn submit_message(
                 },
             ) {
                 Ok(info) => {
-                    app.selection = info.selection;
-                    app.workspace.id = Some(info.workspace_id);
-                    app.session_id = info.id.clone();
                     app.checkout_from = None;
-                    app.interactions
-                        .note_name(info.id.clone(), info.name.clone());
                     if create_worktree {
                         app.show_action_message(format!(
                             "new Git workspace ready: {}",
                             info.workspace.display()
                         ));
                     }
-                    app.workspace.enter(info.workspace);
-                    app.launch.record(info.driva);
-                    app.push_log(LogEntry::info(format!(
-                        "journal: {}",
-                        info.journal_path.display()
-                    )));
+                    log_journal(app, &info);
+                    adopt_session_info(app, live, info);
                     app.activity.status = Status::Running;
-                    *live = Attachment::Attached {
-                        cursor: info.updates_after,
-                    };
                 }
                 Err(error) => {
                     app.push_log(LogEntry::error(format!(
@@ -434,15 +422,8 @@ pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str) -> 
     // Sent as this interaction's own half alone, but remembered as the merge:
     // the server answers for the whole policy, having its own copy of the
     // Workspace's, so the merge is what the plan is keyed on.
-    let overlay = app.launch.interaction.clone();
     let effective = app.launch.effective();
-    let planned = client.plan_session(&PlanSession {
-        workspace_id: workspace_id.to_owned(),
-        selection: selection.clone(),
-        launch: overlay,
-        create_worktree: false,
-        checkout_from: app.checkout_from.clone(),
-    });
+    let planned = client.plan_session(&plan_request(app, workspace_id.to_owned()));
     match planned {
         Ok(options) => app.launch.plan(selection, effective, Some(options)),
         Err(error) => {
@@ -470,7 +451,7 @@ pub fn launch_live_session(
     workspace_id: &str,
     selection: &Selection,
     seed: Option<&str>,
-) -> Result<(App, SessionInfo)> {
+) -> Result<(App, Attachment)> {
     // The CLI's trailing prompt opens a conversation, not a typed question;
     // asking for a shape is a per-turn choice made in the interface.
     let info = create_session(
@@ -483,17 +464,50 @@ pub fn launch_live_session(
     )?;
     let mut app = App::new(info.selection.clone(), info.id.clone());
     app.launch.interaction = launch.clone();
+    log_journal(&mut app, &info);
+    let mut live = Attachment::Detached;
+    adopt_session_info(&mut app, &mut live, info);
+    Ok((app, live))
+}
+
+/// Take on the Session the server has just created or revived: its id, name,
+/// directory, sandbox, the selection it actually runs on, its durable queue,
+/// and the update cursor to poll from. Every path that receives a
+/// [`SessionInfo`] goes through here so none of them forgets a field.
+///
+/// Whether anything is now running is the caller's to say: a seeded launch or
+/// a resume that sends is, a restart with nothing to send is not.
+fn adopt_session_info(app: &mut App, live: &mut Attachment, info: SessionInfo) {
     app.interactions
         .note_name(info.id.clone(), info.name.clone());
-    app.workspace.id = Some(info.workspace_id.clone());
-    app.workspace.enter(info.workspace.clone());
-    app.launch.record(info.driva.clone());
+    app.workspace.id = Some(info.workspace_id);
+    app.workspace.enter(info.workspace);
+    app.launch.record(info.driva);
+    app.set_selection(info.selection);
+    app.outbox.replace_queued(info.queued);
+    app.session_id = info.id;
+    *live = Attachment::Attached {
+        cursor: info.updates_after,
+    };
+}
+
+fn log_journal(app: &mut App, info: &SessionInfo) {
     app.push_log(LogEntry::info(format!(
         "journal: {}",
         info.journal_path.display()
     )));
-    app.outbox.replace_queued(info.queued.clone());
-    Ok((app, info))
+}
+
+/// What a new interaction would run in, asked of the server under the
+/// selection and this interaction's own policy layer as they now stand.
+fn plan_request(app: &App, workspace_id: String) -> PlanSession {
+    PlanSession {
+        workspace_id,
+        selection: app.selection.clone(),
+        launch: app.launch.interaction.clone(),
+        create_worktree: false,
+        checkout_from: app.checkout_from.clone(),
+    }
 }
 
 /// Attach to a live interaction: rebuild an `App` from its summary and replay the
@@ -747,6 +761,26 @@ pub fn open_session(
     open_stored(client, session_id)
 }
 
+/// Put the freshly opened screen `next` in place of `app`, carrying the
+/// operator's own state across (see [`App::adopt`]) and restoring the
+/// standing launch policy. Every switch between Interactions goes through
+/// here, so none of them loses what the others keep.
+pub fn switch_to(
+    app: &mut App,
+    live: &mut Attachment,
+    (mut next, next_live): (App, Attachment),
+    standing_launch: &LaunchPolicy,
+) {
+    // Before adopting, which may reopen the preview or diff over it.
+    next.set_view(crate::app::View::Events);
+    next.focus = crate::app::Focus::List;
+    next.adopt(app.take_operator_state());
+    next.launch.interaction = standing_launch.clone();
+    next.interactions.rest();
+    *app = next;
+    *live = next_live;
+}
+
 pub fn session_id_from_target(target: &Path) -> Result<String> {
     target
         .file_name()
@@ -780,23 +814,14 @@ pub fn resume_and_send(
         selection: Some(app.selection.clone()),
     }) {
         Ok(info) => {
-            app.interactions
-                .note_name(info.id.clone(), info.name.clone());
-            app.workspace.enter(info.workspace);
-            app.launch.record(info.driva);
-            // What the server actually revived it on, which is the answer to
-            // the selection just asked for rather than a restatement of it.
-            app.set_selection(info.selection);
+            // Adopts the selection the server actually revived it on, which
+            // is the answer to the one just asked for rather than a
+            // restatement of it.
+            adopt_session_info(app, live, info);
             app.push_log(LogEntry::info("resumed with provider-native context"));
-            app.outbox.replace_queued(info.queued.clone());
-            let session_id = info.id;
-            app.session_id = session_id.clone();
             app.activity.status = Status::Running;
-            *live = Attachment::Attached {
-                cursor: info.updates_after,
-            };
             if let Err(error) =
-                client.send_turn(&session_id, turn(&message, &app.selection, contract))
+                client.send_turn(&app.session_id, turn(&message, &app.selection, contract))
             {
                 app.push_log(LogEntry::error(format!("send failed: {error:#}")));
             }
@@ -878,13 +903,7 @@ pub fn restart_for_mounts(
     // means finding out with the agent already gone.
     if let Some(workspace_id) = app.workspace.id.clone() {
         client
-            .plan_session(&PlanSession {
-                workspace_id,
-                selection: app.selection.clone(),
-                launch: app.launch.interaction.clone(),
-                create_worktree: false,
-                checkout_from: None,
-            })
+            .plan_session(&plan_request(app, workspace_id))
             .map_err(MountRestartError::Rejected)?;
     }
     let info = match restart(app, client, live) {
@@ -899,16 +918,7 @@ pub fn restart_for_mounts(
             return Err(MountRestartError::Failed(error));
         }
     };
-    app.interactions
-        .note_name(info.id.clone(), info.name.clone());
-    app.workspace.enter(info.workspace);
-    app.launch.record(info.driva);
-    app.set_selection(info.selection);
-    app.outbox.replace_queued(info.queued);
-    app.session_id = info.id;
-    *live = Attachment::Attached {
-        cursor: info.updates_after,
-    };
+    adopt_session_info(app, live, info);
     Ok(())
 }
 
@@ -1204,6 +1214,31 @@ mod tests {
             completed: CompletionState::Active,
             integration: None,
         }
+    }
+
+    /// Every way of switching Interactions carries what the operator put on
+    /// the screen being left, not only the navigator's.
+    #[test]
+    fn switching_carries_the_operators_state_and_the_standing_launch() {
+        let selection = Selection::new(Provider::Codex);
+        let mut app = App::new(selection.clone(), "session-1");
+        app.outbox.set_contract(Some(Contract::Lines));
+        app.recent_models = vec!["gpt-5.6-sol".into()];
+        let mut live = Attachment::Detached;
+        let standing = LaunchPolicy {
+            templates: vec!["rust".into()],
+            ..Default::default()
+        };
+
+        let next = App::new(selection, "session-2");
+        let next_live = Attachment::Attached { cursor: 7 };
+        switch_to(&mut app, &mut live, (next, next_live), &standing);
+
+        assert_eq!(app.session_id, "session-2");
+        assert!(matches!(live, Attachment::Attached { cursor: 7 }));
+        assert_eq!(app.outbox.contract(), Some(Contract::Lines));
+        assert_eq!(app.recent_models, vec!["gpt-5.6-sol".to_owned()]);
+        assert_eq!(app.launch.interaction, standing);
     }
 
     #[test]

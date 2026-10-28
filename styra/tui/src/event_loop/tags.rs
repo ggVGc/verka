@@ -25,15 +25,11 @@ pub(super) fn handle_tag_picker_key(app: &mut App, client: &Client, key: KeyEven
                 let id = app.session_id.clone();
                 save_tags(app, client, id, tags);
             }
-            KeyCode::Backspace => {
-                picker.new_tag.as_mut().expect("new tag is present").pop();
+            _ => {
+                if let Some(edit) = Edit::from_key(key) {
+                    edit.apply(picker.new_tag.as_mut().expect("new tag is present"));
+                }
             }
-            KeyCode::Char(ch) if !ch.is_control() => picker
-                .new_tag
-                .as_mut()
-                .expect("new tag is present")
-                .push(ch),
-            _ => {}
         }
         return;
     }

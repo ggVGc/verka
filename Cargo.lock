@@ -2865,6 +2865,7 @@ dependencies = [
  "serde_json",
  "tui-markdown",
  "two-face",
+ "unicode-segmentation",
  "unicode-width",
 ]
 

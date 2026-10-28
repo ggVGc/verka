@@ -1008,6 +1008,29 @@ mod tests {
     /// about its sandbox: this interaction's is kept by the client, the
     /// Workspace's goes to the server, and a blank one inherits again.
     #[test]
+    fn the_command_prompt_edits_like_every_other_field() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let press = |app: &mut App, code, modifiers| {
+            crate::input::handle_command_prompt_key(app, KeyEvent::new(code, modifiers));
+        };
+        let mut app = running();
+        open_command_prompt(&mut app, ProjectAction::Run);
+        app.launch.command_prompt.as_mut().unwrap().1 = "cargo run\t--bin".into();
+
+        // A chord is a command, not a letter typed into the command.
+        press(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('x'), KeyModifiers::ALT);
+        // A shell word ends at whitespace, so `--bin` goes in one press.
+        press(&mut app, KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(app.launch.command_prompt.as_ref().unwrap().1, "cargo run\t");
+        press(&mut app, KeyCode::Char('w'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('b'), KeyModifiers::NONE);
+        press(&mut app, KeyCode::Backspace, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Char('B'), KeyModifiers::SHIFT);
+        assert_eq!(app.launch.command_prompt.as_ref().unwrap().1, "cargo B");
+    }
+
+    #[test]
     fn a_project_command_is_set_in_the_focused_layer_even_while_running() {
         let type_command = |app: &mut App, action, text: &str| {
             open_command_prompt(app, action);

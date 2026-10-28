@@ -49,6 +49,8 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
         requested_scroll: app.entry_log.scroll.offset,
         protocol: app.selection.provider.protocol(),
         links: ui_link_display(app.link_display),
+        focus_key: crate::keybindings::EVENTS_ENTRY_LOG_FOCUS.keys_label(),
+        close_key: crate::keybindings::GLOBAL_ENTRY_LOG.keys_label(),
     }
 }
 

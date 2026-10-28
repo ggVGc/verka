@@ -301,7 +301,14 @@ pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
     if app.interactions.open {
         return Window::Interactions;
     }
-    match app.view {
+    view_window(app.view)
+}
+
+/// The window a view is, with no modal over it: whose keys the list
+/// dispatcher reads.
+pub(crate) fn view_window(view: View) -> crate::keybindings::Window {
+    use crate::keybindings::Window;
+    match view {
         View::Events => Window::Events,
         View::Raw => Window::Raw,
         View::Messages => Window::Messages,

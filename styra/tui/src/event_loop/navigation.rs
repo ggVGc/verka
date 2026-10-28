@@ -118,39 +118,32 @@ pub(super) fn make_interaction_current(
     let id = interaction.id.clone();
     session::save_composer(app, client, true);
     match session::attach_live_interaction(client, &id, &app.quota_noticed) {
-        Ok((mut next, next_live)) => {
-            // Before adopting, which may reopen the preview or diff over it.
-            next.set_view(View::Events);
-            next.focus = Focus::List;
-            next.adopt(app.take_operator_state());
-            next.launch.interaction = standing_launch.clone();
+        Ok(opened) => {
+            session::switch_to(app, live, opened, standing_launch);
             // The Workspace list is only filled when the navigator is opened,
             // so a switch made with it closed — `n` — would otherwise land on
             // a screen that cannot name the Workspace it is in, and the title
             // would lose its opening name. Ask the server for the list it is
             // missing, and keep the answer for the switches after this one.
-            if !next
+            if !app
                 .interactions
                 .workspaces
                 .iter()
-                .any(|workspace| Some(workspace.id.as_str()) == next.workspace.id.as_deref())
+                .any(|workspace| Some(workspace.id.as_str()) == app.workspace.id.as_deref())
             {
                 if let Ok(workspaces) = client.list_workspaces() {
-                    next.interactions.workspaces = workspaces;
+                    app.interactions.workspaces = workspaces;
                 }
             }
-            if let Some(workspace) = next
+            if let Some(workspace) = app
                 .interactions
                 .workspaces
                 .iter()
-                .find(|workspace| Some(workspace.id.as_str()) == next.workspace.id.as_deref())
+                .find(|workspace| Some(workspace.id.as_str()) == app.workspace.id.as_deref())
                 .cloned()
             {
-                next.show_workspace(&workspace);
+                app.show_workspace(&workspace);
             }
-            *app = next;
-            *live = next_live;
-            app.interactions.rest();
         }
         Err(error) => {
             // The cursor comes home on a failed load too, so a server that

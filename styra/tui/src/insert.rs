@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 
 use crate::mount;
 use styra_protocol::{DrivaOptions, LaunchMount, Mount};
+use styra_ui::query::Edit;
 
 /// Which of the prompt's two questions is being answered.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,15 +116,12 @@ impl Prompt {
                     }
                     Outcome::Open
                 }
-                KeyCode::Backspace => {
-                    text.pop();
+                _ => {
+                    if let Some(edit) = Edit::from_key(key) {
+                        edit.apply(text);
+                    }
                     Outcome::Open
                 }
-                KeyCode::Char(ch) if !ch.is_control() => {
-                    text.push(ch);
-                    Outcome::Open
-                }
-                _ => Outcome::Open,
             },
             Insert::Grant(host) => {
                 let host = host.clone();

@@ -43,7 +43,10 @@ mod tests {
     fn footer_shows_the_working_directory() {
         let mut app = test_support::app("s1");
         app.workspace.enter("/tmp/styra/workspace".into());
-        let screen = rendered(&app);
+        // A non-`main` build names its branch ahead of the directory, so
+        // widen by it to keep the directory on screen on any branch.
+        let width = 80 + styra_ui::footer::BUILD_BRANCH.chars().count() as u16;
+        let screen = test_support::screen_sized(&app, width, 20).all();
         assert!(screen.contains("/tmp/styra/workspace"));
         assert!(!screen.contains("j/k next/prev"));
     }

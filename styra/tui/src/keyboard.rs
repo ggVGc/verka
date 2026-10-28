@@ -4,6 +4,7 @@
 //! [`crate::keybindings`] to customize keys.
 
 use crate::actions::Action;
+use crate::keybindings::Window;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// One key, as the operator presses it.
@@ -93,6 +94,27 @@ impl Key {
     }
 }
 
+/// The windows a binding acts in, where that is narrower than every window
+/// its section is shown in. The reference and the action menu leave a binding
+/// out of the windows it does not act in, and the dispatcher asks the same
+/// question, so the three cannot disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Windows {
+    All,
+    Only(&'static [Window]),
+    Except(&'static [Window]),
+}
+
+impl Windows {
+    fn contains(self, window: Window) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(windows) => windows.contains(&window),
+            Self::Except(windows) => !windows.contains(&window),
+        }
+    }
+}
+
 /// One command: the keys that reach it, and what the reference says about it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Binding {
@@ -101,8 +123,10 @@ pub(crate) struct Binding {
     /// press — a chord, or something typed into the message box.
     label: Option<&'static str>,
     /// When the binding only applies in a narrower situation than the section
-    /// it sits in, shown in parentheses after the keys.
+    /// it sits in, shown in parentheses after the keys. Which window it acts
+    /// in is not a note but `windows`.
     note: Option<&'static str>,
+    windows: Windows,
     action: Action,
 }
 
@@ -111,12 +135,14 @@ impl Binding {
         keys: &'static [Key],
         label: Option<&'static str>,
         note: Option<&'static str>,
+        windows: Windows,
         action: Action,
     ) -> Self {
         Self {
             keys,
             label,
             note,
+            windows,
             action,
         }
     }
@@ -126,6 +152,16 @@ impl Binding {
     /// — never matches.
     pub(crate) fn matches(&self, event: KeyEvent) -> bool {
         self.keys.iter().any(|key| key.matches(event))
+    }
+
+    /// Whether this keypress is this command in `window`.
+    pub(crate) fn matches_in(&self, event: KeyEvent, window: Window) -> bool {
+        self.applies_in(window) && self.matches(event)
+    }
+
+    /// Whether this binding acts in `window` at all.
+    pub(crate) fn applies_in(&self, window: Window) -> bool {
+        self.windows.contains(window)
     }
 
     /// The keys column of the reference.
@@ -173,6 +209,8 @@ impl Binding {
 ///     NAME: [Key::ch('j'), Key::code(KeyCode::Down)] => Action::Example;
 ///     CHORD: [Key::ch('R')] as "z R" => Action::Example;
 ///     NARROW: [Key::ch('v')] ("preview open") => Action::Example;
+///     ONE_WINDOW: [Key::ch('v')] in [Window::Raw] => Action::Example;
+///     NOT_THERE: [Key::ch('i')] except [Window::Preview] => Action::Example;
 /// }
 /// ```
 macro_rules! bindings {
@@ -180,11 +218,17 @@ macro_rules! bindings {
     (@label $label:literal) => { Some($label) };
     (@note) => { None };
     (@note $note:literal) => { Some($note) };
+    (@windows) => { Windows::All };
+    (@windows in [$($window:expr),*]) => { Windows::Only(&[$($window),*]) };
+    (@windows except [$($window:expr),*]) => { Windows::Except(&[$($window),*]) };
     (
         $rows:ident = $title:literal;
         $(
             $(#[$meta:meta])*
-            $name:ident: [$($key:expr),* $(,)?] $(as $label:literal)? $(($note:literal))? => $action:expr;
+            $name:ident: [$($key:expr),* $(,)?] $(as $label:literal)? $(($note:literal))?
+                $(in [$($only:expr),* $(,)?])?
+                $(except [$($except:expr),* $(,)?])?
+                => $action:expr;
         )*
     ) => {
         $(
@@ -193,6 +237,7 @@ macro_rules! bindings {
                 &[$($key),*],
                 bindings!(@label $($label)?),
                 bindings!(@note $($note)?),
+                bindings!(@windows $(in [$($only),*])? $(except [$($except),*])?),
                 $action,
             );
         )*

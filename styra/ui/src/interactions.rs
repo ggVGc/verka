@@ -10,7 +10,6 @@ use ratatui::widgets::{Block, BorderType, Borders};
 use ratatui::Frame;
 use std::borrow::Cow;
 use styra_protocol::CompletionState;
-use unicode_width::UnicodeWidthStr;
 
 /// Three dots, the large one moving rightward one step per event and wrapping
 /// back to the left. It fills the whole status block, so a running row reads
@@ -532,7 +531,10 @@ const BRANCH_COLUMN_LIMIT: usize = 32;
 const LABEL_ROOM: usize = 14;
 
 fn spans_width(spans: &[Span<'_>]) -> usize {
-    spans.iter().map(|span| span.content.width()).sum()
+    spans
+        .iter()
+        .map(|span| crate::text::width(&span.content))
+        .sum()
 }
 
 /// Holds the cell of `spans` from `start` on to exactly `width` cells: cut
@@ -540,43 +542,12 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 /// nothing in one cell can move the cells after it, and every column stays
 /// lined up whatever is in it.
 fn fit_cell(spans: &mut Vec<Span<'static>>, start: usize, width: usize) {
-    let drawn = spans_width(&spans[start..]);
-    if drawn > width {
-        // Room for the `…` the cut ends with, in the style of the span cut.
-        let budget = width.saturating_sub(1);
-        let mut used = 0;
-        let mut at = start;
-        while at < spans.len() {
-            let span_width = spans[at].content.width();
-            if used + span_width > budget {
-                break;
-            }
-            used += span_width;
-            at += 1;
-        }
-        let mut kept = String::new();
-        let style = spans.get(at).map_or_else(Style::default, |span| span.style);
-        if let Some(span) = spans.get(at) {
-            for c in span.content.chars() {
-                let c_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-                if used + c_width > budget {
-                    break;
-                }
-                used += c_width;
-                kept.push(c);
-            }
-        }
-        spans.truncate(at);
-        if width > 0 {
-            kept.push('…');
-            used += 1;
-        }
-        spans.push(Span::styled(kept, style));
-        if used < width {
-            spans.push(Span::raw(" ".repeat(width - used)));
-        }
-    } else if drawn < width {
-        spans.push(Span::raw(" ".repeat(width - drawn)));
+    let cell = spans.split_off(start);
+    let cell = crate::text::truncate(Line::from(cell), width, None);
+    let padding = width.saturating_sub(cell.width());
+    spans.extend(cell.spans);
+    if padding > 0 {
+        spans.push(Span::raw(" ".repeat(padding)));
     }
 }
 
@@ -615,7 +586,7 @@ fn row_item(
         InteractionRow::Workspace(name) => {
             // A faint rule from the name to the pane's edge sets each
             // workspace's rows off from the ones above.
-            let fill = width.saturating_sub(name.width() + 1);
+            let fill = width.saturating_sub(crate::text::width(&name) + 1);
             let mut spans = vec![Span::styled(
                 name.to_string(),
                 Style::default()

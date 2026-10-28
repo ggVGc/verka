@@ -21,6 +21,7 @@ mod words;
 pub use words::highlight_words;
 
 use crate::event_list::{blended_style, faded_style};
+use crate::language::from_path as language_of;
 use crate::markdown::syntax_highlighted_code_lines;
 use crate::theme;
 use ratatui::style::{Color, Modifier, Style};
@@ -223,18 +224,6 @@ fn hunk_separator(line: &str) -> Line<'static> {
         span.style = span.style.add_modifier(Modifier::BOLD);
     }
     line
-}
-
-/// The highlighter's name for the language of `path`: its extension, or for
-/// an extensionless file its name, which is how grammars such as Makefile's
-/// are registered.
-fn language_of(path: &str) -> Option<String> {
-    let name = path.trim().rsplit('/').next()?;
-    let language = match name.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => extension,
-        _ => name,
-    };
-    (!language.is_empty()).then(|| language.to_owned())
 }
 
 /// Render the collected run of code lines and empty it.
@@ -624,9 +613,25 @@ mod tests {
     }
 
     #[test]
+    fn uppercase_extensions_keep_syntax_highlighting_in_snippets_and_headers() {
+        let hunk = "@@ -1 +1 @@\n-let old = 1;\n+let new = 2;";
+        let expected = diff_body_lines(hunk, Some("src/main.rs"), false);
+        assert!(expected[1].spans.len() > 4, "Rust code is tokenized");
+        assert_eq!(diff_body_lines(hunk, Some("src/main.RS"), false), expected);
+
+        for header in [
+            "diff --git a/src/main.RS b/src/main.RS",
+            "+++ b/src/main.RS",
+        ] {
+            let lines = diff_body_lines(&format!("{header}\n{hunk}"), None, false);
+            assert_eq!(&lines[1..], expected.as_slice());
+        }
+    }
+
+    #[test]
     fn an_extensionless_file_is_looked_up_by_name() {
         assert_eq!(language_of("build/Makefile").as_deref(), Some("Makefile"));
-        assert_eq!(language_of("a/b.test.ts").as_deref(), Some("ts"));
+        assert_eq!(language_of("a/b.test.ts").as_deref(), Some("typescript"));
         assert_eq!(language_of(".bashrc").as_deref(), Some(".bashrc"));
     }
 }

@@ -442,17 +442,13 @@ fn main() -> Result<()> {
             // A trailing prompt is input the operator already gave (as a CLI
             // argument), so it is fine to launch immediately.
             Some(seed) => {
-                let (new_app, info) = session::launch_live_session(
+                (app, live) = session::launch_live_session(
                     &client,
                     &launch,
                     &active_workspace.id,
                     &selection,
                     Some(seed),
                 )?;
-                app = new_app;
-                live = Attachment::Attached {
-                    cursor: info.updates_after,
-                };
             }
             // No seed: nothing has been said to an agent yet, so nothing is
             // launched yet either — unless the Workspace already holds live
@@ -548,31 +544,26 @@ fn main() -> Result<()> {
             } => {
                 active_workspace = *workspace;
                 match session_id {
-                    Some(session_id) => match session::open_session(
-                        &client,
-                        &session_id,
-                        &fleet,
-                        &app.quota_noticed,
-                    ) {
-                        Ok((mut new_app, new_live)) => {
-                            new_app.launch.interaction = launch.clone();
-                            app = new_app;
-                            live = new_live;
-                            if !open_interactions {
-                                history.record(&app.session_id);
-                            }
+                    Some(session_id) => {
+                        if open_session_view(
+                            &client,
+                            &launch,
+                            &fleet,
+                            &mut app,
+                            &mut live,
+                            &session_id,
+                        ) {
                             if open_interactions {
                                 event_loop::open_interaction_navigator(
                                     &mut app,
                                     &client,
                                     fleet.clone(),
                                 );
+                            } else {
+                                history.record(&app.session_id);
                             }
                         }
-                        Err(error) => app.push_log(LogEntry::error(format!(
-                            "could not open Session {session_id}: {error:#}"
-                        ))),
-                    },
+                    }
                     None => {
                         let (selection, standing) = standing_launch(&preferences_path, &cli)?;
                         launch = standing;
@@ -653,8 +644,9 @@ fn main() -> Result<()> {
     result
 }
 
-/// Switch this client's view to `session_id`, logging on the screen being left
-/// when it cannot be opened. Reports whether the switch happened.
+/// Switch this client's view to `session_id`, carrying the operator's state
+/// across, and logging on the screen being left when it cannot be opened.
+/// Reports whether the switch happened.
 fn open_session_view(
     client: &Client,
     launch: &LaunchPolicy,
@@ -664,10 +656,11 @@ fn open_session_view(
     session_id: &str,
 ) -> bool {
     match session::open_session(client, session_id, interactions, &app.quota_noticed) {
-        Ok((mut new_app, new_live)) => {
-            new_app.launch.interaction = launch.clone();
-            *app = new_app;
-            *live = new_live;
+        Ok(opened) => {
+            // A switch made from a picker lands on the Interaction itself,
+            // not back in the navigator it may have been made over.
+            app.interactions.close();
+            session::switch_to(app, live, opened, launch);
             true
         }
         Err(error) => {

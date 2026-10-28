@@ -3,6 +3,10 @@
 //! list's filter, and the typed-at pickers. A field reads its keys with
 //! [`Edit::from_key`] and applies what comes back to its query; the keys that
 //! leave it — Enter, Esc, the arrows — stay each field's own.
+//!
+//! The one-line prompts read their keys the same way, so that a chord is a
+//! command in every field rather than a typed letter in some; one that holds
+//! prose rather than a name or a path says so with [`Words::Prose`].
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -37,14 +41,30 @@ impl Edit {
 
     /// Make this change to `query`.
     pub fn apply(self, query: &mut String) {
+        self.apply_with(query, Words::Identifiers);
+    }
+
+    /// Make this change to `text`, with `words` deciding what `Ctrl-W` drops.
+    pub fn apply_with(self, text: &mut String, words: Words) {
         match self {
-            Self::Push(character) => query.push(character),
+            Self::Push(character) => text.push(character),
             Self::Backspace => {
-                query.pop();
+                text.pop();
             }
-            Self::DeleteWord => delete_word(query),
+            Self::DeleteWord => delete_word_in(text, words),
         }
     }
+}
+
+/// What `Ctrl-W` takes as one word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Words {
+    /// Words end at punctuation as well as whitespace; see [`delete_word`].
+    /// For queries, names and paths.
+    Identifiers,
+    /// Words end at whitespace only, as in readline. For a message or a shell
+    /// command, where `--bin` or `don't` is one thing to retype.
+    Prose,
 }
 
 /// Drop the last word of `query`, readline-style: the separators at the end
@@ -56,12 +76,20 @@ impl Edit {
 /// retyping are the ones `:`, `-`, `_`, `.` and `/` divide, so one press
 /// peels off one of them instead of the whole query.
 pub fn delete_word(query: &mut String) {
-    let boundary = |character: char| !character.is_alphanumeric();
-    query.truncate(query.trim_end_matches(boundary).len());
-    let word_start = query.rfind(boundary).map_or(0, |index| {
-        index + query[index..].chars().next().map_or(1, char::len_utf8)
+    delete_word_in(query, Words::Identifiers);
+}
+
+/// Drop the last word of `text`, readline-style, as `words` divides it.
+pub fn delete_word_in(text: &mut String, words: Words) {
+    let boundary = |character: char| match words {
+        Words::Identifiers => !character.is_alphanumeric(),
+        Words::Prose => character.is_whitespace(),
+    };
+    text.truncate(text.trim_end_matches(boundary).len());
+    let word_start = text.rfind(boundary).map_or(0, |index| {
+        index + text[index..].chars().next().map_or(1, char::len_utf8)
     });
-    query.truncate(word_start);
+    text.truncate(word_start);
 }
 
 #[cfg(test)]
@@ -86,6 +114,20 @@ mod tests {
         assert_eq!(deleted("é·ñame"), "é·");
         assert_eq!(deleted("styra wörk- "), "styra ");
         assert_eq!(deleted("retry"), "");
+        assert_eq!(deleted(""), "");
+    }
+
+    #[test]
+    fn a_prose_word_ends_at_whitespace_only() {
+        let deleted = |text: &str| {
+            let mut text = text.to_owned();
+            delete_word_in(&mut text, Words::Prose);
+            text
+        };
+        assert_eq!(deleted("cargo run --bin"), "cargo run ");
+        assert_eq!(deleted("don't  "), "");
+        assert_eq!(deleted("first line\nsecond"), "first line\n");
+        assert_eq!(deleted("é ñame"), "é ");
         assert_eq!(deleted(""), "");
     }
 

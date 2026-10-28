@@ -561,8 +561,7 @@ fn read_session_name(
     order: SessionOrder,
     initial: &str,
 ) -> Result<Option<String>> {
-    let mut value = initial.to_owned();
-    loop {
+    read_text(terminal, initial, 80, |terminal, value| {
         terminal.render_session_picker_name_prompt(
             scope,
             sessions,
@@ -572,24 +571,10 @@ fn read_session_name(
             None,
             false,
             false,
-            &value,
+            value,
         )?;
-        let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        match key.code {
-            KeyCode::Esc => return Ok(None),
-            KeyCode::Enter => return Ok(Some(value)),
-            KeyCode::Backspace => {
-                value.pop();
-            }
-            KeyCode::Char(ch) if value.chars().count() < 80 && !ch.is_control() => value.push(ch),
-            _ => {}
-        }
-    }
+        Ok(())
+    })
 }
 
 /// The Workspace picker loop. The list is typed at: every printable key
@@ -902,8 +887,7 @@ fn read_workspace_text(
     initial: &str,
     max_chars: usize,
 ) -> Result<Option<String>> {
-    let mut value = initial.to_owned();
-    loop {
+    read_text(terminal, initial, max_chars, |terminal, value| {
         terminal.render_workspace_picker_prompt(
             workspaces,
             selected,
@@ -911,8 +895,23 @@ fn read_workspace_text(
             preview,
             filter,
             title,
-            &value,
+            value,
         )?;
+        Ok(())
+    })
+}
+
+/// Read one line of at most `max_chars` characters, starting from `initial`,
+/// drawing each frame with `render`. Enter gives the line, Esc `None`.
+fn read_text(
+    terminal: &mut dyn Ui,
+    initial: &str,
+    max_chars: usize,
+    mut render: impl FnMut(&mut dyn Ui, &str) -> Result<()>,
+) -> Result<Option<String>> {
+    let mut value = initial.to_owned();
+    loop {
+        render(terminal, &value)?;
         let Some(Event::Key(key)) = terminal.poll_event(Duration::from_millis(100))? else {
             continue;
         };
@@ -922,13 +921,11 @@ fn read_workspace_text(
         match key.code {
             KeyCode::Esc => return Ok(None),
             KeyCode::Enter => return Ok(Some(value)),
-            KeyCode::Backspace => {
-                value.pop();
-            }
-            KeyCode::Char(ch) if value.chars().count() < max_chars && !ch.is_control() => {
-                value.push(ch)
-            }
-            _ => {}
+            _ => match Edit::from_key(key) {
+                Some(Edit::Push(_)) if value.chars().count() >= max_chars => {}
+                Some(edit) => edit.apply(&mut value),
+                None => {}
+            },
         }
     }
 }

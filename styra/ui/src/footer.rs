@@ -8,6 +8,10 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
+/// The Git branch this binary was built from. The footer names it ahead of the
+/// working directory unless it is `main`.
+pub const BUILD_BRANCH: &str = env!("STYRA_BUILD_BRANCH");
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Muted,
@@ -72,10 +76,9 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         ])
         .split(area);
     let mut context = Vec::new();
-    let build_branch = env!("STYRA_BUILD_BRANCH");
-    if build_branch != "main" {
+    if BUILD_BRANCH != "main" {
         context.push(Span::styled(
-            format!("[build: {build_branch}] "),
+            format!("[build: {BUILD_BRANCH}] "),
             Style::default().fg(theme::ACCENT),
         ));
     }
@@ -184,7 +187,7 @@ mod tests {
             bold: true,
         }];
         let output = screen(
-            120 + env!("STYRA_BUILD_BRANCH").width() as u16,
+            120 + BUILD_BRANCH.width() as u16,
             &FooterView {
                 working_directory: "/workspace",
                 quota: &quota,
@@ -202,10 +205,10 @@ mod tests {
         ] {
             assert!(output.contains(expected), "missing {expected}: {output}");
         }
-        if env!("STYRA_BUILD_BRANCH") == "main" {
+        if BUILD_BRANCH == "main" {
             assert!(!output.contains("[build:"));
         } else {
-            assert!(output.contains(&format!("[build: {}]", env!("STYRA_BUILD_BRANCH"))));
+            assert!(output.contains(&format!("[build: {BUILD_BRANCH}]")));
         }
     }
 }

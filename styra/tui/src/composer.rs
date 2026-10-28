@@ -15,6 +15,7 @@
 //! operator can step back from typing and choose between them.
 
 use styra_protocol::ComposerState;
+use styra_ui::query::Words;
 
 /// The operator's message buffer and their prompt history.
 pub struct Composer {
@@ -142,14 +143,7 @@ impl Composer {
     /// to the previous word boundary (or the start of the buffer).
     pub fn delete_word(&mut self) {
         self.reset_history();
-        let text = self.text_mut();
-        let trimmed = text.trim_end_matches(char::is_whitespace).len();
-        text.truncate(trimmed);
-        let word_start = text
-            .rfind(char::is_whitespace)
-            .map(|idx| idx + 1)
-            .unwrap_or(0);
-        text.truncate(word_start);
+        styra_ui::query::delete_word_in(self.text_mut(), Words::Prose);
     }
 
     /// Append `text` as its own word, adding the separating space the operator
