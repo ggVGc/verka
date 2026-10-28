@@ -212,7 +212,8 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         focused: if app.interactions.open {
             false
         } else if suffix == Some("diff") {
-            app.diff_focused()
+            // Fullscreen, the diff is the only panel: nothing to tell it from.
+            app.diff_focused() && app.view != View::CheckoutDiff
         } else {
             app.focus == Focus::List && !app.diff_focused() && shares_screen(app)
         },
