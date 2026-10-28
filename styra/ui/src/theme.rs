@@ -42,6 +42,9 @@ pub const DIRECTORY_NAME: Color = palette::SOFT_CYAN;
 /// An interaction's `#tags`: apart from the status flags that share their
 /// row.
 pub const INTERACTION_TAG: Color = palette::PEACH;
+/// The `↳` and `↱N` fork icons at either end of a branch the cursor's
+/// interaction is part of, lifted out of their usual muted text.
+pub const BRANCH_LINK: Color = LIGHT_ACCENT;
 /// Work left uncommitted: the `!` ahead of such an interaction and the
 /// notice on its pane's border.
 pub const UNCOMMITTED: Color = palette::AMBER_YELLOW;

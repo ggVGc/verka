@@ -40,6 +40,18 @@ pub enum InteractionStatus {
     Ended,
 }
 
+/// How a row is tied to the cursor's by a branch drawn apart from its source:
+/// one the rows' nesting does not show, so the row is marked instead.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum BranchLink {
+    #[default]
+    None,
+    /// The cursor's interaction was branched from this one.
+    Source,
+    /// This one was branched from the cursor's interaction.
+    Branch,
+}
+
 /// What an interaction is doing, as its row in the navigator says it: the
 /// status block and the labels after the name. For drawing that state where
 /// the interaction is mentioned outside the navigator, the same way.
@@ -101,9 +113,9 @@ pub enum InteractionRow<'a> {
         /// How many listed interactions name this one as their source with
         /// `branched_from`, rather than being nested beneath it.
         branches: usize,
-        /// The cursor's interaction names this one as its `branched_from`, so
-        /// it is marked for the eye to find.
-        source_of_selected: bool,
+        /// The branch tying this row to the cursor's, either way, so it is
+        /// marked for the eye to find.
+        branch_link: BranchLink,
         /// The model's id, which names its provider too.
         model: &'a str,
         /// The Git branch checked out for this interaction. `None` means the
@@ -722,7 +734,7 @@ fn interaction_cells(
         depth,
         branched_from,
         branches,
-        source_of_selected,
+        branch_link,
         model,
         branch,
         expected_branch,
@@ -775,9 +787,10 @@ fn interaction_cells(
     } else {
         Style::default().fg(theme::TEXT)
     };
-    // The source of the cursor's branch is underlined, so a branch drawn
-    // under another checkout than its source's can still be traced to it.
-    let name_style = if *source_of_selected {
+    // The source of the cursor's branch, and the cursor's own branches, are
+    // underlined, so a branch drawn under another checkout than its source's
+    // can still be traced to it, from either end.
+    let name_style = if *branch_link != BranchLink::None {
         name_style.add_modifier(Modifier::UNDERLINED)
     } else {
         name_style
@@ -787,19 +800,28 @@ fn interaction_cells(
     // icon ahead of the name: `↳` for a branch of another interaction, `↱N`
     // for one with N branches drawn elsewhere. Plain arrows rather than `⑂`,
     // which few terminal fonts draw. The icon starts the name itself, so a
-    // row without one keeps no room for it.
-    let mut fork = String::new();
+    // row without one keeps no room for it. An icon is lit when the cursor
+    // is at either end of the branch it stands for, telling an underlined
+    // source from an underlined branch.
+    let fork_style = |lit: bool| {
+        Style::default().fg(if lit {
+            theme::BRANCH_LINK
+        } else {
+            theme::MUTED_TEXT
+        })
+    };
+    let mut fork = Vec::new();
     if branched_from.is_some() {
-        fork.push('↳');
+        let lit = *selected || *branch_link == BranchLink::Branch;
+        fork.push(Span::styled("↳", fork_style(lit)));
     }
     if *branches > 0 {
-        fork.push_str(&format!("↱{branches}"));
+        let lit = *selected || *branch_link == BranchLink::Source;
+        fork.push(Span::styled(format!("↱{branches}"), fork_style(lit)));
     }
     if !fork.is_empty() {
-        main.push(Span::styled(
-            format!("{fork} "),
-            Style::default().fg(theme::MUTED_TEXT),
-        ));
+        main.extend(fork);
+        main.push(Span::raw(" "));
     }
     let name_index = main.len();
     // A prompt's line breaks and tabs are not drawn, which would run its
@@ -1024,7 +1046,7 @@ fn status_background(status: InteractionStatus, selected: bool) -> ratatui::styl
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
 
     fn rendered(view: &InteractionNavigator<'_>) -> String {
         rendered_at(view, 80)
@@ -1075,7 +1097,7 @@ mod tests {
             level: 0,
             branched_from: None,
             branches: 0,
-            source_of_selected: false,
+            branch_link: BranchLink::None,
             depth,
             model: "gpt-5",
             branch: None,
@@ -1159,7 +1181,7 @@ mod tests {
                     level: 0,
                     branched_from: None,
                     branches: 0,
-                    source_of_selected: false,
+                    branch_link: BranchLink::None,
                     depth: 0,
                     model: "gpt-5",
                     branch: Some("fix"),
@@ -1201,7 +1223,7 @@ mod tests {
             depth,
             branched_from: branched_from.map(Cow::Borrowed),
             branches: 0,
-            source_of_selected: false,
+            branch_link: BranchLink::None,
             model: "sonnet",
             branch: Some("feature"),
             expected_branch: None,
@@ -1366,6 +1388,77 @@ mod tests {
         }
     }
 
+    /// A branch drawn apart from its source is tied to the cursor from
+    /// either end: the other end's name is underlined, and the fork icons at
+    /// both ends are lit, so a source reads apart from a branch.
+    #[test]
+    fn a_branch_is_marked_from_either_end_of_it() {
+        // `rework` on line 1 counts `spike`, on line 2, as its branch.
+        let drawn = |cursor_on_source: bool| {
+            let link = |source: bool| match (source, cursor_on_source) {
+                (true, false) => BranchLink::Source,
+                (false, true) => BranchLink::Branch,
+                _ => BranchLink::None,
+            };
+            let mut rows = vec![
+                placed("rework", 0, 0, None),
+                placed("spike", 0, 0, Some("rework")),
+            ];
+            for (index, row) in rows.iter_mut().enumerate() {
+                if let InteractionRow::Interaction {
+                    branches,
+                    branch_link,
+                    selected,
+                    last_message,
+                    ..
+                } = row
+                {
+                    let source = index == 0;
+                    *branches = source.into();
+                    *branch_link = link(source);
+                    *selected = source == cursor_on_source;
+                    *last_message = None;
+                }
+            }
+            let view = InteractionNavigator {
+                rows,
+                ..many_rows(0)
+            };
+            let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let cell = |buffer: &Buffer, symbol: &str, y: u16| {
+            let x = (0..80)
+                .find(|&x| buffer[(x, y)].symbol() == symbol)
+                .expect("line draws the symbol");
+            buffer[(x, y)].clone()
+        };
+        let lit = |selected: bool| {
+            let style = Style::default().fg(theme::BRANCH_LINK);
+            if selected {
+                style
+            } else {
+                faded_style(style, UNSELECTED_ROW_FADE)
+            }
+            .fg
+            .unwrap()
+        };
+        for cursor_on_source in [true, false] {
+            let buffer = drawn(cursor_on_source);
+            assert_eq!(cell(&buffer, "↱", 1).fg, lit(cursor_on_source));
+            assert_eq!(cell(&buffer, "↳", 2).fg, lit(!cursor_on_source));
+            let (other, y) = if cursor_on_source { ("s", 2) } else { ("r", 1) };
+            assert!(cell(&buffer, other, y)
+                .modifier
+                .contains(Modifier::UNDERLINED));
+        }
+    }
+
     /// An unheaded worktree's long agent branch — the target a heading names
     /// after `→` — is cut to the branch column, so it moves no column after
     /// it; a row with no branch of its own keeps the column empty.
@@ -1526,7 +1619,7 @@ mod tests {
                 level: 0,
                 branched_from: None,
                 branches: 0,
-                source_of_selected: false,
+                branch_link: BranchLink::None,
                 depth: 0,
                 model: "sonnet",
                 branch: None,
@@ -1564,7 +1657,7 @@ mod tests {
                 level: 0,
                 branched_from: None,
                 branches: 0,
-                source_of_selected: false,
+                branch_link: BranchLink::None,
                 depth: 0,
                 model: "sonnet",
                 branch: None,
@@ -1604,7 +1697,7 @@ mod tests {
                 level: 0,
                 branched_from: None,
                 branches: 0,
-                source_of_selected: false,
+                branch_link: BranchLink::None,
                 depth: 0,
                 model: "sonnet",
                 branch: None,
@@ -1641,7 +1734,7 @@ mod tests {
                     level: 0,
                     branched_from: None,
                     branches: 0,
-                    source_of_selected: false,
+                    branch_link: BranchLink::None,
                     depth: 0,
                     model: "sonnet",
                     branch: None,

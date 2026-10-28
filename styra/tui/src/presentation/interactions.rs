@@ -5,7 +5,7 @@ use crate::app::App;
 use std::borrow::Cow;
 use styra_protocol::InteractionSummary;
 use styra_ui::interactions::{
-    InteractionNavigator, InteractionRow, InteractionState, InteractionStatus,
+    BranchLink, InteractionNavigator, InteractionRow, InteractionState, InteractionStatus,
 };
 
 pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
@@ -94,7 +94,13 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
                 .iter()
                 .filter(|other| other.branched_from.as_deref() == Some(interaction.id.as_str()))
                 .count(),
-            source_of_selected: source_of_selected == Some(interaction.id.as_str()),
+            branch_link: if source_of_selected == Some(interaction.id.as_str()) {
+                BranchLink::Source
+            } else if row.branched_from.as_deref() == Some(cursor) {
+                BranchLink::Branch
+            } else {
+                BranchLink::None
+            },
             model: &interaction.selection.model,
             branch: interaction
                 .checkout
