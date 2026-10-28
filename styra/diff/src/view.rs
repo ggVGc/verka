@@ -12,7 +12,9 @@ use crate::report::{Described, ReportPage, ReportState};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, HighlightSpacing, List, ListItem, ListState, Paragraph, Wrap,
+};
 use ratatui::Frame;
 use std::io::BufRead;
 use std::path::Path;
@@ -1045,28 +1047,40 @@ fn render_commits(frame: &mut Frame, commits: &crate::state::Commits, area: Rect
             commit.date
         ))
     }));
-    let title = if commits.focused {
-        " Commits · j/k: preview · Enter: patch · Esc: all changes "
-    } else {
-        " Commits · Tab: focus · h: close "
-    };
-    let widget = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .title(title)
-                .border_style(Style::default().fg(if commits.focused {
-                    theme::ACCENT
-                } else {
-                    theme::INACTIVE
-                })),
-        )
-        .highlight_style(
+    // Outlined like a panel in Styra's grid: the thick accent border while
+    // the list has the keys, a plain inactive one, the list receding, while
+    // the patch has them.
+    let block = Block::bordered();
+    let (block, text, selected) = if commits.focused {
+        (
+            block
+                .title(" Commits · j/k: preview · Enter: patch · Esc: all changes ")
+                .border_type(BorderType::Thick)
+                .border_style(
+                    Style::default()
+                        .fg(theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            theme::TEXT,
             Style::default()
                 .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("› ");
+    } else {
+        (
+            block
+                .title(" Commits · Tab: focus · h: close ")
+                .border_style(Style::default().fg(theme::INACTIVE)),
+            theme::MUTED_TEXT,
+            Style::default().fg(theme::TEXT),
+        )
+    };
+    let widget = List::new(items)
+        .style(Style::default().fg(text))
+        .block(block)
+        .highlight_style(selected)
+        .highlight_symbol("› ")
+        .highlight_spacing(HighlightSpacing::Always);
     let mut state = ListState::default().with_selected(Some(commits.selected));
     frame.render_stateful_widget(widget, area, &mut state);
 }
@@ -4826,6 +4840,54 @@ index 1111111..2222222 100644
             ),
             "{output}"
         );
+    }
+
+    #[test]
+    fn the_commit_lists_outline_shows_whether_the_list_has_the_keys() {
+        let mut commits = crate::state::Commits {
+            entries: vec![crate::git::Commit {
+                id: "abcdef1234".into(),
+                author: "Ada".into(),
+                date: "2 days ago".into(),
+                summary: "First".into(),
+                body: String::new(),
+            }],
+            open: true,
+            focused: true,
+            selected: 1,
+        };
+        let draw = |commits: &crate::state::Commits| {
+            let mut terminal = Terminal::new(TestBackend::new(60, 4)).unwrap();
+            terminal
+                .draw(|frame| render_commits(frame, commits, frame.area()))
+                .unwrap()
+                .buffer
+                .clone()
+        };
+
+        // Row 0 and row 3 are the outline; row 2 is the selected commit.
+        let buffer = draw(&commits);
+        assert_eq!(buffer[(0, 0)].symbol(), "┏");
+        assert_eq!(buffer[(0, 2)].symbol(), "┃");
+        assert_eq!(buffer[(59, 3)].symbol(), "┛");
+        assert_eq!(buffer[(0, 2)].fg, theme::ACCENT);
+        assert_eq!(buffer[(1, 2)].symbol(), "›");
+        assert_eq!(buffer[(3, 2)].fg, theme::ACCENT);
+        assert_eq!(buffer[(3, 1)].fg, theme::TEXT);
+
+        commits.focused = false;
+        let buffer = draw(&commits);
+        assert_eq!(buffer[(0, 0)].symbol(), "┌");
+        assert_eq!(buffer[(0, 2)].symbol(), "│");
+        assert_eq!(buffer[(0, 2)].fg, theme::INACTIVE);
+        assert_eq!(buffer[(1, 2)].symbol(), "›");
+        assert_eq!(buffer[(3, 2)].fg, theme::TEXT);
+        assert_eq!(
+            buffer[(3, 1)].fg,
+            theme::MUTED_TEXT,
+            "the rest of the list recedes"
+        );
+        assert_eq!(buffer[(3, 1)].symbol(), "A");
     }
 }
 
