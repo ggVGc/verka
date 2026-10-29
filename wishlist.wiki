@@ -1,3 +1,5 @@
+- As implementation progresses, ask agent to add nota entries as it goes.
+  - Relies on nota integration existing first.
 - SvaraAsk should probably not perform edits...
 - Some easier way in Svara of continuing an interaction from a question or edit
 - Log any actions taken for an interaction:
