@@ -135,8 +135,18 @@ mod tests {
     use super::*;
     use styra_protocol::agent::Effort;
 
-    fn temp_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("styra-preferences-{}-{name}", std::process::id()))
+    fn defaults_path() -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings").join(FILE_NAME);
+        (directory, path)
+    }
+
+    fn claude_selection() -> Selection {
+        Selection {
+            provider: Provider::Claude,
+            model: "claude-sonnet-5".into(),
+            effort: Effort::Max,
+        }
     }
 
     #[test]
@@ -157,8 +167,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_uses_the_declared_codex_defaults() {
-        let path = temp_path("missing").join(FILE_NAME);
-        fs::remove_dir_all(path.parent().unwrap()).ok();
+        let (_directory, path) = defaults_path();
         let defaults = load_or_default(&path).unwrap();
         assert_eq!(defaults.selection, Selection::new(Provider::Codex));
         assert_eq!(defaults.launch, LaunchPolicy::default());
@@ -166,15 +175,9 @@ mod tests {
 
     #[test]
     fn a_saved_selection_and_launch_policy_round_trip() {
-        let root = temp_path("round-trip");
-        fs::remove_dir_all(&root).ok();
-        let path = root.join(FILE_NAME);
+        let (_directory, path) = defaults_path();
         let defaults = Defaults {
-            selection: Selection {
-                provider: Provider::Claude,
-                model: "claude-sonnet-5".into(),
-                effort: Effort::Max,
-            },
+            selection: claude_selection(),
             launch: LaunchPolicy {
                 network: Some(true),
                 writable_workspace: None,
@@ -195,7 +198,6 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        fs::remove_dir_all(root).ok();
     }
 
     /// Each of the two halves is saved without disturbing the other, so
@@ -203,19 +205,13 @@ mod tests {
     /// policy (or the other way round).
     #[test]
     fn saving_one_half_of_the_defaults_keeps_the_other() {
-        let root = temp_path("halves");
-        fs::remove_dir_all(&root).ok();
-        let path = root.join(FILE_NAME);
+        let (_directory, path) = defaults_path();
         let launch = LaunchPolicy {
             network: Some(true),
             templates: vec!["browser".into()],
             ..LaunchPolicy::default()
         };
-        let selection = Selection {
-            provider: Provider::Claude,
-            model: "claude-sonnet-5".into(),
-            effort: Effort::Max,
-        };
+        let selection = claude_selection();
 
         save_launch(&path, &launch).unwrap();
         save_selection(&path, &selection).unwrap();
@@ -223,7 +219,6 @@ mod tests {
         let defaults = load_or_default(&path).unwrap();
         assert_eq!(defaults.launch, launch);
         assert_eq!(defaults.selection, selection);
-        fs::remove_dir_all(root).ok();
     }
 
     /// A defaults file written before the launch policy existed holds a bare
@@ -231,33 +226,23 @@ mod tests {
     /// their next launch.
     #[test]
     fn a_defaults_file_holding_only_a_selection_is_still_read() {
-        let root = temp_path("legacy");
-        fs::remove_dir_all(&root).ok();
-        fs::create_dir_all(&root).unwrap();
-        let path = root.join(FILE_NAME);
-        let selection = Selection {
-            provider: Provider::Claude,
-            model: "claude-sonnet-5".into(),
-            effort: Effort::Max,
-        };
+        let (_directory, path) = defaults_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let selection = claude_selection();
         fs::write(&path, serde_json::to_vec(&selection).unwrap()).unwrap();
 
         let defaults = load_or_default(&path).unwrap();
         assert_eq!(defaults.selection, selection);
         assert_eq!(defaults.launch, LaunchPolicy::default());
-        fs::remove_dir_all(root).ok();
     }
 
     #[test]
     fn malformed_saved_defaults_are_not_silently_ignored() {
-        let root = temp_path("malformed");
-        fs::remove_dir_all(&root).ok();
-        fs::create_dir_all(&root).unwrap();
-        let path = root.join(FILE_NAME);
+        let (_directory, path) = defaults_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"{ definitely not json").unwrap();
 
         let error = load_or_default(&path).unwrap_err();
         assert!(error.to_string().contains("parsing Styra defaults"));
-        fs::remove_dir_all(root).ok();
     }
 }

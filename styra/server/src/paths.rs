@@ -62,11 +62,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn xdg_state_home_takes_precedence() {
-        assert_eq!(
-            state_home(Some("/state".into()), Some("/home/user".into())),
-            Some(PathBuf::from("/state"))
-        );
+    fn state_home_prefers_xdg_and_otherwise_uses_the_home_default() {
+        for (xdg, expected) in [
+            (Some(OsString::from("/state")), "/state"),
+            (None, "/home/user/.local/state"),
+            (Some(OsString::new()), "/home/user/.local/state"),
+        ] {
+            assert_eq!(
+                state_home(xdg.clone(), Some("/home/user".into())),
+                Some(PathBuf::from(expected)),
+                "{xdg:?}"
+            );
+        }
     }
 
     #[test]
@@ -81,18 +88,6 @@ mod tests {
         assert_eq!(daemon, Some(PathBuf::from("/state/styra")));
         assert_eq!(standalone, Some(PathBuf::from("/state/styra-standalone")));
         assert_ne!(daemon, standalone);
-    }
-
-    #[test]
-    fn home_supplies_the_state_default_when_the_variable_is_unset_or_empty() {
-        assert_eq!(
-            state_home(None, Some("/home/user".into())),
-            Some(PathBuf::from("/home/user/.local/state"))
-        );
-        assert_eq!(
-            state_home(Some(OsString::new()), Some("/home/user".into())),
-            Some(PathBuf::from("/home/user/.local/state"))
-        );
     }
 
     #[test]

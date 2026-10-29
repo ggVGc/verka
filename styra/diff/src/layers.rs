@@ -515,6 +515,7 @@ fn sides(patch: &str) -> (Option<&str>, Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{git, repository};
 
     fn layer(name: &str) -> Layer {
         Layer {
@@ -640,21 +641,7 @@ mod tests {
     /// over the one before.
     #[test]
     fn layers_are_read_from_each_commit_and_the_working_tree() {
-        fn git(directory: &Path, args: &[&str]) -> String {
-            let output = std::process::Command::new("git")
-                .arg("-C")
-                .arg(directory)
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "git {args:?}");
-            String::from_utf8(output.stdout).unwrap().trim().to_owned()
-        }
-        let root = std::env::temp_dir().join("styra-diff-layers");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        git(&root, &["init", "-q", "-b", "main"]);
+        let (_directory, root) = repository("styra-diff-layers");
         std::fs::write(root.join("f"), "a\nb\nc\n").unwrap();
         git(&root, &["add", "."]);
         git(&root, &["commit", "-q", "-m", "start"]);

@@ -292,43 +292,34 @@ mod tests {
     }
 
     #[test]
-    fn only_interactions_still_taking_turns_are_tiled() {
-        let interactions = fleet(&[
-            InteractionActivity::Running,
-            InteractionActivity::Stopped,
-            InteractionActivity::Pending,
-            InteractionActivity::Background,
-        ]);
-        assert_eq!(ids(&interactions), ["100-tile", "97-tile", "98-tile"]);
-    }
-
-    #[test]
-    fn working_tiles_precede_idle_tiles_in_existing_order() {
-        let interactions = fleet(&[
-            InteractionActivity::Pending,
-            InteractionActivity::Background,
-            InteractionActivity::Running,
-            InteractionActivity::Pending,
-        ]);
-        assert_eq!(
-            ids(&interactions),
-            ["99-tile", "98-tile", "100-tile", "97-tile"]
-        );
-    }
-
-    #[test]
-    fn newly_idle_tiles_follow_working_tiles() {
-        let mut interactions = fleet(&[
-            InteractionActivity::Pending,
-            InteractionActivity::Running,
-            InteractionActivity::Pending,
-            InteractionActivity::Pending,
-        ]);
-        interactions.items[2].idle_unseen = true;
-        assert_eq!(
-            ids(&interactions),
-            ["99-tile", "98-tile", "100-tile", "97-tile"]
-        );
+    fn tiles_filter_stopped_work_and_order_working_then_newly_idle_then_idle() {
+        use InteractionActivity::{Background, Pending, Running, Stopped};
+        for (name, activities, unseen, expected) in [
+            (
+                "exclude stopped",
+                vec![Running, Stopped, Pending, Background],
+                None,
+                vec!["100-tile", "97-tile", "98-tile"],
+            ),
+            (
+                "working before idle",
+                vec![Pending, Background, Running, Pending],
+                None,
+                vec!["99-tile", "98-tile", "100-tile", "97-tile"],
+            ),
+            (
+                "newly idle before idle",
+                vec![Pending, Running, Pending, Pending],
+                Some(2),
+                vec!["99-tile", "98-tile", "100-tile", "97-tile"],
+            ),
+        ] {
+            let mut interactions = fleet(&activities);
+            if let Some(index) = unseen {
+                interactions.items[index].idle_unseen = true;
+            }
+            assert_eq!(ids(&interactions), expected, "{name}");
+        }
     }
 
     #[test]

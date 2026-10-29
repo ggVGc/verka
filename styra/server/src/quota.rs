@@ -882,6 +882,8 @@ mod tests {
         assert_eq!(reading.status, QuotaStatus::Warning);
         assert_eq!(reading.utilization, Some(0.91));
         assert_eq!(reading.resets_at_ms, Some(1_788_290_400_000));
+        assert_eq!(reading.provider, Provider::Claude);
+        assert!(reading.describe().starts_with("claude plan quota"));
         assert!(reading.is_notable());
     }
 
@@ -909,6 +911,9 @@ mod tests {
     #[test]
     fn both_codex_windows_are_read_and_their_percentages_normalized() {
         let readings = parse("s-2", Provider::Codex, 2_000, CODEX_USAGE);
+        assert!(readings
+            .iter()
+            .all(|reading| reading.provider == Provider::Codex));
         assert_eq!(readings.len(), 2);
         assert_eq!(readings[0].window, "1h");
         assert_eq!(readings[0].utilization, Some(0.0));
@@ -958,14 +963,6 @@ mod tests {
         assert_eq!(readings[1].resets_at_ms, Some(1_789_459_328_000));
     }
 
-    /// The cheap reject decides what is even parsed, so a renamed key has to
-    /// pass it: `rateLimits` does not contain `rate_limit`.
-    #[test]
-    fn the_cheap_reject_admits_both_spellings() {
-        assert!(!parse("s-1", Provider::Codex, 0, CODEX_LIMITS).is_empty());
-        assert!(!parse("s-1", Provider::Claude, 0, CLAUDE_WARNING).is_empty());
-    }
-
     /// An account whose credits are gone reports no windows whatsoever — the
     /// figures are null and only `rateLimitReachedType` says anything.
     #[test]
@@ -983,38 +980,39 @@ mod tests {
         assert!(readings[0].is_notable());
     }
 
-    /// The reading this module exists for, and the one Codex reports no figure
-    /// on: the turn it refuses because the plan is spent.
     #[test]
-    fn a_codex_refusal_is_read_as_an_exhausted_plan_with_its_retry_time() {
-        let readings = parse("s-2", Provider::Codex, 2_000, CODEX_REFUSAL);
-        assert_eq!(readings.len(), 1);
-        let reading = &readings[0];
-        assert_eq!(reading.provider, Provider::Codex);
-        assert_eq!(reading.window, "plan");
-        assert_eq!(reading.status, QuotaStatus::Exhausted);
-        // No figure is invented from a refusal that states none.
-        assert_eq!(reading.utilization, None);
-        assert_eq!(
-            reading.detail.as_deref(),
-            Some("try again at Sep 9th, 2026 2:01 AM")
-        );
-        assert!(reading.is_notable());
-        assert!(reading.describe().contains("exhausted"));
-    }
-
-    /// The refusal arrives twice, on two notifications, and neither is
-    /// promised — so both are read, and the message that names no retry moment
-    /// keeps the sentence that says why.
-    #[test]
-    fn the_error_notification_carrying_the_refusal_is_read_too() {
-        let readings = parse("s-2", Provider::Codex, 2_000, CODEX_REFUSAL_ERROR);
-        assert_eq!(readings.len(), 1);
-        assert_eq!(readings[0].status, QuotaStatus::Exhausted);
-        assert_eq!(
-            readings[0].detail.as_deref(),
-            Some("Your workspace is out of credits")
-        );
+    fn codex_refusal_notifications_preserve_exhaustion_without_inventing_usage() {
+        for (name, line, at_ms, detail) in [
+            (
+                "turn refusal with retry",
+                CODEX_REFUSAL,
+                2_000,
+                Some("try again at Sep 9th, 2026 2:01 AM"),
+            ),
+            (
+                "error notification without retry",
+                CODEX_REFUSAL_ERROR,
+                2_000,
+                Some("Your workspace is out of credits"),
+            ),
+            (
+                "unfamiliar prose",
+                r#"{"error":{"codexErrorInfo":"usageLimitExceeded"}}"#,
+                0,
+                None,
+            ),
+        ] {
+            let readings = parse("s-2", Provider::Codex, at_ms, line);
+            assert_eq!(readings.len(), 1, "{name}");
+            let reading = &readings[0];
+            assert_eq!(reading.provider, Provider::Codex, "{name}");
+            assert_eq!(reading.window, "plan", "{name}");
+            assert_eq!(reading.status, QuotaStatus::Exhausted, "{name}");
+            assert_eq!(reading.utilization, None, "{name}");
+            assert_eq!(reading.detail.as_deref(), detail, "{name}");
+            assert!(reading.is_notable(), "{name}");
+            assert!(reading.describe().contains("exhausted"), "{name}");
+        }
     }
 
     /// A turn can fail for any number of reasons that say nothing about the
@@ -1024,17 +1022,6 @@ mod tests {
         let line = r#"{"method":"turn/completed","params":{"turn":{"status":"failed",
             "error":{"message":"stream disconnected","codexErrorInfo":"streamClosed"}}}}"#;
         assert!(parse("s-2", Provider::Codex, 0, line).is_empty());
-    }
-
-    /// A refusal whose prose has changed shape still records the exhaustion —
-    /// the fact matters, the sentence is a nicety.
-    #[test]
-    fn a_refusal_without_the_familiar_prose_is_still_a_refusal() {
-        let line = r#"{"error":{"codexErrorInfo":"usageLimitExceeded"}}"#;
-        let readings = parse("s-2", Provider::Codex, 0, line);
-        assert_eq!(readings.len(), 1);
-        assert_eq!(readings[0].status, QuotaStatus::Exhausted);
-        assert_eq!(readings[0].detail, None);
     }
 
     #[test]
@@ -1107,26 +1094,52 @@ mod tests {
         };
         let log = QuotaLog::new();
         assert_eq!(
-            log.observe("s-1", Provider::Claude, 1, &reading(0.91))
+            log.observe("s-1", Provider::Claude, 1, &reading(0.81))
                 .announce
                 .len(),
             1
         );
         // Still the same decile: already said.
         assert!(log
-            .observe("s-1", Provider::Claude, 2, &reading(0.95))
+            .observe("s-1", Provider::Claude, 2, &reading(0.85))
+            .announce
+            .is_empty());
+        let climbed = log
+            .observe("s-1", Provider::Claude, 3, &reading(0.91))
+            .announce;
+        assert_eq!(climbed.len(), 1);
+        assert_eq!(climbed[0].status, QuotaStatus::Warning);
+        assert_eq!(climbed[0].utilization, Some(0.91));
+        assert!(log
+            .observe("s-1", Provider::Claude, 4, &reading(0.95))
             .announce
             .is_empty());
         assert!(log
-            .observe("s-1", Provider::Claude, 3, &reading(0.99))
+            .observe("s-1", Provider::Claude, 5, &reading(0.99))
             .announce
             .is_empty());
         // A full window is a different status, so it is announced again.
         let exhausted = log
-            .observe("s-1", Provider::Claude, 4, CLAUDE_REJECTED)
+            .observe("s-1", Provider::Claude, 6, CLAUDE_REJECTED)
             .announce;
         assert_eq!(exhausted.len(), 1);
         assert_eq!(exhausted[0].status, QuotaStatus::Exhausted);
+        let entries = log.entries();
+        assert_eq!(entries.len(), 6);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.utilization)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(0.81),
+                Some(0.85),
+                Some(0.91),
+                Some(0.95),
+                Some(0.99),
+                None
+            ]
+        );
     }
 
     /// A refusal is announced when it happens, and not once per retry the
@@ -1264,17 +1277,6 @@ mod tests {
         assert_eq!(announced.len(), 2);
         assert_eq!(announced[0].window, "1h");
         assert_eq!(announced[1].window, "7d");
-    }
-
-    /// The reading has to say whose plan it is: the two providers are
-    /// separate subscriptions, and the log mixes both accounts' readings.
-    #[test]
-    fn a_reading_names_the_provider_whose_plan_it_measures() {
-        let claude = parse("s-1", Provider::Claude, 1_000, CLAUDE_WARNING);
-        assert_eq!(claude[0].provider, Provider::Claude);
-        assert!(claude[0].describe().starts_with("claude plan quota"));
-        let codex = parse("s-2", Provider::Codex, 2_000, CODEX_USAGE);
-        assert!(codex.iter().all(|r| r.provider == Provider::Codex));
     }
 
     /// Two providers can name a window alike — and even when they do not, one
@@ -1444,16 +1446,7 @@ mod tests {
         assert_eq!(due[0].window, "five_hour");
         assert_eq!(due[0].at_ms, REJECTED_DUE_MS);
         assert!(!log.is_awaiting_reset());
-    }
-
-    /// Drained rather than read: this is polled on a timer, and a reset handed
-    /// out twice would send the work it held back twice.
-    #[test]
-    fn a_reset_is_handed_out_once() {
-        let log = QuotaLog::new();
-        log.observe("s-1", Provider::Claude, 1, CLAUDE_REJECTED);
-
-        assert_eq!(log.resets(REJECTED_DUE_MS).len(), 1);
+        // Timer polling must never hand the same reset out twice.
         assert!(log.resets(REJECTED_DUE_MS).is_empty());
         assert!(log.resets(REJECTED_DUE_MS + RETENTION_MS).is_empty());
     }

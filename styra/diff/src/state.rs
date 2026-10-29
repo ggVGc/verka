@@ -1091,6 +1091,8 @@ fn line_at(rows: &[Row], top: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{draw as draw_frame, rows as buffer_rows};
+    use crate::test_support::{git, repository};
     use crate::view::removed_rows;
 
     fn two_files() -> CheckoutDiff {
@@ -1114,7 +1116,6 @@ mod tests {
     #[test]
     fn involved_filter_pins_commits_and_keeps_navigation_and_counts_in_sync() {
         use crate::layers::Layer;
-        use ratatui::{backend::TestBackend, Terminal};
         let a = "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+A\n";
         let moved = "diff --git a/old.txt b/b.txt\nsimilarity index 100%\nrename from old.txt\nrename to b.txt\n";
         let b = "diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-b\n+B\n";
@@ -1145,22 +1146,12 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let drawn = |diff: &CheckoutDiff, files_below| {
-            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
-            terminal
-                .draw(|frame| {
-                    let mut view = diff.view(Block::default());
-                    view.files_below = files_below;
-                    crate::view::render(frame, &view, frame.area());
-                })
-                .unwrap();
-            (0..30)
-                .map(|y| {
-                    (0..120)
-                        .map(|x| terminal.backend().buffer()[(x, y)].symbol())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+            let buffer = draw_frame(120, 30, |frame| {
+                let mut view = diff.view(Block::default());
+                view.files_below = files_below;
+                crate::view::render(frame, &view, frame.area());
+            });
+            buffer_rows(&buffer).join("\n")
         };
         for below in [false, true] {
             let shown = drawn(&diff, below);
@@ -1210,7 +1201,6 @@ mod tests {
 
     #[test]
     fn prompts_mark_files_and_lines_and_preview_in_both_layouts() {
-        use ratatui::{backend::TestBackend, Terminal};
         let mut diff = two_files();
         for per_file in [false, true] {
             for split in [false, true] {
@@ -1220,22 +1210,16 @@ mod tests {
                     diff.line_cursor = Some(if per_file { 3 } else { 7 });
                     diff.side_by_side = split;
                     diff.hide_removed = hidden;
-                    let mut terminal = Terminal::new(TestBackend::new(120, 35)).unwrap();
-                    terminal
-                        .draw(|frame| {
-                            let mut view = diff.view(Block::default());
-                            view.prompts = vec![crate::Prompt::from_message(
-                                "please fix this\n\nSource: b.txt:1",
-                                2,
-                            )
-                            .unwrap()];
-                            crate::render(frame, &view, frame.area());
-                        })
-                        .unwrap();
-                    let buffer = terminal.backend().buffer();
-                    let rows: Vec<String> = (0..35)
-                        .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
-                        .collect();
+                    let buffer = draw_frame(120, 35, |frame| {
+                        let mut view = diff.view(Block::default());
+                        view.prompts = vec![crate::Prompt::from_message(
+                            "please fix this\n\nSource: b.txt:1",
+                            2,
+                        )
+                        .unwrap()];
+                        crate::render(frame, &view, frame.area());
+                    });
+                    let rows: Vec<String> = buffer_rows(&buffer);
                     assert!(rows.iter().any(|r| r.contains("please fix this")));
                     assert!(rows.iter().any(|r| r.contains("Enter: interaction log")));
                     assert!(
@@ -1253,7 +1237,6 @@ mod tests {
 
     #[test]
     fn layout_changes_and_resizing_preserve_source_locations() {
-        use ratatui::{backend::TestBackend, Terminal};
         let mut diff = two_files();
         diff.diff = Ok(format!(
             "diff --git a/a.txt b/a.txt\n@@ -1,60 +1,60 @@\n{}",
@@ -1262,13 +1245,10 @@ mod tests {
                 .collect::<String>()
         ));
         let draw = |diff: &mut CheckoutDiff, width| {
-            let mut terminal = Terminal::new(TestBackend::new(width, 16)).unwrap();
             let mut feedback = CheckoutDiffFeedback::default();
-            terminal
-                .draw(|frame| {
-                    feedback = crate::render(frame, &diff.view(Block::default()), frame.area());
-                })
-                .unwrap();
+            draw_frame(width, 16, |frame| {
+                feedback = crate::render(frame, &diff.view(Block::default()), frame.area());
+            });
             diff.note(feedback);
         };
         let location = |diff: &CheckoutDiff| {
@@ -1353,21 +1333,7 @@ mod tests {
     /// selection: the refreshed view stays on the file being read.
     #[test]
     fn a_refresh_picks_up_new_work_and_keeps_the_selected_file() {
-        fn git(directory: &std::path::Path, args: &[&str]) -> String {
-            let output = std::process::Command::new("git")
-                .arg("-C")
-                .arg(directory)
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "git {args:?}");
-            String::from_utf8(output.stdout).unwrap().trim().to_owned()
-        }
-        let root = std::env::temp_dir().join("styra-checkout-diff-refresh");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        git(&root, &["init", "-q"]);
+        let (_directory, root) = repository("styra-checkout-diff-refresh");
         std::fs::write(root.join("a.txt"), "one\n").unwrap();
         std::fs::write(root.join("b.txt"), "one\n").unwrap();
         git(&root, &["add", "."]);
@@ -1675,30 +1641,6 @@ mod tests {
         assert_eq!(diff.selected_file, 0, "the per-file view keeps to its file");
     }
 
-    /// The cursor's row is marked in either layout, on the line it is on.
-    #[test]
-    fn the_line_cursor_is_drawn_on_its_line() {
-        use ratatui::{backend::TestBackend, Terminal};
-        let mut diff = two_files();
-        diff.line_cursor = Some(7);
-        for side_by_side in [false, true] {
-            diff.side_by_side = side_by_side;
-            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
-            terminal
-                .draw(|frame| {
-                    crate::render(frame, &diff.view(Block::default()), frame.area());
-                })
-                .unwrap();
-            let buffer = terminal.backend().buffer();
-            let marked: Vec<String> = (0..30)
-                .filter(|y| buffer[(0, *y)].symbol() == "▌")
-                .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
-                .collect();
-            assert_eq!(marked.len(), 1, "side by side: {side_by_side}");
-            assert!(marked[0].contains('d'), "{}", marked[0]);
-        }
-    }
-
     /// Switching between the combined diff and the per-file view keeps the
     /// cursor on its line, counted in whichever patch is shown.
     #[test]
@@ -1805,7 +1747,6 @@ mod tests {
     /// cursor is on.
     #[test]
     fn found_text_is_marked_and_counted() {
-        use ratatui::{backend::TestBackend, Terminal};
         let mut diff = two_files();
         diff.apply(Action::ToggleLines);
         diff.apply(Action::Find);
@@ -1815,13 +1756,15 @@ mod tests {
         assert_eq!(diff.line_cursor, Some(7), "+d");
         for side_by_side in [false, true] {
             diff.side_by_side = side_by_side;
-            let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
-            terminal
-                .draw(|frame| {
-                    crate::render(frame, &diff.view(Block::default()), frame.area());
-                })
-                .unwrap();
-            let buffer = terminal.backend().buffer();
+            let buffer = draw_frame(120, 20, |frame| {
+                crate::render(frame, &diff.view(Block::default()), frame.area());
+            });
+            let cursor_rows: Vec<_> = buffer_rows(&buffer)
+                .into_iter()
+                .filter(|row| row.starts_with('▌'))
+                .collect();
+            assert_eq!(cursor_rows.len(), 1, "side by side: {side_by_side}");
+            assert!(cursor_rows[0].contains('d'), "{}", cursor_rows[0]);
             let marked = |style: ratatui::style::Style| -> Vec<(u16, &str)> {
                 (0..20)
                     .flat_map(|y| (0..120).map(move |x| (x, y)))
@@ -1837,9 +1780,7 @@ mod tests {
                 marked(ratatui::style::Style::new().bg(styra_ui::theme::ACCENT)).is_empty(),
                 "no other match"
             );
-            let rows: Vec<String> = (0..20)
-                .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
-                .collect();
+            let rows: Vec<String> = buffer_rows(&buffer);
             assert!(rows.iter().any(|row| row.contains("/d  [1/1]")), "{rows:?}");
         }
     }

@@ -666,51 +666,38 @@ mod tests {
         }
     }
 
-    /// The span is the message and the work under it, which is exactly what
-    /// the conversation-only filter leaves out of the list.
     #[test]
-    fn a_conversation_entrys_span_runs_up_to_the_next_message() {
-        let mut list = timeline(vec![
-            user("ask"),
-            shell("one"),
-            shell("two"),
-            message("answer"),
-            shell("three"),
-        ]);
-
-        list.selected = 0;
-        assert_eq!(list.conversation_span(), 0..3);
-
-        // The next message opens its own span, which runs to the end of the
-        // log while the turn is still going.
-        list.selected = 3;
-        assert_eq!(list.conversation_span(), 3..5);
-    }
-
-    /// With the filter off the cursor can rest on a tool row. It belongs to
-    /// the message it came after, so it names that message's span rather than
-    /// one starting at itself.
-    #[test]
-    fn a_selection_between_messages_names_the_span_it_sits_in() {
-        let mut list = timeline(vec![user("ask"), shell("one"), shell("two")]);
-        list.selected = 2;
-        assert_eq!(list.conversation_span(), 0..3);
-    }
-
-    /// An agent that works before saying anything leaves entries with no
-    /// message to anchor to; they are still part of the log, so the span opens
-    /// at its start rather than coming back empty.
-    #[test]
-    fn work_before_the_first_message_belongs_to_the_start_of_the_log() {
-        let mut list = timeline(vec![shell("one"), shell("two"), message("hello")]);
-        list.selected = 1;
-        assert_eq!(list.conversation_span(), 0..2);
-
-        assert_eq!(
-            timeline(Vec::new()).conversation_span(),
-            0..0,
-            "empty only when the log is"
-        );
+    fn conversation_spans_include_the_message_and_its_work() {
+        for (name, events, selections) in [
+            (
+                "messages delimit spans",
+                vec![
+                    user("ask"),
+                    shell("one"),
+                    shell("two"),
+                    message("answer"),
+                    shell("three"),
+                ],
+                vec![(0, 0..3), (3, 3..5)],
+            ),
+            (
+                "tool belongs to preceding message",
+                vec![user("ask"), shell("one"), shell("two")],
+                vec![(2, 0..3)],
+            ),
+            (
+                "work before first message",
+                vec![shell("one"), shell("two"), message("hello")],
+                vec![(1, 0..2)],
+            ),
+            ("empty only when the log is", vec![], vec![(0, 0..0)]),
+        ] {
+            let mut list = timeline(events);
+            for (selected, expected) in selections {
+                list.selected = selected;
+                assert_eq!(list.conversation_span(), expected, "{name}: {selected}");
+            }
+        }
     }
 
     /// A filter that hides the selected row has to pull the selection onto one

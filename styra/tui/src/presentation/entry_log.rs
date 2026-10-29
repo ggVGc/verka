@@ -80,28 +80,6 @@ mod tests {
         app
     }
 
-    #[test]
-    fn entry_log_follows_the_selected_message() {
-        let mut app = app_with_two_turns();
-        app.timeline.all_events = false;
-        app.timeline.selected = 0;
-        app.toggle_entry_log();
-        let view = super::view(&app);
-        assert_eq!(view.entries.len(), 2);
-        assert_eq!(view.entries[1].event, app.timeline.entries[1].event());
-    }
-
-    /// The view exists for the conversation-only reader, so the entries it
-    /// shows must be exactly the ones that filter hides — not filtered again.
-    #[test]
-    fn entry_log_ignores_the_conversation_only_filter() {
-        let mut app = app_with_two_turns();
-        app.timeline.all_events = false;
-        app.timeline.selected = 0;
-        app.toggle_entry_log();
-        assert!(super::view(&app).entries.iter().any(|e| matches!(e.event, AgentEvent::CommandStarted { command } if command == "cargo test backoff")));
-    }
-
     /// `m` says whether minor lifecycle events are worth screen space, and it
     /// says it for the whole Events screen: a pane that kept showing them
     /// would put back what the operator just turned off.
@@ -208,6 +186,12 @@ mod tests {
                 panic!()
             };
             assert!(!e.entry_log.unwrap().focused);
+            let entries = &e.entry_log.unwrap().entries;
+            assert_eq!(entries.len(), 2);
+            assert!(entries.iter().any(|entry| matches!(entry.event,
+                AgentEvent::CommandStarted { command } if command == "cargo test backoff")));
+            assert!(!entries.iter().any(|entry| matches!(entry.event,
+                AgentEvent::CommandStarted { command } if command == "git commit --amend")));
             assert_eq!(
                 e.entry_log.unwrap().entries[1].event,
                 app.timeline.entries[1].event()

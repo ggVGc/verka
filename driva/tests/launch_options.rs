@@ -110,49 +110,29 @@ fn overlay_mount_reports_as_writable_but_discarded() {
 }
 
 #[test]
-fn explicit_current_directory_mount_replaces_the_default_workspace_mount() {
-    let directory = TestDirectory::new("explicit-default-workspace");
-    let output = stdout(directory.run(&["run", "--dry-run", "--read", ".", "--", "true"]));
-    let workspace = directory.0.canonicalize().unwrap();
+fn explicit_current_directory_mounts_replace_the_default_workspace_mount() {
+    for flag in ["--read", "--path"] {
+        let directory = TestDirectory::new(flag);
+        let output = stdout(directory.run(&["run", "--dry-run", flag, ".", "--", "true"]));
+        let workspace = directory.0.canonicalize().unwrap();
 
-    assert_eq!(
-        output
-            .matches(&format!(
-                "mount: {} -> {}",
-                workspace.display(),
-                workspace.display()
-            ))
-            .count(),
-        1
-    );
-    assert!(output.contains(&format!(
-        "mount: {} -> {} (read-only)",
-        workspace.display(),
-        workspace.display()
-    )));
-}
-
-#[test]
-fn current_directory_path_mount_replaces_the_default_workspace_mount() {
-    let directory = TestDirectory::new("path-default-workspace");
-    let output = stdout(directory.run(&["run", "--dry-run", "--path", ".", "--", "true"]));
-    let workspace = directory.0.canonicalize().unwrap();
-
-    assert_eq!(
-        output
-            .matches(&format!(
-                "mount: {} -> {}",
-                workspace.display(),
-                workspace.display()
-            ))
-            .count(),
-        1
-    );
-    assert!(output.contains(&format!(
-        "mount: {} -> {} (read-only)",
-        workspace.display(),
-        workspace.display()
-    )));
+        assert_eq!(
+            output
+                .matches(&format!(
+                    "mount: {} -> {}",
+                    workspace.display(),
+                    workspace.display()
+                ))
+                .count(),
+            1,
+            "{flag}: {output}"
+        );
+        assert!(output.contains(&format!(
+            "mount: {} -> {} (read-only)",
+            workspace.display(),
+            workspace.display()
+        )));
+    }
 }
 
 #[test]

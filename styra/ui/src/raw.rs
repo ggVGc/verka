@@ -398,21 +398,8 @@ mod tests {
         (output, feedback)
     }
     #[test]
-    fn received_messages_have_their_own_title_and_empty_state() {
-        let (output, _) = screen(RawView {
-            chrome: chrome(),
-            source: RawSource::Received(&[]),
-            selected: 0,
-            requested_preview_scroll: 0,
-        });
-        assert!(output.contains("messages"));
-        assert!(output.contains("no received messages yet"));
-        assert!(!output.contains("v: provider native"));
-    }
-
-    #[test]
-    fn styra_wire_has_direction_tags_and_pretty_preview() {
-        let lines = vec![
+    fn raw_sources_show_their_titles_markers_and_preview() {
+        let wire = vec![
             RawLine {
                 at_ms: 0,
                 direction: WireDirection::ToAgent,
@@ -424,29 +411,51 @@ mod tests {
                 text: r#"{"type":"system","subtype":"init","ok":true}"#.into(),
             },
         ];
-        let (output, _) = screen(RawView {
-            chrome: chrome(),
-            source: RawSource::Styra(&lines),
-            selected: 1,
-            requested_preview_scroll: 0,
-        });
-        for expected in ["»", "«", "item/start", "system:init", "\"ok\"", "true"] {
-            assert!(output.contains(expected), "missing {expected}: {output}");
+        let provider = vec![r#"{"type":"session_meta","payload":{"id":"t-1"}}"#.to_owned()];
+        for (name, source, selected, present, absent) in [
+            (
+                "received",
+                RawSource::Received(&[]),
+                0,
+                vec!["messages", "no received messages yet"],
+                vec!["v: provider native"],
+            ),
+            (
+                "wire",
+                RawSource::Styra(&wire),
+                1,
+                vec!["»", "«", "item/start", "system:init", "\"ok\"", "true"],
+                vec![],
+            ),
+            (
+                "provider",
+                RawSource::Provider(&provider),
+                0,
+                vec!["provider native", "session_meta"],
+                vec!["« session_meta"],
+            ),
+        ] {
+            let (output, _) = screen(RawView {
+                chrome: chrome(),
+                source,
+                selected,
+                requested_preview_scroll: 0,
+            });
+            for needle in present {
+                assert!(
+                    output.contains(needle),
+                    "{name}: missing {needle}: {output}"
+                );
+            }
+            for needle in absent {
+                assert!(
+                    !output.contains(needle),
+                    "{name}: unexpected {needle}: {output}"
+                );
+            }
         }
     }
-    #[test]
-    fn provider_records_have_no_wire_marker() {
-        let lines = vec![r#"{"type":"session_meta","payload":{"id":"t-1"}}"#.to_owned()];
-        let (output, _) = screen(RawView {
-            chrome: chrome(),
-            source: RawSource::Provider(&lines),
-            selected: 0,
-            requested_preview_scroll: 0,
-        });
-        assert!(output.contains("provider native"));
-        assert!(output.contains("session_meta"));
-        assert!(!output.contains("« session_meta"));
-    }
+
     #[test]
     fn untagged_text_is_not_hidden() {
         let line = RawLine {

@@ -116,12 +116,6 @@ mod tests {
         (output, limit)
     }
     #[test]
-    fn content_and_filter_marker_are_rendered() {
-        let (output, _) = screen("user: hello\nagent: hi", true, true, false, 0);
-        assert!(output.contains("all events · minor hidden"));
-        assert!(output.contains("user: hello"));
-    }
-    #[test]
     fn uncommitted_work_is_marked_beside_the_filter() {
         let (output, _) = screen("user: hello", true, true, true, 0);
         let bottom = output.lines().last().unwrap().to_owned();
@@ -129,7 +123,9 @@ mod tests {
             bottom.find("all events") < bottom.find("uncommitted changes"),
             "{bottom}"
         );
-        let (clean, _) = screen("user: hello", true, true, false, 0);
+        let (clean, _) = screen("user: hello\nagent: hi", true, true, false, 0);
+        assert!(clean.contains("all events · minor hidden"));
+        assert!(clean.contains("user: hello"));
         assert!(!clean.contains("uncommitted"));
     }
     #[test]

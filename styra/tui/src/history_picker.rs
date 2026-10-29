@@ -138,16 +138,16 @@ mod tests {
     fn stored_sessions_remain_searchable_by_workspace_name_and_id() {
         let history = history();
         let workspaces = [WorkspaceSummary {
-            id: "workspace-id".into(),
-            name: Some("Compiler tools".into()),
-            host_path: "/compiler".into(),
-            git_repository: None,
             path: "/workspaces/compiler".into(),
             session_count: 1,
             age: String::new(),
             created_at_ms: 0,
             last_accessed_at_ms: 0,
-            launch: Default::default(),
+            ..crate::workspace::tests::workspace(
+                "workspace-id",
+                Some("Compiler tools"),
+                "/compiler",
+            )
         }];
         let sessions = [SessionSummary {
             id: "session-a".into(),

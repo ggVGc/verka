@@ -129,30 +129,23 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_key_is_built_once() {
+    fn cache_hits_reuse_values_and_new_keys_build_once() {
         let mut memo: Memo<String, usize> = Memo::default();
         let mut built = 0;
-        for _ in 0..3 {
-            let value = memo.get_or_insert_with("same".to_owned(), || {
+        for (key, new_value, expected, expected_builds) in [
+            ("a", 7, 7, 1),
+            ("a", 8, 7, 1),
+            ("a", 9, 7, 1),
+            ("b", 10, 10, 2),
+            ("a", 11, 7, 2),
+        ] {
+            let value = memo.get_or_insert_with(key.to_owned(), || {
                 built += 1;
-                7
+                new_value
             });
-            assert_eq!(value, 7);
+            assert_eq!(value, expected, "{key}: cached value");
+            assert_eq!(built, expected_builds, "{key}: build count");
         }
-        assert_eq!(built, 1);
-    }
-
-    #[test]
-    fn a_differing_key_is_built_again() {
-        let mut memo: Memo<String, usize> = Memo::default();
-        let mut built = 0;
-        for key in ["a", "b", "a"] {
-            memo.get_or_insert_with(key.to_owned(), || {
-                built += 1;
-                0
-            });
-        }
-        assert_eq!(built, 2);
     }
 
     #[test]

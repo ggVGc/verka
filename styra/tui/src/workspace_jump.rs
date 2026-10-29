@@ -150,21 +150,15 @@ mod tests {
     use super::*;
     use crate::interactions::tests::interaction;
     use crossterm::event::{KeyCode, KeyModifiers};
-    use std::path::PathBuf;
     use styra_protocol::InteractionActivity;
 
     fn workspace(id: &str, name: &str) -> WorkspaceSummary {
         WorkspaceSummary {
-            id: id.into(),
-            name: Some(name.into()),
-            host_path: PathBuf::from(format!("/src/{id}")),
-            git_repository: None,
-            path: PathBuf::from(format!("/workspaces/{id}")),
-            session_count: 0,
+            path: format!("/workspaces/{id}").into(),
             age: String::new(),
             created_at_ms: 0,
             last_accessed_at_ms: 0,
-            launch: Default::default(),
+            ..crate::workspace::tests::workspace(id, Some(name), &format!("/src/{id}"))
         }
     }
 

@@ -1585,13 +1585,34 @@ mod tests {
         drop(journal);
         let _reopened = Journal::open(&dir).unwrap();
         assert_eq!(last_user_message_at_ms(&dir).unwrap(), 200);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("styra-journal-{tag}-{}", new_session_id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Keeps existing path-based fixtures convenient while owning their cleanup.
+    struct TestDirectory {
+        path: PathBuf,
+        _directory: tempfile::TempDir,
+    }
+
+    impl std::ops::Deref for TestDirectory {
+        type Target = PathBuf;
+
+        fn deref(&self) -> &PathBuf {
+            &self.path
+        }
+    }
+
+    impl AsRef<Path> for TestDirectory {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    fn temp_dir(tag: &str) -> TestDirectory {
+        let directory = tempfile::Builder::new().prefix(tag).tempdir().unwrap();
+        TestDirectory {
+            path: directory.path().to_path_buf(),
+            _directory: directory,
+        }
     }
 
     #[test]
@@ -1623,8 +1644,6 @@ mod tests {
                 },
             ]
         );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1662,8 +1681,6 @@ mod tests {
         // session shows only what actually crossed the pipe.
         let raw = replay_raw(&dir).unwrap();
         assert_eq!(raw.len(), 2);
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1678,8 +1695,6 @@ mod tests {
         // exactly what decoding the original line directly produces.
         let events = replay(&dir, Protocol::CodexJsonl).unwrap();
         assert_eq!(events, vec![decode_line(Protocol::CodexJsonl, raw)]);
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Where the agent was working is only ever said on the wire, so the last
@@ -1709,8 +1724,6 @@ mod tests {
             last_reported_cwd(&dir, Protocol::ClaudeJsonl).unwrap(),
             Some("/workspace/.worktrees/audio".to_owned())
         );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A Claude Code that moves mid-turn states the new directory only in the
@@ -1738,44 +1751,6 @@ mod tests {
             last_reported_cwd(&dir, Protocol::ClaudeJsonl).unwrap(),
             Some("/workspace/.worktrees/audio".to_owned())
         );
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// Copied history is read with the protocol that produced it: the two
-    /// providers put their cwd in different places, so reading a Codex line as
-    /// a Claude one finds nothing at all.
-    #[test]
-    fn a_converted_session_reads_its_copied_history_for_a_directory_too() {
-        let source = temp_dir("cwd-source");
-        {
-            let mut journal = Journal::create(&source).unwrap();
-            journal
-                .record_agent_line(
-                    r#"{"type":"session_meta","payload":{"cwd":"/workspace/crates/ui"}}"#,
-                )
-                .unwrap();
-        }
-        let branch = temp_dir("cwd-branch");
-        {
-            let mut journal = Journal::create(&branch).unwrap();
-            journal
-                .copy_branch_from(
-                    &source,
-                    Protocol::CodexJsonl,
-                    None,
-                    crate::protocol::BranchHistory::ThroughSelected,
-                )
-                .unwrap();
-        }
-
-        assert_eq!(
-            last_reported_cwd(&branch, Protocol::ClaudeJsonl).unwrap(),
-            Some("/workspace/crates/ui".to_owned())
-        );
-
-        std::fs::remove_dir_all(&source).ok();
-        std::fs::remove_dir_all(&branch).ok();
     }
 
     #[test]
@@ -1813,6 +1788,11 @@ mod tests {
             .unwrap();
 
         let restored = replay_restored(&branch, Protocol::ClaudeJsonl).unwrap();
+        // Copied Codex history must supply the cwd even in a Claude session.
+        assert_eq!(
+            restored.last_reported_cwd.as_deref(),
+            Some("/workspace/crates/ui")
+        );
         assert_eq!(
             restored.events,
             replay(&branch, Protocol::ClaudeJsonl).unwrap()
@@ -1822,9 +1802,6 @@ mod tests {
             restored.last_reported_cwd,
             last_reported_cwd(&branch, Protocol::ClaudeJsonl).unwrap()
         );
-
-        std::fs::remove_dir_all(source).ok();
-        std::fs::remove_dir_all(branch).ok();
     }
 
     #[test]
@@ -1871,86 +1848,60 @@ mod tests {
                 },
             ]
         );
-
-        std::fs::remove_dir_all(source).ok();
-        std::fs::remove_dir_all(destination).ok();
     }
 
     #[test]
-    fn a_branch_copies_only_the_journal_prefix_through_its_cutoff() {
-        let source = temp_dir("branch-prefix-source");
-        let destination = temp_dir("branch-prefix-destination");
-        std::fs::write(
-            source.join(JOURNAL_FILE),
-            concat!(
-                "{\"source\":\"user\",\"at_ms\":1,\"text\":\"first\"}\n",
-                "{\"source\":\"user\",\"at_ms\":2,\"text\":\"second\"}\n",
-                "{\"source\":\"user\",\"at_ms\":3,\"text\":\"third\"}\n"
+    fn branches_copy_the_requested_history_at_the_cutoff() {
+        for (case, records, cutoff, history, expected) in [
+            (
+                "prefix",
+                concat!(
+                    "{\"source\":\"user\",\"at_ms\":1,\"text\":\"first\"}\n",
+                    "{\"source\":\"user\",\"at_ms\":2,\"text\":\"second\"}\n",
+                    "{\"source\":\"user\",\"at_ms\":3,\"text\":\"third\"}\n"
+                ),
+                2,
+                crate::protocol::BranchHistory::ThroughSelected,
+                &["first", "second"][..],
             ),
-        )
-        .unwrap();
-        {
-            let mut journal = Journal::create(&destination).unwrap();
-            journal
-                .copy_branch_from(
-                    &source,
-                    Protocol::ClaudeJsonl,
-                    Some(2),
-                    crate::protocol::BranchHistory::ThroughSelected,
-                )
-                .unwrap();
-        }
-
-        assert_eq!(
-            replay(&destination, Protocol::CodexAppServer).unwrap(),
-            vec![
-                AgentEvent::UserMessage {
-                    text: "first".into()
-                },
-                AgentEvent::UserMessage {
-                    text: "second".into()
-                },
-            ]
-        );
-
-        std::fs::remove_dir_all(source).ok();
-        std::fs::remove_dir_all(destination).ok();
-    }
-
-    #[test]
-    fn a_selected_only_branch_copies_just_the_last_record_at_its_cutoff() {
-        let source = temp_dir("branch-selected-source");
-        let destination = temp_dir("branch-selected-destination");
-        std::fs::write(
-            source.join(JOURNAL_FILE),
-            concat!(
-                "{\"source\":\"user\",\"at_ms\":10,\"text\":\"first\"}\n",
-                "{\"source\":\"user\",\"at_ms\":20,\"text\":\"selected\"}\n",
-                "{\"source\":\"user\",\"at_ms\":30,\"text\":\"later\"}\n"
+            (
+                "selected record",
+                concat!(
+                    "{\"source\":\"user\",\"at_ms\":10,\"text\":\"first\"}\n",
+                    "{\"source\":\"user\",\"at_ms\":20,\"text\":\"selected\"}\n",
+                    "{\"source\":\"user\",\"at_ms\":30,\"text\":\"later\"}\n"
+                ),
+                21,
+                crate::protocol::BranchHistory::SelectedOnly,
+                &["selected"][..],
             ),
-        )
-        .unwrap();
-        {
-            let mut journal = Journal::create(&destination).unwrap();
-            journal
-                .copy_branch_from(
-                    &source,
-                    Protocol::ClaudeJsonl,
-                    Some(21),
-                    crate::protocol::BranchHistory::SelectedOnly,
-                )
-                .unwrap();
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("source");
+            let destination = directory.path().join("destination");
+            std::fs::create_dir(&source).unwrap();
+            std::fs::create_dir(&destination).unwrap();
+            std::fs::write(source.join(JOURNAL_FILE), records).unwrap();
+            {
+                let mut journal = Journal::create(&destination).unwrap();
+                journal
+                    .copy_branch_from(&source, Protocol::ClaudeJsonl, Some(cutoff), history)
+                    .unwrap();
+            }
+            // Compare the full event sequence: unexpected non-message events
+            // must not be hidden by filtering the replay.
+            let expected: Vec<_> = expected
+                .iter()
+                .map(|text| AgentEvent::UserMessage {
+                    text: (*text).into(),
+                })
+                .collect();
+            assert_eq!(
+                replay(&destination, Protocol::CodexAppServer).unwrap(),
+                expected,
+                "{case}"
+            );
         }
-
-        assert_eq!(
-            replay(&destination, Protocol::CodexAppServer).unwrap(),
-            vec![AgentEvent::UserMessage {
-                text: "selected".into()
-            }]
-        );
-
-        std::fs::remove_dir_all(source).ok();
-        std::fs::remove_dir_all(destination).ok();
     }
 
     /// A branched Session's journal is not in time order: its `branched from`
@@ -1994,11 +1945,7 @@ mod tests {
                 .collect();
 
             assert_eq!(messages, vec!["inherited first"], "{history:?}");
-
-            std::fs::remove_dir_all(destination).ok();
         }
-
-        std::fs::remove_dir_all(source).ok();
     }
 
     /// A branch point resolves to an operator message only when their message
@@ -2033,8 +1980,6 @@ mod tests {
         );
         assert_eq!(operator_message_at(&directory, 40).unwrap(), None);
         assert_eq!(operator_message_at(&directory, 5).unwrap(), None);
-
-        std::fs::remove_dir_all(directory).ok();
     }
 
     #[test]
@@ -2066,8 +2011,6 @@ mod tests {
         let raw = replay_raw(&directory).unwrap();
         assert_eq!(raw.len(), 1);
         assert_eq!(raw[0].text, "carry on here");
-
-        std::fs::remove_dir_all(directory).ok();
     }
 
     /// Branching only the selected entry must seed the new Session with a real
@@ -2104,9 +2047,6 @@ mod tests {
                 text: "selected".into()
             }]
         );
-
-        std::fs::remove_dir_all(source).ok();
-        std::fs::remove_dir_all(destination).ok();
     }
 
     fn test_profile(name: &str, protocol: Protocol) -> Profile {
@@ -2122,22 +2062,51 @@ mod tests {
         }
     }
 
-    #[test]
-    fn workspace_sessions_are_nested_and_record_their_owner() {
-        let root = temp_dir("workspace-session");
-        let host = temp_dir("workspace-host");
-        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
-        let profile = test_profile("codex", Protocol::CodexJsonl);
+    struct SessionFixture {
+        journal: Journal,
+        host: PathBuf,
+        root: PathBuf,
+        workspace: crate::protocol::WorkspaceSummary,
+        id: String,
+        _directory: tempfile::TempDir,
+    }
 
+    fn workspace_session(
+        workspace_name: Option<String>,
+        session_name: Option<String>,
+    ) -> SessionFixture {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("store");
+        let host = directory.path().join("host");
+        std::fs::create_dir(&host).unwrap();
+        let workspace = crate::workspace::create(&root, &host, workspace_name).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, id) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
-        let directory = journal.path().parent().unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, session_name)
+                .unwrap();
+        SessionFixture {
+            host,
+            journal,
+            root,
+            workspace,
+            id,
+            _directory: directory,
+        }
+    }
+
+    #[test]
+    fn workspace_sessions_are_nested_and_record_their_owner() {
+        let fixture = workspace_session(Some("work".into()), None);
+        let directory = fixture.journal.path().parent().unwrap();
         assert_eq!(
             directory,
-            crate::workspace::sessions_dir(&root, &workspace.id).join(&id)
+            crate::workspace::sessions_dir(&fixture.root, &fixture.workspace.id).join(&fixture.id)
         );
-        assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
+        assert_eq!(
+            read_session_workspace_id(directory).unwrap(),
+            fixture.workspace.id
+        );
         assert_eq!(read_provider_session_id(directory).unwrap(), None);
         store_provider_session_id(directory, "provider-1").unwrap();
         assert_eq!(
@@ -2145,23 +2114,20 @@ mod tests {
             Some("provider-1")
         );
 
-        let sessions = list_workspace_sessions(&root, &workspace.id).unwrap();
+        let sessions = list_workspace_sessions(&fixture.root, &fixture.workspace.id).unwrap();
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, id);
-        assert_eq!(sessions[0].workspace_id, workspace.id);
+        assert_eq!(sessions[0].id, fixture.id);
+        assert_eq!(sessions[0].workspace_id, fixture.workspace.id);
         assert_eq!(
             sessions[0].selection,
             crate::agent::Selection::new(crate::agent::Provider::Codex)
         );
         assert_eq!(
-            crate::workspace::get(&root, &workspace.id)
+            crate::workspace::get(&fixture.root, &fixture.workspace.id)
                 .unwrap()
                 .session_count,
             1
         );
-
-        std::fs::remove_dir_all(&root).ok();
-        std::fs::remove_dir_all(&host).ok();
     }
 
     /// A turn runs from the snapshot before its message — or, where that was
@@ -2228,22 +2194,14 @@ mod tests {
         // start, and comparing with it would hand turn 8 their changes.
         take(TurnEnded, 8);
         assert_eq!(pair(8), None);
-
-        std::fs::remove_dir_all(&directory).ok();
     }
 
     /// Each snapshot is numbered in turn, with a diff file only for a
     /// checkout that had changes.
     #[test]
     fn snapshots_are_stored_with_the_session_and_appended_in_order() {
-        let root = temp_dir("snapshot-store");
-        let host = temp_dir("snapshot-host");
-        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
-        let profile = test_profile("codex", Protocol::CodexJsonl);
-        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
-        let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
-        let directory = journal.path().parent().unwrap();
+        let fixture = workspace_session(Some("work".into()), None);
+        let directory = fixture.journal.path().parent().unwrap();
 
         assert!(read_snapshots(directory).unwrap().is_empty());
 
@@ -2252,7 +2210,7 @@ mod tests {
             SnapshotState {
                 moment: SnapshotMoment::BeforeMessage,
                 turn: Some(1),
-                checkout: host.clone(),
+                checkout: fixture.host.clone(),
                 branch: Some("main".into()),
                 commit: Some("abc".into()),
                 diff: None,
@@ -2264,7 +2222,7 @@ mod tests {
             SnapshotState {
                 moment: SnapshotMoment::BeforeMessage,
                 turn: Some(1),
-                checkout: host.clone(),
+                checkout: fixture.host.clone(),
                 branch: None,
                 commit: Some("abc".into()),
                 diff: Some(b"diff --git a/x b/x\n".to_vec()),
@@ -2282,7 +2240,7 @@ mod tests {
         let same = |diff: &[u8]| SnapshotState {
             moment: SnapshotMoment::BeforeMessage,
             turn: Some(1),
-            checkout: host.clone(),
+            checkout: fixture.host.clone(),
             branch: None,
             commit: Some("abc".into()),
             diff: Some(diff.to_vec()),
@@ -2292,9 +2250,6 @@ mod tests {
         let mut clean_again = same(b"");
         clean_again.diff = None;
         assert!(!unchanged_since_last_snapshot(directory, &clean_again).unwrap());
-
-        std::fs::remove_dir_all(&root).ok();
-        std::fs::remove_dir_all(&host).ok();
     }
 
     /// The contract outlives the interaction that used it: an answer can be
@@ -2302,14 +2257,8 @@ mod tests {
     /// a later turn's contract replaces an earlier one.
     #[test]
     fn the_last_typed_turns_contract_is_stored_with_the_session() {
-        let root = temp_dir("contract-store");
-        let host = temp_dir("contract-host");
-        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
-        let profile = test_profile("codex", Protocol::CodexJsonl);
-        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
-        let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
-        let directory = journal.path().parent().unwrap();
+        let fixture = workspace_session(Some("work".into()), None);
+        let directory = fixture.journal.path().parent().unwrap();
 
         assert_eq!(read_session_contract(directory).unwrap(), None);
         store_session_contract(directory, Contract::Files).unwrap();
@@ -2325,14 +2274,14 @@ mod tests {
             Some(Contract::Json)
         );
         // Recording a contract must not disturb the rest of the metadata.
-        assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
+        assert_eq!(
+            read_session_workspace_id(directory).unwrap(),
+            fixture.workspace.id
+        );
         assert_eq!(
             read_session_meta(directory).unwrap().protocol,
             Protocol::CodexJsonl
         );
-
-        std::fs::remove_dir_all(&root).ok();
-        std::fs::remove_dir_all(&host).ok();
     }
 
     /// Until the operator answers, a Session's turns are committed only in a
@@ -2340,14 +2289,8 @@ mod tests {
     /// Session rather than by the interaction that happened to be open.
     #[test]
     fn committing_each_turn_defaults_to_the_checkout_and_is_stored_with_the_session() {
-        let root = temp_dir("auto-commit-store");
-        let host = temp_dir("auto-commit-host");
-        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
-        let profile = test_profile("codex", Protocol::CodexJsonl);
-        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
-        let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
-        let directory = journal.path().parent().unwrap();
+        let fixture = workspace_session(Some("work".into()), None);
+        let directory = fixture.journal.path().parent().unwrap();
 
         let stored = read_session_auto_commit(directory).unwrap();
         assert_eq!(stored, None);
@@ -2364,10 +2307,10 @@ mod tests {
             read_session_auto_commit(directory).unwrap(),
             false
         ));
-        assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
-
-        std::fs::remove_dir_all(&root).ok();
-        std::fs::remove_dir_all(&host).ok();
+        assert_eq!(
+            read_session_workspace_id(directory).unwrap(),
+            fixture.workspace.id
+        );
     }
 
     /// The retry a rate limit triggers resumes the Session as a new
@@ -2376,14 +2319,8 @@ mod tests {
     /// and then be gone, which is the opposite of what it says.
     #[test]
     fn keeping_at_it_after_a_rate_limit_is_stored_with_the_session() {
-        let root = temp_dir("auto-retry-store");
-        let host = temp_dir("auto-retry-host");
-        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
-        let profile = test_profile("codex", Protocol::CodexJsonl);
-        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
-        let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
-        let directory = journal.path().parent().unwrap();
+        let fixture = workspace_session(Some("work".into()), None);
+        let directory = fixture.journal.path().parent().unwrap();
 
         // Nothing is done on the operator's behalf until they ask.
         assert!(!read_session_auto_retry(directory).unwrap());
@@ -2394,14 +2331,14 @@ mod tests {
 
         // And recording it disturbs nothing else about the Session.
         store_session_auto_retry(directory, true).unwrap();
-        assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
+        assert_eq!(
+            read_session_workspace_id(directory).unwrap(),
+            fixture.workspace.id
+        );
         assert_eq!(
             read_session_meta(directory).unwrap().protocol,
             Protocol::CodexJsonl
         );
-
-        std::fs::remove_dir_all(&root).ok();
-        std::fs::remove_dir_all(&host).ok();
     }
 
     /// Completion is a property of the Session, not of whichever interaction
@@ -2409,14 +2346,8 @@ mod tests {
     /// through the same stored metadata every other Session property does.
     #[test]
     fn completion_is_stored_with_the_session() {
-        let root = temp_dir("completed-store");
-        let host = temp_dir("completed-host");
-        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
-        let profile = test_profile("codex", Protocol::CodexJsonl);
-        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
-        let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
-        let directory = journal.path().parent().unwrap();
+        let fixture = workspace_session(Some("work".into()), None);
+        let directory = fixture.journal.path().parent().unwrap();
 
         assert_eq!(
             read_session_completed(directory).unwrap(),
@@ -2449,14 +2380,14 @@ mod tests {
 
         // And recording it disturbs nothing else about the Session.
         store_session_completed(directory, CompletionState::Completed).unwrap();
-        assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
+        assert_eq!(
+            read_session_workspace_id(directory).unwrap(),
+            fixture.workspace.id
+        );
         assert_eq!(
             read_session_meta(directory).unwrap().protocol,
             Protocol::CodexJsonl
         );
-
-        std::fs::remove_dir_all(&root).ok();
-        std::fs::remove_dir_all(&host).ok();
     }
 
     /// Sessions stored before completion became an enum carry a JSON boolean
@@ -2466,15 +2397,9 @@ mod tests {
     /// Sessions the operator had finished with unreadable.
     #[test]
     fn metadata_written_before_completion_was_an_enum_still_loads() {
-        let root = temp_dir("legacy-completed-store");
-        let host = temp_dir("legacy-completed-host");
-        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
-        let profile = test_profile("codex", Protocol::CodexJsonl);
-        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
-        let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
-        let directory = journal.path().parent().unwrap().to_path_buf();
-        drop(journal);
+        let fixture = workspace_session(Some("work".into()), None);
+        let directory = fixture.journal.path().parent().unwrap().to_path_buf();
+        drop(fixture.journal);
         let meta_path = directory.join(SESSION_META_FILE);
 
         let text = std::fs::read_to_string(&meta_path).unwrap();
@@ -2487,9 +2412,6 @@ mod tests {
             CompletionState::Completed,
             "a Session stored as completed reads back as completed"
         );
-
-        std::fs::remove_dir_all(&root).ok();
-        std::fs::remove_dir_all(&host).ok();
     }
 
     #[test]
@@ -2501,7 +2423,6 @@ mod tests {
         ];
         write_queued_messages(&dir, &queued).unwrap();
         assert_eq!(read_queued_messages(&dir).unwrap(), queued);
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A queue file written before contracts existed is an array of strings.
@@ -2515,7 +2436,6 @@ mod tests {
             read_queued_messages(&dir).unwrap(),
             vec![QueuedMessage::new("first"), QueuedMessage::new("second")]
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The last-activity time is read from the journal's write time; a
@@ -2528,7 +2448,6 @@ mod tests {
         std::fs::write(dir.join(JOURNAL_FILE), "{}\n").unwrap();
         let written = last_event_at_ms(&dir).expect("a written journal has a write time");
         assert!(written > 0);
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Sessions written before typed turns existed have no `contract` field,
@@ -2543,7 +2462,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_session_contract(&dir).unwrap(), None);
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -2552,8 +2470,6 @@ mod tests {
         std::fs::write(dir.join(JOURNAL_FILE), "not a record\n").unwrap();
         let events = replay(&dir, Protocol::CodexJsonl).unwrap();
         assert!(matches!(events.as_slice(), [AgentEvent::Malformed { .. }]));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -2626,19 +2542,12 @@ mod tests {
             first_prompt_at(&directory).unwrap().as_deref(),
             Some("Find the flaky checkout test")
         );
-        std::fs::remove_dir_all(directory).ok();
     }
 
     #[test]
     fn a_switched_model_is_what_the_session_is_later_listed_and_resumed_with() {
-        let root = temp_dir("session-selection");
-        let host = temp_dir("session-selection-host");
-        let workspace = crate::workspace::create(&root, &host, None).unwrap();
-        let profile = test_profile("codex", Protocol::CodexJsonl);
-        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
-        let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
-        let directory = journal.path().parent().unwrap();
+        let fixture = workspace_session(None, None);
+        let directory = fixture.journal.path().parent().unwrap();
         store_provider_session_id(directory, "provider-1").unwrap();
 
         let switched = crate::agent::Selection::parse("codex:gpt-5.6-terra/high").unwrap();
@@ -2646,7 +2555,7 @@ mod tests {
 
         assert_eq!(read_session_meta(directory).unwrap().selection, switched);
         assert_eq!(
-            list_workspace_sessions(&root, &workspace.id).unwrap()[0].selection,
+            list_workspace_sessions(&fixture.root, &fixture.workspace.id).unwrap()[0].selection,
             switched
         );
         // The switch is metadata like any other: it leaves the rest intact.
@@ -2654,8 +2563,6 @@ mod tests {
             read_provider_session_id(directory).unwrap().as_deref(),
             Some("provider-1")
         );
-        std::fs::remove_dir_all(root).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]
@@ -2690,20 +2597,12 @@ mod tests {
             list_workspace_sessions(&root, &workspace.id).unwrap()[0].name,
             None
         );
-        std::fs::remove_dir_all(root).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]
     fn session_tags_are_normalized_and_durable() {
-        let root = temp_dir("session-tags");
-        let host = temp_dir("session-tags-host");
-        let workspace = crate::workspace::create(&root, &host, None).unwrap();
-        let profile = test_profile("codex", Protocol::CodexJsonl);
-        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
-        let (journal, _) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
-        let directory = journal.path().parent().unwrap();
+        let fixture = workspace_session(None, None);
+        let directory = fixture.journal.path().parent().unwrap();
 
         assert_eq!(
             store_session_tags(directory, &[" urgent ".into(), "bug".into(), "bug".into()])
@@ -2711,12 +2610,9 @@ mod tests {
             ["bug", "urgent"]
         );
         assert_eq!(
-            list_workspace_sessions(&root, &workspace.id).unwrap()[0].tags,
+            list_workspace_sessions(&fixture.root, &fixture.workspace.id).unwrap()[0].tags,
             ["bug", "urgent"]
         );
-
-        std::fs::remove_dir_all(root).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]
@@ -2743,8 +2639,6 @@ mod tests {
             stored.history.last().unwrap(),
             &format!("sent {}", COMPOSER_HISTORY_LIMIT + 4)
         );
-
-        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

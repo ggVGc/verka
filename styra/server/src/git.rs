@@ -1465,6 +1465,12 @@ mod tests {
         assert!(mounts
             .iter()
             .any(|mount| mount.destination == repository.root && !mount.writable));
+        // The checkout root is also the common directory's parent: bind it once.
+        let mut destinations: Vec<_> = mounts.iter().map(|mount| &mount.destination).collect();
+        let total = destinations.len();
+        destinations.sort();
+        destinations.dedup();
+        assert_eq!(destinations.len(), total, "duplicate mount: {mounts:?}");
         // Every mount is its own source: these are host paths bound in place.
         assert!(mounts.iter().all(|mount| mount.source == mount.destination));
 
@@ -1539,29 +1545,6 @@ mod tests {
         );
 
         std::fs::remove_dir_all(base).unwrap();
-    }
-
-    /// One directory, one mount. A path reached twice — the common directory's
-    /// parent is also the checkout root — must not be bound twice, and the
-    /// writable claim must win.
-    #[test]
-    fn a_directory_reached_twice_is_mounted_once_and_writably() {
-        let root = temporary_directory("mounts-once");
-        let git = FakeGit::new();
-        let repository = git.init(&root);
-
-        let mounts = git.mounts(&root).unwrap();
-
-        let mut destinations: Vec<_> = mounts.iter().map(|mount| &mount.destination).collect();
-        let total = destinations.len();
-        destinations.sort();
-        destinations.dedup();
-        assert_eq!(destinations.len(), total, "duplicate mount: {mounts:?}");
-        assert!(mounts
-            .iter()
-            .any(|mount| mount.destination == repository.common_dir && mount.writable));
-
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

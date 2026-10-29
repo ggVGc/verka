@@ -5568,10 +5568,6 @@ mod tests {
         std::env::temp_dir().join(format!("styra-server-{tag}-{}.sock", std::process::id(),))
     }
 
-    /// A turn is dated once, when it starts. Restating what the interaction is
-    /// already doing — a second operator message inside one running turn —
-    /// must not restart the clock, or the figure a client shows would fall
-    /// back to zero without the work having begun again.
     #[test]
     fn provider_switch_requires_a_stopped_interaction() {
         assert!(ensure_provider_switchable(InteractionActivity::Stopped).is_ok());
@@ -5587,6 +5583,10 @@ mod tests {
         }
     }
 
+    /// A turn is dated once, when it starts. Restating what the interaction is
+    /// already doing — a second operator message inside one running turn —
+    /// must not restart the clock, or the figure a client shows would fall
+    /// back to zero without the work having begun again.
     #[test]
     fn the_activity_clock_restarts_only_when_the_activity_actually_changes() {
         let activity = CurrentActivity::new();
@@ -5814,44 +5814,36 @@ mod tests {
         assert_eq!(state.since_ms, started);
     }
 
-    /// An agent that a window refused, or that the operator stopped, exits as
-    /// a consequence a moment later. The exit is not the news — the window is,
-    /// and a reset comes back to it — so the reason on record survives the
-    /// ending that carries it out.
     #[test]
-    fn an_ending_does_not_displace_the_reason_that_caused_it() {
+    fn an_ending_preserves_its_cause_or_explains_itself() {
         let refusal = InteractionActivityReason::RateLimited {
             window: "five_hour".into(),
             resets_at_ms: None,
         };
-        let activity = CurrentActivity::new();
-        activity.set(InteractionActivity::Running, None);
-        activity.note_reason(refusal.clone());
-
-        activity.stopped(InteractionActivityReason::Exited { exit_code: Some(1) });
-
-        let state = activity.get();
-        assert_eq!(state.activity, InteractionActivity::Stopped);
-        assert_eq!(state.reason, Some(refusal));
-    }
-
-    /// With nothing better on record, the ending speaks for itself — and a
-    /// turn that merely finished is not an explanation for the interaction
-    /// going away.
-    #[test]
-    fn an_ending_explains_itself_when_nothing_else_does() {
-        let activity = CurrentActivity::new();
-        activity.set(
-            InteractionActivity::Pending,
-            Some(InteractionActivityReason::TurnCompleted),
-        );
-
-        activity.stopped(InteractionActivityReason::Exited { exit_code: Some(0) });
-
-        assert_eq!(
-            activity.get().reason,
-            Some(InteractionActivityReason::Exited { exit_code: Some(0) })
-        );
+        for (name, initial, prior, exit, expected) in [
+            (
+                "refusal caused exit",
+                InteractionActivity::Running,
+                refusal.clone(),
+                Some(1),
+                refusal,
+            ),
+            (
+                "completed turn does not explain exit",
+                InteractionActivity::Pending,
+                InteractionActivityReason::TurnCompleted,
+                Some(0),
+                InteractionActivityReason::Exited { exit_code: Some(0) },
+            ),
+        ] {
+            let activity = CurrentActivity::new();
+            activity.set(initial, None);
+            activity.note_reason(prior);
+            activity.stopped(InteractionActivityReason::Exited { exit_code: exit });
+            let state = activity.get();
+            assert_eq!(state.activity, InteractionActivity::Stopped, "{name}");
+            assert_eq!(state.reason, Some(expected), "{name}");
+        }
     }
 
     /// Stopping is a transition like any other, so it is dated — how long an
@@ -6458,26 +6450,63 @@ mod tests {
         std::fs::remove_dir_all(host).ok();
     }
 
+    fn listed_interaction(
+        id: &str,
+        workspace_id: &str,
+        directory: &Path,
+        activity: InteractionActivity,
+    ) -> InteractionSummary {
+        InteractionSummary {
+            id: id.into(),
+            name: None,
+            tags: Vec::new(),
+            workspace_id: workspace_id.into(),
+            selection: Selection::new(crate::agent::Provider::Codex),
+            workspace: directory.to_path_buf(),
+            activity,
+            activity_reason: None,
+            activity_since_ms: 1,
+            idle_unseen: false,
+            interacted_at_ms: 0,
+            last_user_message_at_ms: 0,
+            uncommitted_changes: false,
+            expected_branch: None,
+            checkout: None,
+            branched_from: None,
+            last_message: None,
+            recent_messages: Vec::new(),
+            auto_retry: false,
+            auto_commit: false,
+            events: 0,
+            completed: CompletionState::Active,
+            focus_requested: false,
+            origin: None,
+            integration: None,
+            restored: false,
+        }
+    }
+
     /// A Session on a repository, with no interaction: enough durable state
     /// for the checkout questions, which are decided before an agent starts.
-    fn stored_session(
-        tag: &str,
-    ) -> (
-        PathBuf,
-        PathBuf,
-        ServerState,
-        crate::protocol::WorkspaceSummary,
-        String,
-        PathBuf,
-    ) {
-        let store = temp_path(&format!("{tag}-store"));
-        let host = temp_path(&format!("{tag}-host"));
-        std::fs::remove_dir_all(&store).ok();
-        std::fs::remove_dir_all(&host).ok();
-        std::fs::create_dir_all(&host).unwrap();
+    struct StoredSession {
+        state: ServerState,
+        git: Arc<crate::git::FakeGit>,
+        store: PathBuf,
+        host: PathBuf,
+        workspace: crate::protocol::WorkspaceSummary,
+        id: String,
+        session_path: PathBuf,
+        _directory: tempfile::TempDir,
+    }
+
+    fn stored_session(tag: &str) -> StoredSession {
+        let directory = tempfile::Builder::new().prefix(tag).tempdir().unwrap();
+        let store = directory.path().join("store");
+        let host = directory.path().join("host");
+        std::fs::create_dir(&host).unwrap();
         let git = Arc::new(crate::git::FakeGit::new());
         git.init(&host);
-        let state = ServerState::with_git(git, store.clone());
+        let state = ServerState::with_git(git.clone(), store.clone());
         let workspace = crate::workspace::create(&store, &host, None).unwrap();
         let selection = Selection::new(crate::agent::Provider::Codex);
         let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
@@ -6486,12 +6515,27 @@ mod tests {
                 .unwrap();
         let session_path = journal.path().parent().unwrap().to_path_buf();
         drop(journal);
-        (store, host, state, workspace, id, session_path)
+        StoredSession {
+            state,
+            git,
+            store,
+            host,
+            workspace,
+            id,
+            session_path,
+            _directory: directory,
+        }
     }
 
     #[test]
     fn a_request_cannot_mutate_when_its_intent_cannot_be_stored() {
-        let (store, host, state, _, id, _) = stored_session("action-intent-failure");
+        let StoredSession {
+            store,
+            state,
+            id,
+            _directory,
+            ..
+        } = stored_session("action-intent-failure");
         std::fs::create_dir(store.join("actions.jsonl")).unwrap();
         let request = Request::RenameSession(crate::protocol::RenameSession {
             id: id.clone(),
@@ -6500,14 +6544,20 @@ mod tests {
         assert!(state.handle(request).is_err());
         assert_eq!(state.stored_summary(&id).unwrap().name, None);
         drop(state);
-        std::fs::remove_dir_all(store).unwrap();
-        std::fs::remove_dir_all(host).unwrap();
     }
 
     #[test]
     fn action_history_routes_workspace_edits_and_records_failed_automatic_actions() {
         use crate::protocol::{RenameSession, WorkspaceLaunchChange};
-        let (store, host, state, workspace, id, _) = stored_session("action-history");
+        let StoredSession {
+            store,
+            host,
+            state,
+            workspace,
+            id,
+            _directory,
+            ..
+        } = stored_session("action-history");
         let other_host = host.join("other");
         std::fs::create_dir_all(&other_host).unwrap();
         let other_workspace = crate::workspace::create(&store, &other_host, None).unwrap();
@@ -6577,8 +6627,6 @@ mod tests {
             "reading history must not audit itself"
         );
         drop(client);
-        std::fs::remove_dir_all(store).unwrap();
-        std::fs::remove_dir_all(host).unwrap();
     }
 
     /// `W` may be pressed after a Session has already received several turns.
@@ -6586,8 +6634,15 @@ mod tests {
     /// checkout requested together with that opening prompt.
     #[test]
     fn an_existing_sessions_worktree_is_named_for_its_first_prompt() {
-        let (store, host, state, workspace, id, session_path) =
-            stored_session("name-existing-worktree");
+        let StoredSession {
+            store,
+            state,
+            workspace,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("name-existing-worktree");
         let mut journal = Journal::open(&session_path).unwrap();
         journal
             .record_user_message("Fix the flaky checkout test")
@@ -6618,9 +6673,6 @@ mod tests {
             path.parent(),
             Some(crate::workspace::worktrees_dir(&store, &workspace.id).as_path())
         );
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     /// A cleanup pass takes back the checkouts of the Sessions the operator
@@ -6830,7 +6882,13 @@ mod tests {
     /// through it — and refused before anything is launched.
     #[test]
     fn a_sealed_session_cannot_be_resumed() {
-        let (store, host, state, _workspace, id, session_path) = stored_session("sealed-resume");
+        let StoredSession {
+            state,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("sealed-resume");
 
         // Completed is not sealed: it is refused for wanting a native
         // transcript this bare journal has never had, which is proof the
@@ -6874,9 +6932,6 @@ mod tests {
             journal::read_session_completed(&session_path).unwrap(),
             CompletionState::Sealed
         );
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     /// Completion belongs to the stored Session, so the stored-sessions
@@ -6885,67 +6940,38 @@ mod tests {
     /// `C` fail.
     #[test]
     fn a_stored_session_is_completed_without_an_interaction_behind_it() {
-        let (store, host, state, _workspace, id, session_path) = stored_session("complete-stored");
+        let StoredSession {
+            state,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("complete-stored");
 
         assert_eq!(
             journal::read_session_completed(&session_path).unwrap(),
             CompletionState::Active
         );
 
-        state
-            .handle(Request::SetSessionCompleted {
-                id: id.clone(),
-                completed: CompletionState::Completed,
-            })
-            .expect("completing a stored Session needs no live interaction");
-        assert_eq!(
-            journal::read_session_completed(&session_path).unwrap(),
-            CompletionState::Completed
-        );
-
-        // And back: revealing a completed row is only useful if it can be
-        // unmarked from the same place.
-        state
-            .handle(Request::SetSessionCompleted {
-                id: id.clone(),
-                completed: CompletionState::Active,
-            })
-            .unwrap();
-        assert_eq!(
-            journal::read_session_completed(&session_path).unwrap(),
-            CompletionState::Active
-        );
-
-        // Abandoning it is the same kind of mark, and just as reversible.
-        state
-            .handle(Request::SetSessionCompleted {
-                id: id.clone(),
-                completed: CompletionState::Abandoned,
-            })
-            .unwrap();
-        assert_eq!(
-            journal::read_session_completed(&session_path).unwrap(),
-            CompletionState::Abandoned
-        );
-        state
-            .handle(Request::SetSessionCompleted {
-                id: id.clone(),
-                completed: CompletionState::Active,
-            })
-            .unwrap();
-        assert_eq!(
-            journal::read_session_completed(&session_path).unwrap(),
-            CompletionState::Active
-        );
-
-        // Sealing it, though, is final: even with no live interaction behind
-        // the row, nothing can un-seal it from here.
-        state
-            .handle(Request::SetSessionCompleted {
-                id: id.clone(),
-                completed: CompletionState::Sealed,
-            })
-            .unwrap();
+        // Completion and abandonment are reversible; sealing is final.
+        for completed in [
+            CompletionState::Completed,
+            CompletionState::Active,
+            CompletionState::Abandoned,
+            CompletionState::Active,
+            CompletionState::Sealed,
+        ] {
+            state
+                .handle(Request::SetSessionCompleted {
+                    id: id.clone(),
+                    completed,
+                })
+                .expect("marking a stored Session needs no live interaction");
+            assert_eq!(
+                journal::read_session_completed(&session_path).unwrap(),
+                completed
+            );
+        }
         assert!(
             state
                 .handle(Request::SetSessionCompleted {
@@ -6955,9 +6981,6 @@ mod tests {
                 .is_err(),
             "a sealed session cannot be un-sealed"
         );
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     /// Where a Session was working is said on the wire and written down
@@ -6968,7 +6991,14 @@ mod tests {
     /// mentions a directory again, which for a stopped Session is never.
     #[test]
     fn a_reopened_session_stands_where_it_was_working() {
-        let (store, host, state, _workspace, id, session_path) = stored_session("replayed-cwd");
+        let StoredSession {
+            host,
+            state,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("replayed-cwd");
         let worktree = host.join(".worktrees/audio");
         {
             let mut journal = Journal::open(&session_path).unwrap();
@@ -7006,9 +7036,6 @@ mod tests {
             Some(InteractionUpdate::WorkingDirectoryChanged(directory))
                 if directory == &host.join(".worktrees/audio")
         ));
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     /// Where the work is happening is two rows, and they have to agree. The
@@ -7019,7 +7046,13 @@ mod tests {
     /// branch of the Workspace directory it left.
     #[test]
     fn the_branch_follows_the_agent_out_of_the_directory_it_launched_in() {
-        let (store, host, server, _workspace, _id, session_path) = stored_session("moved-branch");
+        let StoredSession {
+            host,
+            state: server,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("moved-branch");
         let worktree = host.join(".worktrees/audio");
         server
             .inner
@@ -7083,9 +7116,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(seeded_working_directory(&seeded), Some(worktree));
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     /// A checkout is only ever read when an interaction stops working, and the
@@ -7131,32 +7161,8 @@ mod tests {
         crate::roster::Roster::open(&store).publish(vec![(
             session_path.clone(),
             InteractionSummary {
-                id: id.clone(),
-                name: None,
-                tags: Vec::new(),
-                workspace_id: workspace.id.clone(),
                 selection,
-                workspace: worktree.clone(),
-                activity: InteractionActivity::Running,
-                activity_reason: None,
-                activity_since_ms: 1,
-                idle_unseen: false,
-                interacted_at_ms: 0,
-                last_user_message_at_ms: 0,
-                uncommitted_changes: false,
-                expected_branch: None,
-                checkout: None,
-                branched_from: None,
-                last_message: None,
-                recent_messages: Vec::new(),
-                auto_retry: false,
-                auto_commit: false,
-                events: 0,
-                completed: CompletionState::Active,
-                focus_requested: false,
-                origin: None,
-                integration: None,
-                restored: false,
+                ..listed_interaction(&id, &workspace.id, &worktree, InteractionActivity::Running)
             },
             driva,
         )]);
@@ -7184,7 +7190,14 @@ mod tests {
     /// an update restating that is noise in every Session that behaved.
     #[test]
     fn a_session_that_stayed_put_reports_no_directory() {
-        let (store, host, state, _workspace, id, session_path) = stored_session("unmoved-cwd");
+        let StoredSession {
+            host,
+            state,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("unmoved-cwd");
         {
             let mut journal = Journal::open(&session_path).unwrap();
             journal
@@ -7215,9 +7228,6 @@ mod tests {
         .unwrap()
         .iter()
         .any(|update| matches!(update.update, InteractionUpdate::WorkingDirectoryChanged(_))));
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     /// The Session states which checkout it works in, so a resume asks the
@@ -7227,7 +7237,15 @@ mod tests {
     /// branch and its uncommitted work left behind.
     #[test]
     fn a_session_records_the_checkout_it_was_given() {
-        let (store, host, state, workspace, id, session_path) = stored_session("records-checkout");
+        let StoredSession {
+            store,
+            state,
+            workspace,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("records-checkout");
 
         // Before anything is checked out there is nothing to report, and
         // asking must not be what brings the parent directory into being.
@@ -7286,9 +7304,6 @@ mod tests {
                 .unwrap(),
             Some(made)
         );
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     /// A new Session reached with `n` shares the source Session's checkout,
@@ -7296,7 +7311,14 @@ mod tests {
     /// back to the Workspace's original host directory.
     #[test]
     fn a_new_session_can_plan_in_an_existing_sessions_checkout() {
-        let (store, host, state, workspace, id, session_path) = stored_session("inherits-checkout");
+        let StoredSession {
+            state,
+            workspace,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("inherits-checkout");
         let worktrees = state
             .workspace_worktrees(&workspace, true)
             .unwrap()
@@ -7323,17 +7345,20 @@ mod tests {
             Mount::Bind { source, destination, access: MountAccess::ReadWrite }
                 if Some(source) == checkout.path.as_ref() && destination == &sandbox
         )));
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]
     fn a_new_worktree_starts_at_the_source_sessions_current_branch() {
-        let (store, host, _, workspace, id, session_path) = stored_session("fork-new-checkout");
-        let git = Arc::new(crate::git::FakeGit::new());
-        git.init(&host);
-        let state = ServerState::with_git(git.clone(), store.clone());
+        let StoredSession {
+            host,
+            workspace,
+            id,
+            session_path,
+            state,
+            git,
+            _directory,
+            ..
+        } = stored_session("fork-new-checkout");
         let worktrees = state
             .workspace_worktrees(&workspace, true)
             .unwrap()
@@ -7392,14 +7417,20 @@ mod tests {
             git.commit(&host, "HEAD").unwrap().unwrap()
         );
         assert_ne!(fallback.branched_from, fresh.branched_from);
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]
     fn a_fresh_worktree_plan_uses_a_new_directory_and_validates_its_source() {
-        let (store, host, state, workspace, id, session_path) =
-            stored_session("plan-fork-checkout");
+        let StoredSession {
+            store,
+            host,
+            state,
+            workspace,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("plan-fork-checkout");
         let worktrees = state
             .workspace_worktrees(&workspace, true)
             .unwrap()
@@ -7429,28 +7460,6 @@ mod tests {
             error.to_string().contains("belongs to Workspace"),
             "{error:#}"
         );
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
-    }
-
-    #[test]
-    fn a_checkout_cannot_be_inherited_across_workspaces() {
-        let (store, host, state, _workspace, id, _session_path) =
-            stored_session("rejects-foreign-checkout");
-        let other_host = temp_path("rejects-foreign-checkout-other-host");
-        std::fs::remove_dir_all(&other_host).ok();
-        std::fs::create_dir_all(&other_host).unwrap();
-        let other = crate::workspace::create(&store, &other_host, None).unwrap();
-
-        let error = state.inherited_checkout(&other.id, Some(&id)).unwrap_err();
-        assert!(
-            error.to_string().contains("belongs to Workspace"),
-            "{error:#}"
-        );
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
-        std::fs::remove_dir_all(other_host).ok();
     }
 
     /// A Session launched before the record existed has a checkout and no
@@ -7459,7 +7468,15 @@ mod tests {
     /// Session once and never again.
     #[test]
     fn a_session_predating_the_record_is_given_one() {
-        let (store, host, state, workspace, id, session_path) = stored_session("backfill-checkout");
+        let StoredSession {
+            store,
+            state,
+            workspace,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("backfill-checkout");
         let worktrees = state
             .workspace_worktrees(&workspace, true)
             .unwrap()
@@ -7490,9 +7507,6 @@ mod tests {
                 .flatten(),
             None
         );
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     /// A source with no live interaction still learns where its history was
@@ -8361,81 +8375,55 @@ mod tests {
         assert_eq!(parse_rfc3339_ms("not a timestamp"), None);
     }
 
-    #[test]
-    fn messages_up_to_keeps_the_leading_run_at_or_before_the_cutoff() {
-        let claude = concat!(
-            r#"{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:00.000Z","message":{"role":"user","content":"first"}}"#,
-            "\n",
-            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"second"}]}}"#,
-            "\n",
-            r#"{"type":"user","uuid":"u2","parentUuid":"a1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:02.000Z","message":{"role":"user","content":"third"}}"#,
-            "\n",
-        );
-        let cutoff = parse_rfc3339_ms("2026-08-21T10:00:01.000Z").unwrap();
-        assert_eq!(
-            messages_up_to(claude, genta::session::SessionFormat::Claude, cutoff, None).unwrap(),
-            2
-        );
-        assert_eq!(
-            messages_up_to(claude, genta::session::SessionFormat::Claude, 0, None).unwrap(),
-            0
-        );
-        assert_eq!(
-            messages_up_to(
-                claude,
-                genta::session::SessionFormat::Claude,
-                u64::MAX,
-                None
-            )
-            .unwrap(),
-            3
-        );
+    fn claude_transcript(answer: &str, last_user: &str, last_timestamp: &str) -> String {
+        [
+            serde_json::json!({"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:00.000Z","message":{"role":"user","content":"first"}}),
+            serde_json::json!({"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":answer}]}}),
+            serde_json::json!({"type":"user","uuid":"u2","parentUuid":"a1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":last_timestamp,"message":{"role":"user","content":last_user}}),
+        ]
+        .into_iter()
+        .map(|line| format!("{line}\n"))
+        .collect()
     }
 
-    /// The host writes an operator message to the agent before the provider
-    /// stamps its own copy, so a cutoff resolved from that message lands just
-    /// before it in the native transcript. Naming the selected text keeps it:
-    /// branching through one's own turn must not branch through the previous
-    /// one.
+    /// Cutoffs keep the leading history. A named operator message also
+    /// survives when the host sent it before the provider stamped its copy.
     #[test]
-    fn a_cutoff_on_an_operator_message_keeps_the_message_it_names() {
-        let claude = concat!(
-            r#"{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:00.000Z","message":{"role":"user","content":"first"}}"#,
-            "\n",
-            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}"#,
-            "\n",
-            r#"{"type":"user","uuid":"u2","parentUuid":"a1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:02.500Z","message":{"role":"user","content":"try again"}}"#,
-            "\n",
-        );
+    fn message_cutoffs_keep_leading_history_and_the_named_operator_message() {
+        let on_time = claude_transcript("second", "third", "2026-08-21T10:00:02.000Z");
+        let delayed = claude_transcript("answer", "try again", "2026-08-21T10:00:02.500Z");
+        let reply_cutoff = parse_rfc3339_ms("2026-08-21T10:00:01.000Z").unwrap();
         // The host sent "try again" half a second before Claude stamped it.
-        let cutoff = parse_rfc3339_ms("2026-08-21T10:00:02.000Z").unwrap();
-
-        assert_eq!(
-            messages_up_to(claude, genta::session::SessionFormat::Claude, cutoff, None).unwrap(),
-            2
-        );
-        assert_eq!(
-            messages_up_to(
-                claude,
+        let operator_cutoff = parse_rfc3339_ms("2026-08-21T10:00:02.000Z").unwrap();
+        for (case, transcript, cutoff, selected, expected) in [
+            ("through the reply", &on_time, reply_cutoff, None, 2),
+            ("before the first message", &on_time, 0, None, 0),
+            ("through the end", &on_time, u64::MAX, None, 3),
+            ("delayed unnamed turn", &delayed, operator_cutoff, None, 2),
+            (
+                "delayed named turn",
+                &delayed,
+                operator_cutoff,
+                Some("try again"),
+                3,
+            ),
+            (
+                "a different name does not extend the cutoff",
+                &delayed,
+                operator_cutoff,
+                Some("something else"),
+                2,
+            ),
+        ] {
+            let count = messages_up_to(
+                transcript,
                 genta::session::SessionFormat::Claude,
                 cutoff,
-                Some("try again")
+                selected,
             )
-            .unwrap(),
-            3
-        );
-        // A different message at the cutoff is not the one named, so nothing
-        // beyond the timestamps is taken.
-        assert_eq!(
-            messages_up_to(
-                claude,
-                genta::session::SessionFormat::Claude,
-                cutoff,
-                Some("something else")
-            )
-            .unwrap(),
-            2
-        );
+            .unwrap_or_else(|error| panic!("{case}: {error:#}"));
+            assert_eq!(count, expected, "{case}");
+        }
     }
 
     /// The same skew decides which single message `selected_only` takes: named
@@ -8443,17 +8431,10 @@ mod tests {
     /// it.
     #[test]
     fn a_selected_only_branch_on_an_operator_message_takes_that_message() {
-        let claude = concat!(
-            r#"{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:00.000Z","message":{"role":"user","content":"first"}}"#,
-            "\n",
-            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}"#,
-            "\n",
-            r#"{"type":"user","uuid":"u2","parentUuid":"a1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:02.500Z","message":{"role":"user","content":"try again"}}"#,
-            "\n",
-        );
+        let claude = claude_transcript("answer", "try again", "2026-08-21T10:00:02.500Z");
         let cutoff = parse_rfc3339_ms("2026-08-21T10:00:02.000Z").unwrap();
         let branched = branch_native_session(
-            claude,
+            &claude,
             genta::session::SessionFormat::Claude,
             genta::session::SessionFormat::Claude,
             "new-id",
@@ -8474,17 +8455,10 @@ mod tests {
 
     #[test]
     fn a_selected_only_native_branch_contains_just_the_selected_message() {
-        let claude = concat!(
-            r#"{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:00.000Z","message":{"role":"user","content":"first"}}"#,
-            "\n",
-            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"selected"}]}}"#,
-            "\n",
-            r#"{"type":"user","uuid":"u2","parentUuid":"a1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:02.000Z","message":{"role":"user","content":"later"}}"#,
-            "\n",
-        );
+        let claude = claude_transcript("selected", "later", "2026-08-21T10:00:02.000Z");
         let cutoff = parse_rfc3339_ms("2026-08-21T10:00:01.000Z").unwrap();
         let branched = branch_native_session(
-            claude,
+            &claude,
             genta::session::SessionFormat::Claude,
             genta::session::SessionFormat::Codex,
             "new-id",
@@ -8521,7 +8495,7 @@ mod tests {
         let created = match state
             .handle(Request::CreateWorkspace(CreateWorkspace {
                 host_path: host.clone(),
-                name: None,
+                name: Some("api test".into()),
                 git_repository: None,
             }))
             .unwrap()
@@ -8530,6 +8504,19 @@ mod tests {
             other => panic!("unexpected response: {other:?}"),
         };
         assert!(created.launch.is_empty());
+        assert_eq!(created.name.as_deref(), Some("api test"));
+        assert!(matches!(
+            state.handle(Request::ListWorkspaces).unwrap(),
+            Response::Workspaces(workspaces) if workspaces == vec![created.clone()]
+        ));
+        assert!(matches!(
+            state
+                .handle(Request::ListSessions {
+                    workspace_id: created.id.clone(),
+                })
+                .unwrap(),
+            Response::StoredSessions(sessions) if sessions.is_empty()
+        ));
 
         let launch = LaunchPolicy {
             network: Some(true),
@@ -8581,7 +8568,16 @@ mod tests {
     /// list leaves it out and the one row a client shows is asked for it.
     #[test]
     fn a_listed_rows_driva_policy_is_asked_for_rather_than_listed() {
-        let (store, host, state, workspace, id, session_path) = stored_session("listed-driva");
+        let StoredSession {
+            store,
+            host,
+            state,
+            workspace,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("listed-driva");
         drop(state);
         let driva = DrivaOptions {
             isolation_backend: "bwrap".into(),
@@ -8591,34 +8587,7 @@ mod tests {
         };
         crate::roster::Roster::open(&store).publish(vec![(
             session_path.clone(),
-            InteractionSummary {
-                id: id.clone(),
-                name: None,
-                tags: Vec::new(),
-                workspace_id: workspace.id.clone(),
-                selection: Selection::new(crate::agent::Provider::Codex),
-                workspace: host.clone(),
-                activity: InteractionActivity::Stopped,
-                activity_reason: None,
-                activity_since_ms: 1,
-                idle_unseen: false,
-                interacted_at_ms: 0,
-                last_user_message_at_ms: 0,
-                uncommitted_changes: false,
-                expected_branch: None,
-                checkout: None,
-                branched_from: None,
-                last_message: None,
-                recent_messages: Vec::new(),
-                auto_retry: false,
-                auto_commit: false,
-                events: 0,
-                completed: CompletionState::Active,
-                focus_requested: false,
-                origin: None,
-                integration: None,
-                restored: false,
-            },
+            listed_interaction(&id, &workspace.id, &host, InteractionActivity::Stopped),
             driva.clone(),
         )]);
         let state = ServerState::new(store.clone(), store.with_extension("sock"));
@@ -8640,46 +8609,24 @@ mod tests {
                 id: "no-such-session".into()
             })
             .is_err());
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]
     fn deleted_workspace_api_blocks_sessions_and_restores_after_reopening() {
-        let (store, host, state, workspace, id, session_path) =
-            stored_session("deleted-workspace-api");
+        let StoredSession {
+            store,
+            host,
+            state,
+            workspace,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("deleted-workspace-api");
         drop(state);
         crate::roster::Roster::open(&store).publish(vec![(
             session_path.clone(),
-            InteractionSummary {
-                id: id.clone(),
-                name: None,
-                tags: Vec::new(),
-                workspace_id: workspace.id.clone(),
-                selection: Selection::new(crate::agent::Provider::Codex),
-                workspace: host.clone(),
-                activity: InteractionActivity::Stopped,
-                activity_reason: None,
-                activity_since_ms: 1,
-                idle_unseen: false,
-                interacted_at_ms: 0,
-                last_user_message_at_ms: 0,
-                uncommitted_changes: false,
-                expected_branch: None,
-                checkout: None,
-                branched_from: None,
-                last_message: None,
-                recent_messages: Vec::new(),
-                auto_retry: false,
-                auto_commit: false,
-                events: 0,
-                completed: CompletionState::Active,
-                focus_requested: false,
-                origin: None,
-                integration: None,
-                restored: false,
-            },
+            listed_interaction(&id, &workspace.id, &host, InteractionActivity::Stopped),
             DrivaOptions::default(),
         )]);
         let state = ServerState::new(store.clone(), store.with_extension("sock"));
@@ -8760,47 +8707,5 @@ mod tests {
             .handle(Request::StoredSession { id, raw: false })
             .is_ok());
         drop(state);
-        std::fs::remove_dir_all(store).unwrap();
-        std::fs::remove_dir_all(host).unwrap();
-    }
-
-    #[test]
-    fn workspace_api_creates_lists_and_scopes_sessions() {
-        let store = std::env::temp_dir().join(format!(
-            "styra-server-workspace-test-{}",
-            std::process::id()
-        ));
-        let host = store.with_extension("host");
-        std::fs::remove_dir_all(&store).ok();
-        std::fs::create_dir_all(&host).unwrap();
-        let state = ServerState::new(store.clone(), store.with_extension("sock"));
-
-        let created = match state
-            .handle(Request::CreateWorkspace(CreateWorkspace {
-                host_path: host.clone(),
-                name: Some("api test".into()),
-                git_repository: None,
-            }))
-            .unwrap()
-        {
-            Response::WorkspaceCreated(workspace) => workspace,
-            other => panic!("unexpected response: {other:?}"),
-        };
-        assert_eq!(created.name.as_deref(), Some("api test"));
-        assert!(matches!(
-            state.handle(Request::ListWorkspaces).unwrap(),
-            Response::Workspaces(workspaces) if workspaces == vec![created.clone()]
-        ));
-        assert!(matches!(
-            state
-                .handle(Request::ListSessions {
-                    workspace_id: created.id,
-                })
-                .unwrap(),
-            Response::StoredSessions(sessions) if sessions.is_empty()
-        ));
-
-        std::fs::remove_dir_all(store).ok();
-        std::fs::remove_dir_all(host).ok();
     }
 }

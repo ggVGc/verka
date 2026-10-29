@@ -300,29 +300,16 @@ mod tests {
 
     #[test]
     fn nothing_is_marked_until_the_term_is_long_enough() {
-        assert_eq!(term("re"), None);
-        assert_eq!(term("  re "), None);
-        assert_eq!(term(" retry "), Some("retry"));
-
-        let view = SearchView {
-            query: Some("re"),
-            typing: true,
-        };
-        assert_eq!(view.term(), None);
+        for (query, expected) in [("re", None), ("  re ", None), (" retry ", Some("retry"))] {
+            assert_eq!(term(query), expected, "{query:?}");
+            let view = SearchView {
+                query: Some(query),
+                typing: true,
+            };
+            assert_eq!(view.term(), expected, "{query:?}");
+        }
         assert!(marked(&highlight_line(Line::from("retry"), "retry")).len() == 1);
-    }
 
-    #[test]
-    fn a_line_with_no_match_is_left_exactly_as_it_was() {
-        let line = Line::from(vec![Span::raw("nothing"), Span::raw(" here")]);
-        let highlighted = highlight_line(line.clone(), "retry");
-
-        assert_eq!(highlighted.spans.len(), line.spans.len());
-        assert!(marked(&highlighted).is_empty());
-    }
-
-    #[test]
-    fn a_term_marks_nothing_until_it_is_long_enough() {
         let mut search = Search::default();
         search.open();
         for character in "re".chars() {
@@ -332,6 +319,15 @@ mod tests {
 
         search.push('t');
         assert_eq!(search.view().term(), Some("ret"));
+    }
+
+    #[test]
+    fn a_line_with_no_match_is_left_exactly_as_it_was() {
+        let line = Line::from(vec![Span::raw("nothing"), Span::raw(" here")]);
+        let highlighted = highlight_line(line.clone(), "retry");
+
+        assert_eq!(highlighted.spans.len(), line.spans.len());
+        assert!(marked(&highlighted).is_empty());
     }
 
     #[test]

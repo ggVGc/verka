@@ -2202,12 +2202,27 @@ mod tests {
     }
 
     #[test]
-    fn following_tracks_the_newest_entry() {
-        let mut app = app();
-        app.push_event(AgentEvent::TurnStarted);
-        app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
-        assert!(app.timeline.follow);
-        assert_eq!(app.timeline.selected, 1);
+    fn following_tracks_visible_entries_and_transfers_their_expansion() {
+        for hidden_start in [false, true] {
+            let mut app = app();
+            if hidden_start {
+                app.push_event(AgentEvent::TurnStarted);
+            }
+            app.push_event(AgentEvent::AgentMessage {
+                text: "first".into(),
+            });
+            let first = app.timeline.selected;
+            assert_eq!(first, usize::from(hidden_start));
+            assert!(app.timeline.follow);
+            app.timeline.entries[first].expanded = true;
+            app.push_event(AgentEvent::AgentMessage {
+                text: "second".into(),
+            });
+            assert!(app.timeline.follow);
+            assert_eq!(app.timeline.selected, first + 1);
+            assert!(!app.timeline.entries[first].expanded);
+            assert!(app.timeline.entries[first + 1].expanded);
+        }
     }
 
     #[test]
@@ -2228,71 +2243,36 @@ mod tests {
     }
 
     #[test]
-    fn following_transfers_expansion_to_a_new_visible_entry() {
-        let mut app = app();
-        app.push_event(AgentEvent::AgentMessage {
-            text: "first".into(),
-        });
-        app.timeline.entries[0].expanded = true;
-
-        app.push_event(AgentEvent::AgentMessage {
-            text: "second".into(),
-        });
-
-        assert_eq!(app.timeline.selected, 1);
-        assert!(!app.timeline.entries[0].expanded);
-        assert!(app.timeline.entries[1].expanded);
-    }
-
-    #[test]
     fn moving_up_pins_the_view_and_reaching_the_tail_resumes_follow() {
-        let mut app = app();
-        // Multi-line so every entry has detail and so is reachable by the
-        // has-detail-only select_next/select_prev this test exercises.
-        for _ in 0..3 {
-            app.push_event(AgentEvent::AgentMessage {
-                text: "x\nmore x".into(),
-            });
+        // Entry navigation requires detail; line navigation reaches every
+        // visible entry. Both must preserve the same pin/follow behavior.
+        for (text, select_prev, select_next) in [
+            (
+                "x\nmore x",
+                App::select_prev as fn(&mut App),
+                App::select_next as fn(&mut App),
+            ),
+            ("x", App::select_prev_line, App::select_next_line),
+        ] {
+            let mut app = app();
+            for _ in 0..3 {
+                app.push_event(AgentEvent::AgentMessage { text: text.into() });
+            }
+            select_prev(&mut app);
+            assert!(!app.timeline.follow);
+            assert_eq!(app.timeline.selected, 1);
+
+            // New events no longer move the selection while pinned.
+            app.push_event(AgentEvent::AgentMessage { text: text.into() });
+            assert_eq!(app.timeline.selected, 1);
+
+            // Walking back down to the tail re-enables follow.
+            select_next(&mut app);
+            select_next(&mut app);
+            select_next(&mut app);
+            assert!(app.timeline.follow);
+            assert_eq!(app.timeline.selected, app.timeline.entries.len() - 1);
         }
-        app.select_prev();
-        assert!(!app.timeline.follow);
-        assert_eq!(app.timeline.selected, 1);
-
-        // New events no longer move the selection while pinned.
-        app.push_event(AgentEvent::AgentMessage {
-            text: "x\nmore x".into(),
-        });
-        assert_eq!(app.timeline.selected, 1);
-
-        // Walking back down to the tail re-enables follow.
-        app.select_next();
-        app.select_next();
-        app.select_next();
-        assert!(app.timeline.follow);
-        assert_eq!(app.timeline.selected, app.timeline.entries.len() - 1);
-    }
-
-    #[test]
-    fn moving_up_by_line_pins_the_view_and_reaching_the_tail_resumes_follow() {
-        // Same follow/pin contract as select_next/select_prev, but for
-        // select_next_line/select_prev_line (j/k), which move one visible
-        // entry at a time regardless of whether it has detail.
-        let mut app = app();
-        for _ in 0..3 {
-            app.push_event(AgentEvent::AgentMessage { text: "x".into() });
-        }
-        app.select_prev_line();
-        assert!(!app.timeline.follow);
-        assert_eq!(app.timeline.selected, 1);
-
-        app.push_event(AgentEvent::AgentMessage { text: "x".into() });
-        assert_eq!(app.timeline.selected, 1);
-
-        app.select_next_line();
-        app.select_next_line();
-        app.select_next_line();
-        assert!(app.timeline.follow);
-        assert_eq!(app.timeline.selected, app.timeline.entries.len() - 1);
     }
 
     #[test]
@@ -2533,38 +2513,27 @@ mod tests {
         assert_eq!(app.activity.status, Status::Running);
     }
 
-    /// A typed turn arrives framed, since the server appends the contract's
-    /// instructions before sending. The list shows the operator's own message
-    /// and records what it asked for, rather than a screen of boilerplate.
+    /// Framed turns show the operator's own message and contract; ordinary
+    /// messages stay untouched, even when they mention answer blocks.
     #[test]
-    fn a_framed_operator_message_is_shown_as_it_was_written() {
-        let mut app = app();
-        app.push_event(AgentEvent::UserMessage {
-            text: styra_protocol::contract::frame("which files handle auth?", Contract::Files),
-        });
-        let entry = app.timeline.entries.last().expect("the message was pushed");
-        assert_eq!(
-            *entry.event(),
-            AgentEvent::UserMessage {
-                text: "which files handle auth?".into()
-            }
-        );
-        assert_eq!(entry.contract, Some(Contract::Files));
-    }
-
-    /// An ordinary message is not framed and must be left exactly as it is,
-    /// including one that happens to talk about answer blocks.
-    #[test]
-    fn an_unframed_operator_message_is_untouched() {
-        let mut app = app();
-        let text = "explain the <styra:answer> convention";
-        app.push_event(AgentEvent::UserMessage { text: text.into() });
-        let entry = app.timeline.entries.last().expect("the message was pushed");
-        assert_eq!(
-            *entry.event(),
-            AgentEvent::UserMessage { text: text.into() }
-        );
-        assert_eq!(entry.contract, None);
+    fn operator_messages_preserve_their_text_and_contract() {
+        for (text, contract) in [
+            ("which files handle auth?", Some(Contract::Files)),
+            ("explain the <styra:answer> convention", None),
+        ] {
+            let mut app = app();
+            let received = match contract {
+                Some(contract) => styra_protocol::contract::frame(text, contract),
+                None => text.into(),
+            };
+            app.push_event(AgentEvent::UserMessage { text: received });
+            let entry = app.timeline.entries.last().expect("the message was pushed");
+            assert_eq!(
+                *entry.event(),
+                AgentEvent::UserMessage { text: text.into() }
+            );
+            assert_eq!(entry.contract, contract);
+        }
     }
 
     #[test]
@@ -2737,59 +2706,39 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_edit_completion_is_dropped_since_the_file_changed_row_already_shows_it() {
-        // Edit/Write/MultiEdit surface as `FileChanged` at start, not
-        // `ToolStarted`, so their `ToolCompleted` used to find no match and
-        // fall through to a second, id-only line. A clean result adds
-        // nothing the `FileChanged` row didn't already show.
-        let mut app = app();
-        app.push_event(AgentEvent::FileChanged {
-            id: "toolu_2".into(),
-            paths: vec!["src/lib.rs".into()],
-            diff: Some("@@ edit @@\n-old\n+new".into()),
-            checkpoint: None,
-            checkpoint_error: None,
-        });
-        app.push_event(AgentEvent::ToolCompleted {
-            id: "toolu_2".into(),
-            name: "toolu_2".into(),
-            detail: String::new(),
-            status: "completed".into(),
-            output: String::new(),
-        });
-
-        assert_eq!(app.timeline.entries.len(), 1);
-        assert!(matches!(
-            *app.timeline.entries[0].event(),
-            AgentEvent::FileChanged { .. }
-        ));
-    }
-
-    #[test]
-    fn a_failed_edit_completion_replaces_the_file_changed_row_with_a_visible_error() {
-        let mut app = app();
-        app.push_event(AgentEvent::FileChanged {
-            id: "toolu_3".into(),
-            paths: vec!["src/lib.rs".into()],
-            diff: Some("@@ edit @@\n-old\n+new".into()),
-            checkpoint: None,
-            checkpoint_error: None,
-        });
-        app.push_event(AgentEvent::ToolCompleted {
-            id: "toolu_3".into(),
-            name: "toolu_3".into(),
-            detail: String::new(),
-            status: "error".into(),
-            output: "old_string not found".into(),
-        });
-
-        assert_eq!(app.timeline.entries.len(), 1);
-        assert_eq!(
-            *app.timeline.entries[0].event(),
-            AgentEvent::Error {
-                message: "src/lib.rs: old_string not found".into(),
-            }
-        );
+    fn edit_completion_keeps_the_change_or_replaces_it_with_the_error() {
+        for (id, status, output) in [
+            ("toolu_2", "completed", ""),
+            ("toolu_3", "error", "old_string not found"),
+        ] {
+            let mut app = app();
+            // Edits arrive as FileChanged rather than ToolStarted; completion
+            // must not append a second, id-only entry.
+            let changed = AgentEvent::FileChanged {
+                id: id.into(),
+                paths: vec!["src/lib.rs".into()],
+                diff: Some("@@ edit @@\n-old\n+new".into()),
+                checkpoint: None,
+                checkpoint_error: None,
+            };
+            app.push_event(changed.clone());
+            app.push_event(AgentEvent::ToolCompleted {
+                id: id.into(),
+                name: id.into(),
+                detail: String::new(),
+                status: status.into(),
+                output: output.into(),
+            });
+            assert_eq!(app.timeline.entries.len(), 1, "{status}");
+            let expected = if status == "error" {
+                AgentEvent::Error {
+                    message: "src/lib.rs: old_string not found".into(),
+                }
+            } else {
+                changed
+            };
+            assert_eq!(*app.timeline.entries[0].event(), expected, "{status}");
+        }
     }
 
     #[test]
@@ -3135,12 +3084,22 @@ mod tests {
     }
 
     #[test]
-    fn an_idle_codex_thread_can_change_its_next_turn_model() {
+    fn an_idle_codex_launcher_applies_only_a_changed_selection() {
         let mut app = App::new(Selection::new(Provider::Codex), "session-1");
         app.activity.status = Status::Idle(IdleReason::TurnComplete);
         assert!(app.can_configure_launch());
         app.open_launcher();
         assert!(app.launcher.is_some());
+        app.confirm_launcher();
+        assert_eq!(app.take_request(), None, "confirming unchanged selection");
+        app.open_launcher();
+        app.launcher.as_mut().unwrap().next();
+        app.confirm_launcher();
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ApplySelection),
+            "changes reach the live agent now"
+        );
     }
 
     #[test]
@@ -3159,30 +3118,6 @@ mod tests {
 
         assert_ne!(app.selection.model, original.model);
         assert_eq!(app.selection.effort, original.effort);
-    }
-
-    /// The operator's switch has to reach the agent when they make it, not
-    /// whenever they next happen to type something.
-    #[test]
-    fn switching_a_live_sessions_model_asks_the_server_to_apply_it_now() {
-        let mut app = App::new(Selection::new(Provider::Codex), "session-1");
-        app.activity.status = Status::Idle(IdleReason::TurnComplete);
-        app.open_launcher();
-        let launcher = app.launcher.as_mut().unwrap();
-        launcher.next();
-        app.confirm_launcher();
-
-        assert_eq!(app.take_request(), Some(Request::ApplySelection));
-    }
-
-    #[test]
-    fn confirming_the_same_selection_asks_the_server_for_nothing() {
-        let mut app = App::new(Selection::new(Provider::Codex), "session-1");
-        app.activity.status = Status::Idle(IdleReason::TurnComplete);
-        app.open_launcher();
-        app.confirm_launcher();
-
-        assert_eq!(app.take_request(), None);
     }
 
     /// Before launch there is no interaction to tell; the first message
@@ -3232,16 +3167,6 @@ mod tests {
     }
 
     #[test]
-    fn cycling_models_during_a_running_turn_keeps_the_selection() {
-        let mut app = app();
-        app.activity.status = Status::Running;
-        let original = app.selection.clone();
-        app.open_model_picker();
-        assert_eq!(app.selection, original);
-        assert!(app.take_request().is_none());
-    }
-
-    #[test]
     fn combined_picker_keeps_live_claude_effort_fixed_and_offers_other_models() {
         let mut app = App::new(Selection::new(Provider::Claude), "session-1");
         app.activity.status = Status::Idle(IdleReason::TurnComplete);
@@ -3263,120 +3188,101 @@ mod tests {
 
     #[test]
     fn a_running_turn_cannot_change_model() {
-        let mut app = App::new(Selection::new(Provider::Codex), "session-1");
-        app.activity.status = Status::Running;
-        assert!(!app.can_configure_launch());
-        app.open_launcher();
-        assert!(app.launcher.is_none());
+        for open_picker in [App::open_launcher, App::open_model_picker] {
+            let mut app = App::new(Selection::new(Provider::Codex), "session-1");
+            app.activity.status = Status::Running;
+            let original = app.selection.clone();
+            assert!(!app.can_configure_launch());
+            open_picker(&mut app);
+            assert!(app.launcher.is_none());
+            assert_eq!(app.selection, original);
+            assert!(app.take_request().is_none());
+        }
     }
 
-    /// A live or replayed Session carries the exact selection it was created
-    /// with, independently of the client's saved default for new Sessions.
+    /// Reports replace the launch settings they name; absent fields retain
+    /// the requested selection, including the provider's shorthand defaults.
     #[test]
-    fn a_session_keeps_its_recorded_selection() {
-        let app = App::new(
-            styra_protocol::agent::Selection::parse("claude:opus/xhigh").unwrap(),
-            "session-1",
-        );
-        assert_eq!(
-            app.selection,
-            Selection::parse("claude:opus/xhigh").unwrap()
-        );
-    }
-
-    /// What the status line names before the agent has spoken: the launch it was
-    /// started with, model and effort included, marked as not yet confirmed.
-    #[test]
-    fn the_launch_label_falls_back_to_the_requested_selection() {
-        let app = App::new(
-            styra_protocol::agent::Selection::parse("claude:opus/max").unwrap(),
-            "s-1",
-        );
-        let label = app.launch_label();
-        assert_eq!(label.agent, "claude");
-        assert_eq!(label.model.as_deref(), Some("opus"));
-        assert_eq!(label.effort.as_deref(), Some("max"));
-
-        // Short launch syntax is normalized to the provider's declared defaults.
-        let app = App::new(
-            styra_protocol::agent::Selection::parse("codex").unwrap(),
-            "s-2",
-        );
-        let label = app.launch_label();
-        assert_eq!(label.agent, "codex");
-        assert_eq!(
-            label.model.as_deref(),
-            Some(Provider::Codex.default_model())
-        );
-        assert_eq!(
-            label.effort.as_deref(),
-            Some(Provider::Codex.default_effort().as_str())
-        );
-    }
-
-    /// The agent's own report becomes the interaction selection, so reopening
-    /// the launcher starts on the model actually in use.
-    #[test]
-    fn a_reported_model_and_effort_replace_the_interaction_selection() {
-        let mut app = App::new(
-            styra_protocol::agent::Selection::parse("codex").unwrap(),
-            "s-1",
-        );
-        app.push_event(AgentEvent::ThreadStarted {
-            thread_id: "t-9".into(),
-            model: Some("gpt-5.6-sol".into()),
-            effort: Some("high".into()),
-        });
-        let label = app.launch_label();
-        assert_eq!(label.model.as_deref(), Some("gpt-5.6-sol"));
-        assert_eq!(label.effort.as_deref(), Some("high"));
-        assert_eq!(app.selection.model, "gpt-5.6-sol");
-        assert_eq!(app.selection.effort, styra_protocol::agent::Effort::High);
-
-        // A launch that asked for something else is overruled by the fact.
-        let mut app = App::new(
-            styra_protocol::agent::Selection::parse("codex:gpt-5.6-luna/low").unwrap(),
-            "s-2",
-        );
-        app.push_event(AgentEvent::ThreadStarted {
-            thread_id: "t".into(),
-            model: Some("gpt-5.6-sol".into()),
-            effort: Some("xhigh".into()),
-        });
-        let label = app.launch_label();
-        assert_eq!(label.model.as_deref(), Some("gpt-5.6-sol"));
-        assert_eq!(label.effort.as_deref(), Some("xhigh"));
-    }
-
-    /// Claude Code names a model but never an effort, so the effort the session
-    /// was launched with must survive its report rather than being blanked.
-    #[test]
-    fn an_unreported_effort_keeps_the_one_the_session_was_launched_with() {
-        let mut app = App::new(
-            styra_protocol::agent::Selection::parse("claude:opus/max").unwrap(),
-            "s-1",
-        );
-        app.push_event(AgentEvent::ThreadStarted {
-            thread_id: "s-1".into(),
-            model: Some("claude-opus-4-8".into()),
-            effort: None,
-        });
-        let label = app.launch_label();
-        assert_eq!(label.model.as_deref(), Some("claude-opus-4-8"));
-        assert_eq!(label.effort.as_deref(), Some("max"));
-
-        // A thread reported with neither leaves the display as it was.
-        let mut app = App::new(
-            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
-            "s-2",
-        );
-        app.push_event(AgentEvent::ThreadStarted {
-            thread_id: "t".into(),
-            model: None,
-            effort: None,
-        });
-        let label = app.launch_label();
-        assert_eq!(label.model.as_deref(), Some("gpt-5.6-sol"));
+    fn launch_labels_follow_reported_settings_and_keep_unreported_ones() {
+        for (case, launch, report, agent, model, effort) in [
+            (
+                "recorded shorthand selection",
+                "claude:opus/xhigh",
+                None,
+                "claude",
+                "opus",
+                "xhigh",
+            ),
+            (
+                "unreported Claude",
+                "claude:opus/max",
+                None,
+                "claude",
+                "opus",
+                "max",
+            ),
+            (
+                "default Codex",
+                "codex",
+                None,
+                "codex",
+                Provider::Codex.default_model(),
+                Provider::Codex.default_effort().as_str(),
+            ),
+            (
+                "reported settings",
+                "codex",
+                Some((Some("gpt-5.6-sol"), Some("high"))),
+                "codex",
+                "gpt-5.6-sol",
+                "high",
+            ),
+            (
+                "report overrides request",
+                "codex:gpt-5.6-luna/low",
+                Some((Some("gpt-5.6-sol"), Some("xhigh"))),
+                "codex",
+                "gpt-5.6-sol",
+                "xhigh",
+            ),
+            (
+                "Claude omits effort",
+                "claude:opus/max",
+                Some((Some("claude-opus-4-8"), None)),
+                "claude",
+                "claude-opus-4-8",
+                "max",
+            ),
+            (
+                "empty report",
+                "codex:gpt-5.6-sol/high",
+                Some((None, None)),
+                "codex",
+                "gpt-5.6-sol",
+                "high",
+            ),
+        ] {
+            let selection = Selection::parse(launch).unwrap();
+            let mut app = App::new(selection.clone(), "s-1");
+            assert_eq!(app.selection, selection, "{case}: requested selection");
+            if let Some((model, effort)) = report {
+                app.push_event(AgentEvent::ThreadStarted {
+                    thread_id: "s-1".into(),
+                    model: model.map(str::to_owned),
+                    effort: effort.map(str::to_owned),
+                });
+            }
+            let label = app.launch_label();
+            assert_eq!(label.agent, agent, "{case}");
+            assert_eq!(label.model.as_deref(), Some(model), "{case}");
+            assert_eq!(label.effort.as_deref(), Some(effort), "{case}");
+            assert_eq!(app.selection.model, model, "{case}: recorded model");
+            assert_eq!(
+                app.selection.effort.as_str(),
+                effort,
+                "{case}: recorded effort"
+            );
+        }
     }
 
     #[test]
@@ -4073,31 +3979,26 @@ mod tests {
         assert_eq!(app.copy_text().as_deref(), Some("src/auth.rs:12"));
     }
 
-    /// The driva view is a view like any other: reachable whether or not there
-    /// is a sandbox to describe, and toggled off by the same key.
     #[test]
-    fn the_driva_view_toggles_whether_or_not_a_policy_has_been_recorded() {
-        let mut app = app();
-        assert_eq!(app.launch.driva, None);
-
-        assert_eq!(app.view, View::Events);
-        app.toggle_view(View::Driva);
-        assert_eq!(app.view, View::Driva);
-        app.toggle_view(View::Driva);
-        assert_eq!(app.view, View::Events);
-    }
-
-    #[test]
-    fn fullscreen_preview_toggles_the_view_and_is_independent_of_the_side_panel() {
-        let mut app = app();
-        assert_eq!(app.view, View::Events);
-        app.toggle_view(View::Preview);
-        assert_eq!(app.view, View::Preview);
-        // The side-panel flag (bound to lowercase `p`) is a separate toggle;
-        // the full-screen shortcut (`P`) does not touch it.
-        assert!(!app.preview.open);
-        app.toggle_view(View::Preview);
-        assert_eq!(app.view, View::Events);
+    fn view_toggles_return_to_events_and_leave_the_side_preview_alone() {
+        for target in [View::Log, View::Transcript, View::Driva, View::Preview] {
+            let mut app = app();
+            assert_eq!(app.launch.driva, None);
+            assert_eq!(app.view, View::Events);
+            for expected in [target, View::Events] {
+                app.toggle_view(target);
+                assert_eq!(app.view, expected, "{target:?}");
+                assert!(
+                    !app.preview.open,
+                    "{target:?}: the side panel has its own toggle"
+                );
+            }
+            app.toggle_raw();
+            assert_eq!(app.view, View::Raw);
+            app.toggle_view(target);
+            assert_eq!(app.view, target, "{target:?}: switch from another view");
+            assert!(!app.preview.open, "{target:?}");
+        }
     }
 
     #[test]
@@ -4263,6 +4164,13 @@ mod tests {
             let mut screen = app();
             screen.preview.open = open;
             screen.push_event(AgentEvent::AgentMessage {
+                text: "No references here.".into(),
+            });
+            screen.highlight_first_link();
+            assert!(screen.link_highlight.is_none());
+            assert_eq!(screen.preview.open, open);
+
+            screen.push_event(AgentEvent::AgentMessage {
                 text: "[link](https://example.com)".into(),
             });
             screen.highlight_first_link();
@@ -4353,20 +4261,6 @@ mod tests {
             after.take_request(),
             Some(Request::ShowDiff("session-2".into()))
         );
-    }
-
-    #[test]
-    fn link_highlight_without_links_leaves_preview_visibility_alone() {
-        for open in [false, true] {
-            let mut screen = app();
-            screen.preview.open = open;
-            screen.push_event(AgentEvent::AgentMessage {
-                text: "No references here.".into(),
-            });
-            screen.highlight_first_link();
-            assert!(screen.link_highlight.is_none());
-            assert_eq!(screen.preview.open, open);
-        }
     }
 
     #[test]

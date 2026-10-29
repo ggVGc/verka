@@ -623,11 +623,6 @@ mod tests {
         }
         // A model with a ladder gets one row per rung, and one with no ladder
         // gets a single row that does not advertise a placeholder.
-        let opus = labels
-            .iter()
-            .filter(|label| label.starts_with("claude:claude-opus-5/"))
-            .count();
-        assert_eq!(opus, Provider::Claude.efforts_for("claude-opus-5").len());
         assert_eq!(
             labels
                 .iter()
@@ -882,15 +877,23 @@ mod tests {
     }
 
     #[test]
-    fn efforts_are_offered_in_ladder_order() {
+    fn every_models_efforts_are_offered_in_ladder_order() {
         let launcher = opened("claude");
-        let rungs: Vec<Effort> = launcher
-            .labels()
-            .iter()
-            .zip(&launcher.rows)
-            .filter(|(label, _)| label.starts_with("claude:claude-opus-5/"))
-            .map(|(_, row)| row.effort)
-            .collect();
-        assert_eq!(rungs, Provider::Claude.efforts_for("claude-opus-5"));
+        for provider in PROVIDERS {
+            for model in provider.models() {
+                let rungs: Vec<Effort> = launcher
+                    .rows
+                    .iter()
+                    .filter(|row| row.provider == provider && row.model == model.id)
+                    .map(|row| row.effort)
+                    .collect();
+                let expected = if model.efforts.is_empty() {
+                    vec![provider.default_effort_for(model.id)]
+                } else {
+                    model.efforts.to_vec()
+                };
+                assert_eq!(rungs, expected, "{}:{}", provider.as_str(), model.id);
+            }
+        }
     }
 }

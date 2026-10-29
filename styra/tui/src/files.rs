@@ -323,33 +323,23 @@ mod tests {
         SandboxLayout::default().workspace
     }
 
-    /// The agent names files inside its sandbox; the operator's editor opens
-    /// them on the host. The same file has two absolute paths and this is
-    /// where they are reconciled.
     #[test]
-    fn a_sandbox_path_is_re_rooted_at_the_workspace_on_this_host() {
-        let resolved = resolve(
-            Path::new("/home/me/project"),
-            sandbox().join("src/main.rs").to_str().unwrap(),
-        );
-
-        assert_eq!(resolved, PathBuf::from("/home/me/project/src/main.rs"));
-    }
-
-    #[test]
-    fn a_relative_path_is_taken_against_the_workspace() {
-        let resolved = resolve(Path::new("/home/me/project"), "src/main.rs");
-
-        assert_eq!(resolved, PathBuf::from("/home/me/project/src/main.rs"));
-    }
-
-    /// A path the agent reached outside its sandbox is already a host path,
-    /// and re-rooting it would name a file that does not exist.
-    #[test]
-    fn an_absolute_path_outside_the_sandbox_is_left_alone() {
-        let resolved = resolve(Path::new("/home/me/project"), "/etc/hosts");
-
-        assert_eq!(resolved, PathBuf::from("/etc/hosts"));
+    fn paths_resolve_from_the_sandbox_workspace_or_host() {
+        for (reported, expected) in [
+            (
+                sandbox().join("src/main.rs"),
+                "/home/me/project/src/main.rs",
+            ),
+            (PathBuf::from("src/main.rs"), "/home/me/project/src/main.rs"),
+            (PathBuf::from("/etc/hosts"), "/etc/hosts"),
+        ] {
+            assert_eq!(
+                resolve(Path::new("/home/me/project"), reported.to_str().unwrap()),
+                PathBuf::from(expected),
+                "{}",
+                reported.display()
+            );
+        }
     }
 
     /// A directory tree for the search to walk: `root/sub/deeper`, with a

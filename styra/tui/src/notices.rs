@@ -114,16 +114,6 @@ mod tests {
         assert_eq!(texts(&notices), vec!["first action", "second action"]);
     }
 
-    #[test]
-    fn a_notice_is_gone_once_its_five_seconds_are_up() {
-        let mut notices = Notices::default();
-        notices.show_since("old action", Duration::from_secs(5));
-
-        notices.expire();
-
-        assert!(notices.is_empty());
-    }
-
     /// Each notice gets its own window from when it was shown, so a later one
     /// is not cut short by an earlier one running out.
     #[test]
@@ -148,9 +138,10 @@ mod tests {
         assert!(!live.expire(), "nothing has run out yet");
 
         let mut stale = Notices::default();
-        stale.show_since("long gone", Duration::from_secs(6));
+        stale.show_since("long gone", Duration::from_secs(5));
 
         assert!(stale.expire(), "one left the screen");
+        assert!(stale.is_empty());
         assert!(!stale.expire(), "and does not leave a second time");
     }
 

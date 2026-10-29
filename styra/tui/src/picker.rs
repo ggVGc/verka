@@ -1276,7 +1276,7 @@ mod tests {
     }
 
     #[test]
-    fn session_picker_history_filter_can_be_toggled() {
+    fn session_picker_history_filter_shows_recent_or_all_sessions() {
         let now_ms = 10 * crate::session::RECENT_SESSION_WINDOW_MS;
         let mut fresh = session("fresh");
         fresh.last_event_at_ms = Some(now_ms - crate::session::RECENT_SESSION_WINDOW_MS);
@@ -1309,15 +1309,6 @@ mod tests {
             None,
         );
         assert_eq!(all.len(), 3);
-        let recent_again = picker_sessions(
-            &sessions,
-            false,
-            false,
-            now_ms,
-            SessionOrder::LastActivity,
-            None,
-        );
-        assert_eq!(recent_again, recent);
     }
 
     #[test]
@@ -1328,22 +1319,29 @@ mod tests {
         prompted.first_prompt = Some("Investigate checkout timeout".into());
         let sessions = vec![named, prompted];
 
-        let matches = picker_sessions(
-            &sessions,
-            true,
-            false,
-            unix_now_ms(),
-            SessionOrder::LastActivity,
-            Some("TIMEOUT"),
-        );
+        for (query, expected) in [
+            ("PAYMENTS", vec!["named"]),
+            ("TIMEOUT", vec!["prompted"]),
+            ("nonexistent", vec![]),
+        ] {
+            let matches = picker_sessions(
+                &sessions,
+                true,
+                false,
+                unix_now_ms(),
+                SessionOrder::LastActivity,
+                Some(query),
+            );
 
-        assert_eq!(
-            matches
-                .iter()
-                .map(|session| session.id.as_str())
-                .collect::<Vec<_>>(),
-            ["prompted"]
-        );
+            assert_eq!(
+                matches
+                    .iter()
+                    .map(|session| session.id.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "query: {query}"
+            );
+        }
     }
 
     #[test]

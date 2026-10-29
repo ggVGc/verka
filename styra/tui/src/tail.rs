@@ -125,30 +125,22 @@ mod tests {
         tail
     }
 
-    /// The point of holding an offset rather than an index: an operator
-    /// reading back through the log keeps reading the same entries while the
-    /// agent keeps appending to it.
     #[test]
-    fn entries_arriving_underneath_do_not_move_a_scrolled_back_view() {
-        let mut tail = tail(5);
-        tail.scroll_up();
-        tail.scroll_up();
-        assert_eq!(tail.scroll_back(), 2);
-
-        tail.push(5);
-        tail.push(6);
-
-        assert_eq!(tail.scroll_back(), 4, "still on the same two entries back");
-    }
-
-    #[test]
-    fn a_view_at_the_tail_keeps_following_it() {
-        let mut tail = tail(3);
-        assert_eq!(tail.scroll_back(), 0);
-
-        tail.push(3);
-
-        assert_eq!(tail.scroll_back(), 0);
+    fn appended_entries_preserve_the_view_or_follow_the_tail() {
+        for (name, count, scrolls, appended, expected) in [
+            ("scrolled back", 5, 2, vec![5, 6], 4),
+            ("following", 3, 0, vec![3], 0),
+        ] {
+            let mut tail = tail(count);
+            for _ in 0..scrolls {
+                tail.scroll_up();
+            }
+            assert_eq!(tail.scroll_back(), scrolls, "{name}: before append");
+            for entry in appended {
+                tail.push(entry);
+            }
+            assert_eq!(tail.scroll_back(), expected, "{name}: after append");
+        }
     }
 
     #[test]

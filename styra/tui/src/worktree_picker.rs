@@ -339,18 +339,7 @@ mod tests {
     }
 
     fn workspace(id: &str) -> WorkspaceSummary {
-        WorkspaceSummary {
-            id: id.into(),
-            name: None,
-            host_path: format!("/home/op/{id}").into(),
-            git_repository: None,
-            path: format!("/state/workspaces/{id}").into(),
-            session_count: 0,
-            age: "now".into(),
-            created_at_ms: 1,
-            last_accessed_at_ms: 1,
-            launch: Default::default(),
-        }
+        crate::workspace::tests::workspace(id, None, &format!("/home/op/{id}"))
     }
 
     fn worktrees() -> Vec<WorktreeSummary> {

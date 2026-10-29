@@ -1124,78 +1124,44 @@ mod tests {
 
     fn interaction_with_checkout(id: &str, checkout: Option<CheckoutState>) -> InteractionSummary {
         InteractionSummary {
-            auto_retry: false,
-            auto_commit: false,
-            id: id.into(),
-            name: None,
-            tags: Vec::new(),
-            workspace_id: "workspace".into(),
-            selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
-            workspace: std::path::PathBuf::from("/workspace"),
-            activity: styra_protocol::InteractionActivity::Running,
-            activity_reason: None,
-            activity_since_ms: 0,
-            idle_unseen: false,
-            interacted_at_ms: 0,
-            last_user_message_at_ms: 0,
-            uncommitted_changes: false,
-            expected_branch: None,
             checkout,
-            last_message: None,
-            recent_messages: Vec::new(),
-            events: 0,
-            branched_from: None,
-            completed: styra_protocol::CompletionState::Active,
-            focus_requested: false,
-            origin: None,
-            integration: None,
-            restored: false,
+            ..crate::interactions::tests::interaction(
+                id,
+                styra_protocol::InteractionActivity::Running,
+            )
         }
     }
 
-    /// A linked worktree names the branch of its agent away from the
-    /// Workspace's own checkout, so the operator cannot mistake one for the
-    /// other from the header alone.
     #[test]
-    fn header_names_a_linked_worktree() {
-        let mut app = test_support::app("s1");
-        app.interactions.items = vec![interaction_with_checkout(
-            "s1",
-            Some(CheckoutState {
-                worktree: "/workspace/.worktrees/fix-retries".into(),
-                repository: "/workspace".into(),
-                branch: Some("fix-retries".into()),
-            }),
-        )];
-
-        inspect(&app, |v| {
-            let MainView::Events(events) = &v.main else {
-                panic!("events expected")
-            };
-            assert_eq!(events.list.chrome.worktree.as_deref(), Some("fix-retries"));
-        });
-    }
-
-    /// The agent's own checkout is the Workspace's, so naming it again in the
-    /// header would only repeat what the Workspace name already says.
-    #[test]
-    fn header_says_nothing_extra_for_a_plain_checkout() {
-        let mut app = test_support::app("s1");
-        app.interactions.items = vec![interaction_with_checkout(
-            "s1",
-            Some(CheckoutState {
-                worktree: "/workspace".into(),
-                repository: "/workspace".into(),
-                branch: Some("main".into()),
-            }),
-        )];
-
-        inspect(&app, |v| {
-            let MainView::Events(events) = &v.main else {
-                panic!("events expected")
-            };
-            assert!(events.list.chrome.worktree.is_none());
-        });
+    fn header_names_only_linked_worktrees() {
+        for (worktree, branch, expected) in [
+            (
+                "/workspace/.worktrees/fix-retries",
+                "fix-retries",
+                Some("fix-retries"),
+            ),
+            ("/workspace", "main", None),
+        ] {
+            let mut app = test_support::app("s1");
+            app.interactions.items = vec![interaction_with_checkout(
+                "s1",
+                Some(CheckoutState {
+                    worktree: worktree.into(),
+                    repository: "/workspace".into(),
+                    branch: Some(branch.into()),
+                }),
+            )];
+            inspect(&app, |v| {
+                let MainView::Events(events) = &v.main else {
+                    panic!("events expected")
+                };
+                assert_eq!(
+                    events.list.chrome.worktree.as_deref(),
+                    expected,
+                    "{worktree}"
+                );
+            });
+        }
     }
 
     #[test]

@@ -2113,72 +2113,75 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_checkout_reports_its_branch_and_where_it_is() {
-        let lines = text(checkout_lines(Some(&state(
-            "/work/project",
-            "/work/project",
-            Some("main"),
-        ))));
-
-        assert!(lines[0].contains("branch"), "{lines:?}");
-        assert!(lines[0].contains("main"), "{lines:?}");
-        assert!(lines[1].contains("/work/project"), "{lines:?}");
-        // Nothing to say about a repository the checkout simply is.
-        assert!(!lines[1].contains("linked"), "{lines:?}");
+    fn checkout_rows_name_the_branch_location_and_repository_state() {
+        for (name, checkout, present, absent) in [
+            (
+                "plain",
+                Some(state("/work/project", "/work/project", Some("main"))),
+                vec![(0, "branch"), (0, "main"), (1, "/work/project")],
+                vec![(1, "linked")],
+            ),
+            // A linked checkout also names the repository it belongs to.
+            (
+                "linked",
+                Some(state(
+                    "/styra/worktrees/session",
+                    "/work/project",
+                    Some("styra/session"),
+                )),
+                vec![
+                    (0, "styra/session"),
+                    (1, "/styra/worktrees/session"),
+                    (1, "linked from /work/project"),
+                ],
+                vec![],
+            ),
+            (
+                "detached",
+                Some(state("/work", "/work", None)),
+                vec![(0, "detached head")],
+                vec![],
+            ),
+            (
+                "outside repository",
+                None,
+                vec![(0, "not a Git checkout")],
+                vec![],
+            ),
+        ] {
+            let lines = text(checkout_lines(checkout.as_ref()));
+            if checkout.is_none() {
+                assert_eq!(lines.len(), 1, "{name}");
+            }
+            for (index, needle) in present {
+                assert!(
+                    lines[index].contains(needle),
+                    "{name}: missing {needle}: {lines:?}"
+                );
+            }
+            for (index, needle) in absent {
+                assert!(
+                    !lines[index].contains(needle),
+                    "{name}: unexpected {needle}: {lines:?}"
+                );
+            }
+        }
     }
 
-    /// The worktree Styra parks under its own directory says nothing about
-    /// which repository the branch will turn up in, so the row says it.
     #[test]
-    fn a_linked_worktree_says_what_it_was_branched_from() {
-        let lines = text(checkout_lines(Some(&state(
-            "/styra/worktrees/session",
-            "/work/project",
-            Some("styra/session"),
-        ))));
-
-        assert!(lines[0].contains("styra/session"), "{lines:?}");
-        assert!(lines[1].contains("/styra/worktrees/session"), "{lines:?}");
-        assert!(lines[1].contains("linked from /work/project"), "{lines:?}");
-    }
-
-    #[test]
-    fn a_detached_head_is_said_to_be_one_rather_than_left_blank() {
-        let lines = text(checkout_lines(Some(&state("/work", "/work", None))));
-
-        assert!(lines[0].contains("detached head"), "{lines:?}");
-    }
-
-    #[test]
-    fn a_branch_point_names_the_branch_and_the_commit_it_started_at() {
-        let line = text(vec![branched_from_line(&BranchPoint {
-            branch: Some("main".to_owned()),
-            commit: "3f2a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a".to_owned(),
-        })]);
-
-        assert!(line[0].contains("branched from"), "{line:?}");
-        assert!(line[0].contains("main @ 3f2a1b4c9d"), "{line:?}");
-        assert!(!line[0].contains("3f2a1b4c9d8"), "{line:?}");
-    }
-
-    #[test]
-    fn a_branch_point_on_a_detached_head_still_names_its_commit() {
-        let line = text(vec![branched_from_line(&BranchPoint {
-            branch: None,
-            commit: "3f2a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a".to_owned(),
-        })]);
-
-        assert!(line[0].contains("detached head @ 3f2a1b4c9d"), "{line:?}");
-    }
-
-    /// "Not a checkout" and "not looked at yet" would both render as no rows
-    /// at all, and the operator reading the panel cannot ask which it was.
-    #[test]
-    fn a_workspace_outside_a_repository_still_gets_a_row() {
-        let lines = text(checkout_lines(None));
-
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].contains("not a Git checkout"), "{lines:?}");
+    fn branch_points_name_the_branch_or_detached_head_and_shorten_the_commit() {
+        for (branch, expected) in [
+            (Some("main"), "main @ 3f2a1b4c9d"),
+            (None, "detached head @ 3f2a1b4c9d"),
+        ] {
+            let line = text(vec![branched_from_line(&BranchPoint {
+                branch: branch.map(ToOwned::to_owned),
+                commit: "3f2a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a".to_owned(),
+            })]);
+            assert!(line[0].contains("branched from"), "{branch:?}: {line:?}");
+            assert!(line[0].contains(expected), "{branch:?}: {line:?}");
+            assert!(!line[0].contains("3f2a1b4c9d8"), "{branch:?}: {line:?}");
+        }
     }
 
     fn row(lines: &[String], label: &str) -> String {

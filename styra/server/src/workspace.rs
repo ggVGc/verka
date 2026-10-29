@@ -548,6 +548,14 @@ mod tests {
             get(&store, &first.id).unwrap().name.as_deref(),
             Some("first")
         );
+
+        access(&store, &first.id).unwrap();
+        let listed = list(&store).unwrap();
+        assert_eq!(listed[0].id, first.id);
+        assert_eq!(listed[1].id, second.id);
+
+        std::fs::remove_dir_all(store).unwrap();
+        std::fs::remove_dir_all(host).unwrap();
     }
 
     /// A stored policy is the Workspace's, so it has to survive everything
@@ -808,19 +816,5 @@ mod tests {
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
         std::fs::remove_dir_all(elsewhere).ok();
-    }
-
-    #[test]
-    fn accessing_an_older_workspace_moves_it_to_the_front() {
-        let store = temp_dir("recent-store");
-        let host = temp_dir("recent-host");
-        let first = create(&store, &host, Some("first".into())).unwrap();
-        let second = create(&store, &host, Some("second".into())).unwrap();
-
-        access(&store, &first.id).unwrap();
-
-        let listed = list(&store).unwrap();
-        assert_eq!(listed[0].id, first.id);
-        assert_eq!(listed[1].id, second.id);
     }
 }

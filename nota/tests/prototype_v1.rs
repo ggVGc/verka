@@ -391,33 +391,36 @@ fn a_note_keeps_its_own_trailer_like_text() {
 }
 
 #[test]
-fn loading_a_review_rejects_note_commits_that_change_files() {
-    let git = FakeGit::new();
-    review_on(&git, "nota/invalid");
-    git.commit("invalid note\n\nNota-Note: true", &["suggested.txt"]);
-
-    let error = load_current(&git).unwrap_err();
-    assert!(format!("{error:#}").contains("changes project files"));
-}
-
-#[test]
-fn loading_a_review_rejects_empty_suggestion_commits() {
-    let git = FakeGit::new();
-    review_on(&git, "nota/empty");
-    git.commit("empty suggestion", &[]);
-
-    let error = load_current(&git).unwrap_err();
-    assert!(format!("{error:#}").contains("has no changed project files"));
-}
-
-#[test]
-fn loading_a_review_rejects_suggestions_without_a_comment() {
-    let git = FakeGit::new();
-    review_on(&git, "nota/no-comment");
-    git.commit("", &["suggested.txt"]);
-
-    let error = load_current(&git).unwrap_err();
-    assert!(format!("{error:#}").contains("has an empty review comment"));
+fn loading_a_review_rejects_malformed_commits() {
+    for (case, message, paths, expected_error) in [
+        (
+            "note changes files",
+            "invalid note\n\nNota-Note: true",
+            &["suggested.txt"][..],
+            "changes project files",
+        ),
+        (
+            "empty suggestion",
+            "empty suggestion",
+            &[][..],
+            "has no changed project files",
+        ),
+        (
+            "missing comment",
+            "",
+            &["suggested.txt"][..],
+            "has an empty review comment",
+        ),
+    ] {
+        let git = FakeGit::new();
+        review_on(&git, "nota/invalid");
+        git.commit(message, paths);
+        let error = load_current(&git).unwrap_err();
+        assert!(
+            format!("{error:#}").contains(expected_error),
+            "{case}: {error:#}"
+        );
+    }
 }
 
 #[test]

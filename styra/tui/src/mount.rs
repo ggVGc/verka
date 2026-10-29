@@ -267,56 +267,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_typed_mount_parses_its_paths_and_access() {
-        assert_eq!(
-            parse("/srv/data").unwrap(),
-            LaunchMount {
-                source: PathBuf::from("/srv/data"),
-                destination: None,
-                writable: false,
-            }
-        );
-        assert_eq!(
-            parse("  /srv/data:rw  ").unwrap(),
-            LaunchMount {
-                source: PathBuf::from("/srv/data"),
-                destination: None,
-                writable: true,
-            }
-        );
-        assert_eq!(
-            parse("/srv/data:/mnt/data").unwrap(),
-            LaunchMount {
-                source: PathBuf::from("/srv/data"),
-                destination: Some(PathBuf::from("/mnt/data")),
-                writable: false,
-            }
-        );
-        assert_eq!(
-            parse("/srv/data:/mnt/data:rw").unwrap(),
-            LaunchMount {
-                source: PathBuf::from("/srv/data"),
-                destination: Some(PathBuf::from("/mnt/data")),
-                writable: true,
-            }
-        );
-
-        // A directory that happens to be named `rw` is still a destination:
-        // only a trailing bare `ro`/`rw` after a path is an access mode.
-        assert_eq!(
-            parse("/srv/rw:/mnt/rw").unwrap(),
-            LaunchMount {
-                source: PathBuf::from("/srv/rw"),
-                destination: Some(PathBuf::from("/mnt/rw")),
-                writable: false,
-            }
-        );
-
-        assert!(parse("").is_err());
-        assert!(parse("data").is_err());
-        assert!(parse("/srv/data:relative").is_err());
-        assert!(parse("/a:/b:/c:rw").is_err());
-        assert!(parse("/srv/data:").is_err());
+    fn typed_mounts_parse_paths_access_and_trailing_slashes() {
+        for (input, source, destination, writable) in [
+            ("/srv/data", "/srv/data", None, false),
+            ("  /srv/data:rw  ", "/srv/data", None, true),
+            ("/srv/data:/mnt/data", "/srv/data", Some("/mnt/data"), false),
+            (
+                "/srv/data:/mnt/data:rw",
+                "/srv/data",
+                Some("/mnt/data"),
+                true,
+            ),
+            // A directory named rw is still a destination.
+            ("/srv/rw:/mnt/rw", "/srv/rw", Some("/mnt/rw"), false),
+            // A directory selected from the list arrives with its slash.
+            (
+                "/srv/data/:/mnt/data/:rw",
+                "/srv/data",
+                Some("/mnt/data"),
+                true,
+            ),
+        ] {
+            assert_eq!(
+                parse(input).unwrap(),
+                LaunchMount {
+                    source: source.into(),
+                    destination: destination.map(PathBuf::from),
+                    writable
+                },
+                "{input}"
+            );
+        }
+        for input in [
+            "",
+            "data",
+            "/srv/data:relative",
+            "/a:/b:/c:rw",
+            "/srv/data:",
+        ] {
+            assert!(parse(input).is_err(), "{input:?}");
+        }
     }
 
     /// How a mount reads back is what the two settings panes list, so the
@@ -328,6 +318,7 @@ mod tests {
             "/srv/data → /mnt/data (rw)"
         );
         assert_eq!(label(&parse("/srv/data").unwrap()), "/srv/data (ro)");
+        assert_eq!(label(&parse("/srv/data/").unwrap()), "/srv/data (ro)");
     }
 
     /// What the agent can reach, and under which of several overlapping mounts:
@@ -472,17 +463,6 @@ mod tests {
         let list = listed(&format!("/srv:{base}/no"));
         assert_eq!(list.highlighted(), Some(format!("/srv:{base}/notes.txt")));
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// A directory taken from the list arrives with its `/`, which is not part
-    /// of the mount.
-    #[test]
-    fn a_trailing_slash_is_not_part_of_a_mount() {
-        assert_eq!(
-            parse("/srv/data/:/mnt/data/:rw").unwrap(),
-            parse("/srv/data:/mnt/data:rw").unwrap()
-        );
-        assert_eq!(label(&parse("/srv/data/").unwrap()), "/srv/data (ro)");
     }
 
     /// The client resolves `~` itself: a path left for the server to expand

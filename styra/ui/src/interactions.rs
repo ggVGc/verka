@@ -1602,121 +1602,52 @@ mod tests {
         assert!(screen[2].starts_with("┃ ●    two lines "), "{screen:#?}");
     }
 
-    /// A stopped entry is one the operator has to decide whether to resume,
-    /// and the reason it stopped is what that decision turns on.
+    /// Rows explain whether they stopped, failed a turn, or are waiting on
+    /// a plan window, so the operator can decide what to do next.
     #[test]
-    fn a_stopped_interaction_says_why_it_stopped() {
-        let view = InteractionNavigator {
-            scope: "Payments".into(),
-            all_workspaces: false,
-            completion_filter: "completed hidden".into(),
-            tag_filter: &[],
-            filter: None,
-            typing_filter: false,
-            requested_offset: Some(0),
-            rows: vec![InteractionRow::Interaction {
-                name: "repair checkout".into(),
-                level: 0,
-                branched_from: None,
-                branches: 0,
-                branch_link: BranchLink::None,
-                depth: 0,
-                model: "sonnet",
-                branch: None,
-                expected_branch: None,
-                status: InteractionStatus::Stopped(StopTone::Paused),
-                selected: false,
-                loading: false,
-                newly_idle: false,
-                flashing: false,
-                stop_reason: Some("paused".into()),
-                rate_limited: None,
-                uncommitted: false,
-                completion: CompletionState::Active,
-                tags: &[],
-                last_message: None,
-            }],
-        };
-        assert!(squeezed(&rendered(&view)).contains("repair checkout sonnet paused"));
-    }
-
-    /// A turn that failed leaves the agent idle and taking messages, but the
-    /// row must not read as a turn that got done.
-    #[test]
-    fn an_idle_interaction_says_when_its_turn_failed() {
-        let view = InteractionNavigator {
-            scope: "Payments".into(),
-            all_workspaces: false,
-            completion_filter: "completed hidden".into(),
-            tag_filter: &[],
-            filter: None,
-            typing_filter: false,
-            requested_offset: Some(0),
-            rows: vec![InteractionRow::Interaction {
-                name: "repair checkout".into(),
-                level: 0,
-                branched_from: None,
-                branches: 0,
-                branch_link: BranchLink::None,
-                depth: 0,
-                model: "sonnet",
-                branch: None,
-                expected_branch: None,
-                status: InteractionStatus::IdleFailed,
-                selected: false,
-                loading: false,
-                newly_idle: false,
-                flashing: false,
-                stop_reason: None,
-                rate_limited: None,
-                uncommitted: false,
-                completion: CompletionState::Active,
-                tags: &[],
-                last_message: None,
-            }],
-        };
-        assert!(squeezed(&rendered(&view)).contains("repair checkout sonnet TURN FAILED"));
+    fn interaction_state_labels_explain_what_is_holding_up_work() {
+        for (status, stop_reason, rate_limited, width, label) in [
+            (
+                InteractionStatus::Stopped(StopTone::Paused),
+                Some("paused"),
+                None,
+                80,
+                "paused",
+            ),
+            (InteractionStatus::IdleFailed, None, None, 80, "TURN FAILED"),
+            (
+                InteractionStatus::Idle,
+                None,
+                Some("five_hour"),
+                120,
+                "RATE LIMITED (five_hour)",
+            ),
+        ] {
+            let mut row = placed("repair checkout", 0, 0, None);
+            if let InteractionRow::Interaction {
+                branch,
+                status: row_status,
+                stop_reason: row_stop_reason,
+                rate_limited: row_rate_limited,
+                ..
+            } = &mut row
+            {
+                *branch = None;
+                *row_status = status;
+                *row_stop_reason = stop_reason.map(Into::into);
+                *row_rate_limited = rate_limited.map(Into::into);
+            }
+            let view = InteractionNavigator {
+                rows: vec![row],
+                ..many_rows(0)
+            };
+            let screen = squeezed(&rendered_at(&view, width));
+            assert!(
+                screen.contains(&format!("repair checkout sonnet {label}")),
+                "{label}: {screen}"
+            );
+        }
         assert_eq!(status_marker(InteractionStatus::IdleFailed).1, theme::ERROR);
-    }
-
-    /// An interaction idling because a plan window refused it looks exactly
-    /// like one waiting for the operator, and is the opposite situation: the
-    /// row has to say which of the two it is.
-    #[test]
-    fn an_idle_interaction_says_when_a_plan_window_is_holding_it() {
-        let view = InteractionNavigator {
-            scope: "Payments".into(),
-            all_workspaces: false,
-            completion_filter: "completed hidden".into(),
-            tag_filter: &[],
-            filter: None,
-            typing_filter: false,
-            requested_offset: Some(0),
-            rows: vec![InteractionRow::Interaction {
-                name: "repair checkout".into(),
-                level: 0,
-                branched_from: None,
-                branches: 0,
-                branch_link: BranchLink::None,
-                depth: 0,
-                model: "sonnet",
-                branch: None,
-                expected_branch: None,
-                status: InteractionStatus::Idle,
-                selected: false,
-                loading: false,
-                newly_idle: false,
-                flashing: false,
-                stop_reason: None,
-                rate_limited: Some("five_hour".into()),
-                uncommitted: false,
-                completion: CompletionState::Active,
-                tags: &[],
-                last_message: None,
-            }],
-        };
-        assert!(squeezed(&rendered_at(&view, 120))
-            .contains("repair checkout sonnet RATE LIMITED (five_hour)"));
     }
 
     fn many_rows(selected: usize) -> InteractionNavigator<'static> {
@@ -1837,34 +1768,26 @@ mod tests {
         offset.unwrap()
     }
 
-    /// The cursor walks the rows in view without moving them.
     #[test]
-    fn the_cursor_moves_freely_inside_the_view() {
-        for selected in 0..=2 {
-            assert_eq!(drawn_offset(selected, 0), 0, "row {selected}");
+    fn scrolling_keeps_two_rows_of_margin_until_the_list_ends() {
+        for (rule, selected, requested, expected) in [
+            ("free movement at top", 0, 0, 0),
+            ("free movement at top", 1, 0, 0),
+            ("free movement at top", 2, 0, 0),
+            ("free movement between margins", 4, 4, 4),
+            ("approaching lower edge", 3, 0, 2),
+            ("inside bottom margin", 5, 6, 6),
+            ("approaching upper edge", 4, 6, 4),
+            ("stop at first row", 0, 6, 0),
+            ("stop at last row", 7, 0, 6),
+            ("clamp past end", 7, 100, 6),
+        ] {
+            assert_eq!(
+                drawn_offset(selected, requested),
+                expected,
+                "{rule}: selected={selected}, requested={requested}"
+            );
         }
-        // Rows 2 to 6 in view, the cursor anywhere between their margins.
-        assert_eq!(drawn_offset(4, 4), 4);
-    }
-
-    /// Two rows are kept between the cursor and the edge it is moving toward,
-    /// so the operator sees what comes next before reaching it.
-    #[test]
-    fn the_view_scrolls_two_rows_before_the_cursor_reaches_an_edge() {
-        // Down from the top: row 3 is the first with fewer than two rows below.
-        assert_eq!(drawn_offset(3, 0), 2);
-        // Up from the bottom, where rows 3 to 7 are in view.
-        assert_eq!(drawn_offset(5, 6), 6);
-        assert_eq!(drawn_offset(4, 6), 4);
-    }
-
-    /// At the ends of the list there are no rows to keep in the margin, so
-    /// the view stops there instead of running past the list.
-    #[test]
-    fn the_view_stops_at_the_ends_of_the_list() {
-        assert_eq!(drawn_offset(0, 6), 0);
-        assert_eq!(drawn_offset(7, 0), 6);
-        assert_eq!(drawn_offset(7, 100), 6);
     }
 
     /// Every row but the cursor's is gently faded, with supporting text

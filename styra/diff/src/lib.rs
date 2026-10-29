@@ -22,6 +22,9 @@ pub use prompt::Prompt;
 mod state;
 mod view;
 
+#[cfg(test)]
+mod test_support;
+
 pub use keys::Outcome;
 pub use report::{FileReport, Report, ReportPage, ReportState};
 pub use state::{CheckoutDiff, Commits, DiffTarget, Source, Supplied};

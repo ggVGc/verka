@@ -2145,33 +2145,8 @@ mod tests {
         }
     }
 
-    /// Draw a list of `events` with `selected` under the cursor, anchored at
-    /// `requested_offset`, and report the screen and the offset the render
-    /// asked to keep.
-    fn scrolled_screen(
-        events: &[AgentEvent],
-        selected: usize,
-        requested_offset: usize,
-        anchor_selection: bool,
-        scroll_delta: i32,
-    ) -> (Vec<String>, usize) {
-        let entries = events
-            .iter()
-            .enumerate()
-            .map(|(index, event)| EventEntry {
-                event,
-                version: version(),
-                expanded: false,
-                has_detail: false,
-                contract: None,
-                selected: index == selected,
-                link_highlight: None,
-                branch: Default::default(),
-                branch_provider_switch: None,
-                inherited: false,
-            })
-            .collect();
-        let view = EventListView {
+    fn list_view<'a>(entries: Vec<EventEntry<'a>>) -> EventListView<'a> {
+        EventListView {
             chrome: PanelChrome {
                 focused: true,
                 workspace: None,
@@ -2196,10 +2171,10 @@ mod tests {
             usage: None,
             can_configure_launch: false,
             selection_name: "codex".into(),
-            requested_offset,
+            requested_offset: 0,
             requested_row_offset: 0,
-            scroll_delta,
-            anchor_selection,
+            scroll_delta: 0,
+            anchor_selection: true,
             keep_viewport: false,
             moved_backward: false,
             max_lines_above_selection: None,
@@ -2214,6 +2189,44 @@ mod tests {
                 failed: false,
             },
             queued: &[],
+        }
+    }
+
+    fn buffer_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+        (buffer.area.top()..buffer.area.bottom())
+            .map(|y| {
+                (buffer.area.left()..buffer.area.right())
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Draw a list of `events` with `selected` under the cursor, anchored at
+    /// `requested_offset`, and report the screen and the offset the render
+    /// asked to keep.
+    fn scrolled_screen(
+        events: &[AgentEvent],
+        selected: usize,
+        requested_offset: usize,
+        anchor_selection: bool,
+        scroll_delta: i32,
+    ) -> (Vec<String>, usize) {
+        let entries = events
+            .iter()
+            .enumerate()
+            .map(|(index, event)| EventEntry {
+                expanded: false,
+                has_detail: false,
+                selected: index == selected,
+                ..entry_of(event, version())
+            })
+            .collect();
+        let view = EventListView {
+            requested_offset,
+            scroll_delta,
+            anchor_selection,
+            ..list_view(entries)
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         let mut offset = 0;
@@ -2223,13 +2236,7 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let rows = (0..buffer.area.height)
-            .map(|y| {
-                (0..buffer.area.width)
-                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
-                    .collect::<String>()
-            })
-            .collect();
+        let rows = buffer_rows(&buffer);
         (rows, offset)
     }
 
@@ -2241,134 +2248,78 @@ mod tests {
             .collect()
     }
 
-    /// The list hands ratatui only the window it will draw, with the offset
-    /// and the selection rebased onto it — so both have to be translated back
-    /// out. The offset is persisted across frames, so getting this wrong would
-    /// not flicker for a frame: it would move the session and keep it there.
+    /// Window offsets remain in the caller's numbering. Anchored windows
+    /// follow selection; unanchored windows follow explicit scroll requests.
     #[test]
-    fn a_window_reports_its_offset_in_the_callers_numbering() {
-        let events = numbered(500);
-
-        let (rows, offset) = scrolled_screen(&events, 300, 300, true, 0);
-
-        assert_eq!(offset, 300, "the offset the caller gave back is its own");
-        assert!(
-            rows.iter().any(|row| row.contains("message 300")),
-            "the selected entry is on screen: {rows:#?}"
-        );
-        assert!(
-            !rows.iter().any(|row| row.contains("message 0")),
-            "the top of the session is not: {rows:#?}"
-        );
-    }
-
-    /// Windowing must not change which rows a screen shows. A list short
-    /// enough that every entry fits is the case where the window is the whole
-    /// list, and it has to read exactly as it did.
-    #[test]
-    fn a_list_shorter_than_the_viewport_still_shows_every_entry() {
-        let events = numbered(4);
-
-        let (rows, offset) = scrolled_screen(&events, 0, 0, true, 0);
-
-        assert_eq!(offset, 0);
-        for n in 0..4 {
-            assert!(
-                rows.iter().any(|row| row.contains(&format!("message {n}"))),
-                "message {n} is missing: {rows:#?}"
-            );
+    fn scrolled_windows_preserve_offsets_and_visible_entries() {
+        for (
+            case,
+            (count, selected, offset, anchored, delta),
+            (expected_offset, visible, hidden),
+        ) in [
+            (
+                "rebased window",
+                (500, 300, 300, true, 0),
+                (Some(300), &[300][..], &[0][..]),
+            ),
+            (
+                "whole short list",
+                (4, 0, 0, true, 0),
+                (Some(0), &[0, 1, 2, 3][..], &[][..]),
+            ),
+            // Consecutive anchors must share the boundary entry: no skipped row.
+            (
+                "first anchor",
+                (200, 100, 100, true, 0),
+                (None, &[101][..], &[][..]),
+            ),
+            (
+                "next anchor",
+                (200, 101, 101, true, 0),
+                (None, &[101][..], &[][..]),
+            ),
+            (
+                "unanchored",
+                (200, 0, 100, false, 0),
+                (Some(100), &[100][..], &[0][..]),
+            ),
+            (
+                "ten-line scroll",
+                (30, 0, 0, false, 10),
+                (Some(10), &[10][..], &[9][..]),
+            ),
+        ] {
+            let events = numbered(count);
+            let (rows, actual_offset) = scrolled_screen(&events, selected, offset, anchored, delta);
+            if let Some(expected) = expected_offset {
+                assert_eq!(actual_offset, expected, "{case}: caller offset");
+            }
+            for n in visible {
+                assert!(
+                    rows.iter().any(|row| row.contains(&format!("message {n}"))),
+                    "{case}: missing message {n}: {rows:#?}"
+                );
+            }
+            for n in hidden {
+                assert!(
+                    !rows.iter().any(|row| row.contains(&format!("message {n}"))),
+                    "{case}: unexpected message {n}: {rows:#?}"
+                );
+            }
         }
-    }
-
-    /// Scrolling is continuous: consecutive anchors show consecutive windows,
-    /// with no entry skipped between two frames.
-    #[test]
-    fn consecutive_anchors_show_consecutive_windows() {
-        let events = numbered(200);
-
-        let (first, _) = scrolled_screen(&events, 100, 100, true, 0);
-        let (second, _) = scrolled_screen(&events, 101, 101, true, 0);
-
-        assert!(first.iter().any(|row| row.contains("message 101")));
-        assert!(second.iter().any(|row| row.contains("message 101")));
-    }
-
-    #[test]
-    fn an_unanchored_view_scrolls_away_from_the_selection() {
-        let events = numbered(200);
-
-        let (rows, offset) = scrolled_screen(&events, 0, 100, false, 0);
-
-        assert_eq!(offset, 100);
-        assert!(rows.iter().any(|row| row.contains("message 100")));
-        assert!(!rows.iter().any(|row| row.contains("message 0")));
-    }
-
-    #[test]
-    fn ten_line_scroll_moves_ten_single_line_entries() {
-        let events = numbered(30);
-
-        let (rows, offset) = scrolled_screen(&events, 0, 0, false, 10);
-
-        assert_eq!(offset, 10);
-        assert!(rows.iter().any(|row| row.contains("message 10")));
-        assert!(!rows.iter().any(|row| row.contains("message 9")));
     }
 
     /// One agent message, drawn with `search` typed into the `/` prompt.
     fn searched_screen(text: &str, search: SearchView<'_>) -> (Vec<String>, Vec<String>) {
         let event = AgentEvent::AgentMessage { text: text.into() };
         let view = EventListView {
-            chrome: PanelChrome {
-                focused: true,
-                workspace: None,
-                worktree: None,
-                source_branch: None,
-                agent: "codex".into(),
-                model: "gpt-5.6-sol".into(),
-                model_reported: true,
-                effort: None,
-                effort_reported: true,
-                status: "running".into(),
-                status_tone: StatusTone::Running,
-                elapsed: None,
-                suffix: None,
-                session: None,
-            },
-            entries: vec![EventEntry {
-                event: &event,
-                version: version(),
+            search,
+            ..list_view(vec![EventEntry {
                 expanded: false,
                 has_detail: false,
-                contract: None,
                 selected: true,
-                link_highlight: None,
-                branch: Default::default(),
-                branch_provider_switch: None,
-                inherited: false,
-            }],
-            activity: ActivityCounts::default(),
-            all_events: false,
-            show_minor: false,
-            uncommitted_changes: false,
-            usage: None,
-            can_configure_launch: false,
-            selection_name: "codex".into(),
-            requested_offset: 0,
-            requested_row_offset: 0,
-            scroll_delta: 0,
-            anchor_selection: true,
-            keep_viewport: false,
-            moved_backward: false,
-            max_lines_above_selection: None,
-            protocol: Protocol::default(),
-            links: LinkDisplay::Compact,
-            search,
-            status: EventListStatus::Idle {
-                reason: None,
-                failed: false,
-            },
-            queued: &[],
+                ..entry_of(&event, version())
+            }])
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
         terminal
@@ -2377,13 +2328,7 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let rows = (0..buffer.area.height)
-            .map(|y| {
-                (0..buffer.area.width)
-                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
-                    .collect::<String>()
-            })
-            .collect();
+        let rows = buffer_rows(&buffer);
         // The marked text, row by row, so a test can say what was marked
         // without depending on where on the row it landed.
         let marked = (0..buffer.area.height)
@@ -2437,16 +2382,11 @@ mod tests {
         };
         let fg = |selected: bool, content: &str| {
             let entry = EventEntry {
-                event: &event,
-                version: version(),
                 expanded: false,
                 has_detail: false,
-                contract: None,
+
                 selected,
-                link_highlight: None,
-                branch: Default::default(),
-                branch_provider_switch: None,
-                inherited: false,
+                ..entry_of(&event, version())
             };
             summary_line(&entry, SummaryContext::EventList, Protocol::default())
                 .spans
@@ -2475,19 +2415,12 @@ mod tests {
         };
         let summary = |event: &AgentEvent, name| {
             let entry = EventEntry {
-                event,
-                version: version(),
                 expanded: false,
-                has_detail: true,
-                contract: None,
-                selected: false,
-                link_highlight: None,
                 branch: BranchLink {
                     name,
                     ..Default::default()
                 },
-                branch_provider_switch: None,
-                inherited: false,
+                ..entry_of(event, version())
             };
             summary_line(&entry, SummaryContext::EventList, Protocol::default())
                 .spans
@@ -2525,26 +2458,14 @@ mod tests {
         };
         let long = format!("Backoff now doubles up to 30s. {}", "More. ".repeat(40));
         let mut entry = EventEntry {
-            event: &event,
-            version: version(),
-            expanded: true,
-            has_detail: true,
-            contract: None,
-            selected: false,
-            link_highlight: None,
             branch: BranchLink {
                 name: Some("Retry backoff"),
                 state: Some(paused),
                 message: Some(&long),
             },
-            branch_provider_switch: None,
-            inherited: false,
+            ..entry_of(&event, version())
         };
-        let render = EntryRender {
-            protocol: Protocol::default(),
-            links: LinkDisplay::Compact,
-            search: None,
-        };
+        let render = render_of();
         let rows = |entry: &EventEntry<'_>| {
             entry_rows_with_max_rows(entry, 80, 20, render)
                 .into_iter()
@@ -2587,22 +2508,10 @@ mod tests {
             name: None,
         };
         let mut entry = EventEntry {
-            event: &event,
-            version: version(),
             expanded: false,
-            has_detail: true,
-            contract: None,
-            selected: false,
-            link_highlight: None,
-            branch: Default::default(),
-            branch_provider_switch: None,
-            inherited: false,
+            ..entry_of(&event, version())
         };
-        let render = EntryRender {
-            protocol: Protocol::default(),
-            links: LinkDisplay::Compact,
-            search: None,
-        };
+        let render = render_of();
         let text = |rows: Vec<Line<'static>>| {
             rows.into_iter()
                 .flat_map(|line| line.spans)
@@ -2639,22 +2548,11 @@ mod tests {
             text: "see [guide](https://example.com/guide)".into(),
         };
         let entry = EventEntry {
-            event: &event,
-            version: version(),
-            expanded: true,
-            has_detail: true,
-            contract: None,
             selected: true,
             link_highlight: Some(0),
-            branch: Default::default(),
-            branch_provider_switch: None,
-            inherited: false,
+            ..entry_of(&event, version())
         };
-        let render = EntryRender {
-            protocol: Protocol::default(),
-            links: LinkDisplay::Compact,
-            search: None,
-        };
+        let render = render_of();
         let mut terminal = Terminal::new(TestBackend::new(80, 4)).unwrap();
         terminal
             .draw(|frame| {

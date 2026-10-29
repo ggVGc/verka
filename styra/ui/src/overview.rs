@@ -510,6 +510,17 @@ mod tests {
         }
     }
 
+    fn overview<'a>() -> OverviewView<'a> {
+        OverviewView {
+            tiles: Vec::new(),
+            running_only: false,
+            workspace_scope: None,
+            selected: 0,
+            links: LinkDisplay::Compact,
+            search: SearchView::default(),
+        }
+    }
+
     fn draw(view: &OverviewView<'_>, width: u16, height: u16) -> (String, OverviewFeedback) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut feedback = None;
@@ -601,15 +612,12 @@ mod tests {
     #[test]
     fn tiles_off_the_cursor_are_faded() {
         let view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
             ],
             selected: 1,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
         terminal
@@ -651,12 +659,8 @@ mod tests {
         let mut waiting = tile("write the docs", InteractionStatus::Idle);
         waiting.newly_idle = true;
         let view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
             tiles: vec![working, waiting],
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         let (screen, feedback) = draw(&view, 100, 14);
 
@@ -692,12 +696,8 @@ mod tests {
             })
             .collect();
         let view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
             tiles: vec![talking],
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         // Two description lines, three of messages and the status tail
         // inside the borders.
@@ -725,12 +725,8 @@ mod tests {
             agent("Two **flaky** tests:\n\n- `checkout`\n- `refund`"),
         ];
         let view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
             tiles: vec![talking],
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         let (screen, _) = draw(&view, 50, 14);
         assert!(
@@ -763,12 +759,8 @@ mod tests {
         };
         chatty.messages = (0..20).map(|n| agent(&format!("message {n}"))).collect();
         let view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
             tiles: vec![working, chatty],
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         let (screen, _) = draw(&view, 100, 14);
         let row = |text: &str| screen.lines().position(|line| line.contains(text));
@@ -789,15 +781,11 @@ mod tests {
     #[test]
     fn a_narrow_screen_stacks_the_tiles_in_one_column() {
         let view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
             ],
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         let (screen, feedback) = draw(&view, 50, 20);
         assert_eq!(feedback.rows, vec![1, 1], "{screen}");
@@ -811,8 +799,6 @@ mod tests {
     #[test]
     fn the_tiles_fill_the_whole_frame() {
         let mut view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
             tiles: vec![
                 tile("first", InteractionStatus::Idle),
                 tile("second", InteractionStatus::Idle),
@@ -820,9 +806,7 @@ mod tests {
             ],
             // Off the tiles whose corners are checked, which are not drawn
             // thick then.
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         let (screen, feedback) = draw(&view, 151, 31);
         assert_eq!(feedback.rows, vec![2, 1], "{screen}");
@@ -877,15 +861,11 @@ mod tests {
     fn a_short_row_stretches_its_tiles_across() {
         let names = ["one", "two", "three", "four", "five", "six", "seven"];
         let view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
             tiles: names
                 .iter()
                 .map(|name| tile(name, InteractionStatus::Idle))
                 .collect(),
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         let (screen, feedback) = draw(&view, 150, 30);
         assert_eq!(feedback.rows, vec![3, 2, 2], "{screen}");
@@ -917,15 +897,12 @@ mod tests {
     fn the_cursor_tile_stays_on_screen() {
         let names = ["one", "two", "three", "four", "five", "six"];
         let view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
             tiles: names
                 .iter()
                 .map(|name| tile(name, InteractionStatus::Idle))
                 .collect(),
             selected: 5,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         // One column, two seven-row tiles high.
         let (screen, _) = draw(&view, 40, 16);
@@ -966,12 +943,8 @@ mod tests {
             },
         ];
         let view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
             tiles: vec![talking],
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         let (screen, _) = draw(&view, 60, 14);
         assert!(screen.contains("« Split the retry work off."), "{screen}");
@@ -994,15 +967,13 @@ mod tests {
         let mut other = tile("write the docs", InteractionStatus::Idle);
         other.branch = Some("styra/retry-docs");
         let view = OverviewView {
-            running_only: false,
             tiles: vec![fixing, other],
-            selected: 0,
-            links: LinkDisplay::Compact,
             search: SearchView {
                 query: Some("retry"),
                 typing: true,
             },
             workspace_scope: None,
+            ..overview()
         };
         let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
         terminal
@@ -1041,14 +1012,7 @@ mod tests {
 
     #[test]
     fn an_empty_fleet_says_so() {
-        let view = OverviewView {
-            running_only: false,
-            workspace_scope: None,
-            tiles: Vec::new(),
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
-        };
+        let view = OverviewView { ..overview() };
         let (screen, _) = draw(&view, 60, 5);
         assert!(
             screen.contains("no interaction is running or idle"),
@@ -1059,12 +1023,8 @@ mod tests {
     #[test]
     fn the_grid_shows_the_shared_workspace_scope() {
         let mut view = OverviewView {
-            running_only: false,
             workspace_scope: Some("Payments".into()),
-            tiles: Vec::new(),
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         let (screen, _) = draw(&view, 120, 5);
         assert!(screen.contains("Workspace: Payments"), "{screen}");
@@ -1081,11 +1041,7 @@ mod tests {
     fn an_empty_running_filter_shows_its_state() {
         let view = OverviewView {
             running_only: true,
-            workspace_scope: None,
-            tiles: Vec::new(),
-            selected: 0,
-            links: LinkDisplay::Compact,
-            search: SearchView::default(),
+            ..overview()
         };
         let (screen, feedback) = draw(&view, 100, 5);
         assert!(screen.contains("r running only: on"), "{screen}");

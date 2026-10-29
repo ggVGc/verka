@@ -274,6 +274,16 @@ mod tests {
             .arg("30")
             .spawn()
             .unwrap();
+        // spawn() can return before /proc publishes the new argv. Wait for
+        // that fixture state rather than asserting against the transient
+        // kernel-name fallback ("[sleep]").
+        let cmdline = PathBuf::from(format!("/proc/{}/cmdline", child.id()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::fs::read(&cmdline).unwrap_or_default().is_empty()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         let processes = sandbox_processes(std::process::id());
         child.kill().unwrap();
         child.wait().unwrap();

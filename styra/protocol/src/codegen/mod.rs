@@ -199,6 +199,20 @@ mod tests {
     #[test]
     fn the_borrowed_vocabularies_are_in_the_model() {
         let model = model().unwrap();
+        let Body::Enum(request) = &model.get("Request").unwrap().body else {
+            panic!("Request is an enum of operations");
+        };
+        assert!(
+            request.variants.len() > 30,
+            "the operation list looks short"
+        );
+        for provider in crate::agent::Provider::ALL {
+            assert_eq!(serde_json::to_value(provider).unwrap(), provider.as_str());
+        }
+        assert_eq!(
+            serde_json::to_value(crate::protocol::Request::QuotaLog).unwrap()["operation"],
+            "quota_log"
+        );
         for name in [
             "AgentEvent",  // genta
             "Selection",   // genta

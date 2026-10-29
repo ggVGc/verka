@@ -243,21 +243,31 @@ mod tests {
         format!("Here you go.\n{OPEN}\n{body}\n{CLOSE}\n")
     }
 
-    #[test]
-    fn framing_keeps_the_operator_message_and_names_the_delimiters() {
-        let framed = frame("which files handle auth?", Contract::Files);
-        assert!(framed.starts_with("which files handle auth?"));
-        assert!(framed.contains(OPEN));
-        assert!(framed.contains(CLOSE));
-        assert!(framed.contains("one file location per line"));
-    }
-
     /// Framing and unframing are one agreement read in two directions, so
-    /// every contract has to survive the round trip exactly.
+    /// every contract must name its shape and survive the round trip exactly.
     #[test]
-    fn unframing_recovers_the_operator_message_and_its_contract() {
+    fn every_contract_frames_its_shape_and_recovers_the_operator_message() {
         for contract in CONTRACTS {
             let framed = frame("which files handle auth?", contract);
+            assert!(
+                framed.starts_with("which files handle auth?"),
+                "{contract:?}"
+            );
+            assert!(
+                framed.contains(OPEN),
+                "{contract:?} named no opening delimiter"
+            );
+            assert!(
+                framed.contains(CLOSE),
+                "{contract:?} named no closing delimiter"
+            );
+            assert!(
+                framed.contains(shape(contract)),
+                "{contract:?} did not state its shape"
+            );
+            if contract == Contract::Files {
+                assert!(framed.contains("one file location per line"));
+            }
             assert_eq!(
                 unframe(&framed),
                 Some(("which files handle auth?", contract)),
@@ -277,23 +287,6 @@ mod tests {
         assert_eq!(unframe(&quoted), None);
     }
 
-    #[test]
-    fn every_contract_frames_with_its_own_shape() {
-        for contract in [
-            Contract::Text,
-            Contract::Lines,
-            Contract::Files,
-            Contract::Json,
-        ] {
-            let framed = frame("go", contract);
-            assert!(framed.contains(OPEN), "{contract:?} named no delimiter");
-            assert!(
-                framed.contains(shape(contract)),
-                "{contract:?} did not state its shape"
-            );
-        }
-    }
-
     /// An agent that echoes the requested format while thinking must not have
     /// its rehearsal read as the answer.
     #[test]
@@ -301,14 +294,6 @@ mod tests {
         let message =
             format!("{OPEN}\n...your answer...\n{CLOSE}\nActually:\n{OPEN}\nreal\n{CLOSE}");
         assert_eq!(extract(&message).unwrap().trim(), "real");
-    }
-
-    #[test]
-    fn a_reply_with_no_block_is_an_error_naming_the_delimiter() {
-        let error = extract("I could not determine that.")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains(OPEN), "{error}");
     }
 
     #[test]
@@ -335,48 +320,56 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_path_is_a_file_with_no_position() {
-        let value = parse(&block("src/auth.rs"), Contract::Files).unwrap();
-        assert_eq!(
-            value,
-            AnswerValue::Files(vec![FileLocation {
-                path: PathBuf::from("src/auth.rs"),
-                line: None,
-                column: None,
-                end_line: None,
-                description: String::new(),
-            }])
-        );
-    }
-
-    #[test]
-    fn a_file_carries_line_column_and_description() {
-        let value = parse(
-            &block("src/auth.rs:12:5: checks the token"),
-            Contract::Files,
-        )
-        .unwrap();
-        assert_eq!(
-            value,
-            AnswerValue::Files(vec![FileLocation {
-                path: PathBuf::from("src/auth.rs"),
-                line: Some(12),
-                column: Some(5),
-                end_line: None,
-                description: "checks the token".into(),
-            }])
-        );
-    }
-
-    #[test]
-    fn a_description_may_contain_colons() {
-        let AnswerValue::Files(files) =
-            parse(&block("a.rs:3: see also: b.rs"), Contract::Files).unwrap()
-        else {
-            panic!("the files contract must parse to files");
-        };
-        assert_eq!(files[0].line, Some(3));
-        assert_eq!(files[0].description, "see also: b.rs");
+    fn single_file_locations_preserve_positions_and_descriptions() {
+        for (input, expected) in [
+            (
+                "src/auth.rs",
+                FileLocation {
+                    path: PathBuf::from("src/auth.rs"),
+                    line: None,
+                    column: None,
+                    end_line: None,
+                    description: String::new(),
+                },
+            ),
+            (
+                "src/auth.rs:12:5: checks the token",
+                FileLocation {
+                    path: PathBuf::from("src/auth.rs"),
+                    line: Some(12),
+                    column: Some(5),
+                    end_line: None,
+                    description: "checks the token".into(),
+                },
+            ),
+            (
+                "a.rs:3: see also: b.rs",
+                FileLocation {
+                    path: PathBuf::from("a.rs"),
+                    line: Some(3),
+                    column: None,
+                    end_line: None,
+                    description: "see also: b.rs".into(),
+                },
+            ),
+            // A non-numeric field ends the position and starts the description.
+            (
+                "README: the entry point",
+                FileLocation {
+                    path: PathBuf::from("README"),
+                    line: None,
+                    column: None,
+                    end_line: None,
+                    description: "the entry point".into(),
+                },
+            ),
+        ] {
+            assert_eq!(
+                parse(&block(input), Contract::Files).unwrap(),
+                AnswerValue::Files(vec![expected]),
+                "{input}"
+            );
+        }
     }
 
     /// Agents name a function or a block as a range of lines unasked. The
@@ -409,20 +402,6 @@ mod tests {
         // A range running backwards is not one, and is left as text.
         assert_eq!(files[3].line, None);
         assert_eq!(files[3].description, "9-3: backwards");
-    }
-
-    /// A description that opens with a non-numeric word must not be read as a
-    /// position, or `README: the entry point` loses its path.
-    #[test]
-    fn a_non_numeric_field_ends_the_position() {
-        let AnswerValue::Files(files) =
-            parse(&block("README: the entry point"), Contract::Files).unwrap()
-        else {
-            panic!("the files contract must parse to files");
-        };
-        assert_eq!(files[0].path, PathBuf::from("README"));
-        assert_eq!(files[0].line, None);
-        assert_eq!(files[0].description, "the entry point");
     }
 
     #[test]
@@ -485,6 +464,7 @@ mod tests {
     /// to see what was said, and why it did not satisfy what was asked.
     #[test]
     fn a_reply_that_misses_the_contract_keeps_the_message_and_says_why() {
+        // This also covers extract's missing-block error through parse and read.
         let events = vec![AgentEvent::AgentMessage {
             text: "I could not determine that.".into(),
         }];

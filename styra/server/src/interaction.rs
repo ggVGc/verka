@@ -1303,6 +1303,33 @@ mod tests {
         }
     }
 
+    struct InteractionFixture(tempfile::TempDir);
+
+    impl InteractionFixture {
+        fn new(name: &str) -> Self {
+            Self(tempfile::Builder::new().prefix(name).tempdir().unwrap())
+        }
+
+        fn path(&self) -> &Path {
+            self.0.path()
+        }
+
+        fn spawn(
+            &self,
+            backend: impl Isolation + Send + 'static,
+            session_id: &str,
+        ) -> (Interaction, Receiver<InteractionUpdate>) {
+            Interaction::spawn(
+                workspace_spec(self.path()),
+                Box::new(backend),
+                Journal::create(self.path()).unwrap(),
+                session_id.into(),
+                self.path().join("diagnostics.log"),
+            )
+            .unwrap()
+        }
+    }
+
     /// A template names host state with `~` (the rust template's `RUSTUP_HOME`,
     /// say). Profiles pin `HOME` to a disposable sandbox directory, so the
     /// marker must resolve against the host home the template's mounts use, and
@@ -1419,18 +1446,8 @@ mod tests {
 
     #[test]
     fn a_sent_message_round_trips_through_the_agent_and_into_the_journal() {
-        let dir = std::env::temp_dir().join(format!("styra-session-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let journal = Journal::create(&dir).unwrap();
-
-        let (interaction, updates) = Interaction::spawn(
-            workspace_spec(&dir),
-            Box::new(EchoBackend),
-            journal,
-            "test-session".into(),
-            dir.join("diagnostics.log"),
-        )
-        .unwrap();
+        let fixture = InteractionFixture::new("styra-session");
+        let (interaction, updates) = fixture.spawn(EchoBackend, "test-session");
 
         interaction.send("hello agent").unwrap();
         // Closing stdin lets the echo backend finish after replying.
@@ -1481,7 +1498,7 @@ mod tests {
         drop(interaction);
 
         // The journal captured both the operator turn and the agent reply.
-        let replayed = crate::journal::replay(&dir, Protocol::ClaudeJsonl).unwrap();
+        let replayed = crate::journal::replay(fixture.path(), Protocol::ClaudeJsonl).unwrap();
         assert_eq!(
             replayed,
             vec![
@@ -1493,33 +1510,21 @@ mod tests {
                 },
             ]
         );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Regression test for an interaction being marked ended while its stdout
     /// reader still has agent data to publish.
     #[test]
     fn ended_is_the_final_update_after_buffered_stdout_is_drained() {
-        let dir = std::env::temp_dir().join(format!(
-            "styra-buffered-exit-session-{}",
-            std::process::id()
-        ));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
-        let journal = Journal::create(&dir).unwrap();
+        let fixture = InteractionFixture::new("styra-buffered-exit-session");
         let release = Arc::new(Barrier::new(2));
 
-        let (interaction, updates) = Interaction::spawn(
-            workspace_spec(&dir),
-            Box::new(BufferedExitBackend {
+        let (interaction, updates) = fixture.spawn(
+            BufferedExitBackend {
                 release: Arc::clone(&release),
-            }),
-            journal,
-            "buffered-exit-session".into(),
-            dir.join("diagnostics.log"),
-        )
-        .unwrap();
+            },
+            "buffered-exit-session",
+        );
 
         // The reader records a line before publishing its Raw and Event
         // updates. Holding this lock makes the process-exit thread win the
@@ -1555,7 +1560,6 @@ mod tests {
         }
 
         drop(interaction);
-        std::fs::remove_dir_all(&dir).ok();
 
         assert_eq!(
             order,
@@ -1566,29 +1570,20 @@ mod tests {
 
     #[test]
     fn dropping_an_interaction_force_terminates_a_backend_that_ignores_eof() {
-        let dir =
-            std::env::temp_dir().join(format!("styra-stubborn-session-{}", std::process::id()));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
-        let journal = Journal::create(&dir).unwrap();
+        let fixture = InteractionFixture::new("styra-stubborn-session");
         let terminated = Arc::new(AtomicBool::new(false));
 
-        let (interaction, _updates) = Interaction::spawn(
-            workspace_spec(&dir),
-            Box::new(StubbornBackend {
+        let (interaction, _updates) = fixture.spawn(
+            StubbornBackend {
                 terminated: Arc::clone(&terminated),
-            }),
-            journal,
-            "stubborn-session".into(),
-            dir.join("diagnostics.log"),
-        )
-        .unwrap();
+            },
+            "stubborn-session",
+        );
 
         let started = Instant::now();
         drop(interaction);
         assert!(terminated.load(Ordering::Acquire));
         assert!(started.elapsed() < Duration::from_secs(1));
-        std::fs::remove_dir_all(dir).ok();
     }
 
     /// A resume launched straight after a stop reuses the stopped sandbox's
@@ -1597,38 +1592,22 @@ mod tests {
     /// interaction is still alive to be replaced, terminating if it must.
     #[test]
     fn shutting_down_waits_for_the_sandbox_to_be_gone() {
-        let dir =
-            std::env::temp_dir().join(format!("styra-shut-down-session-{}", std::process::id()));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = InteractionFixture::new("styra-shut-down-session");
 
-        let (polite, _updates) = Interaction::spawn(
-            workspace_spec(&dir),
-            Box::new(EchoBackend),
-            Journal::create(&dir).unwrap(),
-            "polite-session".into(),
-            dir.join("diagnostics.log"),
-        )
-        .unwrap();
+        let (polite, _updates) = fixture.spawn(EchoBackend, "polite-session");
         assert!(polite.shut_down());
         assert!(polite.exec.as_ref().unwrap().is_finished());
 
         let terminated = Arc::new(AtomicBool::new(false));
-        let (stubborn, _updates) = Interaction::spawn(
-            workspace_spec(&dir),
-            Box::new(StubbornBackend {
+        let (stubborn, _updates) = fixture.spawn(
+            StubbornBackend {
                 terminated: Arc::clone(&terminated),
-            }),
-            Journal::create(&dir).unwrap(),
-            "stubborn-session".into(),
-            dir.join("diagnostics.log"),
-        )
-        .unwrap();
+            },
+            "stubborn-session",
+        );
         assert!(stubborn.shut_down());
         assert!(terminated.load(Ordering::Acquire));
         assert!(stubborn.exec.as_ref().unwrap().is_finished());
-
-        std::fs::remove_dir_all(dir).ok();
     }
 
     /// An agent with background work ignores stdin EOF and works on, so
@@ -1636,20 +1615,14 @@ mod tests {
     /// it outright rather than asking first.
     #[test]
     fn stopping_and_killing_end_an_agent_that_ignores_eof() {
-        let dir = std::env::temp_dir().join(format!("styra-kill-session-{}", std::process::id()));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = InteractionFixture::new("styra-kill-session");
         let spawn_stubborn = |terminated: &Arc<AtomicBool>| {
-            Interaction::spawn(
-                workspace_spec(&dir),
-                Box::new(StubbornBackend {
+            fixture.spawn(
+                StubbornBackend {
                     terminated: Arc::clone(terminated),
-                }),
-                Journal::create(&dir).unwrap(),
-                "stubborn-session".into(),
-                dir.join("diagnostics.log"),
+                },
+                "stubborn-session",
             )
-            .unwrap()
         };
 
         let terminated = Arc::new(AtomicBool::new(false));
@@ -1667,8 +1640,6 @@ mod tests {
         assert!(killed.kill());
         assert!(terminated.load(Ordering::Acquire));
         assert!(killed.exec.as_ref().unwrap().is_finished());
-
-        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

@@ -734,17 +734,13 @@ mod tests {
         fixture.feature();
         let workspace =
             crate::workspace::create(fixture.state.store_root(), fixture.path(), None).unwrap();
-        let selection = Selection::new(crate::agent::Provider::Codex);
-        let profile =
-            crate::agent::resolve_profile(&selection, &workspace_layout(fixture.path())).unwrap();
-        let (journal, id) = Journal::create_in_workspace(
+
+        let (journal, id) = create_session(
             fixture.state.store_root(),
             &workspace.id,
-            &profile,
-            &selection,
+            fixture.path(),
             None,
-        )
-        .unwrap();
+        );
         let session = journal.path().parent().unwrap().to_path_buf();
         drop(journal);
         assert!(journal::read_session_checkout(&session).unwrap().is_none());
@@ -778,17 +774,13 @@ mod tests {
         let fixture = Fixture::new();
         fixture.feature();
         let session = fixture.state.stored_summary(&fixture.id).unwrap();
-        let selection = Selection::new(crate::agent::Provider::Codex);
-        let profile =
-            crate::agent::resolve_profile(&selection, &workspace_layout(&fixture.host)).unwrap();
-        let (journal, separate_id) = Journal::create_in_workspace(
+
+        let (journal, separate_id) = create_session(
             fixture.state.store_root(),
             &session.workspace_id,
-            &profile,
-            &selection,
+            &fixture.host,
             None,
-        )
-        .unwrap();
+        );
         let separate_path = journal.path().parent().unwrap().to_path_buf();
         let workspace =
             crate::workspace::get(fixture.state.store_root(), &session.workspace_id).unwrap();
@@ -811,14 +803,12 @@ mod tests {
             "an interaction in another worktree does not count"
         );
         drop(journal);
-        let (journal, other_id) = Journal::create_in_workspace(
+        let (journal, other_id) = create_session(
             fixture.state.store_root(),
             &session.workspace_id,
-            &profile,
-            &selection,
+            &fixture.host,
             None,
-        )
-        .unwrap();
+        );
         let other_path = journal.path().parent().unwrap().to_path_buf();
         journal::store_session_checkout(&other_path, &fixture.checkout).unwrap();
         drop(journal);
@@ -878,19 +868,15 @@ mod tests {
         fixture.feature();
         let workspace =
             crate::workspace::create(fixture.state.store_root(), fixture.path(), None).unwrap();
-        let selection = Selection::new(crate::agent::Provider::Codex);
-        let profile =
-            crate::agent::resolve_profile(&selection, &workspace_layout(fixture.path())).unwrap();
+
         let mut ids = Vec::new();
         for _ in 0..2 {
-            let (journal, id) = Journal::create_in_workspace(
+            let (journal, id) = create_session(
                 fixture.state.store_root(),
                 &workspace.id,
-                &profile,
-                &selection,
+                fixture.path(),
                 None,
-            )
-            .unwrap();
+            );
             assert!(
                 journal::read_session_checkout(journal.path().parent().unwrap())
                     .unwrap()
@@ -1087,17 +1073,13 @@ mod tests {
         let fixture = Fixture::new();
         fixture.feature();
         let session = fixture.state.stored_summary(&fixture.id).unwrap();
-        let selection = Selection::new(crate::agent::Provider::Codex);
-        let profile =
-            crate::agent::resolve_profile(&selection, &workspace_layout(&fixture.host)).unwrap();
-        let (journal, _) = Journal::create_in_workspace(
+
+        let (journal, _) = create_session(
             fixture.state.store_root(),
             &session.workspace_id,
-            &profile,
-            &selection,
+            &fixture.host,
             None,
-        )
-        .unwrap();
+        );
         journal::store_session_checkout(journal.path().parent().unwrap(), &fixture.checkout)
             .unwrap();
         assert!(fixture
@@ -1412,19 +1394,23 @@ mod tests {
             SystemGit.commit_all(self.path(), "feature two").unwrap();
         }
 
+        fn conflict(&self) {
+            std::fs::write(self.path().join("file"), "feature\n").unwrap();
+            SystemGit.commit_all(self.path(), "feature").unwrap();
+            std::fs::write(self.host.join("file"), "source\n").unwrap();
+            SystemGit.commit_all(&self.host, "source").unwrap();
+        }
+
         fn branch_record(&self, parent: &str, completed: CompletionState) -> (String, PathBuf) {
             let session = self.state.stored_summary(&self.id).unwrap();
             let selection = Selection::new(crate::agent::Provider::Codex);
-            let profile =
-                crate::agent::resolve_profile(&selection, &workspace_layout(&self.host)).unwrap();
-            let (journal, id) = Journal::create_in_workspace(
+
+            let (journal, id) = create_session(
                 self.state.store_root(),
                 &session.workspace_id,
-                &profile,
-                &selection,
-                Some("Child branch".into()),
-            )
-            .unwrap();
+                &self.host,
+                Some("Child branch"),
+            );
             let path = journal.path().parent().unwrap().to_path_buf();
             drop(journal);
             journal::store_session_origin(
@@ -1489,6 +1475,50 @@ mod tests {
             journal::read_session_completed(&fixture.session).unwrap(),
             CompletionState::Sealed
         );
+    }
+
+    fn create_session(
+        store: &Path,
+        workspace_id: &str,
+        directory: &Path,
+        name: Option<&str>,
+    ) -> (Journal, String) {
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile =
+            crate::agent::resolve_profile(&selection, &workspace_layout(directory)).unwrap();
+        Journal::create_in_workspace(
+            store,
+            workspace_id,
+            &profile,
+            &selection,
+            name.map(str::to_owned),
+        )
+        .unwrap()
+    }
+
+    fn pending_rebase(source_commit: String) -> crate::protocol::RebaseStatus {
+        crate::protocol::RebaseStatus {
+            finished: false,
+            succeeded: false,
+            message: String::new(),
+            output: String::new(),
+            source_commit,
+        }
+    }
+
+    fn continue_rebase(path: &Path) -> Result<()> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .env("GIT_EDITOR", "true")
+            .args(["rebase", "--continue"])
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "rebase continue failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
     }
 
     fn wait_for_rebase(fixture: &Fixture) -> crate::protocol::RebaseStatus {
@@ -1711,13 +1741,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let mut status = crate::protocol::RebaseStatus {
-            finished: false,
-            succeeded: false,
-            message: String::new(),
-            output: String::new(),
-            source_commit: target.clone(),
-        };
+        let mut status = pending_rebase(target.clone());
         // A failed resolver leaves a retryable rebase and the old Git ref intact.
         assert!(fixture
             .state
@@ -1746,13 +1770,7 @@ mod tests {
                     resolved = true;
                     std::fs::write(path.join("file"), "target and feature\n")?;
                     git(path, &["add", "file"]);
-                    let result = Command::new("git")
-                        .arg("-C")
-                        .arg(path)
-                        .env("GIT_EDITOR", "true")
-                        .args(["rebase", "--continue"])
-                        .output()?;
-                    anyhow::ensure!(result.status.success(), "rebase continue failed");
+                    continue_rebase(path)?;
                     Ok(())
                 },
             )
@@ -1849,13 +1867,7 @@ mod tests {
         let source = git(&fixture.host, &["rev-parse", "main"]);
         std::fs::write(fixture.host.join("later"), "later\n").unwrap();
         SystemGit.commit_all(&fixture.host, "later").unwrap();
-        let mut status = crate::protocol::RebaseStatus {
-            finished: false,
-            succeeded: false,
-            message: String::new(),
-            output: String::new(),
-            source_commit: source.clone(),
-        };
+        let mut status = pending_rebase(source.clone());
         fixture
             .state
             .run_rebase(
@@ -1880,18 +1892,9 @@ mod tests {
     #[test]
     fn standalone_rebase_resolves_conflicts_before_recording_the_base() {
         let fixture = Fixture::new();
-        std::fs::write(fixture.path().join("file"), "feature\n").unwrap();
-        SystemGit.commit_all(fixture.path(), "feature").unwrap();
-        std::fs::write(fixture.host.join("file"), "source\n").unwrap();
-        SystemGit.commit_all(&fixture.host, "source").unwrap();
+        fixture.conflict();
         let source = git(&fixture.host, &["rev-parse", "main"]);
-        let mut status = crate::protocol::RebaseStatus {
-            finished: false,
-            succeeded: false,
-            message: String::new(),
-            output: String::new(),
-            source_commit: source.clone(),
-        };
+        let mut status = pending_rebase(source.clone());
         let record = fixture.session.join("rebase.json");
         let mut called = false;
         fixture
@@ -1916,13 +1919,7 @@ mod tests {
                     status.output = "Resolved file; continuing the rebase".into();
                     std::fs::write(path.join("file"), "source and feature\n")?;
                     git(path, &["add", "file"]);
-                    let output = Command::new("git")
-                        .arg("-C")
-                        .arg(path)
-                        .env("GIT_EDITOR", "true")
-                        .args(["rebase", "--continue"])
-                        .output()?;
-                    anyhow::ensure!(output.status.success(), "rebase continue failed");
+                    continue_rebase(path)?;
                     Ok(())
                 },
             )
@@ -1954,17 +1951,8 @@ mod tests {
     #[test]
     fn standalone_rebase_keeps_the_old_base_when_conflict_resolution_fails() {
         let fixture = Fixture::new();
-        std::fs::write(fixture.path().join("file"), "feature\n").unwrap();
-        SystemGit.commit_all(fixture.path(), "feature").unwrap();
-        std::fs::write(fixture.host.join("file"), "source\n").unwrap();
-        SystemGit.commit_all(&fixture.host, "source").unwrap();
-        let mut status = crate::protocol::RebaseStatus {
-            finished: false,
-            succeeded: false,
-            message: String::new(),
-            output: String::new(),
-            source_commit: git(&fixture.host, &["rev-parse", "main"]),
-        };
+        fixture.conflict();
+        let mut status = pending_rebase(git(&fixture.host, &["rev-parse", "main"]));
         assert!(fixture
             .state
             .run_rebase_with_resolver(
@@ -1989,10 +1977,7 @@ mod tests {
     #[test]
     fn standalone_rebase_refuses_an_unrelated_conflicted_rebase() {
         let fixture = Fixture::new();
-        std::fs::write(fixture.path().join("file"), "feature\n").unwrap();
-        SystemGit.commit_all(fixture.path(), "feature").unwrap();
-        std::fs::write(fixture.host.join("file"), "source\n").unwrap();
-        SystemGit.commit_all(&fixture.host, "source").unwrap();
+        fixture.conflict();
         assert!(!SystemGit.rebase(fixture.path(), "main").unwrap());
         assert!(fixture.state.start_rebase(&fixture.id).is_err());
         assert_eq!(
@@ -2073,10 +2058,7 @@ mod tests {
     #[test]
     fn rebase_conflicts_are_retained_and_can_be_resolved_then_integrated() {
         let fixture = Fixture::new();
-        std::fs::write(fixture.path().join("file"), "feature\n").unwrap();
-        SystemGit.commit_all(fixture.path(), "feature").unwrap();
-        std::fs::write(fixture.host.join("file"), "source\n").unwrap();
-        SystemGit.commit_all(&fixture.host, "source").unwrap();
+        fixture.conflict();
         assert!(!SystemGit.rebase(fixture.path(), "main").unwrap());
         assert!(SystemGit.rebase_in_progress(fixture.path()).unwrap());
         assert_eq!(
@@ -2085,18 +2067,7 @@ mod tests {
         );
         std::fs::write(fixture.path().join("file"), "source and feature\n").unwrap();
         git(fixture.path(), &["add", "file"]);
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
-            .env("GIT_EDITOR", "true")
-            .args(["rebase", "--continue"])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        continue_rebase(fixture.path()).unwrap();
         fixture
             .state
             .run_integration(&fixture.id, fixture.progress())

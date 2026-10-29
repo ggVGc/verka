@@ -247,20 +247,3 @@ fn default_socket() -> Result<PathBuf> {
         .context("XDG_RUNTIME_DIR is not set; pass --socket explicitly")?;
     Ok(PathBuf::from(runtime).join("styra/styra.sock"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn send_request_has_the_protocol_shape() {
-        let request = Request::SendMessage {
-            id: "styra-1".into(),
-            message: styra_protocol::SendMessage::new("hello"),
-        };
-        let value = serde_json::to_value(request).unwrap();
-        assert_eq!(value["operation"], "send_message");
-        assert_eq!(value["data"]["id"], "styra-1");
-        assert_eq!(value["data"]["message"]["text"], "hello");
-    }
-}

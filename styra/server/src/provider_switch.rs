@@ -431,48 +431,28 @@ mod tests {
     }
 
     #[test]
-    fn a_live_interaction_cannot_switch_or_restart_and_has_no_side_effects() {
-        for activity in [
-            InteractionActivity::Running,
-            InteractionActivity::Background,
-            InteractionActivity::Pending,
+    fn an_interaction_must_finish_stopping_before_switching_or_restarting() {
+        use InteractionActivity::{Background, Pending, Running, Stopped};
+        for (activity, resume_error, switch_error) in [
+            (Running, "live interaction", "stop the interaction"),
+            (Background, "live interaction", "stop the interaction"),
+            (Pending, "live interaction", "stop the interaction"),
+            (Stopped, "not exited", "not exited"),
         ] {
             let mut environment = MockEnvironment::stopped();
             environment.activity = Some((activity, false));
             let original = environment.summary(SESSION).unwrap();
             let chosen = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
-
-            assert!(
-                resume_inner(&environment, MockEnvironment::request(chosen.clone()))
-                    .unwrap_err()
-                    .to_string()
-                    .contains("live interaction")
-            );
-            assert!(switch_with(&environment, SESSION, &chosen)
+            let error = resume_inner(&environment, MockEnvironment::request(chosen.clone()))
                 .unwrap_err()
-                .to_string()
-                .contains("stop the interaction"));
+                .to_string();
+            assert!(error.contains(resume_error), "{activity:?}: {error}");
+            let error = switch_with(&environment, SESSION, &chosen)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(switch_error), "{activity:?}: {error}");
             environment.assert_untouched(&original);
         }
-    }
-
-    #[test]
-    fn stopping_must_finish_before_switching_or_restarting() {
-        let mut environment = MockEnvironment::stopped();
-        environment.activity = Some((InteractionActivity::Stopped, false));
-        let original = environment.summary(SESSION).unwrap();
-        let chosen = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
-        assert!(
-            resume_inner(&environment, MockEnvironment::request(chosen.clone()))
-                .unwrap_err()
-                .to_string()
-                .contains("not exited")
-        );
-        assert!(switch_with(&environment, SESSION, &chosen)
-            .unwrap_err()
-            .to_string()
-            .contains("not exited"));
-        environment.assert_untouched(&original);
     }
 
     #[test]

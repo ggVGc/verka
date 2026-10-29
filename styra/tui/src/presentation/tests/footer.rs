@@ -6,39 +6,8 @@ mod tests {
     use super::super::test_support::inspect;
     use styra_ui::application::MainView;
 
-    use std::path::PathBuf;
-    use styra_protocol::{CompletionState, InteractionActivity, InteractionSummary};
-
-    fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
-        InteractionSummary {
-            auto_retry: false,
-            auto_commit: false,
-            id: id.into(),
-            name: None,
-            tags: Vec::new(),
-            workspace_id: "workspace".into(),
-            selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
-            workspace: PathBuf::from("/workspace"),
-            activity,
-            activity_reason: None,
-            activity_since_ms: 0,
-            idle_unseen: false,
-            interacted_at_ms: 0,
-            last_user_message_at_ms: 0,
-            uncommitted_changes: false,
-            expected_branch: None,
-            checkout: None,
-            last_message: None,
-            recent_messages: Vec::new(),
-            events: 0,
-            branched_from: None,
-            completed: CompletionState::Active,
-            focus_requested: false,
-            origin: None,
-            integration: None,
-            restored: false,
-        }
-    }
+    use crate::interactions::tests::interaction;
+    use styra_protocol::InteractionActivity;
 
     #[test]
     fn footer_shows_the_working_directory() {
@@ -157,12 +126,5 @@ mod tests {
         });
     }
 
-    #[test]
-    fn footer_data_uses_the_entered_workspace() {
-        let mut app = test_support::app("s1");
-        app.workspace.enter("/workspace".into());
-        inspect(&app, |v| {
-            assert_eq!(v.footer.working_directory, "/workspace")
-        });
-    }
+
 }

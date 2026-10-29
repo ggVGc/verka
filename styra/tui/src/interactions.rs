@@ -1995,20 +1995,92 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn finishing_with_stopped_rows_hidden_skips_a_stopped_sibling() {
-        let mut stopped = interaction("stopped", InteractionActivity::Stopped);
-        stopped.workspace_id = "workspace".into();
-        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
-        elsewhere.workspace_id = "other".into();
-        let mut live = LiveInteractions::default();
-        live.open(vec![completed("finished"), stopped, elsewhere], vec![]);
-        live.show_completed = true;
-        live.hide_stopped = true;
-
-        assert_eq!(
-            live.select_past_hidden("finished", None).unwrap().id,
-            "elsewhere"
-        );
+    fn finishing_selects_visible_local_work_before_other_workspaces() {
+        use InteractionActivity::{Pending, Running, Stopped};
+        let elsewhere = || {
+            let mut item = interaction("elsewhere", Pending);
+            item.workspace_id = "other".into();
+            item
+        };
+        for (name, items, show_completed, hide_stopped, scope, expected) in [
+            (
+                "hidden stopped sibling",
+                vec![
+                    completed("finished"),
+                    interaction("stopped", Stopped),
+                    elsewhere(),
+                ],
+                true,
+                true,
+                None,
+                "elsewhere",
+            ),
+            (
+                "next visible row",
+                vec![completed("finished"), interaction("next", Pending)],
+                false,
+                false,
+                Some("workspace"),
+                "next",
+            ),
+            (
+                "stay on shown completed row without local work",
+                vec![completed("finished"), elsewhere()],
+                true,
+                false,
+                None,
+                "finished",
+            ),
+            (
+                "local live work before stopped or elsewhere",
+                vec![
+                    interaction("earlier", Running),
+                    completed("finished"),
+                    elsewhere(),
+                    interaction("stopped", Stopped),
+                ],
+                false,
+                false,
+                None,
+                "earlier",
+            ),
+            (
+                "local stopped work before elsewhere",
+                vec![
+                    completed("finished"),
+                    elsewhere(),
+                    interaction("stopped", Stopped),
+                ],
+                false,
+                false,
+                None,
+                "stopped",
+            ),
+            (
+                "leave workspace when no local work remains",
+                vec![completed("finished"), elsewhere()],
+                false,
+                false,
+                None,
+                "elsewhere",
+            ),
+        ] {
+            let count = items.len();
+            let mut live = LiveInteractions::default();
+            live.open(items, vec![]);
+            live.show_completed = show_completed;
+            live.hide_stopped = hide_stopped;
+            assert_eq!(
+                live.select_past_hidden("finished", scope).unwrap().id,
+                expected,
+                "{name}"
+            );
+            assert_eq!(
+                live.items.len(),
+                count,
+                "{name}: the completed row is still listed"
+            );
+        }
     }
 
     /// Completion is a property of the Session, cleared by the server when it
@@ -2024,27 +2096,6 @@ pub(crate) mod tests {
         live.refresh(vec![interaction("finished", InteractionActivity::Running)]);
 
         assert_eq!(live.visible_indices("", Some("workspace")), vec![0]);
-    }
-
-    /// Completing the interaction on screen leaves it listed — the navigator
-    /// is only filtering it — so the move is onto the next visible row.
-    #[test]
-    fn completing_an_interaction_selects_the_next_visible_one() {
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                completed("finished"),
-                interaction("next", InteractionActivity::Pending),
-            ],
-            vec![],
-        );
-
-        let next = live
-            .select_past_hidden("finished", Some("workspace"))
-            .unwrap();
-
-        assert_eq!(next.id, "next");
-        assert_eq!(live.items.len(), 2, "the completed row is still listed");
     }
 
     #[test]
@@ -2103,64 +2154,6 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
-    fn finishing_with_completed_rows_shown_stays_when_no_local_work_remains() {
-        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
-        elsewhere.workspace_id = "other".into();
-        let mut live = LiveInteractions::default();
-        live.open(vec![completed("finished"), elsewhere], vec![]);
-        live.show_completed = true;
-
-        assert_eq!(
-            live.select_past_hidden("finished", None).unwrap().id,
-            "finished"
-        );
-    }
-
-    /// The rest of the completed interaction's own Workspace comes before any
-    /// other Workspace, even one listed next to it — and its live work comes
-    /// before a stopped row of its own Workspace.
-    #[test]
-    fn completing_an_interaction_moves_on_to_live_work_in_its_own_workspace() {
-        let mut live = LiveInteractions::default();
-        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
-        elsewhere.workspace_id = "other".into();
-        live.open(
-            vec![
-                interaction("earlier", InteractionActivity::Running),
-                completed("finished"),
-                elsewhere,
-                interaction("stopped", InteractionActivity::Stopped),
-            ],
-            vec![],
-        );
-
-        let next = live.select_past_hidden("finished", None).unwrap();
-
-        assert_eq!(next.id, "earlier");
-    }
-
-    /// A stopped row of its own Workspace is still work left in it, and is
-    /// moved to before any other Workspace's live work.
-    #[test]
-    fn completing_an_interaction_stays_in_its_workspace_while_any_work_is_left() {
-        let mut live = LiveInteractions::default();
-        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
-        elsewhere.workspace_id = "other".into();
-        live.open(
-            vec![
-                completed("finished"),
-                elsewhere,
-                interaction("stopped", InteractionActivity::Stopped),
-            ],
-            vec![],
-        );
-
-        let next = live.select_past_hidden("finished", None).unwrap();
-
-        assert_eq!(next.id, "stopped");
-    }
-
     /// Nearest is where the navigator draws the rows — grouped by worktree —
     /// not the order they were created in.
     #[test]
@@ -2194,20 +2187,6 @@ pub(crate) mod tests {
         let next = live.select_past_hidden("finished", None).unwrap();
 
         assert_eq!(next.id, "main");
-    }
-
-    /// With no work left in its own Workspace, the move falls back to the
-    /// next visible row wherever it is.
-    #[test]
-    fn completing_the_last_live_interaction_of_a_workspace_moves_past_it() {
-        let mut live = LiveInteractions::default();
-        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
-        elsewhere.workspace_id = "other".into();
-        live.open(vec![completed("finished"), elsewhere], vec![]);
-
-        let next = live.select_past_hidden("finished", None).unwrap();
-
-        assert_eq!(next.id, "elsewhere");
     }
 
     /// A focus request is answered when its interaction first arrives, and
@@ -2267,6 +2246,8 @@ pub(crate) mod tests {
                 interaction("waiting", InteractionActivity::Pending),
                 interaction("done", InteractionActivity::Stopped),
                 interaction("also-done", InteractionActivity::Stopped),
+                // Completed work must not inflate the stopped count.
+                completed("signed-off"),
             ],
             Vec::new(),
         );
@@ -2276,30 +2257,6 @@ pub(crate) mod tests {
                 running: 2,
                 idle: 1,
                 stopped: 2,
-            }
-        );
-    }
-
-    /// Completion is the reason the server stopped these, so without the
-    /// exclusion every interaction the operator ever signed off on would keep
-    /// inflating the stopped number for the rest of the session.
-    #[test]
-    fn the_activity_tally_leaves_out_completed_interactions() {
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                interaction("working", InteractionActivity::Running),
-                interaction("abandoned", InteractionActivity::Stopped),
-                completed("signed-off"),
-            ],
-            Vec::new(),
-        );
-        assert_eq!(
-            live.activity_counts(),
-            ActivityCounts {
-                running: 1,
-                idle: 0,
-                stopped: 1,
             }
         );
     }
@@ -2351,6 +2308,9 @@ pub(crate) mod tests {
         assert_eq!(live.next_live("current", None).unwrap().id, "background");
         assert_eq!(live.next_live("background", None).unwrap().id, "waiting");
         assert_eq!(live.next_live("waiting", None).unwrap().id, "current");
+        // Active navigation skips the idle row in the same fleet.
+        assert_eq!(live.next_active("current", None).unwrap().id, "background");
+        assert_eq!(live.next_active("background", None).unwrap().id, "current");
     }
 
     #[test]
@@ -2381,26 +2341,6 @@ pub(crate) mod tests {
             live.next_attention_or_live("current", None).unwrap().id,
             "next-live"
         );
-    }
-
-    /// The step between actively working interactions skips ones idle and
-    /// waiting on the operator, unlike [`LiveInteractions::next_live`].
-    #[test]
-    fn the_active_step_skips_idle_interactions_and_wraps() {
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                interaction("current", InteractionActivity::Running),
-                interaction("waiting", InteractionActivity::Pending),
-                interaction("background", InteractionActivity::Background),
-                completed("finished"),
-                interaction("stopped", InteractionActivity::Stopped),
-            ],
-            vec![],
-        );
-
-        assert_eq!(live.next_active("current", None).unwrap().id, "background");
-        assert_eq!(live.next_active("background", None).unwrap().id, "current");
     }
 
     /// With nothing else actively working there is nowhere to step to: an
@@ -3210,6 +3150,9 @@ pub(crate) mod tests {
             "running"
         );
         assert!(live.previous_workspace("third", "", workspace).is_none());
+        live.toggle_workspace_scope();
+        assert!(live.next_workspace("pending", "", workspace).is_none());
+        assert!(live.previous_workspace("running", "", workspace).is_none());
     }
 
     /// The group jump crosses more of the list per press than j/k, so it has
@@ -3310,70 +3253,71 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn workspace_jumps_do_nothing_in_workspace_scope() {
-        let mut other = interaction("other", InteractionActivity::Pending);
+    fn first_live_selection_respects_scope_recency_and_waiting_work() {
+        use InteractionActivity::{Pending, Running, Stopped};
+        let mut other = interaction("other", Pending);
         other.workspace_id = "other-workspace".into();
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                interaction("current", InteractionActivity::Pending),
-                other,
-                interaction("next", InteractionActivity::Running),
-            ],
-            vec![],
-        );
-        live.toggle_workspace_scope();
-
-        assert!(live
-            .next_workspace("current", "", Some("workspace"))
-            .is_none());
-        assert!(live
-            .previous_workspace("next", "", Some("workspace"))
-            .is_none());
-    }
-
-    #[test]
-    fn first_live_in_workspace_prefers_the_one_waiting_on_the_operator() {
-        let mut other = interaction("other", InteractionActivity::Pending);
-        other.workspace_id = "other-workspace".into();
-        let interactions = vec![
-            other,
-            interaction("stopped", InteractionActivity::Stopped),
-            interaction("running", InteractionActivity::Running),
-            interaction("idle", InteractionActivity::Pending),
-        ];
-
-        assert_eq!(
-            first_live_in_workspace(&interactions, "workspace")
-                .unwrap()
-                .id,
-            "idle"
-        );
-        assert_eq!(
-            first_live_in_workspace(&interactions, "other-workspace")
-                .unwrap()
-                .id,
-            "other"
-        );
-    }
-
-    #[test]
-    fn first_live_in_workspace_returns_to_the_one_last_turned_to() {
-        let mut idle = interaction("idle", InteractionActivity::Pending);
+        let mut idle = interaction("idle", Pending);
         idle.interacted_at_ms = 10;
-        let mut running = interaction("running", InteractionActivity::Running);
+        let mut running = interaction("running", Running);
         running.interacted_at_ms = 20;
-        let mut stopped = interaction("stopped", InteractionActivity::Stopped);
+        let mut stopped = interaction("stopped", Stopped);
         stopped.interacted_at_ms = 30;
-        let untouched = interaction("untouched", InteractionActivity::Pending);
-        let interactions = vec![idle, running, stopped, untouched];
-
-        assert_eq!(
-            first_live_in_workspace(&interactions, "workspace")
-                .unwrap()
-                .id,
-            "running"
-        );
+        let mut elsewhere = interaction("elsewhere", Pending);
+        elsewhere.workspace_id = "other-workspace".into();
+        for (name, items, expectations) in [
+            (
+                "waiting operator",
+                vec![
+                    other,
+                    interaction("stopped", Stopped),
+                    interaction("running", Running),
+                    interaction("idle", Pending),
+                ],
+                vec![
+                    (Some("workspace"), Some("idle")),
+                    (Some("other-workspace"), Some("other")),
+                ],
+            ),
+            (
+                "last visited live entry",
+                vec![idle, running, stopped, interaction("untouched", Pending)],
+                vec![(Some("workspace"), Some("running"))],
+            ),
+            (
+                "all stopped",
+                vec![
+                    interaction("stopped", Stopped),
+                    interaction("also-stopped", Stopped),
+                ],
+                vec![
+                    (Some("workspace"), None),
+                    (Some("unknown"), None),
+                    (None, None),
+                ],
+            ),
+            (
+                "across workspaces",
+                vec![
+                    interaction("stopped", Stopped),
+                    interaction("running", Running),
+                    elsewhere,
+                ],
+                vec![(None, Some("elsewhere"))],
+            ),
+        ] {
+            for (scope, expected) in expectations {
+                let chosen = match scope {
+                    Some(workspace) => first_live_in_workspace(&items, workspace),
+                    None => first_live(&items),
+                };
+                assert_eq!(
+                    chosen.as_ref().map(|item| item.id.as_str()),
+                    expected,
+                    "{name}: {scope:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3393,31 +3337,6 @@ pub(crate) mod tests {
             assert!(first_live_in_workspace(&[finished.clone()], "workspace").is_none());
             assert!(first_live(&[finished]).is_none());
         }
-    }
-
-    #[test]
-    fn a_workspace_whose_interactions_all_stopped_has_no_live_entry() {
-        let interactions = vec![
-            interaction("stopped", InteractionActivity::Stopped),
-            interaction("also-stopped", InteractionActivity::Stopped),
-        ];
-
-        assert!(first_live_in_workspace(&interactions, "workspace").is_none());
-        assert!(first_live_in_workspace(&interactions, "unknown").is_none());
-        assert!(first_live(&interactions).is_none());
-    }
-
-    #[test]
-    fn first_live_looks_across_every_workspace() {
-        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
-        elsewhere.workspace_id = "other-workspace".into();
-        let interactions = vec![
-            interaction("stopped", InteractionActivity::Stopped),
-            interaction("running", InteractionActivity::Running),
-            elsewhere,
-        ];
-
-        assert_eq!(first_live(&interactions).unwrap().id, "elsewhere");
     }
 
     fn named(id: &str, name: &str) -> InteractionSummary {
@@ -3513,26 +3432,7 @@ pub(crate) mod tests {
 
         live.set_tag_filter(Vec::new(), "one", None);
         assert_eq!(live.visible_indices("", None), vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn the_tag_filter_can_exclude_tags() {
-        let tagged = |id: &str, tags: &[&str]| {
-            let mut interaction = named(id, id);
-            interaction.tags = tags.iter().map(|tag| tag.to_string()).collect();
-            interaction
-        };
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                tagged("one", &["bug"]),
-                tagged("two", &["bug", "wip"]),
-                tagged("three", &["docs"]),
-            ],
-            vec![],
-        );
-
-        live.set_tag_filter(vec!["bug".into(), "-wip".into()], "one", None);
+        live.set_tag_filter(vec!["bug".into(), "-urgent".into()], "one", None);
         assert_eq!(live.visible_indices("", None), vec![0]);
     }
 

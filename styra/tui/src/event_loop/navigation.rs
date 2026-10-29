@@ -200,16 +200,11 @@ mod tests {
     fn workspaces(ids: &[&str]) -> Vec<WorkspaceSummary> {
         ids.iter()
             .map(|id| WorkspaceSummary {
-                id: (*id).into(),
-                name: Some((*id).into()),
-                host_path: (*id).into(),
-                git_repository: None,
                 path: (*id).into(),
-                session_count: 0,
                 age: String::new(),
                 created_at_ms: 0,
                 last_accessed_at_ms: 0,
-                launch: Default::default(),
+                ..crate::workspace::tests::workspace(id, Some(id), id)
             })
             .collect()
     }

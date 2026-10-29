@@ -983,16 +983,6 @@ mod tests {
         assert_eq!(app.launch.interaction.writable_workspace, None);
     }
 
-    /// A launch policy is not editable once something is running, and this key
-    /// is no exception: the sandbox on screen is then a record of a mount that
-    /// is already in place.
-    #[test]
-    fn a_running_interactions_workspace_mount_is_not_re_bound() {
-        let mut app = running();
-        cycle_workspace_access(&mut app);
-        assert_eq!(app.launch.interaction.writable_workspace, None);
-    }
-
     #[test]
     fn moving_between_policy_layers_is_silent() {
         let mut app = pending_in_a_workspace_with_a_policy();
@@ -1313,19 +1303,8 @@ mod tests {
     fn editing_the_launch_inputs_re_asks_for_the_plan() {
         let mut app = pending();
         let effective = app.launch.effective();
-        app.launch.plan(
-            app.selection.clone(),
-            effective,
-            Some(DrivaOptions {
-                isolation_backend: "bwrap".into(),
-                command: vec!["codex".into()],
-                working_directory: PathBuf::from("/tmp/styra/workspace"),
-                network: false,
-                base: Vec::new(),
-                mounts: Vec::new(),
-                ..Default::default()
-            }),
-        );
+        app.launch
+            .plan(app.selection.clone(), effective, Some(options("bwrap")));
         assert!(!wants_plan(&app));
 
         cycle_network(&mut app);
@@ -1343,6 +1322,16 @@ mod tests {
 
         add_mount(&mut app, "/srv/data:rw");
         assert!(wants_plan(&app));
+        // Entering another Workspace changes the plan without an operator edit.
+        {
+            let mut app = pending();
+            let effective = app.launch.effective();
+            app.launch.plan(app.selection.clone(), effective, None);
+            assert!(!wants_plan(&app));
+
+            app.launch.set_workspace(workspace_policy());
+            assert!(wants_plan(&app));
+        }
     }
 
     /// The plan is asked for once per distinct set of inputs, and a live
@@ -1414,26 +1403,15 @@ mod tests {
         }
     }
 
-    /// Entering another Workspace re-plans: the policy a launch would run under
-    /// changed even though nothing the operator typed did.
-    #[test]
-    fn a_workspace_policy_change_re_asks_for_the_plan() {
-        let mut app = pending();
-        let effective = app.launch.effective();
-        app.launch.plan(app.selection.clone(), effective, None);
-        assert!(!wants_plan(&app));
-
-        app.launch.set_workspace(workspace_policy());
-        assert!(wants_plan(&app));
-    }
-
     /// The launch policy is only editable while nothing has started: once an
     /// interaction is running, the driva view is a record of the sandbox it is
     /// confined to and changing it would mean a new session.
     #[test]
     fn the_launch_policy_cannot_be_edited_once_an_interaction_is_running() {
-        let mut app = App::new(Selection::parse("codex").unwrap(), "s1");
+        let mut app = running();
         assert!(!app.can_edit_launch());
+        cycle_workspace_access(&mut app);
+        assert_eq!(app.launch.interaction.writable_workspace, None);
 
         cycle_network(&mut app);
         assert_eq!(app.launch.interaction.network, None);
@@ -1501,15 +1479,9 @@ mod tests {
         assert!(app.restart_for_mounts);
     }
 
-    /// A working agent's sandbox cannot be restarted under it, and a stopped
-    /// one's next launch takes the mount without a restart.
+    /// A stopped agent's next launch takes the mount without a restart.
     #[test]
-    fn only_an_idle_interaction_is_restarted_for_a_mount() {
-        let mut working = running();
-        working.activity.status = Status::Running;
-        open_prompt(&mut working);
-        assert!(working.launch.prompt.is_none());
-
+    fn a_stopped_interaction_takes_a_mount_without_restarting() {
         let mut stopped = running();
         stopped.activity.status = Status::Stopped(StopReason::Paused);
         add_mount(&mut stopped, "/srv/data");

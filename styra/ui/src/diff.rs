@@ -572,38 +572,35 @@ mod tests {
         );
     }
 
-    /// A removal is numbered in the old file and anything else in the new
-    /// one, padded so the column lines up across the diff.
     #[test]
-    fn code_lines_are_numbered_from_their_hunk() {
-        let diff = "@@ -8,3 +8,4 @@\n a\n-b\n+c\n+d\n e\n@@ edit @@\n+f";
-        let texts: Vec<String> = diff_body_lines(diff, None, false)
-            .iter()
-            .map(text)
-            .collect();
-        assert_eq!(
-            texts,
-            [
-                "┄┄┄",
-                " 8  a",
-                " 9 -b",
-                " 9 +c",
-                "10 +d",
-                "11  e",
-                "edit",
-                "   +f",
-            ],
-            "a hunk with no position leaves the column blank"
-        );
-    }
-
-    #[test]
-    fn a_diff_with_no_positions_has_no_number_column() {
-        let texts: Vec<String> = diff_body_lines("@@ edit @@\n-a\n+b", None, false)
-            .iter()
-            .map(text)
-            .collect();
-        assert_eq!(texts, ["edit", "-a", "+b"]);
+    fn diff_line_numbers_follow_hunk_positions_and_disappear_without_them() {
+        for (case, diff, expected) in [
+            (
+                "mixed hunks leave an unpositioned hunk blank",
+                "@@ -8,3 +8,4 @@\n a\n-b\n+c\n+d\n e\n@@ edit @@\n+f",
+                vec![
+                    "┄┄┄",
+                    " 8  a",
+                    " 9 -b",
+                    " 9 +c",
+                    "10 +d",
+                    "11  e",
+                    "edit",
+                    "   +f",
+                ],
+            ),
+            (
+                "no positions means no number column",
+                "@@ edit @@\n-a\n+b",
+                vec!["edit", "-a", "+b"],
+            ),
+        ] {
+            let texts: Vec<String> = diff_body_lines(diff, None, false)
+                .iter()
+                .map(text)
+                .collect();
+            assert_eq!(texts, expected, "{case}");
+        }
     }
 
     #[test]

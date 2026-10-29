@@ -1770,18 +1770,22 @@ mod tests {
         }
     }
 
-    /// The ordinary case: the Workspace says what every launch here needs, the
-    /// launch says what is particular to it, and the sandbox gets both.
-    #[test]
-    fn a_launch_adds_to_the_workspace_policy_by_default() {
-        let base = LaunchPolicy {
+    fn workspace_policy() -> LaunchPolicy {
+        LaunchPolicy {
             network: Some(true),
             writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/corpus", None, false)],
             ignore_workspace: false,
             ..LaunchPolicy::default()
-        };
+        }
+    }
+
+    /// The ordinary case: the Workspace says what every launch here needs, the
+    /// launch says what is particular to it, and the sandbox gets both.
+    #[test]
+    fn a_launch_adds_to_the_workspace_policy_by_default() {
+        let base = workspace_policy();
         let overlay = LaunchPolicy {
             templates: vec!["browser".into()],
             mounts: vec![mount("/srv/scratch", None, true)],
@@ -1859,14 +1863,7 @@ mod tests {
     /// `ignore_workspace` is the one way a launch says "not that policy, this one".
     #[test]
     fn an_ignore_workspace_launch_ignores_the_workspace_policy_entirely() {
-        let base = LaunchPolicy {
-            network: Some(true),
-            writable_workspace: None,
-            templates: vec!["rust".into()],
-            mounts: vec![mount("/srv/corpus", None, false)],
-            ignore_workspace: false,
-            ..LaunchPolicy::default()
-        };
+        let base = workspace_policy();
         let overlay = LaunchPolicy {
             templates: vec!["browser".into()],
             ignore_workspace: true,
@@ -1897,14 +1894,7 @@ mod tests {
     /// policy — the property that makes a standing policy worth storing.
     #[test]
     fn an_empty_overlay_leaves_the_workspace_policy_as_it_is() {
-        let base = LaunchPolicy {
-            network: Some(true),
-            writable_workspace: None,
-            templates: vec!["rust".into()],
-            mounts: vec![mount("/srv/corpus", None, false)],
-            ignore_workspace: false,
-            ..LaunchPolicy::default()
-        };
+        let base = workspace_policy();
         assert!(LaunchPolicy::default().is_empty());
         assert_eq!(LaunchPolicy::merge(&base, &LaunchPolicy::default()), base);
     }

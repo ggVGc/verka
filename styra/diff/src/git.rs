@@ -253,26 +253,7 @@ fn git_with_index(directory: &Path, args: &[&str], index: Option<&Path>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn git(directory: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(directory)
-            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git {args:?}");
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
-    }
-
-    fn repository(name: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(name);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        git(&root, &["init", "-q", "-b", "main"]);
-        root
-    }
+    use crate::test_support::{git, repository};
 
     #[test]
     fn commit_browser_previews_each_patch_and_restores_all_changes() {
@@ -406,7 +387,7 @@ mod tests {
     /// tree, not of the branch's last commit.
     #[test]
     fn the_diff_covers_work_committed_since_the_start_and_work_not_yet_committed() {
-        let root = repository("styra-checkout-diff");
+        let (_directory, root) = repository("styra-checkout-diff");
         std::fs::write(root.join("a.txt"), "one\n").unwrap();
         git(&root, &["add", "."]);
         git(&root, &["commit", "-q", "-m", "start"]);
@@ -419,12 +400,11 @@ mod tests {
 
         assert!(diff.contains("+committed"), "{diff}");
         assert!(diff.contains("+loose"), "{diff}");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn moves_are_detected_even_when_disabled_in_repository_config() {
-        let root = repository("styra-diff-renames");
+        let (_directory, root) = repository("styra-diff-renames");
         std::fs::write(root.join("old.txt"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
         git(&root, &["add", "."]);
         git(&root, &["commit", "-q", "-m", "start"]);
@@ -441,24 +421,22 @@ mod tests {
         let files = crate::files::file_diffs(&patch);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].change(), crate::files::FileChange::MovedEdited);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_start_commit_git_does_not_know_is_reported_rather_than_shown_as_empty() {
-        let root = repository("styra-checkout-diff-unknown");
+        let (_directory, root) = repository("styra-checkout-diff-unknown");
 
         let diff = diff(&root, "0123456789abcdef0123456789abcdef01234567");
 
         assert!(diff.unwrap_err().starts_with("git diff failed"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Given a base, the diff starts where the branch left it, so what the
     /// base gained afterwards is not shown as removed.
     #[test]
     fn a_base_is_measured_from_where_the_branch_left_it() {
-        let root = repository("styra-diff-target");
+        let (_directory, root) = repository("styra-diff-target");
         std::fs::write(root.join("a.txt"), "one\n").unwrap();
         git(&root, &["add", "."]);
         git(&root, &["commit", "-q", "-m", "start"]);
@@ -496,12 +474,11 @@ mod tests {
         assert!(target(&root, Some("no-such-branch"))
             .unwrap_err()
             .starts_with("git merge-base failed"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn snapshot_trees_include_untracked_work_and_preserve_the_real_index() {
-        let root = repository("styra-diff-snapshot-tree");
+        let (_directory, root) = repository("styra-diff-snapshot-tree");
         std::fs::write(root.join("tracked.txt"), "committed\n").unwrap();
         git(&root, &["add", "."]);
         git(&root, &["commit", "-q", "-m", "start"]);
@@ -521,12 +498,11 @@ mod tests {
         assert!(shown.contains("+new"), "{shown}");
         assert!(!shown.contains("tracked.txt b/tracked.txt"), "{shown}");
         assert_eq!(std::fs::read(root.join(".git/index")).unwrap(), index);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_snapshot_tree_can_be_diffed_without_any_checkout_commit() {
-        let root = repository("styra-diff-snapshot-unborn");
+        let (_directory, root) = repository("styra-diff-snapshot-unborn");
         std::fs::write(root.join("file.txt"), "initial\n").unwrap();
         git(&root, &["add", "."]);
         let base = git(&root, &["write-tree"]);
@@ -536,14 +512,13 @@ mod tests {
         let shown = diff(&root, &base).unwrap();
         assert!(shown.contains("-initial"), "{shown}");
         assert!(shown.contains("+changed"), "{shown}");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Branches, remote branches, and both kinds of tag at a commit are
     /// named; a ref elsewhere, and a remote's `HEAD`, are not.
     #[test]
     fn the_names_at_a_commit_are_its_branches_and_tags() {
-        let root = repository("styra-diff-names");
+        let (_directory, root) = repository("styra-diff-names");
         git(&root, &["commit", "-q", "--allow-empty", "-m", "start"]);
         let start = git(&root, &["rev-parse", "HEAD"]);
         git(&root, &["tag", "v1"]);
@@ -584,6 +559,5 @@ mod tests {
         let dirty_tree = git(&root, &["write-tree"]);
         assert!(names_at(&root, &dirty_tree).is_empty());
         assert!(names_at(&root, "not-a-commit").is_empty());
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

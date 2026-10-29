@@ -2605,6 +2605,7 @@ fn muted(text: &str) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{draw as draw_frame, rows as buffer_rows};
     use ratatui::{backend::TestBackend, Terminal};
 
     const DIFF: &str = "\
@@ -2622,22 +2623,13 @@ index 1111111..2222222 100644
     #[test]
     fn shortcut_rows_only_appear_in_the_legend() {
         for help in [None, Some(0), Some(u16::MAX)] {
-            let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
-            terminal
-                .draw(|frame| {
-                    let mut view = CheckoutDiffView::unread(Block::bordered());
-                    view.diff = Ok(DIFF);
-                    view.help = help;
-                    render(frame, &view, frame.area());
-                })
-                .unwrap();
-            let output: String = terminal
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect();
+            let buffer = draw_frame(100, 20, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::bordered());
+                view.diff = Ok(DIFF);
+                view.help = help;
+                render(frame, &view, frame.area());
+            });
+            let output: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
             if help.is_some() {
                 assert!(output.contains("Shortcuts"), "{output}");
                 if help == Some(0) {
@@ -2656,24 +2648,15 @@ index 1111111..2222222 100644
     #[test]
     fn file_view_shows_the_title_and_hunks_without_git_headers() {
         for side_by_side in [false, true] {
-            let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
-            terminal
-                .draw(|frame| {
-                    let mut view = CheckoutDiffView::unread(Block::bordered());
-                    view.diff = Ok(DIFF);
-                    view.per_file = true;
-                    view.side_by_side = side_by_side;
-                    let measured = render(frame, &view, frame.area());
-                    assert_eq!(measured.side_by_side, side_by_side);
-                })
-                .unwrap();
-            let output: String = terminal
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect();
+            let buffer = draw_frame(140, 24, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::bordered());
+                view.diff = Ok(DIFF);
+                view.per_file = true;
+                view.side_by_side = side_by_side;
+                let measured = render(frame, &view, frame.area());
+                assert_eq!(measured.side_by_side, side_by_side);
+            });
+            let output: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
             assert!(output.contains("src/a.rs [M]"), "{output}");
             assert!(output.contains("┄┄┄"), "{output}");
             assert!(output.contains("fn c() {}"), "{output}");
@@ -2851,7 +2834,6 @@ index 1111111..2222222 100644
     #[test]
     fn the_files_the_cursors_commits_changed_stand_out() {
         use crate::layers::Layer;
-        use ratatui::{backend::TestBackend, Terminal};
         let layer = |name: &str| Layer {
             name: name.into(),
             ..Layer::default()
@@ -2872,19 +2854,15 @@ index 1111111..2222222 100644
         // The style of each listed file's name, with the cursor on `line` of
         // the patch of the file at `selected` in the diff.
         let names = |selected: usize, line: Option<usize>| {
-            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-            terminal
-                .draw(|frame| {
-                    let mut view = CheckoutDiffView::unread(Block::default());
-                    view.diff = Ok(&text);
-                    view.per_file = true;
-                    view.selected_file = selected;
-                    view.layers = Some(Ok(&layers));
-                    view.line_cursor = line;
-                    render(frame, &view, frame.area());
-                })
-                .unwrap();
-            let buffer = terminal.backend().buffer().clone();
+            let buffer = draw_frame(100, 24, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::default());
+                view.diff = Ok(&text);
+                view.per_file = true;
+                view.selected_file = selected;
+                view.layers = Some(Ok(&layers));
+                view.line_cursor = line;
+                render(frame, &view, frame.area());
+            });
             ["a.rs", "b.txt", "c.txt", "moved.txt"].map(|name| {
                 (0..24)
                     .find_map(|y| {
@@ -2941,7 +2919,6 @@ index 1111111..2222222 100644
     #[test]
     fn the_layers_legend_lists_each_commit_at_the_top_left() {
         use crate::layers::{background, Layer};
-        use ratatui::{backend::TestBackend, Terminal};
         let layer = |name: &str, summary: &str| Layer {
             name: name.into(),
             summary: summary.into(),
@@ -2959,18 +2936,14 @@ index 1111111..2222222 100644
             (false, Some(8)),
             (false, Some(5)),
         ] {
-            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-            terminal
-                .draw(|frame| {
-                    let mut view = CheckoutDiffView::unread(Block::default());
-                    view.diff = Ok(DIFF);
-                    view.per_file = per_file;
-                    view.layers = Some(Ok(&layers));
-                    view.line_cursor = cursor;
-                    render(frame, &view, frame.area());
-                })
-                .unwrap();
-            let buffer = terminal.backend().buffer();
+            let buffer = draw_frame(100, 24, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::default());
+                view.diff = Ok(DIFF);
+                view.per_file = per_file;
+                view.layers = Some(Ok(&layers));
+                view.line_cursor = cursor;
+                render(frame, &view, frame.area());
+            });
             let row = |y: u16| -> String { (0..100).map(|x| buffer[(x, y)].symbol()).collect() };
             let (top, left) = (0..24)
                 .find_map(|y| Some((y, row(y).find("layers, oldest first:")?)))
@@ -3036,6 +3009,21 @@ index 1111111..2222222 100644
         }
     }
 
+    fn commit_cell<'a>(
+        buffer: &'a ratatui::buffer::Buffer,
+        name: &str,
+    ) -> &'a ratatui::buffer::Cell {
+        (buffer.area.top()..buffer.area.bottom())
+            .find_map(|y| {
+                let row: String = (buffer.area.left()..buffer.area.right())
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect();
+                row.find(name)
+                    .map(|x| &buffer[(buffer.area.left() + x as u16, y)])
+            })
+            .expect("commit listed")
+    }
+
     #[test]
     fn file_focus_highlights_all_its_commits_and_follows_file_changes() {
         use crate::layers::Layer;
@@ -3061,26 +3049,17 @@ index 1111111..2222222 100644
             "diff --git a/a.txt b/a.txt\n@@ -1,2 +1,2 @@\n-old\n+new\n-before\n+after\n{other}"
         );
         for selected in [0, 1] {
-            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-            terminal
-                .draw(|frame| {
-                    let mut view = CheckoutDiffView::unread(Block::default());
-                    view.diff = Ok(&text);
-                    view.per_file = true;
-                    view.selected_file = selected;
-                    view.layers = Some(Ok(&layers));
-                    render(frame, &view, frame.area());
-                })
-                .unwrap();
-            let buffer = terminal.backend().buffer();
+            let buffer = draw_frame(100, 24, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::default());
+                view.diff = Ok(&text);
+                view.per_file = true;
+                view.selected_file = selected;
+                view.layers = Some(Ok(&layers));
+                render(frame, &view, frame.area());
+            });
             for index in 0..3 {
                 let name = format!("commit{index}");
-                let cell = (0..24)
-                    .find_map(|y| {
-                        let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
-                        row.find(&name).map(|x| &buffer[(x as u16, y)])
-                    })
-                    .expect("commit listed");
+                let cell = commit_cell(&buffer, &name);
                 let highlighted = if selected == 0 { index < 2 } else { index == 2 };
                 assert_eq!(
                     cell.bg == theme::SELECTION_BACKGROUND,
@@ -3116,25 +3095,16 @@ index 1111111..2222222 100644
         let text = format!("{moved}{other}");
         for per_file in [false, true] {
             for files_below in [false, true] {
-                let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-                terminal
-                    .draw(|frame| {
-                        let mut view = CheckoutDiffView::unread(Block::default());
-                        view.diff = Ok(&text);
-                        view.per_file = per_file;
-                        view.files_below = files_below;
-                        view.layers = Some(Ok(&layers));
-                        render(frame, &view, frame.area());
-                    })
-                    .unwrap();
-                let buffer = terminal.backend().buffer();
+                let buffer = draw_frame(100, 24, |frame| {
+                    let mut view = CheckoutDiffView::unread(Block::default());
+                    view.diff = Ok(&text);
+                    view.per_file = per_file;
+                    view.files_below = files_below;
+                    view.layers = Some(Ok(&layers));
+                    render(frame, &view, frame.area());
+                });
                 for (name, highlighted) in [("move_commit", true), ("edit_commit", false)] {
-                    let cell = (0..24)
-                        .find_map(|y| {
-                            let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
-                            row.find(name).map(|x| &buffer[(x as u16, y)])
-                        })
-                        .expect("commit listed");
+                    let cell = commit_cell(&buffer, name);
                     assert_eq!(
                         cell.bg == theme::SELECTION_BACKGROUND,
                         highlighted,
@@ -3190,19 +3160,16 @@ index 1111111..2222222 100644
         };
         let layers = Layers::from_steps(&[(layer("1111111"), String::new())]);
         let draw = |hidden| {
-            let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-            terminal
-                .draw(|frame| {
-                    let mut view = CheckoutDiffView::unread(Block::default());
-                    view.diff = Ok(DIFF);
-                    view.per_file = true;
-                    view.thumbnail = true;
-                    view.thumbnail_hidden = hidden;
-                    view.layers = Some(Ok(&layers));
-                    render(frame, &view, frame.area());
-                })
-                .unwrap();
-            terminal.backend().buffer().clone()
+            let buffer = draw_frame(100, 40, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::default());
+                view.diff = Ok(DIFF);
+                view.per_file = true;
+                view.thumbnail = true;
+                view.thumbnail_hidden = hidden;
+                view.layers = Some(Ok(&layers));
+                render(frame, &view, frame.area());
+            });
+            buffer
         };
         let first_row = |buffer: &ratatui::buffer::Buffer, text: &str| {
             (0..40).find(|&y| {
@@ -3239,23 +3206,20 @@ index 1111111..2222222 100644
         let patch = "diff --git a/added.rs b/added.rs\n@@ -0,0 +1 @@\n+    added\n\
                      diff --git a/deleted.rs b/deleted.rs\n@@ -1 +0,0 @@\n-removed\n";
         let draw = |thumbnail, per_file, selected_file, width, height| {
-            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            terminal
-                .draw(|frame| {
-                    render(
-                        frame,
-                        &CheckoutDiffView {
-                            diff: Ok(patch),
-                            thumbnail,
-                            per_file,
-                            selected_file,
-                            ..CheckoutDiffView::unread(Block::bordered())
-                        },
-                        frame.area(),
-                    );
-                })
-                .unwrap();
-            terminal.backend().buffer().clone()
+            let buffer = draw_frame(width, height, |frame| {
+                render(
+                    frame,
+                    &CheckoutDiffView {
+                        diff: Ok(patch),
+                        thumbnail,
+                        per_file,
+                        selected_file,
+                        ..CheckoutDiffView::unread(Block::bordered())
+                    },
+                    frame.area(),
+                );
+            });
+            buffer
         };
         let added = draw(true, true, 0, 80, 30);
         let removed = draw(true, true, 1, 80, 30);
@@ -3298,22 +3262,18 @@ index 1111111..2222222 100644
 
     #[test]
     fn fifteen_sections_preserve_edits_inside_the_viewport_outline() {
-        let mut terminal = Terminal::new(TestBackend::new(30, 19)).unwrap();
-        terminal
-            .draw(|frame| {
-                render_thumbnail(
-                    frame,
-                    "@@ -10 +10 @@\n-old\n+new\n@@ -900 +900 @@\n-old\n+new\n",
-                    Some(1000),
-                    frame.area(),
-                    false,
-                    0,
-                    100,
-                    false,
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
+        let buffer = draw_frame(30, 19, |frame| {
+            render_thumbnail(
+                frame,
+                "@@ -10 +10 @@\n-old\n+new\n@@ -900 +900 @@\n-old\n+new\n",
+                Some(1000),
+                frame.area(),
+                false,
+                0,
+                100,
+                false,
+            );
+        });
         let output: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
         assert!(output.contains("1000 lines"));
         assert!(output.contains("+2") && output.contains("−2"));
@@ -3388,28 +3348,25 @@ index 1111111..2222222 100644
             "+late\n".repeat(40)
         );
         let draw = |scroll| {
-            let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
-            terminal
-                .draw(|frame| {
-                    render(
-                        frame,
-                        &CheckoutDiffView {
-                            diff: Ok(&patch),
-                            per_file: true,
-                            thumbnail: true,
-                            highlight_diff: None,
-                            requested_scroll: scroll,
-                            help: None,
-                            side_by_side: false,
-                            rendered_side: false,
-                            horizontal_scroll: 0,
-                            ..CheckoutDiffView::unread(Block::bordered())
-                        },
-                        frame.area(),
-                    );
-                })
-                .unwrap();
-            terminal.backend().buffer().clone()
+            let buffer = draw_frame(80, 30, |frame| {
+                render(
+                    frame,
+                    &CheckoutDiffView {
+                        diff: Ok(&patch),
+                        per_file: true,
+                        thumbnail: true,
+                        highlight_diff: None,
+                        requested_scroll: scroll,
+                        help: None,
+                        side_by_side: false,
+                        rendered_side: false,
+                        horizontal_scroll: 0,
+                        ..CheckoutDiffView::unread(Block::bordered())
+                    },
+                    frame.area(),
+                );
+            });
+            buffer
         };
         let top = draw(0);
         let bottom = draw(u16::MAX);
@@ -3438,17 +3395,13 @@ index 1111111..2222222 100644
 
     #[test]
     fn a_single_box_encloses_disjoint_visible_areas() {
-        let mut terminal = Terminal::new(TestBackend::new(12, 17)).unwrap();
-        terminal
-            .draw(|frame| {
-                render_viewport_box(
-                    frame,
-                    frame.area(),
-                    &[false, true, false, false, false, true, false, false],
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
+        let buffer = draw_frame(12, 17, |frame| {
+            render_viewport_box(
+                frame,
+                frame.area(),
+                &[false, true, false, false, false, true, false, false],
+            );
+        });
         for (position, glyph) in [
             ((0, 1), "┌"),
             ((11, 1), "┐"),
@@ -3544,63 +3497,53 @@ index 1111111..2222222 100644
         search: SearchView<'_>,
     ) -> ((String, u16), u16) {
         let (width, height) = (80, 18);
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut measured = CheckoutDiffFeedback::default();
-        terminal
-            .draw(|frame| {
-                measured = render(
-                    frame,
-                    &CheckoutDiffView {
-                        host_shortcuts: &[],
-                        commits: None,
-                        block: Block::bordered(),
-                        worktree: Path::new("/state/worktrees/styra-7"),
-                        branch: Some("styra/rename"),
-                        base_branch,
-                        base_commit: "4bf5c35d0123456789abcdef",
-                        base_names: &[],
-                        branch_point: true,
-                        label: None,
-                        diff,
-                        highlight_diff: None,
-                        requested_scroll: scroll,
-                        help: None,
-                        side_by_side: false,
-                        rendered_side: false,
-                        horizontal_scroll: 0,
-                        per_file,
-                        thumbnail: false,
-                        thumbnail_hidden: false,
-                        hide_removed: false,
-                        compact_dirs: true,
-                        files_below: false,
-                        tint: Tint::Full,
-                        word_highlights: true,
-                        layers: None,
-                        involved_layers: None,
-                        selected_file,
-                        file_list_offset: 0,
-                        search,
-                        report: None,
-                        report_page: None,
-                        conversation: None,
-                        intro: None,
-                        line_cursor: None,
-                        find: Default::default(),
-                        prompts: Vec::new(),
-                    },
-                    frame.area(),
-                );
-            })
-            .unwrap();
-        let output = terminal
-            .backend()
-            .buffer()
-            .content()
-            .chunks(width as usize)
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let buffer = draw_frame(width, height, |frame| {
+            measured = render(
+                frame,
+                &CheckoutDiffView {
+                    host_shortcuts: &[],
+                    commits: None,
+                    block: Block::bordered(),
+                    worktree: Path::new("/state/worktrees/styra-7"),
+                    branch: Some("styra/rename"),
+                    base_branch,
+                    base_commit: "4bf5c35d0123456789abcdef",
+                    base_names: &[],
+                    branch_point: true,
+                    label: None,
+                    diff,
+                    highlight_diff: None,
+                    requested_scroll: scroll,
+                    help: None,
+                    side_by_side: false,
+                    rendered_side: false,
+                    horizontal_scroll: 0,
+                    per_file,
+                    thumbnail: false,
+                    thumbnail_hidden: false,
+                    hide_removed: false,
+                    compact_dirs: true,
+                    files_below: false,
+                    tint: Tint::Full,
+                    word_highlights: true,
+                    layers: None,
+                    involved_layers: None,
+                    selected_file,
+                    file_list_offset: 0,
+                    search,
+                    report: None,
+                    report_page: None,
+                    conversation: None,
+                    intro: None,
+                    line_cursor: None,
+                    find: Default::default(),
+                    prompts: Vec::new(),
+                },
+                frame.area(),
+            );
+        });
+        let output = buffer_rows(&buffer).join("\n");
         ((output, measured.scroll.limit), measured.scroll.viewport)
     }
 
@@ -3608,25 +3551,15 @@ index 1111111..2222222 100644
     /// rows left for the patch.
     fn report_screen(report: &ReportState, per_file: bool) -> (String, u16) {
         let (width, height) = (100, 24);
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut viewport = 0;
-        terminal
-            .draw(|frame| {
-                let mut view = CheckoutDiffView::unread(Block::bordered());
-                view.diff = Ok(DIFF);
-                view.per_file = per_file;
-                view.report = Some(report);
-                viewport = render(frame, &view, frame.area()).scroll.viewport;
-            })
-            .unwrap();
-        let output = terminal
-            .backend()
-            .buffer()
-            .content()
-            .chunks(width as usize)
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let buffer = draw_frame(width, height, |frame| {
+            let mut view = CheckoutDiffView::unread(Block::bordered());
+            view.diff = Ok(DIFF);
+            view.per_file = per_file;
+            view.report = Some(report);
+            viewport = render(frame, &view, frame.area()).scroll.viewport;
+        });
+        let output = buffer_rows(&buffer).join("\n");
         (output, viewport)
     }
 
@@ -3707,29 +3640,19 @@ index 1111111..2222222 100644
         let text = format!("{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old\n+new\n");
         let page = |report: Option<&ReportState>, text: &str| {
             let (width, height) = (100, 24);
-            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            terminal
-                .draw(|frame| {
-                    let mut view = CheckoutDiffView::unread(Block::bordered());
-                    view.diff = Ok(text);
-                    view.report = report;
-                    view.report_page = Some(ReportPage {
-                        selected: 1,
-                        scroll: 0,
-                        reveal: true,
-                        preview: None,
-                    });
-                    render(frame, &view, frame.area());
-                })
-                .unwrap();
-            terminal
-                .backend()
-                .buffer()
-                .content()
-                .chunks(width as usize)
-                .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-                .collect::<Vec<_>>()
-                .join("\n")
+            let buffer = draw_frame(width, height, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::bordered());
+                view.diff = Ok(text);
+                view.report = report;
+                view.report_page = Some(ReportPage {
+                    selected: 1,
+                    scroll: 0,
+                    reveal: true,
+                    preview: None,
+                });
+                render(frame, &view, frame.area());
+            });
+            buffer_rows(&buffer).join("\n")
         };
         let report = ReportState {
             report: Some(crate::Report {
@@ -3790,18 +3713,14 @@ index 1111111..2222222 100644
         // No host frame; 10 rows inside the page's border: the summary, then three rows a file —
         // the rule above it, its name, and that it is not described.
         let draw = |page: ReportPage| {
-            let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
             let mut measured = None;
-            terminal
-                .draw(|frame| {
-                    let mut view = CheckoutDiffView::unread(Block::default());
-                    view.diff = Ok(&text);
-                    view.report = Some(&report);
-                    view.report_page = Some(page);
-                    measured = render(frame, &view, frame.area()).report_page;
-                })
-                .unwrap();
-            let buffer = terminal.backend().buffer().clone();
+            let buffer = draw_frame(60, 12, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::default());
+                view.diff = Ok(&text);
+                view.report = Some(&report);
+                view.report_page = Some(page);
+                measured = render(frame, &view, frame.area()).report_page;
+            });
             (buffer, measured.unwrap())
         };
         let row_of = |buffer: &ratatui::buffer::Buffer, name: &str| {
@@ -3861,29 +3780,20 @@ index 1111111..2222222 100644
             ..Default::default()
         };
         let draw = |selected, preview| {
-            let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
             let mut measured = None;
-            terminal
-                .draw(|frame| {
-                    let mut view = CheckoutDiffView::unread(Block::bordered());
-                    view.diff = Ok(&text);
-                    view.report = Some(&report);
-                    view.report_page = Some(ReportPage {
-                        selected,
-                        scroll: 0,
-                        reveal: true,
-                        preview,
-                    });
-                    measured = render(frame, &view, frame.area()).report_page;
-                })
-                .unwrap();
-            let rows: Vec<String> = terminal
-                .backend()
-                .buffer()
-                .content()
-                .chunks(80)
-                .map(|row| row.iter().map(|cell| cell.symbol()).collect())
-                .collect();
+            let buffer = draw_frame(80, 30, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::bordered());
+                view.diff = Ok(&text);
+                view.report = Some(&report);
+                view.report_page = Some(ReportPage {
+                    selected,
+                    scroll: 0,
+                    reveal: true,
+                    preview,
+                });
+                measured = render(frame, &view, frame.area()).report_page;
+            });
+            let rows = buffer_rows(&buffer);
             (rows, measured.unwrap().preview)
         };
         let row = |rows: &[String], text: &str| rows.iter().position(|row| row.contains(text));
@@ -3926,18 +3836,13 @@ index 1111111..2222222 100644
         ];
         for page in pages {
             let (width, height) = (60, 20);
-            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            terminal
-                .draw(|frame| {
-                    let mut view =
-                        CheckoutDiffView::unread(Block::bordered().border_style(outline));
-                    view.diff = Ok(DIFF);
-                    view.report = Some(&report);
-                    page(&mut view);
-                    render(frame, &view, frame.area());
-                })
-                .unwrap();
-            let buffer = terminal.backend().buffer();
+            let buffer = draw_frame(width, height, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::bordered().border_style(outline));
+                view.diff = Ok(DIFF);
+                view.report = Some(&report);
+                page(&mut view);
+                render(frame, &view, frame.area());
+            });
             let frame: Vec<_> = (0..width)
                 .flat_map(|x| [(x, 0), (x, height - 1)])
                 .chain((0..height).flat_map(|y| [(0, y), (width - 1, y)]))
@@ -4075,26 +3980,16 @@ index 1111111..2222222 100644
             .map(|n| format!("diff --git a/f{n:02} b/f{n:02}\n@@ -1 +1 @@\n-old {n}\n+new {n}\n"))
             .collect::<String>();
         let (width, height) = (50, 40);
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                let mut view = CheckoutDiffView::unread(Block::bordered());
-                view.diff = Ok(&text);
-                view.per_file = true;
-                view.files_below = true;
-                view.thumbnail = true;
-                view.selected_file = 19;
-                render(frame, &view, frame.area());
-            })
-            .unwrap();
-        let output = terminal
-            .backend()
-            .buffer()
-            .content()
-            .chunks(width as usize)
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let buffer = draw_frame(width, height, |frame| {
+            let mut view = CheckoutDiffView::unread(Block::bordered());
+            view.diff = Ok(&text);
+            view.per_file = true;
+            view.files_below = true;
+            view.thumbnail = true;
+            view.selected_file = 19;
+            render(frame, &view, frame.area());
+        });
+        let output = buffer_rows(&buffer).join("\n");
         let rows = output.lines().collect::<Vec<_>>();
         let stat = rows
             .iter()
@@ -4210,22 +4105,18 @@ index 1111111..2222222 100644
     fn the_selected_file_sits_on_a_soft_band_and_keeps_its_markers_color() {
         let text = "diff --git a/a b/a\nnew file mode 100644\n\
             diff --git a/b b/b\ndeleted file mode 100644\n";
-        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        terminal
-            .draw(|frame| {
-                render(
-                    frame,
-                    &CheckoutDiffView {
-                        per_file: true,
-                        diff: Ok(text),
-                        selected_file: 1,
-                        ..CheckoutDiffView::unread(Block::bordered())
-                    },
-                    frame.area(),
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
+        let buffer = draw_frame(40, 12, |frame| {
+            render(
+                frame,
+                &CheckoutDiffView {
+                    per_file: true,
+                    diff: Ok(text),
+                    selected_file: 1,
+                    ..CheckoutDiffView::unread(Block::bordered())
+                },
+                frame.area(),
+            );
+        });
         let row = |name: &str| {
             (0..12)
                 .find(|&y| {
@@ -4429,40 +4320,106 @@ index 1111111..2222222 100644
     }
 
     #[test]
-    fn the_header_names_both_sides_and_where_they_were_read() {
-        let (output, _) = screen(Ok(DIFF), Some("main"), 0);
-        assert!(
-            output.contains(
-                "styra/rename  against  main at 4bf5c35d01 (no branch tip or tag)  (where"
+    fn checkout_headers_describe_the_base_and_its_names() {
+        let names = [
+            "main".to_owned(),
+            "styra/rename".into(),
+            "tag: v1.2".into(),
+            "origin/main".into(),
+        ];
+        let checkout = |base_branch| CheckoutDiffView {
+            worktree: Path::new("/state/worktrees/styra-7"),
+            branch: Some("styra/rename"),
+            base_branch,
+            base_commit: "4bf5c35d0123456789abcdef",
+            branch_point: true,
+            diff: Ok(DIFF),
+            ..CheckoutDiffView::unread(Block::bordered())
+        };
+        for (case, width, height, view, present, absent) in [
+            (
+                "branch point",
+                80,
+                18,
+                checkout(Some("main")),
+                &[
+                    "styra/rename  against  main at 4bf5c35d01 (no branch tip or tag)  (where",
+                    "/state/worktrees/styra-7",
+                    "1 file changed  +2 -1",
+                    "fn c() {}",
+                ][..],
+                &[][..],
             ),
-            "{output}"
-        );
-        assert!(output.contains("/state/worktrees/styra-7"), "{output}");
-        assert!(output.contains("1 file changed  +2 -1"), "{output}");
-        assert!(output.contains("fn c() {}"), "{output}");
+            (
+                "detached base",
+                80,
+                18,
+                checkout(None),
+                &["styra/rename  against  4bf5c35d01"][..],
+                &[][..],
+            ),
+            (
+                "comparison without a branch point",
+                80,
+                16,
+                CheckoutDiffView {
+                    branch: Some("main"),
+                    base_branch: Some("HEAD"),
+                    base_commit: "4bf5c35d0123456789abcdef",
+                    diff: Ok(""),
+                    ..CheckoutDiffView::unread(Block::bordered())
+                },
+                &[
+                    "main  against  HEAD at 4bf5c35d01",
+                    "no changes",
+                    "no branch tip or tag",
+                ][..],
+                &["where the branch started", "since the branch was made"][..],
+            ),
+            (
+                "branches and tags at the base",
+                180,
+                16,
+                CheckoutDiffView {
+                    base_names: &names,
+                    ..checkout(Some("main"))
+                },
+                &[
+                    "against  main at 4bf5c35d01 (branch tip: main, branch tip: styra/rename, tag: v1.2, branch tip: origin/main)  (where the branch started)",
+                ][..],
+                &[][..],
+            ),
+        ] {
+            let buffer = draw_frame(width, height, |frame| {
+                render(frame, &view, frame.area());
+            });
+            let output: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+            for text in present {
+                assert!(output.contains(text), "{case}: missing {text:?}: {output}");
+            }
+            for text in absent {
+                assert!(!output.contains(text), "{case}: unexpected {text:?}: {output}");
+            }
+        }
     }
 
     /// A host's conversation takes the header's place; the diff stays.
     #[test]
     fn a_conversation_replaces_the_header() {
-        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
-        let frame = terminal
-            .draw(|frame| {
-                render(
-                    frame,
-                    &CheckoutDiffView {
-                        branch: Some("styra/rename"),
-                        base_commit: "4bf5c35d0123456789abcdef",
-                        diff: Ok(DIFF),
-                        conversation: Some(vec![Line::from("» rename b to c")]),
-                        ..CheckoutDiffView::unread(Block::bordered())
-                    },
-                    frame.area(),
-                );
-            })
-            .unwrap();
-        let output = frame
-            .buffer
+        let buffer = draw_frame(80, 16, |frame| {
+            render(
+                frame,
+                &CheckoutDiffView {
+                    branch: Some("styra/rename"),
+                    base_commit: "4bf5c35d0123456789abcdef",
+                    diff: Ok(DIFF),
+                    conversation: Some(vec![Line::from("» rename b to c")]),
+                    ..CheckoutDiffView::unread(Block::bordered())
+                },
+                frame.area(),
+            );
+        });
+        let output = buffer
             .content()
             .iter()
             .map(|cell| cell.symbol())
@@ -4479,23 +4436,19 @@ index 1111111..2222222 100644
     #[test]
     fn a_supplied_diff_is_labelled_as_given() {
         let draw = |side_by_side, diff| {
-            let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
-            let frame = terminal
-                .draw(|frame| {
-                    render(
-                        frame,
-                        &CheckoutDiffView {
-                            label: Some("turn 3 · snapshot diff"),
-                            diff: Ok(diff),
-                            side_by_side,
-                            ..CheckoutDiffView::unread(Block::bordered())
-                        },
-                        frame.area(),
-                    );
-                })
-                .unwrap();
-            frame
-                .buffer
+            let buffer = draw_frame(100, 16, |frame| {
+                render(
+                    frame,
+                    &CheckoutDiffView {
+                        label: Some("turn 3 · snapshot diff"),
+                        diff: Ok(diff),
+                        side_by_side,
+                        ..CheckoutDiffView::unread(Block::bordered())
+                    },
+                    frame.area(),
+                );
+            });
+            buffer
                 .content()
                 .iter()
                 .map(|cell| cell.symbol())
@@ -4519,24 +4472,20 @@ index 1111111..2222222 100644
     /// rather than counted from 0.
     #[test]
     fn a_hunk_without_a_position_has_no_numbers_side_by_side() {
-        let mut terminal = Terminal::new(TestBackend::new(120, 16)).unwrap();
-        let frame = terminal
-            .draw(|frame| {
-                render(
-                    frame,
-                    &CheckoutDiffView {
-                        label: Some("turn 1"),
-                        diff: Ok("diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ edit @@\n-fn old_name\n+fn new_name\n"),
-                        side_by_side: true,
-                        rendered_side: true,
-                        ..CheckoutDiffView::unread(Block::bordered())
-                    },
-                    frame.area(),
-                );
-            })
-            .unwrap();
-        let output = frame
-            .buffer
+        let buffer = draw_frame(120, 16, |frame| {
+            render(
+                frame,
+                &CheckoutDiffView {
+                    label: Some("turn 1"),
+                    diff: Ok("diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ edit @@\n-fn old_name\n+fn new_name\n"),
+                    side_by_side: true,
+                    rendered_side: true,
+                    ..CheckoutDiffView::unread(Block::bordered())
+                },
+                frame.area(),
+            );
+        });
+        let output = buffer
             .content()
             .iter()
             .map(|cell| cell.symbol())
@@ -4551,29 +4500,19 @@ index 1111111..2222222 100644
     #[test]
     fn an_intro_goes_above_the_header_and_takes_at_most_half() {
         let draw = |intro: Vec<Line<'static>>| {
-            let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-            let frame = terminal
-                .draw(|frame| {
-                    render(
-                        frame,
-                        &CheckoutDiffView {
-                            label: Some("turn 2"),
-                            diff: Ok(DIFF),
-                            intro: Some(intro),
-                            ..CheckoutDiffView::unread(Block::bordered())
-                        },
-                        frame.area(),
-                    );
-                })
-                .unwrap();
-            let buffer = &frame.buffer;
-            (0..buffer.area.height)
-                .map(|y| {
-                    (0..buffer.area.width)
-                        .map(|x| buffer[(x, y)].symbol())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
+            let buffer = draw_frame(80, 20, |frame| {
+                render(
+                    frame,
+                    &CheckoutDiffView {
+                        label: Some("turn 2"),
+                        diff: Ok(DIFF),
+                        intro: Some(intro),
+                        ..CheckoutDiffView::unread(Block::bordered())
+                    },
+                    frame.area(),
+                );
+            });
+            buffer_rows(&buffer)
         };
         let rows = draw(vec![Line::from("rename b to c")]);
         let row = |rows: &[String], text: &str| rows.iter().position(|row| row.contains(text));
@@ -4582,69 +4521,6 @@ index 1111111..2222222 100644
         assert!(row(&rows, "line 0").is_some());
         assert!(row(&rows, "line 20").is_none(), "{rows:#?}");
         assert!(row(&rows, "turn 2").is_some(), "{rows:#?}");
-    }
-
-    /// The hint fills the row out to the panel's edge, not just the text.
-    #[test]
-    fn a_changed_row_is_tinted_across_the_panel() {
-        let mut terminal = Terminal::new(TestBackend::new(80, 18)).unwrap();
-        terminal
-            .draw(|frame| {
-                render(
-                    frame,
-                    &CheckoutDiffView {
-                        host_shortcuts: &[],
-                        commits: None,
-                        block: Block::bordered(),
-                        worktree: Path::new("/w"),
-                        branch: None,
-                        base_branch: None,
-                        base_commit: "4bf5c35d",
-                        base_names: &[],
-                        branch_point: true,
-                        label: None,
-                        diff: Ok(DIFF),
-                        highlight_diff: None,
-                        requested_scroll: 0,
-                        help: None,
-                        per_file: false,
-                        side_by_side: false,
-                        rendered_side: false,
-                        horizontal_scroll: 0,
-                        thumbnail: false,
-                        thumbnail_hidden: false,
-                        hide_removed: false,
-                        compact_dirs: true,
-                        files_below: false,
-                        tint: Tint::Full,
-                        word_highlights: true,
-                        layers: None,
-                        involved_layers: None,
-                        selected_file: 0,
-                        file_list_offset: 0,
-                        search: Default::default(),
-                        report: None,
-                        report_page: None,
-                        conversation: None,
-                        intro: None,
-                        line_cursor: None,
-                        find: Default::default(),
-                        prompts: Vec::new(),
-                    },
-                    frame.area(),
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let row = (0..18u16)
-            .find(|&y| {
-                (0..80u16)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-                    .contains("fn c()")
-            })
-            .unwrap();
-        assert_eq!(buffer[(70, row)].bg, theme::DIFF_ADDED_BACKGROUND);
     }
 
     /// Each file's header is a bar between two rules drawn as rows of their
@@ -4660,21 +4536,17 @@ index 1111111..2222222 100644
         // as its glyph alone, and any other row as its text.
         let body = |hide_removed: bool| {
             let height = 40;
-            let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
-            let frame = terminal
-                .draw(|frame| {
-                    render(
-                        frame,
-                        &CheckoutDiffView {
-                            diff: Ok(&text),
-                            hide_removed,
-                            ..CheckoutDiffView::unread(Block::bordered())
-                        },
-                        frame.area(),
-                    );
-                })
-                .unwrap();
-            let buffer = frame.buffer.clone();
+            let buffer = draw_frame(80, height, |frame| {
+                render(
+                    frame,
+                    &CheckoutDiffView {
+                        diff: Ok(&text),
+                        hide_removed,
+                        ..CheckoutDiffView::unread(Block::bordered())
+                    },
+                    frame.area(),
+                );
+            });
             let rows: Vec<(String, bool, bool)> = (0..height)
                 .map(|y| {
                     let cells: Vec<_> = (1..79u16).map(|x| &buffer[(x, y)]).collect();
@@ -4746,25 +4618,19 @@ index 1111111..2222222 100644
     #[test]
     fn the_unchanged_rows_tint_switches_between_full_and_half() {
         let draw = |tint: Tint, hide_removed: bool| {
-            let mut terminal = Terminal::new(TestBackend::new(80, 18)).unwrap();
-            let frame = terminal
-                .draw(|frame| {
-                    render(
-                        frame,
-                        &CheckoutDiffView {
-                            diff: Ok(DIFF),
-                            hide_removed,
-                            tint,
-                            ..CheckoutDiffView::unread(Block::bordered())
-                        },
-                        frame.area(),
-                    );
-                })
-                .unwrap();
-            let buffer = frame.buffer.clone();
-            let rows: Vec<String> = (0..18u16)
-                .map(|y| (0..80u16).map(|x| buffer[(x, y)].symbol()).collect())
-                .collect();
+            let buffer = draw_frame(80, 18, |frame| {
+                render(
+                    frame,
+                    &CheckoutDiffView {
+                        diff: Ok(DIFF),
+                        hide_removed,
+                        tint,
+                        ..CheckoutDiffView::unread(Block::bordered())
+                    },
+                    frame.area(),
+                );
+            });
+            let rows: Vec<String> = buffer_rows(&buffer);
             // The `f` opening a row's code.
             let start = |code: &str| {
                 let y = rows.iter().position(|row| row.contains(code))?;
@@ -4795,15 +4661,6 @@ index 1111111..2222222 100644
     }
 
     #[test]
-    fn a_base_made_from_a_detached_head_is_named_by_its_commit_alone() {
-        let (output, _) = screen(Ok(DIFF), None, 0);
-        assert!(
-            output.contains("styra/rename  against  4bf5c35d01"),
-            "{output}"
-        );
-    }
-
-    #[test]
     fn the_diff_scrolls_beneath_a_header_that_stays() {
         let long = (0..20).fold(DIFF.to_owned(), |text, n| {
             text + &format!("+fn x{n}() {{}}\n")
@@ -4828,85 +4685,6 @@ index 1111111..2222222 100644
         let (failed, _) = screen(Err("git diff failed: bad revision"), Some("main"), 0);
         assert!(failed.contains("git diff failed: bad revision"), "{failed}");
         assert!(!failed.contains("files changed"), "{failed}");
-    }
-
-    /// A base that is just a commit to compare with is not called where the
-    /// branch started.
-    #[test]
-    fn a_base_that_is_no_branch_point_is_not_called_one() {
-        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
-        let frame = terminal
-            .draw(|frame| {
-                render(
-                    frame,
-                    &CheckoutDiffView {
-                        branch: Some("main"),
-                        base_branch: Some("HEAD"),
-                        base_commit: "4bf5c35d0123456789abcdef",
-                        base_names: &[],
-                        diff: Ok(""),
-                        ..CheckoutDiffView::unread(Block::bordered())
-                    },
-                    frame.area(),
-                );
-            })
-            .unwrap();
-        let output = frame
-            .buffer
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(
-            output.contains("main  against  HEAD at 4bf5c35d01"),
-            "{output}"
-        );
-        assert!(!output.contains("where the branch started"), "{output}");
-        assert!(output.contains("no changes"), "{output}");
-        assert!(!output.contains("since the branch was made"), "{output}");
-        assert!(output.contains("no branch tip or tag"), "{output}");
-    }
-
-    /// The branches and tags at the base commit follow it, as `git log`
-    /// decorates a commit, including the current branch when it is at the base.
-    #[test]
-    fn the_names_at_the_base_commit_follow_it() {
-        let names = [
-            "main".to_owned(),
-            "styra/rename".into(),
-            "tag: v1.2".into(),
-            "origin/main".into(),
-        ];
-        let mut terminal = Terminal::new(TestBackend::new(180, 16)).unwrap();
-        let frame = terminal
-            .draw(|frame| {
-                render(
-                    frame,
-                    &CheckoutDiffView {
-                        branch: Some("styra/rename"),
-                        base_branch: Some("main"),
-                        base_commit: "4bf5c35d0123456789abcdef",
-                        base_names: &names,
-                        branch_point: true,
-                        diff: Ok(DIFF),
-                        ..CheckoutDiffView::unread(Block::bordered())
-                    },
-                    frame.area(),
-                );
-            })
-            .unwrap();
-        let output = frame
-            .buffer
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(
-            output.contains(
-                "against  main at 4bf5c35d01 (branch tip: main, branch tip: styra/rename, tag: v1.2, branch tip: origin/main)  (where the branch started)"
-            ),
-            "{output}"
-        );
     }
 
     #[test]
@@ -4961,35 +4739,32 @@ index 1111111..2222222 100644
 #[cfg(test)]
 mod split_tests {
     use super::*;
-    use ratatui::{backend::TestBackend, Terminal};
+    use crate::test_support::draw as draw_frame;
 
     #[test]
     fn turn_highlights_preserve_search_matches() {
         let patch = "diff --git a/a.rs b/a.rs\n@@ -1 +1 @@\n-old unique\n+new unique\n";
         for split in [false, true] {
-            let mut terminal = Terminal::new(TestBackend::new(160, 24)).unwrap();
-            let frame = terminal
-                .draw(|frame| {
-                    let view = CheckoutDiffView {
-                        diff: Ok(patch),
-                        highlight_diff: Some(patch),
-                        side_by_side: split,
-                        line_cursor: Some(2),
-                        find: SearchView {
-                            query: Some("unique"),
-                            typing: false,
-                        },
-                        ..CheckoutDiffView::unread(Block::default())
-                    };
-                    render(frame, &view, frame.area());
-                })
-                .unwrap();
+            let buffer = draw_frame(160, 24, |frame| {
+                let view = CheckoutDiffView {
+                    diff: Ok(patch),
+                    highlight_diff: Some(patch),
+                    side_by_side: split,
+                    line_cursor: Some(2),
+                    find: SearchView {
+                        query: Some("unique"),
+                        typing: false,
+                    },
+                    ..CheckoutDiffView::unread(Block::default())
+                };
+                render(frame, &view, frame.area());
+            });
             let found = (0..24)
                 .find_map(|y| {
-                    let row: String = (0..160).map(|x| frame.buffer[(x, y)].symbol()).collect();
+                    let row: String = (0..160).map(|x| buffer[(x, y)].symbol()).collect();
                     let start = row.find("new unique")?;
                     let x = row[..start].chars().count() as u16 + 4;
-                    Some(&frame.buffer[(x, y)])
+                    Some(&buffer[(x, y)])
                 })
                 .unwrap();
             // In split view both halves share the cursor's row, whose
@@ -5016,20 +4791,17 @@ mod split_tests {
             for per_file in [false, true] {
                 for hidden in [false, true] {
                     for enabled in [false, true] {
-                        let mut terminal = Terminal::new(TestBackend::new(160, 32)).unwrap();
-                        let frame = terminal
-                            .draw(|frame| {
-                                let view = CheckoutDiffView {
-                                    diff: Ok(patch),
-                                    highlight_diff: enabled.then_some(turn),
-                                    side_by_side: split,
-                                    per_file,
-                                    hide_removed: hidden,
-                                    ..CheckoutDiffView::unread(Block::default())
-                                };
-                                render(frame, &view, frame.area());
-                            })
-                            .unwrap();
+                        let buffer = draw_frame(160, 32, |frame| {
+                            let view = CheckoutDiffView {
+                                diff: Ok(patch),
+                                highlight_diff: enabled.then_some(turn),
+                                side_by_side: split,
+                                per_file,
+                                hide_removed: hidden,
+                                ..CheckoutDiffView::unread(Block::default())
+                            };
+                            render(frame, &view, frame.area());
+                        });
                         for (code, selected) in [
                             ("new unique", true),
                             ("old unique", true),
@@ -5038,12 +4810,12 @@ mod split_tests {
                         ] {
                             let found = (0..32).find_map(|y| {
                                 let row: String =
-                                    (0..160).map(|x| frame.buffer[(x, y)].symbol()).collect();
+                                    (0..160).map(|x| buffer[(x, y)].symbol()).collect();
                                 let byte = row.find(code)?;
                                 let x = row[..byte].chars().count() as u16
                                     + code.find(' ').unwrap() as u16
                                     + 1;
-                                Some(&frame.buffer[(x, y)])
+                                Some(&buffer[(x, y)])
                             });
                             if hidden && code.contains("old") {
                                 assert!(found.is_none());
@@ -5062,27 +4834,32 @@ mod split_tests {
         }
     }
 
+    fn split_buffer(
+        patch: &str,
+        width: u16,
+        height: u16,
+        horizontal_scroll: u16,
+    ) -> ratatui::buffer::Buffer {
+        draw_frame(width, height, |frame| {
+            render_split(
+                frame,
+                patch,
+                Tint::Full,
+                true,
+                None,
+                frame.area(),
+                0,
+                horizontal_scroll,
+                false,
+                None,
+            );
+        })
+    }
+
     #[test]
     fn split_paints_each_side_and_leaves_missing_cells_neutral() {
         let patch = "diff --git a/a.rs b/a.rs\n@@ -10,2 +20,3 @@\n-old\n+new\n+extra\n keep\n";
-        let mut terminal = Terminal::new(TestBackend::new(101, 8)).unwrap();
-        terminal
-            .draw(|frame| {
-                render_split(
-                    frame,
-                    patch,
-                    Tint::Full,
-                    true,
-                    None,
-                    frame.area(),
-                    0,
-                    0,
-                    false,
-                    None,
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
+        let buffer = split_buffer(patch, 101, 8, 0);
         let row = |y| {
             (0..101)
                 .map(|x| buffer[(x, y)].symbol())
@@ -5105,24 +4882,7 @@ mod split_tests {
             "x".repeat(80),
             "y".repeat(80)
         );
-        let mut terminal = Terminal::new(TestBackend::new(101, 4)).unwrap();
-        terminal
-            .draw(|frame| {
-                render_split(
-                    frame,
-                    &patch,
-                    Tint::Full,
-                    true,
-                    None,
-                    frame.area(),
-                    0,
-                    32,
-                    false,
-                    None,
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
+        let buffer = split_buffer(&patch, 101, 4, 32);
         let row: String = (0..101).map(|x| buffer[(x, 1)].symbol()).collect();
         assert!(row.starts_with("456 yyyy"), "{row}");
         assert!(row.contains("│123 xxxx"), "{row}");
@@ -5142,15 +4902,12 @@ mod split_tests {
             (0, false, false),
         ] {
             view.hide_removed = hidden;
-            let mut terminal = Terminal::new(TestBackend::new(width, 25)).unwrap();
-            terminal
-                .draw(|frame| {
-                    let measured = render(frame, &view, frame.area());
-                    assert_eq!(measured.side_by_side, expected);
-                    let panel = Panel::render(&view, frame, frame.area());
-                    assert_eq!(panel.diff_layout.unwrap().0, expected);
-                })
-                .unwrap();
+            draw_frame(width, 25, |frame| {
+                let measured = render(frame, &view, frame.area());
+                assert_eq!(measured.side_by_side, expected);
+                let panel = Panel::render(&view, frame, frame.area());
+                assert_eq!(panel.diff_layout.unwrap().0, expected);
+            });
             assert!(view.side_by_side);
         }
     }
@@ -5160,21 +4917,17 @@ mod split_tests {
         for split in [false, true] {
             for words in [false, true] {
                 for tint in [Tint::Full, Tint::Half] {
-                    let mut terminal = Terminal::new(TestBackend::new(160, 24)).unwrap();
-                    let frame = terminal
-                        .draw(|frame| {
-                            let view = CheckoutDiffView {
-                                diff: Ok(patch),
-                                side_by_side: split,
-                                word_highlights: words,
-                                tint,
-                                ..CheckoutDiffView::unread(Block::default())
-                            };
-                            render(frame, &view, frame.area());
-                        })
-                        .unwrap();
-                    let cells: Vec<_> = frame
-                        .buffer
+                    let buffer = draw_frame(160, 24, |frame| {
+                        let view = CheckoutDiffView {
+                            diff: Ok(patch),
+                            side_by_side: split,
+                            word_highlights: words,
+                            tint,
+                            ..CheckoutDiffView::unread(Block::default())
+                        };
+                        render(frame, &view, frame.area());
+                    });
+                    let cells: Vec<_> = buffer
                         .content
                         .iter()
                         .filter(|cell| cell.bg == theme::DIFF_WORD_ADDED_BACKGROUND)
@@ -5201,34 +4954,17 @@ mod split_tests {
     fn panning_keeps_word_highlights_and_gutters_in_place() {
         let padding = "a".repeat(45);
         let patch = format!("@@ -12 +12 @@\n-let {padding} = 30;\n+let {padding} = 60;\n");
-        let mut terminal = Terminal::new(TestBackend::new(81, 3)).unwrap();
-        let frame = terminal
-            .draw(|frame| {
-                render_split(
-                    frame,
-                    &patch,
-                    Tint::Full,
-                    true,
-                    None,
-                    frame.area(),
-                    0,
-                    30,
-                    false,
-                    None,
-                );
-            })
-            .unwrap();
-        let changed: Vec<_> = frame
-            .buffer
+        let buffer = split_buffer(&patch, 81, 3, 30);
+        let changed: Vec<_> = buffer
             .content
             .iter()
             .filter(|c| c.bg == theme::DIFF_WORD_ADDED_BACKGROUND)
             .collect();
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].symbol(), "6");
-        assert_eq!(frame.buffer[(0, 1)].symbol(), "1");
-        assert_eq!(frame.buffer[(1, 1)].symbol(), "2");
-        assert_eq!(frame.buffer[(41, 1)].symbol(), "1");
-        assert_eq!(frame.buffer[(42, 1)].symbol(), "2");
+        assert_eq!(buffer[(0, 1)].symbol(), "1");
+        assert_eq!(buffer[(1, 1)].symbol(), "2");
+        assert_eq!(buffer[(41, 1)].symbol(), "1");
+        assert_eq!(buffer[(42, 1)].symbol(), "2");
     }
 }

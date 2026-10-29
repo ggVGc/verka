@@ -1017,30 +1017,20 @@ mod tests {
         );
     }
 
-    /// A capture that never produced a sample is a failure worth the reason
-    /// the device gave, not the bare fact that nothing was recorded.
     #[test]
-    fn a_silent_capture_is_reported_with_what_the_device_said() {
-        let (done, finished) = mpsc::channel();
-        done.send(Ok(Some("Device or resource busy".into())))
-            .unwrap();
-
-        let error = finish_within(recorded(&wave(&[])), &finished, STOP_DEADLINE).unwrap_err();
-
-        assert_eq!(
-            format!("{error:#}"),
-            "the default input produced no audio: Device or resource busy"
-        );
-    }
-
-    #[test]
-    fn a_capture_that_said_nothing_still_reports_the_silence() {
-        let (done, finished) = mpsc::channel();
-        done.send(Ok(None)).unwrap();
-
-        let error = finish_within(recorded(&wave(&[])), &finished, STOP_DEADLINE).unwrap_err();
-
-        assert_eq!(format!("{error:#}"), "the default input produced no audio");
+    fn a_silent_capture_reports_the_device_reason_when_available() {
+        for (fault, expected) in [
+            (
+                Some("Device or resource busy"),
+                "the default input produced no audio: Device or resource busy",
+            ),
+            (None, "the default input produced no audio"),
+        ] {
+            let (done, finished) = mpsc::channel();
+            done.send(Ok(fault.map(String::from))).unwrap();
+            let error = finish_within(recorded(&wave(&[])), &finished, STOP_DEADLINE).unwrap_err();
+            assert_eq!(format!("{error:#}"), expected, "{fault:?}");
+        }
     }
 
     /// An input that will not let go is given up on rather than waited on:

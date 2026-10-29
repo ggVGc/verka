@@ -1469,13 +1469,17 @@ mod tests {
         app
     }
 
-    fn tree(name: &str) -> PathBuf {
-        let base = std::env::temp_dir().join(format!("styra-keys-{name}"));
-        let _ = std::fs::remove_dir_all(&base);
+    fn tree(name: &str) -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::Builder::new()
+            .prefix(&format!("styra-keys-{name}-"))
+            .tempdir()
+            .unwrap();
+        let base = directory.path();
         std::fs::create_dir_all(base.join("reports")).unwrap();
         std::fs::write(base.join("reports/summary.md"), "x").unwrap();
         std::fs::write(base.join("notes.txt"), "x").unwrap();
-        std::fs::canonicalize(base).unwrap()
+        let path = std::fs::canonicalize(base).unwrap();
+        (directory, path)
     }
 
     fn typed(app: &mut App, text: &str) {
@@ -1691,29 +1695,22 @@ mod tests {
 
     #[test]
     fn uppercase_g_in_details_opens_the_git_checkout_prompt_prefilled() {
-        let root = tree("git-checkout-prompt");
+        let (_root_directory, root) = tree("git-checkout-prompt");
         let mut app = app(&root);
         app.enter_list();
         app.workspace.git_repository = Some(root.join("repository"));
         app.toggle_view(View::Driva);
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
 
-        handle_list_key(
+        press_list_key(
             &mut app,
-            &client,
-            &mut live,
+            &root,
             KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
         );
 
         assert_eq!(
             app.git_repository_prompt.as_deref(),
             Some(root.join("repository").to_string_lossy().as_ref())
         );
-        let _ = std::fs::remove_dir_all(root);
     }
 
     /// A view's own key wins over the global command on the same key, as the
@@ -1721,48 +1718,35 @@ mod tests {
     /// toggle, not integration.
     #[test]
     fn a_views_own_key_wins_over_the_global_one() {
-        let root = tree("own-key-wins");
+        let (_root_directory, root) = tree("own-key-wins");
         let mut app = app(&root);
         app.enter_list();
         app.session_id = "session-1".into();
         app.toggle_view(View::Driva);
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
 
-        handle_list_key(
+        press_list_key(
             &mut app,
-            &client,
-            &mut live,
+            &root,
             KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
         );
 
         assert!(app.integration_prompt.is_none());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     /// `T` is global, so it edits the interaction's tags from the reading
     /// views too, not only from the event list.
     #[test]
     fn tags_are_edited_from_a_reading_view() {
-        let root = tree("tags-from-raw");
+        let (_root_directory, root) = tree("tags-from-raw");
         let mut app = app(&root);
         app.enter_list();
         app.session_id = "session-1".into();
         app.toggle_view(View::Raw);
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
 
-        handle_list_key(
+        press_list_key(
             &mut app,
-            &client,
-            &mut live,
+            &root,
             KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
         );
 
         // With no server to answer, reaching the tag editor shows as its
@@ -1771,12 +1755,11 @@ mod tests {
             .notices
             .iter()
             .any(|notice| notice.text.contains("could not list interactions")));
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn control_w_removes_mount_path_parts() {
-        let root = tree("mount-path-prompt");
+        let (_root_directory, root) = tree("mount-path-prompt");
         let mut app = app(&root);
         app.launch.prompt = Some("/home/op/project/crates/inner".into());
 
@@ -1801,7 +1784,6 @@ mod tests {
             KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
         );
         assert_eq!(app.launch.prompt.as_deref(), Some("/"));
-        let _ = std::fs::remove_dir_all(root);
     }
 
     /// The list under the mount prompt narrows with every letter typed; the
@@ -1810,7 +1792,7 @@ mod tests {
     /// the prompt with its list.
     #[test]
     fn the_mount_prompt_narrows_a_live_list_of_paths() {
-        let root = tree("mount-path-list");
+        let (_root_directory, root) = tree("mount-path-list");
         std::fs::create_dir_all(root.join("alpha")).unwrap();
         std::fs::create_dir_all(root.join("beta")).unwrap();
         let base = root.display().to_string();
@@ -1855,7 +1837,6 @@ mod tests {
         handle_mount_prompt_key(&mut app, key(KeyCode::Esc));
         assert!(app.launch.prompt.is_none());
         assert!(app.launch.paths.is_none());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     /// Enter on a name that is still being narrowed mounts the row the list
@@ -1863,7 +1844,7 @@ mod tests {
     /// while the list shows its siblings.
     #[test]
     fn enter_mounts_the_highlighted_path_for_a_partial_name() {
-        let root = tree("mount-path-enter");
+        let (_root_directory, root) = tree("mount-path-enter");
         std::fs::create_dir_all(root.join("alpha")).unwrap();
         let base = root.display().to_string();
         let mut app = app(&root);
@@ -1885,28 +1866,18 @@ mod tests {
         app.launch.prompt = Some(format!("{base}/reports"));
         handle_mount_prompt_key(&mut app, key(KeyCode::Enter));
         assert_eq!(sources(&app), [root.join("alpha"), root.join("reports")]);
-        let _ = std::fs::remove_dir_all(root);
     }
 
     /// Ctrl-N starts a new session, while `N` moves among actively working
     /// interactions and plain `n` follows newly idle work first.
     #[test]
     fn interaction_shortcuts_distinguish_new_live_and_working() {
-        let root = tree("live-step");
+        let (_root_directory, root) = tree("live-step");
         let mut app = app(&root);
         app.enter_list();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-        let mut press = |app: &mut App, code, modifiers| {
-            handle_list_key(
-                app,
-                &client,
-                &mut live,
-                KeyEvent::new(code, modifiers),
-                &mut pending_fold,
-                &root.join("preferences.toml"),
-            );
+        app.session_id = "session-1".into();
+        let press = |app: &mut App, code, modifiers| {
+            press_list_key(app, &root, KeyEvent::new(code, modifiers));
         };
 
         press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
@@ -1927,29 +1898,28 @@ mod tests {
         press(&mut app, KeyCode::Char('o'), KeyModifiers::ALT);
         assert_eq!(app.take_request(), Some(Request::InteractionHistory));
 
-        let _ = std::fs::remove_dir_all(root);
+        press(&mut app, KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::CreateWorktree { message: None })
+        );
+        press(&mut app, KeyCode::Char('~'), KeyModifiers::SHIFT);
+        assert_eq!(app.take_request(), Some(Request::OpenDirectory));
     }
 
     #[test]
     fn plain_l_opens_the_launcher_from_the_main_view() {
-        let root = tree("launcher-shortcut");
+        let (_root_directory, root) = tree("launcher-shortcut");
         let mut app = app(&root);
         app.enter_list();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
 
-        handle_list_key(
+        press_list_key(
             &mut app,
-            &client,
-            &mut live,
+            &root,
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
         );
 
         assert!(app.launcher.is_some());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     /// The grid takes `l` from the launcher to move right, Tab and Shift-Tab
@@ -1958,25 +1928,15 @@ mod tests {
     #[test]
     fn the_overview_walks_its_grid_and_opens_the_chosen_tile() {
         use styra_protocol::InteractionActivity;
-        let root = tree("overview-keys");
+        let (_root_directory, root) = tree("overview-keys");
         let mut app = app(&root);
         app.enter_list();
         app.interactions.refresh(vec![
             crate::interactions::tests::interaction("2-left", InteractionActivity::Running),
             crate::interactions::tests::interaction("1-right", InteractionActivity::Pending),
         ]);
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-        let mut press = |app: &mut App, code| {
-            handle_list_key(
-                app,
-                &client,
-                &mut live,
-                KeyEvent::new(code, KeyModifiers::NONE),
-                &mut pending_fold,
-                &root.join("preferences.toml"),
-            );
+        let press = |app: &mut App, code| {
+            press_list_key(app, &root, KeyEvent::new(code, KeyModifiers::NONE));
         };
 
         press(&mut app, KeyCode::Char('o'));
@@ -2044,7 +2004,6 @@ mod tests {
 
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.view, View::Events);
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2132,69 +2091,54 @@ mod tests {
     }
 
     #[test]
-    fn messages_shortcut_opens_and_closes_the_interactions_log() {
-        let root = tree("messages-shortcut");
-        let mut app = app(&root);
-        app.enter_list();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-        for expected in [View::Messages, View::Events] {
-            handle_list_key(
-                &mut app,
-                &client,
-                &mut live,
-                KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT),
-                &mut pending_fold,
-                &root.join("preferences.toml"),
-            );
-            assert_eq!(app.view, expected);
+    fn global_view_shortcuts_open_and_close_their_views() {
+        for (name, code, modifiers, view, request) in [
+            (
+                "messages",
+                KeyCode::Char('M'),
+                KeyModifiers::SHIFT,
+                View::Messages,
+                None,
+            ),
+            (
+                "processes",
+                KeyCode::Char('H'),
+                KeyModifiers::SHIFT,
+                View::Processes,
+                Some(Request::Processes),
+            ),
+            (
+                "log",
+                KeyCode::Char('l'),
+                KeyModifiers::CONTROL,
+                View::Log,
+                None,
+            ),
+        ] {
+            let (_root_directory, root) = tree(name);
+            let mut app = app(&root);
+            app.enter_list();
+            for expected in [view, View::Events] {
+                press_list_key(&mut app, &root, KeyEvent::new(code, modifiers));
+                assert_eq!(app.view, expected, "{name}");
+                assert_eq!(app.take_request(), request, "{name}: {expected:?}");
+            }
         }
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn processes_shortcut_opens_the_view_and_asks_the_server() {
-        let root = tree("processes-shortcut");
-        let mut app = app(&root);
-        app.enter_list();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-        for expected in [View::Processes, View::Events] {
-            handle_list_key(
-                &mut app,
-                &client,
-                &mut live,
-                KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT),
-                &mut pending_fold,
-                &root.join("preferences.toml"),
-            );
-            assert_eq!(app.view, expected);
-            assert!(matches!(app.take_request(), Some(Request::Processes)));
-        }
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn lowercase_h_opens_the_processes_pane_in_the_entry_logs_place() {
-        let root = tree("processes-pane-shortcut");
+        let (_root_directory, root) = tree("processes-pane-shortcut");
         let mut app = app(&root);
         app.enter_list();
         app.view = View::Quota;
         app.toggle_entry_log();
         assert!(app.entry_log.open);
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-        let mut press = |app: &mut App| {
-            handle_list_key(
+        let press = |app: &mut App| {
+            press_list_key(
                 app,
-                &client,
-                &mut live,
+                &root,
                 KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
-                &mut pending_fold,
-                &root.join("preferences.toml"),
             )
         };
         app.view = View::Quota;
@@ -2210,39 +2154,13 @@ mod tests {
         press(&mut app);
         app.toggle_entry_log();
         assert!(app.entry_log.open && !app.processes_pane);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn control_l_toggles_the_log_view() {
-        let root = tree("log-shortcut");
-        let mut app = app(&root);
-        app.enter_list();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-
-        handle_list_key(
-            &mut app,
-            &client,
-            &mut live,
-            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
-        );
-
-        assert_eq!(app.view, View::Log);
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn esc_returns_to_the_event_list_from_every_other_view() {
-        let root = tree("esc-back");
+        let (_root_directory, root) = tree("esc-back");
         let mut app = app(&root);
         app.enter_list();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
 
         for view in [
             View::Raw,
@@ -2258,22 +2176,18 @@ mod tests {
             View::Overview,
         ] {
             app.view = view;
-            handle_list_key(
+            press_list_key(
                 &mut app,
-                &client,
-                &mut live,
+                &root,
                 KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-                &mut pending_fold,
-                &root.join("preferences.toml"),
             );
             assert_eq!(app.view, View::Events, "Esc from {view:?}");
         }
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn link_highlight_temporarily_opens_the_file_preview() {
-        let root = tree("links-preview-restore");
+        let (_root_directory, root) = tree("links-preview-restore");
         for open in [false, true] {
             for exit in [KeyCode::Esc, KeyCode::Enter, KeyCode::Char('M')] {
                 let mut app = app(&root);
@@ -2315,7 +2229,6 @@ mod tests {
                 }
             }
         }
-        let _ = std::fs::remove_dir_all(root);
     }
 
     /// With a preview open the arrows scroll it ten lines, as `j`/`k` do the
@@ -2324,7 +2237,7 @@ mod tests {
     /// scroll the interaction independently instead (covered below).
     #[test]
     fn arrows_scroll_an_open_preview_and_page_keys_move_half_of_it() {
-        let root = tree("preview-arrows");
+        let (_root_directory, root) = tree("preview-arrows");
         let mut app = app(&root);
         app.enter_list();
         for index in 0..3 {
@@ -2333,18 +2246,8 @@ mod tests {
             });
         }
         app.select_first();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-        let mut press = |app: &mut App, code: KeyCode| {
-            handle_list_key(
-                app,
-                &client,
-                &mut live,
-                KeyEvent::new(code, KeyModifiers::NONE),
-                &mut pending_fold,
-                &root.join("preferences.toml"),
-            )
+        let press = |app: &mut App, code: KeyCode| {
+            press_list_key(app, &root, KeyEvent::new(code, KeyModifiers::NONE))
         };
 
         for view in [View::Events, View::Preview] {
@@ -2378,14 +2281,13 @@ mod tests {
             }
             app.select_first();
         }
-        let _ = std::fs::remove_dir_all(root);
     }
 
     /// Only these presses are handed to the event loop to branch; every other
     /// send goes out from the message box as it is.
     #[test]
     fn only_a_typed_message_sent_with_control_enter_branches() {
-        let root = tree("creates-worktree");
+        let (_root_directory, root) = tree("creates-worktree");
         let mut app = app(&root);
         let press = |modifiers| KeyEvent::new(KeyCode::Enter, modifiers);
 
@@ -2408,240 +2310,116 @@ mod tests {
             creates_worktree(&app, press(KeyModifiers::CONTROL)),
             "a Session already under way can still be branched"
         );
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// `Ctrl-Enter` asks for the same thing `Ctrl+W` does, carrying the prompt the
-    /// new checkout is for, so both wait behind the event loop's one notice.
-    #[test]
-    fn control_enter_hands_the_first_prompt_to_the_worktree_request() {
-        let root = tree("first-prompt-worktree");
-        let mut app = app(&root);
-        app.enter_input();
-        app.composer.set("start here".into());
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-
-        handle_input_key(
-            &mut app,
-            &client,
-            "workspace-1",
-            &mut live,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
-        );
-
-        assert_eq!(
-            app.take_request(),
-            Some(Request::CreateWorktree {
-                message: Some("start here".into())
-            })
-        );
-        assert!(app.composer.text().is_empty());
-        assert_eq!(live, Attachment::Detached, "nothing launches from the box");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// Later in a Session the message rides the same request, and nothing is
-    /// sent from the box: the interaction has to be moved before it hears it.
-    #[test]
-    fn control_enter_mid_session_hands_the_message_to_the_worktree_request() {
-        let root = tree("later-message-worktree");
-        let mut app = app(&root);
-        app.session_id = "session-1".into();
-        app.activity.status = Status::Idle(crate::activity::IdleReason::TurnComplete);
-        app.enter_input();
-        app.composer.set("carry on in a branch".into());
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Attached { cursor: 0 };
-
-        handle_input_key(
-            &mut app,
-            &client,
-            "workspace-1",
-            &mut live,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
-        );
-
-        assert_eq!(
-            app.take_request(),
-            Some(Request::CreateWorktree {
-                message: Some("carry on in a branch".into())
-            })
-        );
-        assert!(app.composer.text().is_empty());
-        assert_eq!(live, Attachment::Attached { cursor: 0 });
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// Moving a working agent would stop its turn, so the press is refused and
-    /// the message is left where it was written.
-    #[test]
-    fn control_enter_mid_turn_is_refused_and_keeps_the_message() {
-        let root = tree("mid-turn-worktree");
-        let mut app = app(&root);
-        app.session_id = "session-1".into();
-        app.activity.status = Status::Running;
-        app.enter_input();
-        app.composer.set("carry on in a branch".into());
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Attached { cursor: 0 };
-
-        handle_input_key(
-            &mut app,
-            &client,
-            "workspace-1",
-            &mut live,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
-        );
-
-        assert_eq!(app.take_request(), None);
-        assert_eq!(app.composer.text(), "carry on in a branch");
-        assert_eq!(live, Attachment::Attached { cursor: 0 });
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn control_w_requests_a_worktree_for_an_existing_session() {
-        let root = tree("session-worktree");
-        let mut app = app(&root);
-        app.enter_list();
-        // `Ctrl+W` only means anything for a session that exists; the guard on the
-        // key reads the id the list is sitting on.
-        app.session_id = "session-1".into();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-
-        handle_list_key(
-            &mut app,
-            &client,
-            &mut live,
-            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
-        );
-
-        assert_eq!(
-            app.take_request(),
-            Some(Request::CreateWorktree { message: None })
-        );
-        let _ = std::fs::remove_dir_all(root);
+    fn control_enter_carries_the_prompt_only_when_the_worktree_can_move() {
+        for (name, session_id, status, attachment, message, allowed) in [
+            (
+                "first-prompt",
+                "",
+                Status::Pending,
+                Attachment::Detached,
+                "start here",
+                true,
+            ),
+            (
+                "later-message",
+                "session-1",
+                Status::Idle(crate::activity::IdleReason::TurnComplete),
+                Attachment::Attached { cursor: 0 },
+                "carry on in a branch",
+                true,
+            ),
+            (
+                "mid-turn",
+                "session-1",
+                Status::Running,
+                Attachment::Attached { cursor: 0 },
+                "carry on in a branch",
+                false,
+            ),
+        ] {
+            let (_root_directory, root) = tree(name);
+            let mut app = app(&root);
+            app.session_id = session_id.into();
+            app.activity.status = status;
+            app.enter_input();
+            app.composer.set(message.into());
+            let client = Client::new(root.join("missing.sock"));
+            let mut live = match &attachment {
+                Attachment::Detached => Attachment::Detached,
+                Attachment::Attached { cursor } => Attachment::Attached { cursor: *cursor },
+            };
+            handle_input_key(
+                &mut app,
+                &client,
+                "workspace-1",
+                &mut live,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+            );
+            let expected = allowed.then(|| Request::CreateWorktree {
+                message: Some(message.into()),
+            });
+            assert_eq!(app.take_request(), expected, "{name}");
+            assert_eq!(
+                app.composer.text(),
+                if allowed { "" } else { message },
+                "{name}"
+            );
+            assert_eq!(live, attachment, "{name}: nothing launches from the box");
+        }
     }
 
     #[test]
     fn enter_on_a_branch_marker_opens_the_linked_interaction() {
-        let root = tree("follow-branch-enter");
-        let mut app = app(&root);
-        app.enter_list();
-        app.push_event(styra_protocol::event::AgentEvent::Branched {
-            direction: styra_protocol::event::BranchDirection::To,
-            session: "branch-2".into(),
-            name: None,
-        });
-        app.select_last();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
+        use styra_protocol::event::BranchDirection;
 
-        handle_list_key(
-            &mut app,
-            &client,
-            &mut live,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
-        );
+        for (fixture, direction, session) in [
+            ("follow-branch-enter", BranchDirection::To, "branch-2"),
+            (
+                "follow-branch-enter-source",
+                BranchDirection::From,
+                "source-1",
+            ),
+        ] {
+            let (_root_directory, root) = tree(fixture);
+            let mut app = app(&root);
+            app.enter_list();
+            app.push_event(styra_protocol::event::AgentEvent::Branched {
+                direction,
+                session: session.into(),
+                name: None,
+            });
+            app.select_last();
 
-        assert_eq!(
-            app.take_request(),
-            Some(Request::OpenSession("branch-2".into()))
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
+            press_list_key(&mut app, &root, KeyCode::Enter.into());
 
-    #[test]
-    fn enter_on_a_from_branch_marker_opens_the_linked_interaction() {
-        let root = tree("follow-branch-enter-source");
-        let mut app = app(&root);
-        app.enter_list();
-        app.push_event(styra_protocol::event::AgentEvent::Branched {
-            direction: styra_protocol::event::BranchDirection::From,
-            session: "source-1".into(),
-            name: None,
-        });
-        app.select_last();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-
-        handle_list_key(
-            &mut app,
-            &client,
-            &mut live,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
-        );
-
-        assert_eq!(
-            app.take_request(),
-            Some(Request::OpenSession("source-1".into()))
-        );
-        let _ = std::fs::remove_dir_all(root);
+            assert_eq!(
+                app.take_request(),
+                Some(Request::OpenSession(session.into()))
+            );
+        }
     }
 
     #[test]
     fn enter_on_a_regular_event_still_toggles_its_expansion() {
-        let root = tree("regular-enter");
+        let (_root_directory, root) = tree("regular-enter");
         let mut app = app(&root);
         app.enter_list();
         app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
             text: "ordinary reply".into(),
         });
         app.select_last();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
 
-        handle_list_key(
+        press_list_key(
             &mut app,
-            &client,
-            &mut live,
+            &root,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
         );
 
         assert!(app.timeline.selected_entry().unwrap().expanded);
         assert!(app.take_request().is_none());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// `~` asks for a terminal wherever the interaction is working, with no
-    /// live attachment needed: unlike `!`, which attaches to a running
-    /// sandbox, a finished interaction still has a directory to stand in.
-    #[test]
-    fn tilde_asks_for_a_terminal_in_the_interaction_directory() {
-        let root = tree("terminal-here");
-        let mut app = app(&root);
-        app.enter_list();
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Attachment::Detached;
-        let mut pending_fold = false;
-
-        handle_list_key(
-            &mut app,
-            &client,
-            &mut live,
-            KeyEvent::new(KeyCode::Char('~'), KeyModifiers::SHIFT),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
-        );
-
-        assert_eq!(app.take_request(), Some(Request::OpenDirectory));
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn press_list_key(app: &mut App, root: &Path, key: KeyEvent) {
@@ -2699,7 +2477,7 @@ mod tests {
 
     #[test]
     fn diff_keys_carry_the_selected_file_or_reference_location() {
-        let root = tree("diff-selected-location");
+        let (_root_directory, root) = tree("diff-selected-location");
         let mut app = app_with_diffable_interaction(&root);
         app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
             text: "see `notes.txt`".into(),
@@ -2732,48 +2510,44 @@ mod tests {
                 fullscreen: true,
             })
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// `d` asks the event loop to resolve this Session's diff base.
-    #[test]
-    fn d_asks_for_a_diff_of_the_checkout() {
-        let root = tree("diff-checkout");
-        let mut app = app_with_diffable_interaction(&root);
-
-        press_d(&mut app, &root);
-
-        assert_eq!(
-            app.take_request(),
-            Some(Request::ShowDiff("styra-7".into()))
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
+    /// `d` asks the event loop to resolve this Session's diff base;
     /// `D` asks for the same diff fullscreen.
     #[test]
-    fn shift_d_asks_for_the_same_diff_fullscreen() {
-        let root = tree("diff-external");
-        let mut app = app_with_diffable_interaction(&root);
+    fn diff_keys_ask_for_the_checkout_diff() {
+        for (fixture, character, modifiers, request) in [
+            (
+                "diff-checkout",
+                'd',
+                KeyModifiers::NONE,
+                Request::ShowDiff("styra-7".into()),
+            ),
+            (
+                "diff-external",
+                'D',
+                KeyModifiers::SHIFT,
+                Request::ShowDiffFullscreen("styra-7".into()),
+            ),
+        ] {
+            let (_root_directory, root) = tree(fixture);
+            let mut app = app_with_diffable_interaction(&root);
 
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
-        );
+            press_list_key(
+                &mut app,
+                &root,
+                KeyEvent::new(KeyCode::Char(character), modifiers),
+            );
 
-        assert_eq!(
-            app.take_request(),
-            Some(Request::ShowDiffFullscreen("styra-7".into()))
-        );
-        let _ = std::fs::remove_dir_all(&root);
+            assert_eq!(app.take_request(), Some(request));
+        }
     }
 
     /// The details view keeps `D` for saving the launch default, so no diff
     /// is asked for there.
     #[test]
     fn shift_d_in_the_details_view_is_not_a_diff() {
-        let root = tree("diff-details");
+        let (_root_directory, root) = tree("diff-details");
         let mut app = app_with_diffable_interaction(&root);
         app.view = View::Driva;
 
@@ -2787,12 +2561,11 @@ mod tests {
             app.take_request(),
             Some(Request::ShowDiffFullscreen(_))
         ));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn preview_diff_can_be_scrolled_promoted_and_closed() {
-        let root = tree("diff-preview");
+        let (_root_directory, root) = tree("diff-preview");
         let mut app = app_with_diffable_interaction(&root);
         app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
         app.diff_preview = true;
@@ -2862,7 +2635,6 @@ mod tests {
         );
         assert!(!app.diff_visible());
         assert!(!app.preview.open);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// `u` swaps the diff between the checkout's and the selected turn's, the
@@ -2870,7 +2642,7 @@ mod tests {
     /// one opened on the checkout's diff again.
     #[test]
     fn t_switches_the_diff_to_the_turn_diff_and_back() {
-        let root = tree("diff-turn");
+        let (_root_directory, root) = tree("diff-turn");
         let mut app = app_with_diffable_interaction(&root);
         app.push_event(styra_protocol::event::AgentEvent::UserMessage {
             text: "change a".into(),
@@ -2930,12 +2702,11 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert_ne!(app.view, View::CheckoutDiff);
         assert!(!app.diff_turn);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn diff_prompt_enter_reveals_latest_matching_message() {
-        let root = tree("diff-prompt-jump");
+        let (_root_directory, root) = tree("diff-prompt-jump");
         let mut app = app_with_diffable_interaction(&root);
         let mut diff = styra_diff::CheckoutDiff::read(diffable_target());
         diff.diff = Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n".into());
@@ -2980,14 +2751,13 @@ mod tests {
         handle_diff_key(&mut app, KeyEvent::from(KeyCode::Enter));
         assert_eq!(app.timeline.selected, expected - 2, "file prompt");
         assert!(app.diff_interaction_focus, "side pane returns keys to log");
-        let _ = std::fs::remove_dir_all(root);
     }
 
     /// `i` starts a message about what the diff is on — the file it shows,
     /// and the line cursor's line — and sending puts that under it.
     #[test]
     fn a_message_started_from_the_diff_notes_its_file_and_line() {
-        let root = tree("diff-message-source");
+        let (_root_directory, root) = tree("diff-message-source");
         let mut app = app_with_diffable_interaction(&root);
         app.view = View::CheckoutDiff;
         let mut diff = styra_diff::CheckoutDiff::read(diffable_target());
@@ -3027,12 +2797,11 @@ mod tests {
 
         app.enter_input();
         assert_eq!(app.message_source, None, "a message started elsewhere");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn per_file_diff_navigation_and_scrolling_use_separate_keys() {
-        let root = tree("diff-files");
+        let (_root_directory, root) = tree("diff-files");
         let mut app = app_with_diffable_interaction(&root);
         app.enter_list();
         app.view = View::CheckoutDiff;
@@ -3077,7 +2846,10 @@ mod tests {
         assert!(app.checkout_diff.as_ref().unwrap().line_cursor.is_none());
         press(&mut app, KeyCode::Tab);
         assert!(app.checkout_diff.as_ref().unwrap().commits.focused);
-        assert!(!app.diff_conversation, "Tab belongs to the open commit list");
+        assert!(
+            !app.diff_conversation,
+            "Tab belongs to the open commit list"
+        );
         press(&mut app, KeyCode::Char('h'));
         assert!(!app.checkout_diff.as_ref().unwrap().commits.open);
         press(&mut app, KeyCode::Down);
@@ -3231,12 +3003,11 @@ mod tests {
             press(&mut app, KeyCode::Char(key));
             assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, selected);
         }
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn tab_switches_navigation_between_the_side_diff_and_interaction() {
-        let root = tree("diff-tab-focus");
+        let (_root_directory, root) = tree("diff-tab-focus");
         for preview_open in [false, true] {
             let mut app = app_with_diffable_interaction(&root);
             for index in 0..3 {
@@ -3270,14 +3041,13 @@ mod tests {
             assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 20);
             assert_eq!(app.preview.open, preview_open);
         }
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// `v` asks for the file at the top of the diff, at the line there, and
     /// says why when that file is gone rather than asking for it.
     #[test]
     fn v_in_the_diff_opens_the_file_at_the_top_at_its_line() {
-        let root = tree("diff-open");
+        let (_root_directory, root) = tree("diff-open");
         let mut app = app_with_diffable_interaction(&root);
         app.view = View::CheckoutDiff;
         let mut diff = styra_diff::CheckoutDiff::read(DiffTarget {
@@ -3302,12 +3072,11 @@ mod tests {
         app.checkout_diff.as_mut().unwrap().scroll.offset = 5;
         press_list_key(&mut app, &root, v);
         assert_eq!(app.take_request(), None);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn i_from_the_diff_focuses_the_message_and_esc_returns_to_the_diff() {
-        let root = tree("diff-message-focus");
+        let (_root_directory, root) = tree("diff-message-focus");
         for view in [View::Events, View::Files, View::CheckoutDiff] {
             let mut app = app_with_diffable_interaction(&root);
             app.view = view;
@@ -3338,12 +3107,11 @@ mod tests {
             assert!(app.diff_focused());
             assert_eq!(app.view, view);
         }
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn i_and_q_are_still_text_while_typing_the_diff_filter() {
-        let root = tree("diff-filter-i");
+        let (_root_directory, root) = tree("diff-filter-i");
         let mut app = app_with_diffable_interaction(&root);
         app.diff_preview = true;
         let mut diff = styra_diff::CheckoutDiff::read(diffable_target());
@@ -3358,12 +3126,11 @@ mod tests {
             Some("iq")
         );
         assert_eq!(app.take_request(), None);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn q_from_the_diff_quits_styra_in_either_layout() {
-        let root = tree("diff-quit");
+        let (_root_directory, root) = tree("diff-quit");
         for view in [View::Events, View::Files, View::CheckoutDiff] {
             let mut app = app_with_diffable_interaction(&root);
             app.view = view;
@@ -3372,14 +3139,13 @@ mod tests {
             press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('q')));
             assert_eq!(app.take_request(), Some(Request::Quit));
         }
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Apart from the message and quit shortcuts, global keys do nothing in the diff,
     /// and d or Esc returns to events.
     #[test]
     fn d_and_esc_close_the_diff_view() {
-        let root = tree("diff-exclusive");
+        let (_root_directory, root) = tree("diff-exclusive");
         let mut app = app_with_diffable_interaction(&root);
         app.view = View::CheckoutDiff;
 
@@ -3414,13 +3180,12 @@ mod tests {
                 }
             }
         }
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A Session needs no branch point to open its snapshot diff.
     #[test]
     fn d_without_a_start_commit_requests_a_snapshot_diff() {
-        let root = tree("diff-no-branch-point");
+        let (_root_directory, root) = tree("diff-no-branch-point");
         let mut app = app(&root);
         app.enter_list();
         app.session_id = "styra-7".into();
@@ -3441,14 +3206,13 @@ mod tests {
             app.take_request(),
             Some(Request::ShowDiff("styra-7".into()))
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// What the prompt decides reaches the message: a path the sandbox already
     /// carries goes in under the name the agent knows it by.
     #[test]
     fn a_decided_path_goes_into_the_message_being_composed() {
-        let root = tree("mounted");
+        let (_root_directory, root) = tree("mounted");
         let mut app = app(&root);
 
         typed(&mut app, "reports/summary.md");
@@ -3456,16 +3220,14 @@ mod tests {
         assert!(app.insert.is_none());
         assert_eq!(app.composer.text(), "/workspace/reports/summary.md");
         assert!(app.launch.interaction.mounts.is_empty());
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// And a granted one also reaches the launch policy, as this
     /// interaction's own mount.
     #[test]
     fn a_granted_path_is_added_to_this_interactions_mounts() {
-        let root = tree("granted");
-        let outside = tree("granted-elsewhere");
+        let (_root_directory, root) = tree("granted");
+        let (_outside_directory, outside) = tree("granted-elsewhere");
         let mut app = app(&root);
         let host = outside.join("notes.txt");
 
@@ -3489,9 +3251,6 @@ mod tests {
             .notices
             .iter()
             .any(|message| message.text.contains("to this interaction")));
-
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&outside);
     }
 
     /// Highlight the one link in a reply naming `link`, and open its menu.
@@ -3513,7 +3272,7 @@ mod tests {
 
     #[test]
     fn the_link_menus_first_action_opens_the_link_as_enter_does() {
-        let root = tree("link-open");
+        let (_root_directory, root) = tree("link-open");
         let mut app = app(&root);
         link_menu_on(&mut app, &root.join("notes.txt").display().to_string());
 
@@ -3524,13 +3283,12 @@ mod tests {
             app.take_request(),
             Some(Request::OpenPath(root.join("notes.txt")))
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn the_link_menu_mounts_a_file_outside_the_sandbox_for_this_interaction() {
-        let root = tree("link-mount");
-        let outside = tree("link-mount-elsewhere");
+        let (_root_directory, root) = tree("link-mount");
+        let (_outside_directory, outside) = tree("link-mount-elsewhere");
         let host = outside.join("notes.txt");
         let mut app = app(&root);
         link_menu_on(&mut app, &host.display().to_string());
@@ -3553,17 +3311,14 @@ mod tests {
             "mounting keeps the link highlighted"
         );
         assert!(app.take_request().is_none());
-
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&outside);
     }
 
     /// An idle interaction takes the mount by restarting, as it does when the
     /// mount is added in the Driva view; a working one refuses it.
     #[test]
     fn the_link_menu_restarts_an_idle_interaction_to_mount() {
-        let root = tree("link-mount-idle");
-        let outside = tree("link-mount-idle-elsewhere");
+        let (_root_directory, root) = tree("link-mount-idle");
+        let (_outside_directory, outside) = tree("link-mount-idle-elsewhere");
         let host = outside.join("notes.txt");
 
         let mut working = app(&root);
@@ -3586,14 +3341,11 @@ mod tests {
         assert!(idle.notices.iter().any(|message| message
             .text
             .contains("restarting the interaction to apply it")));
-
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]
     fn the_link_menu_does_not_mount_what_the_sandbox_already_carries() {
-        let root = tree("link-mounted");
+        let (_root_directory, root) = tree("link-mounted");
         let mut app = app(&root);
         link_menu_on(&mut app, "notes.txt");
 
@@ -3604,6 +3356,5 @@ mod tests {
         assert!(app.notices.iter().any(|message| message
             .text
             .contains("already in the sandbox at /workspace")));
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

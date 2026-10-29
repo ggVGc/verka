@@ -178,21 +178,19 @@ mod tests {
     }
 
     #[test]
-    fn every_row_of_a_block_carries_the_gutter() {
-        let lines = code_block_lines("one\ntwo", None, theme::TEXT, false, "  ");
-
-        for line in &lines {
-            assert_eq!(line.spans[0].content.as_ref(), "  │ ");
-            assert_eq!(line.spans[0].style.fg, Some(theme::INACTIVE));
+    fn plain_and_highlighted_blocks_carry_the_gutter_on_every_row() {
+        for (source, language) in [("one\ntwo", None), ("fn main() {}", Some("rust"))] {
+            let lines = code_block_lines(source, language, theme::TEXT, false, "  ");
+            assert!(!lines.is_empty(), "{language:?}");
+            for line in &lines {
+                assert_eq!(line.spans[0].content.as_ref(), "  │ ", "{language:?}");
+                assert_eq!(
+                    line.spans[0].style.fg,
+                    Some(theme::INACTIVE),
+                    "{language:?}"
+                );
+            }
         }
-    }
-
-    #[test]
-    fn a_highlighted_block_carries_the_gutter_too() {
-        let lines = code_block_lines("fn main() {}", Some("rust"), theme::TEXT, false, "  ");
-
-        assert_eq!(lines[0].spans[0].content.as_ref(), "  │ ");
-        assert_eq!(lines[0].spans[0].style.fg, Some(theme::INACTIVE));
     }
 
     #[test]

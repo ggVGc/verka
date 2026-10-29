@@ -470,6 +470,9 @@ mod tests {
         list.next(&rows);
         list.prev(&rows);
         assert_eq!(list.selected, 0);
+        list.page_down(&rows);
+        list.page_up(&rows);
+        assert_eq!(list.selected, 0);
     }
 
     /// Paging crosses a long list in presses rather than keystrokes, and
@@ -499,25 +502,18 @@ mod tests {
     #[test]
     fn paging_is_held_to_the_matching_rows() {
         let rows = rows();
-        let mut list = FuzzyList::at(&rows, 0);
-        for character in "claude-".chars() {
-            list.push(character);
+        for (query, count, last_match, last_row) in [("claude-", 3, 2, 2), ("co5", 2, 1, 1)] {
+            let mut list = FuzzyList::at(&rows, 0);
+            for character in query.chars() {
+                list.push(character);
+            }
+            assert_eq!(list.matches(&rows).len(), count, "{query}");
+            list.page_down(&rows);
+            assert_eq!(list.selected, last_match, "last match for {query}");
+            assert_eq!(list.selected_row(&rows), Some(last_row), "{query}");
+            list.page_up(&rows);
+            assert_eq!(list.selected, 0, "first match for {query}");
         }
-        list.page_down(&rows);
-        assert_eq!(list.selected, 2, "the last of the three matches");
-        assert_eq!(list.selected_row(&rows), Some(2));
-    }
-
-    #[test]
-    fn paging_nothing_is_a_no_op() {
-        let rows = rows();
-        let mut list = FuzzyList::at(&rows, 0);
-        for character in "zzz".chars() {
-            list.push(character);
-        }
-        list.page_down(&rows);
-        list.page_up(&rows);
-        assert_eq!(list.selected, 0);
     }
 
     /// The cursor moves within the matches, not the rows, and holds at both

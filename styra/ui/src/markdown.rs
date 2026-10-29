@@ -1076,45 +1076,23 @@ mod tests {
     }
 
     #[test]
-    fn block_lines_keep_ordered_list_numbering() {
-        let base = Style::default();
-        let lines = markdown_block_lines("1. first\n2. second", base, "");
-
-        let rendered: Vec<String> = lines.iter().map(rendered_line).collect();
-        assert!(rendered.iter().any(|line| line.starts_with("1. first")));
-        assert!(rendered.iter().any(|line| line.starts_with("2. second")));
-    }
-
-    #[test]
-    fn block_lines_use_a_bullet_glyph_for_unordered_items() {
-        let base = Style::default();
-        let lines = markdown_block_lines("- one\n- two", base, "");
-
-        let rendered: Vec<String> = lines.iter().map(rendered_line).collect();
-        assert!(rendered.iter().any(|line| line.starts_with("\u{2022} one")));
-        assert!(rendered.iter().any(|line| line.starts_with("\u{2022} two")));
-        assert!(!rendered.iter().any(|line| line.contains("- ")));
-    }
-
-    #[test]
-    fn block_lines_keep_one_line_per_source_line_without_blank_separators() {
-        // Agent messages routinely separate lines with a single `\n`, not a
-        // blank line. CommonMark's soft-break-to-space rule would otherwise
-        // silently merge them into one rendered line.
-        let base = Style::default();
-        let lines = markdown_block_lines("hello\nworld", base, "");
-
-        let rendered: Vec<String> = lines.iter().map(rendered_line).collect();
-        assert_eq!(rendered, vec!["hello".to_owned(), "world".to_owned()]);
-    }
-
-    #[test]
-    fn block_lines_leave_fenced_code_content_untouched() {
-        let base = Style::default();
-        let lines = markdown_block_lines("```\nfn f() {}\n```", base, "");
-
-        let rendered: Vec<String> = lines.iter().map(rendered_line).collect();
-        assert!(rendered.iter().any(|line| line == "fn f() {}"));
+    fn block_lines_preserve_source_structure_and_code() {
+        for (case, source, expected) in [
+            (
+                "ordered list",
+                "1. first\n2. second",
+                vec!["1. first", "2. second"],
+            ),
+            ("bullet glyphs", "- one\n- two", vec!["• one", "• two"]),
+            // Agent messages use single newlines: CommonMark soft breaks must
+            // not silently join their lines or introduce blank separators.
+            ("source newlines", "hello\nworld", vec!["hello", "world"]),
+            ("fenced code", "```\nfn f() {}\n```", vec!["fn f() {}"]),
+        ] {
+            let lines = markdown_block_lines(source, Style::default(), "");
+            let rendered: Vec<String> = lines.iter().map(rendered_line).collect();
+            assert_eq!(rendered, expected, "{case}");
+        }
     }
 
     #[test]

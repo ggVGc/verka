@@ -144,10 +144,10 @@ pub fn search_text(workspace: &WorkspaceSummary) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn workspace(id: &str, name: Option<&str>, host_path: &str) -> WorkspaceSummary {
+    pub(crate) fn workspace(id: &str, name: Option<&str>, host_path: &str) -> WorkspaceSummary {
         WorkspaceSummary {
             id: id.into(),
             name: name.map(str::to_owned),
@@ -196,17 +196,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn there_is_no_root_until_a_live_workspace_records_one() {
-        let location = Location::default();
-
-        assert_eq!(location.root(), None);
-    }
-
     /// A session starts working at the root of the Workspace it was launched
-    /// in, so recording one sets both.
+    /// in, so recording one sets both. Changing directory then moves only
+    /// the working directory; reported paths still resolve against the root.
     #[test]
-    fn entering_a_workspace_starts_working_at_its_root() {
+    fn entering_and_changing_directory_keep_the_workspace_root() {
         let mut location = Location::default();
 
         location.enter(PathBuf::from("/home/op/project"));
@@ -216,15 +210,6 @@ mod tests {
             location.working_directory_or_current(),
             Some(PathBuf::from("/home/op/project"))
         );
-    }
-
-    /// Codex can be told to work elsewhere mid-session. That moves the working
-    /// directory without moving the Workspace, which is still what reported
-    /// paths resolve against.
-    #[test]
-    fn changing_directory_does_not_move_the_workspace() {
-        let mut location = Location::default();
-        location.enter(PathBuf::from("/home/op/project"));
 
         location.change_directory(PathBuf::from("/home/op/project/crates/inner"));
 
@@ -242,6 +227,7 @@ mod tests {
         let location = Location::default();
         let current = std::env::current_dir().ok();
 
+        assert_eq!(location.root(), None);
         assert_eq!(location.root_or_current_directory(), current);
         assert_eq!(location.working_directory_or_current(), current);
     }

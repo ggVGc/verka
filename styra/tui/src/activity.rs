@@ -919,71 +919,63 @@ mod tests {
         }
     }
 
-    /// The reason the server reports is the one the operator reads. Without it
-    /// a client that attached after the fact could only say "idle", which is
-    /// the state it can already see.
     #[test]
-    fn a_reported_reason_is_adopted_as_this_clients_own() {
-        assert_eq!(
-            Status::reported(&reported(
-                InteractionActivity::Pending,
-                Some(InteractionActivityReason::Interrupted),
-            )),
-            Status::Idle(IdleReason::Interrupted)
-        );
-        assert_eq!(
-            Status::reported(&reported(
-                InteractionActivity::Pending,
-                Some(InteractionActivityReason::RateLimited {
+    fn reported_status_adopts_only_reasons_that_explain_its_state() {
+        use InteractionActivity::{Pending, Stopped};
+        use InteractionActivityReason::{Interrupted, Paused, RateLimited, TurnCompleted};
+        for (name, activity, reason, expected) in [
+            (
+                "interrupted",
+                Pending,
+                Some(Interrupted),
+                Status::Idle(IdleReason::Interrupted),
+            ),
+            (
+                "quota refusal",
+                Pending,
+                Some(RateLimited {
                     window: "five_hour".into(),
                     resets_at_ms: Some(1_000),
                 }),
-            )),
-            Status::Idle(IdleReason::RateLimited(limit()))
-        );
-    }
-
-    /// A server that says nothing about why is not made to say something: the
-    /// client states the state it was told and no more.
-    #[test]
-    fn a_server_that_reports_no_reason_leaves_the_status_unexplained() {
-        assert_eq!(
-            Status::reported(&reported(InteractionActivity::Pending, None)),
-            Status::Idle(IdleReason::Reported)
-        );
-        assert_eq!(
-            Status::reported(&reported(InteractionActivity::Stopped, None)),
-            Status::Stopped(StopReason::NotAccepting)
-        );
-    }
-
-    /// The reasons are a vocabulary for the whole of an interaction's life, so
-    /// each state takes only the ones that can explain *it*: how a turn ended
-    /// says nothing about why the interaction then stopped, and a stop is no
-    /// reason to be waiting for input.
-    #[test]
-    fn a_state_takes_only_the_reasons_that_can_explain_it() {
-        assert_eq!(
-            Status::reported(&reported(
-                InteractionActivity::Stopped,
-                Some(InteractionActivityReason::Paused),
-            )),
-            Status::Stopped(StopReason::Paused)
-        );
-        assert_eq!(
-            Status::reported(&reported(
-                InteractionActivity::Stopped,
-                Some(InteractionActivityReason::TurnCompleted),
-            )),
-            Status::Stopped(StopReason::NotAccepting)
-        );
-        assert_eq!(
-            Status::reported(&reported(
-                InteractionActivity::Pending,
-                Some(InteractionActivityReason::Paused),
-            )),
-            Status::Idle(IdleReason::Reported)
-        );
+                Status::Idle(IdleReason::RateLimited(limit())),
+            ),
+            (
+                "unexplained idle",
+                Pending,
+                None,
+                Status::Idle(IdleReason::Reported),
+            ),
+            (
+                "unexplained stop",
+                Stopped,
+                None,
+                Status::Stopped(StopReason::NotAccepting),
+            ),
+            (
+                "paused stop",
+                Stopped,
+                Some(Paused),
+                Status::Stopped(StopReason::Paused),
+            ),
+            (
+                "turn reason cannot explain stop",
+                Stopped,
+                Some(TurnCompleted),
+                Status::Stopped(StopReason::NotAccepting),
+            ),
+            (
+                "stop reason cannot explain idle",
+                Pending,
+                Some(Paused),
+                Status::Idle(IdleReason::Reported),
+            ),
+        ] {
+            assert_eq!(
+                Status::reported(&reported(activity, reason)),
+                expected,
+                "{name}"
+            );
+        }
     }
 
     /// Integration is what sealed the Session, so it is what the status names;

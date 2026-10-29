@@ -928,16 +928,10 @@ mod cli_tests {
 
     fn workspace(id: &str, host_path: &str) -> WorkspaceSummary {
         WorkspaceSummary {
-            id: id.into(),
-            name: None,
-            host_path: host_path.into(),
-            git_repository: None,
             path: format!("/store/{id}").into(),
-            session_count: 0,
-            age: "now".into(),
             created_at_ms: 0,
             last_accessed_at_ms: 0,
-            launch: Default::default(),
+            ..crate::workspace::tests::workspace(id, None, host_path)
         }
     }
 
@@ -1025,9 +1019,11 @@ mod cli_tests {
     /// `n` in a Session working in a linked worktree opens a blank screen
     /// standing in that worktree, not at the Workspace root: the checkout it
     /// asks to share is where the next launch will actually work, and the
-    /// footer has to say so before the first message is sent.
+    /// footer has to say so before the first message is sent. Pressing `n`
+    /// again on that blank screen returns to the Workspace root, since it
+    /// has no Session of its own to lend a checkout.
     #[test]
-    fn a_new_session_started_in_a_checkout_stays_in_it() {
+    fn new_sessions_share_the_checkout_then_return_to_the_root_from_a_blank_screen() {
         let viewed = workspace("viewed", "/work/viewed");
         let checkout = Path::new("/state/worktrees/viewed/rename-the-picker-styra-7");
         let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
@@ -1044,26 +1040,8 @@ mod cli_tests {
             pending.workspace.working_directory_or_current(),
             Some(checkout.to_path_buf())
         );
-    }
 
-    /// `n` pressed again on the blank screen a worktree Session led to steps
-    /// back out to the Workspace root: that screen has no Session of its own
-    /// to lend a checkout, so the one it was going to share is not carried on.
-    #[test]
-    fn a_second_new_session_from_a_blank_screen_returns_to_the_workspace_root() {
-        let viewed = workspace("viewed", "/work/viewed");
-        let checkout = Path::new("/state/worktrees/viewed/rename-the-picker-styra-7");
-        let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
-        let mut app = App::pending(selection);
-        app.workspace.id = Some(viewed.id.clone());
-        app.session_id = "styra-7".into();
-        app.workspace.enter(checkout.to_path_buf());
-
-        let first = pending_app_from_session(&app, &viewed);
-        assert_eq!(first.checkout_from.as_deref(), Some("styra-7"));
-        assert_eq!(first.workspace.root(), Some(checkout));
-
-        let second = pending_app_from_session(&first, &viewed);
+        let second = pending_app_from_session(&pending, &viewed);
         assert_eq!(second.checkout_from, None);
         assert_eq!(second.workspace.root(), Some(Path::new("/work/viewed")));
     }
@@ -1115,28 +1093,33 @@ mod cli_tests {
         );
     }
 
+    fn launcher_fixture(selection: &str) -> (tempfile::TempDir, App, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("defaults.json");
+        let mut app = App::pending(Selection::parse(selection).expect("valid test selection"));
+        app.open_launcher();
+        (directory, app, path)
+    }
+
+    fn press_launcher(app: &mut App, path: &Path, code: KeyCode, modifiers: KeyModifiers) {
+        launcher::handle_key(app, KeyEvent::new(code, modifiers), path);
+    }
+
+    fn type_launcher(app: &mut App, path: &Path, text: &str) {
+        for character in text.chars() {
+            press_launcher(app, path, KeyCode::Char(character), KeyModifiers::NONE);
+        }
+    }
+
     #[test]
     fn confirming_the_launcher_selects_for_this_workspace_without_saving_a_default() {
-        let root = std::env::temp_dir().join(format!(
-            "styra-launch-default-handler-{}",
-            std::process::id()
-        ));
-        std::fs::remove_dir_all(&root).ok();
-        let path = root.join("defaults.json");
-        let selection =
-            Selection::parse("claude:claude-sonnet-5/max").expect("valid test selection");
-        let mut app = App::pending(selection.clone());
-        app.open_launcher();
+        let (_directory, mut app, path) = launcher_fixture("claude:claude-sonnet-5/max");
+        let selection = app.selection.clone();
 
-        launcher::handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-            &path,
-        );
+        press_launcher(&mut app, &path, KeyCode::Enter, KeyModifiers::NONE);
 
         assert_eq!(app.selection, selection);
         assert!(!path.exists());
-        std::fs::remove_dir_all(root).ok();
     }
 
     /// The arrows move the picker and confirming remembers the model, so the
@@ -1144,12 +1127,7 @@ mod cli_tests {
     /// only ctrl-D writes.
     #[test]
     fn the_arrows_move_the_launcher_and_confirming_remembers_the_model() {
-        let root =
-            std::env::temp_dir().join(format!("styra-launch-recent-models-{}", std::process::id()));
-        std::fs::remove_dir_all(&root).ok();
-        let path = root.join("defaults.json");
-        let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
-        app.open_launcher();
+        let (_directory, mut app, path) = launcher_fixture("claude");
         let opened_on = app.launcher.as_ref().unwrap().selection();
 
         // Two rows down and one back up.
@@ -1159,11 +1137,7 @@ mod cli_tests {
         let moved_to = app.launcher.as_ref().unwrap().selection();
         assert_ne!(moved_to, opened_on, "the cursor moved");
 
-        launcher::handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-            &path,
-        );
+        press_launcher(&mut app, &path, KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(app.selection, moved_to);
         assert!(!path.exists(), "Enter does not save a default selection");
         assert_eq!(
@@ -1182,7 +1156,6 @@ mod cli_tests {
                 .is_some_and(|label| label.contains(&moved_to.model)),
             "the model just used leads the list"
         );
-        std::fs::remove_dir_all(root).ok();
     }
 
     /// The list is typed at directly — no key opens a query first, because
@@ -1190,97 +1163,46 @@ mod cli_tests {
     /// what the query found.
     #[test]
     fn typing_at_the_launcher_narrows_it_and_enter_launches_on_the_row() {
-        let path = std::env::temp_dir().join(format!(
-            "styra-launch-filter-{}/defaults.json",
-            std::process::id()
-        ));
-        let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
-        app.open_launcher();
+        let (_directory, mut app, path) = launcher_fixture("claude");
 
-        for character in "haiku".chars() {
-            launcher::handle_key(
-                &mut app,
-                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
-                &path,
-            );
-        }
+        type_launcher(&mut app, &path, "haiku");
         let narrowed = app.launcher.as_ref().unwrap().selection().model;
         assert!(narrowed.contains("haiku"), "{narrowed}");
 
-        launcher::handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-            &path,
-        );
+        press_launcher(&mut app, &path, KeyCode::Enter, KeyModifiers::NONE);
         assert!(app.launcher.is_none());
         assert_eq!(app.selection.model, narrowed);
-        std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
     /// Typing a triple is typing an identifier, so ctrl-W takes back one part
     /// of one — and an unbound chord is not mistaken for a letter of a name.
     #[test]
     fn ctrl_w_deletes_a_word_of_the_launcher_query() {
-        let path = std::env::temp_dir().join(format!(
-            "styra-launch-ctrl-w-{}/defaults.json",
-            std::process::id()
-        ));
-        let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
-        app.open_launcher();
-        for character in "claude-opus-5-5/mox".chars() {
-            launcher::handle_key(
-                &mut app,
-                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
-                &path,
-            );
-        }
+        let (_directory, mut app, path) = launcher_fixture("claude");
+        type_launcher(&mut app, &path, "claude-opus-5-5/mox");
 
-        launcher::handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
-            &path,
-        );
+        press_launcher(&mut app, &path, KeyCode::Char('w'), KeyModifiers::CONTROL);
         let launcher = app.launcher.as_ref().expect("still open");
         assert_eq!(launcher.list.query, "claude-opus-5-5/");
         assert_eq!(launcher.selection().model, "claude-opus-5-5");
 
         // A chord the picker has no command for types nothing.
-        launcher::handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
-            &path,
-        );
+        press_launcher(&mut app, &path, KeyCode::Char('a'), KeyModifiers::CONTROL);
         assert_eq!(
             app.launcher.as_ref().unwrap().list.query,
             "claude-opus-5-5/",
             "an unbound chord is not a letter of the query"
         );
-        std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
     /// Esc widens an over-narrowed list before it abandons the picker: the
     /// first press is the one the operator meant, the second closes.
     #[test]
     fn esc_clears_the_query_before_it_closes_the_launcher() {
-        let path = std::env::temp_dir().join(format!(
-            "styra-launch-esc-{}/defaults.json",
-            std::process::id()
-        ));
-        let mut app = App::pending(Selection::parse("claude").expect("valid test selection"));
-        app.open_launcher();
-        for character in "haiku".chars() {
-            launcher::handle_key(
-                &mut app,
-                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
-                &path,
-            );
-        }
+        let (_directory, mut app, path) = launcher_fixture("claude");
+        type_launcher(&mut app, &path, "haiku");
 
-        launcher::handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-            &path,
-        );
+        press_launcher(&mut app, &path, KeyCode::Esc, KeyModifiers::NONE);
         let launcher = app.launcher.as_ref().expect("still open");
         assert!(!launcher.is_filtering(), "the query is gone");
         assert!(
@@ -1288,38 +1210,21 @@ mod cli_tests {
             "and the row it found is still selected"
         );
 
-        launcher::handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-            &path,
-        );
+        press_launcher(&mut app, &path, KeyCode::Esc, KeyModifiers::NONE);
         assert!(app.launcher.is_none(), "the second press closes it");
     }
 
     #[test]
     fn the_launcher_can_explicitly_save_the_selection_as_the_default() {
-        let root = std::env::temp_dir().join(format!(
-            "styra-launch-default-handler-explicit-{}",
-            std::process::id()
-        ));
-        std::fs::remove_dir_all(&root).ok();
-        let path = root.join("defaults.json");
-        let selection =
-            Selection::parse("claude:claude-sonnet-5/max").expect("valid test selection");
-        let mut app = App::pending(selection.clone());
-        app.open_launcher();
+        let (_directory, mut app, path) = launcher_fixture("claude:claude-sonnet-5/max");
+        let selection = app.selection.clone();
 
-        launcher::handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
-            &path,
-        );
+        press_launcher(&mut app, &path, KeyCode::Char('d'), KeyModifiers::CONTROL);
 
         assert_eq!(
             preferences::load_or_default(&path).unwrap().selection,
             selection
         );
-        std::fs::remove_dir_all(root).ok();
     }
 }
 

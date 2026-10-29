@@ -236,9 +236,35 @@ mod tests {
     use super::*;
     use ratatui::{
         backend::TestBackend,
+        buffer::Buffer,
         layout::{Constraint, Layout},
         Terminal,
     };
+
+    fn draw_content(
+        height: u16,
+        title: &str,
+        content: &str,
+        target: Option<u32>,
+        scroll: u16,
+    ) -> (Buffer, crate::preview::PreviewFeedback) {
+        let mut terminal = Terminal::new(TestBackend::new(40, height)).unwrap();
+        let mut feedback = None;
+        terminal
+            .draw(|frame| {
+                feedback = Some(render_content(
+                    frame,
+                    Some(title),
+                    FileContent::Ready(content),
+                    target,
+                    scroll,
+                    frame.area(),
+                ));
+            })
+            .unwrap();
+        (terminal.backend().buffer().clone(), feedback.unwrap())
+    }
+
     fn screen(files: &[FileView], content: FileContent<'_>) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         terminal
@@ -288,22 +314,8 @@ mod tests {
 
     #[test]
     fn a_target_line_is_numbered_and_marked() {
-        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
-        terminal
-            .draw(|frame| {
-                render_content(
-                    frame,
-                    Some("src/main.rs:2"),
-                    FileContent::Ready("first\nsecond\nthird"),
-                    Some(2),
-                    0,
-                    frame.area(),
-                );
-            })
-            .unwrap();
-        let output = terminal
-            .backend()
-            .buffer()
+        let (buffer, _) = draw_content(8, "src/main.rs:2", "first\nsecond\nthird", Some(2), 0);
+        let output = buffer
             .content()
             .iter()
             .map(|cell| cell.symbol())
@@ -334,28 +346,13 @@ mod tests {
     fn content_scrolls_as_asked_up_to_its_last_page() {
         let content = (1..=30).map(|n| format!("line {n}\n")).collect::<String>();
         let draw = |scroll| {
-            let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-            let mut feedback = None;
-            terminal
-                .draw(|frame| {
-                    feedback = Some(render_content(
-                        frame,
-                        Some("notes.txt"),
-                        FileContent::Ready(&content),
-                        None,
-                        scroll,
-                        frame.area(),
-                    ));
-                })
-                .unwrap();
-            let rows: Vec<String> = terminal
-                .backend()
-                .buffer()
+            let (buffer, feedback) = draw_content(12, "notes.txt", &content, None, scroll);
+            let rows: Vec<String> = buffer
                 .content()
                 .chunks(40)
                 .map(|row| row.iter().map(|cell| cell.symbol()).collect())
                 .collect();
-            (feedback.unwrap(), rows)
+            (feedback, rows)
         };
 
         let (feedback, rows) = draw(5);
@@ -372,22 +369,8 @@ mod tests {
     #[test]
     fn file_types_without_a_name_here_are_still_highlighted() {
         let content = "defmodule Styra do\n  def hello, do: :world\nend\n";
-        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
-        terminal
-            .draw(|frame| {
-                render_content(
-                    frame,
-                    Some("lib/styra.ex"),
-                    FileContent::Ready(content),
-                    None,
-                    0,
-                    frame.area(),
-                );
-            })
-            .unwrap();
-        let colors: BTreeSet<_> = terminal
-            .backend()
-            .buffer()
+        let (buffer, _) = draw_content(6, "lib/styra.ex", content, None, 0);
+        let colors: BTreeSet<_> = buffer
             .content()
             .iter()
             .filter(|cell| !cell.symbol().trim().is_empty() && !"│─┌┐└┘".contains(cell.symbol()))

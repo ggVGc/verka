@@ -255,42 +255,30 @@ mod tests {
     }
 
     #[test]
-    fn entering_on_a_line_pins_the_view_and_entering_on_nothing_follows() {
-        let mut raw = RawView::default();
-        for i in 0..3 {
-            raw.push(line(&format!("line {i}")));
+    fn entering_pins_clamps_or_follows_the_available_lines() {
+        for (name, count, entries) in [
+            (
+                "reenter to follow",
+                3,
+                vec![(Some(1), 1, false), (None, 2, true)],
+            ),
+            // An index saved before lazy attach may outlive its line.
+            ("clamp stale index", 1, vec![(Some(7), 0, false)]),
+            ("empty", 0, vec![(Some(3), 0, true)]),
+        ] {
+            let mut raw = RawView::default();
+            for i in 0..count {
+                raw.push(line(&format!("line {i}")));
+            }
+            for (requested, selected, follows) in entries {
+                raw.enter(requested);
+                assert_eq!(raw.selected_index(), selected, "{name}: {requested:?}");
+                assert_eq!(raw.is_following(), follows, "{name}: {requested:?}");
+                if count == 0 {
+                    assert!(raw.selected().is_none(), "{name}");
+                }
+            }
         }
-
-        raw.enter(Some(1));
-        assert_eq!(raw.selected_index(), 1);
-        assert!(!raw.is_following());
-
-        raw.enter(None);
-        assert_eq!(raw.selected_index(), 2);
-        assert!(raw.is_following());
-    }
-
-    /// A line index recorded before a lazy attach dropped the history would
-    /// otherwise point past the end of it.
-    #[test]
-    fn entering_on_a_line_that_is_no_longer_there_lands_on_the_last_one() {
-        let mut raw = RawView::default();
-        raw.push(line("only"));
-
-        raw.enter(Some(7));
-
-        assert_eq!(raw.selected_index(), 0);
-    }
-
-    #[test]
-    fn entering_an_empty_view_selects_nothing_and_follows() {
-        let mut raw = RawView::default();
-
-        raw.enter(Some(3));
-
-        assert_eq!(raw.selected_index(), 0);
-        assert!(raw.is_following());
-        assert!(raw.selected().is_none());
     }
 
     #[test]

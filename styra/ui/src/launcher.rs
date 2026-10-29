@@ -177,6 +177,7 @@ mod tests {
         let screen = rendered(&view());
         for text in [
             "styra · launch",
+            "type to narrow",
             "codex:gpt-5.6-sol/minimal",
             "claude:claude-opus-5/max",
             "claude:claude-haiku-4-5-20251001",
@@ -239,13 +240,6 @@ mod tests {
         }
         assert!(!screen.contains("model-astra"));
         assert!(!screen.contains("low"));
-    }
-
-    /// The list says how it is driven: it is typed at, not stepped through,
-    /// and nothing else on screen would say so.
-    #[test]
-    fn says_that_it_is_typed_at() {
-        assert!(rendered(&view()).contains("type to narrow"));
     }
 
     #[test]

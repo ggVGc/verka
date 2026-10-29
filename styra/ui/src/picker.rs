@@ -1094,21 +1094,6 @@ mod tests {
     }
 
     #[test]
-    fn workspace_picker_title_states_the_filter() {
-        let workspace = workspace_summary("retry", "retry work", 3);
-
-        let screen = rendered_filtered_workspace_picker(
-            &[workspace],
-            0,
-            &[],
-            SessionsPreview::Ready(&[]),
-            Some("ret"),
-        );
-
-        assert!(screen.contains("filter: ret"), "{screen}");
-    }
-
-    #[test]
     fn workspace_picker_says_when_the_filter_is_what_emptied_the_list() {
         let screen = rendered_filtered_workspace_picker(
             &[],
@@ -1118,6 +1103,7 @@ mod tests {
             Some("nothing"),
         );
 
+        assert!(screen.contains("filter: nothing"), "{screen}");
         assert!(screen.contains("no Workspaces match"), "{screen}");
     }
 

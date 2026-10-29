@@ -450,32 +450,35 @@ mod tests {
             session: None,
         }
     }
-    #[test]
-    fn view_renders_reading_and_retry_state() {
-        let reading = reading(Provider::Codex, "5h", QuotaStatus::Warning, Some(0.81));
-        let mut terminal = Terminal::new(TestBackend::new(100, 10)).unwrap();
+    fn rendered(readings: &[&QuotaEvent], auto_retry: bool, now_ms: u64, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, height)).unwrap();
         terminal
             .draw(|frame| {
                 render(
                     frame,
                     &QuotaView {
                         chrome: chrome(),
-                        readings: &[&reading],
-                        auto_retry: true,
+                        readings,
+                        auto_retry,
                         scroll_back: 0,
-                        now_ms: 1_000,
+                        now_ms,
                     },
                     frame.area(),
                 )
             })
             .unwrap();
-        let output = terminal
+        terminal
             .backend()
             .buffer()
             .content()
             .iter()
             .map(|cell| cell.symbol())
-            .collect::<String>();
+            .collect()
+    }
+    #[test]
+    fn view_renders_reading_and_retry_state() {
+        let reading = reading(Provider::Codex, "5h", QuotaStatus::Warning, Some(0.81));
+        let output = rendered(&[&reading], true, 1_000, 10);
         for expected in ["81%", "codex", "5h", "rate-limit retry: on"] {
             assert!(output.contains(expected), "{output}");
         }
@@ -487,29 +490,7 @@ mod tests {
         let mut weekly = reading(Provider::Codex, "7d", QuotaStatus::Warning, Some(0.91));
         weekly.at_ms = 2_000;
         weekly.resets_at_ms = Some(2_000 + 7 * 24 * 3_600 * 1_000);
-        let mut terminal = Terminal::new(TestBackend::new(100, 10)).unwrap();
-        terminal
-            .draw(|frame| {
-                render(
-                    frame,
-                    &QuotaView {
-                        chrome: chrome(),
-                        readings: &[&old, &weekly],
-                        auto_retry: true,
-                        scroll_back: 0,
-                        now_ms: 2_000,
-                    },
-                    frame.area(),
-                )
-            })
-            .unwrap();
-        let output = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
+        let output = rendered(&[&old, &weekly], true, 2_000, 10);
         // One summary row for the window, showing the newest reading only.
         assert_eq!(output.matches("7d").count(), 3, "{output}");
         assert!(output.contains("resets 1970-01-0"), "{output}");
@@ -552,29 +533,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let borrowed = readings.iter().collect::<Vec<_>>();
-        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-        terminal
-            .draw(|frame| {
-                render(
-                    frame,
-                    &QuotaView {
-                        chrome: chrome(),
-                        readings: &borrowed,
-                        auto_retry: false,
-                        scroll_back: 0,
-                        now_ms: 1_000,
-                    },
-                    frame.area(),
-                )
-            })
-            .unwrap();
-        let output = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
+        let output = rendered(&borrowed, false, 1_000, 40);
         assert!(output.contains("entry39"), "{output}");
         assert!(output.contains("entry30"), "{output}");
         assert!(!output.contains("entry29"), "{output}");
@@ -615,52 +574,34 @@ mod tests {
         assert!(!text(&segments).contains('%'), "{segments:?}");
     }
 
-    /// The event loop repaints an otherwise still screen on this, so a reading
-    /// that is merely present must not answer yes: a standing figure is a
-    /// measurement, and repainting it forever paints the same pixels.
     #[test]
-    fn only_a_refusal_still_waiting_on_its_moment_moves_the_footer() {
+    fn only_the_newest_refusal_with_a_future_reset_moves_the_footer() {
         let figure = reading(Provider::Codex, "5h", QuotaStatus::Warning, Some(0.91));
-        assert!(
-            !footer_ticks(&[&figure], 1_000),
-            "a utilization figure stands until a new reading replaces it"
-        );
-
         let mut refused = reading(Provider::Codex, "5h", QuotaStatus::Exhausted, Some(1.0));
         refused.resets_at_ms = Some(9_000);
-        assert!(
-            footer_ticks(&[&refused], 1_000),
-            "the moment is still ahead"
-        );
-        assert!(
-            !footer_ticks(&[&refused], 9_001),
-            "and the footer has stopped quoting it"
-        );
-
-        let mut refused_without_a_moment =
-            reading(Provider::Codex, "5h", QuotaStatus::Exhausted, None);
-        refused_without_a_moment.resets_at_ms = None;
-        assert!(
-            !footer_ticks(&[&refused_without_a_moment], 1_000),
-            "`spent` names no moment, so no moment can pass"
-        );
-    }
-
-    /// A refusal that a later reading has overtaken is not on the footer, and
-    /// so cannot be what the footer is waiting for. Reading the whole log
-    /// rather than the newest per window would leave a long-past refusal
-    /// repainting the screen for as long as its stated reset stayed ahead.
-    #[test]
-    fn a_refusal_a_later_reading_has_overtaken_stops_moving_the_footer() {
-        let mut refused = reading(Provider::Codex, "5h", QuotaStatus::Exhausted, Some(1.0));
-        refused.resets_at_ms = Some(9_000);
+        let mut undated = reading(Provider::Codex, "5h", QuotaStatus::Exhausted, None);
+        undated.resets_at_ms = None;
         let mut serving = reading(Provider::Codex, "5h", QuotaStatus::Allowed, Some(0.1));
         serving.at_ms = refused.at_ms + 1;
-
-        assert!(
-            !footer_ticks(&[&refused, &serving], 1_000),
-            "the provider is taking work again"
-        );
+        for (why, readings, now, expected) in [
+            (
+                "a figure stands until replaced",
+                vec![&figure],
+                1_000,
+                false,
+            ),
+            ("the moment is ahead", vec![&refused], 1_000, true),
+            ("the moment has passed", vec![&refused], 9_001, false),
+            ("spent names no moment", vec![&undated], 1_000, false),
+            (
+                "serving retires the refusal",
+                vec![&refused, &serving],
+                1_000,
+                false,
+            ),
+        ] {
+            assert_eq!(footer_ticks(&readings, now), expected, "{why}");
+        }
     }
 
     /// An account out of credits comes back when somebody pays, not when a

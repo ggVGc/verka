@@ -911,6 +911,114 @@ mod tests {
     use super::*;
 
     #[test]
+    fn simple_requests_preserve_their_wire_fields_and_round_trip() {
+        for (request, fields) in [
+            (
+                Request::RenameWorkspace(RenameWorkspace {
+                    id: "workspace-1".into(),
+                    name: Some("payments".into()),
+                }),
+                vec![
+                    ("/operation", serde_json::json!("rename_workspace")),
+                    ("/data/id", serde_json::json!("workspace-1")),
+                    ("/data/name", serde_json::json!("payments")),
+                ],
+            ),
+            (
+                Request::ProviderRaw { id: "s-1".into() },
+                vec![
+                    ("/operation", serde_json::json!("provider_raw")),
+                    ("/data/id", serde_json::json!("s-1")),
+                ],
+            ),
+            (
+                Request::CreateSession(CreateSession {
+                    workspace_id: "w-1".into(),
+                    selection: crate::agent::Selection {
+                        provider: crate::agent::Provider::Claude,
+                        model: "claude-opus-5".into(),
+                        effort: crate::agent::Effort::XHigh,
+                    },
+                    launch: LaunchPolicy::default(),
+                    create_worktree: false,
+                    checkout_from: None,
+                    message: None,
+                    name: None,
+                    contract: None,
+                    focus: false,
+                }),
+                vec![
+                    ("/data/selection/provider", serde_json::json!("claude")),
+                    ("/data/selection/model", serde_json::json!("claude-opus-5")),
+                    ("/data/selection/effort", serde_json::json!("xhigh")),
+                ],
+            ),
+            (
+                Request::CreateSessionWorktree {
+                    id: "styra-1".into(),
+                },
+                vec![
+                    ("/operation", serde_json::json!("create_session_worktree")),
+                    ("/data/id", serde_json::json!("styra-1")),
+                ],
+            ),
+            (
+                Request::SetWorkspaceHostPath {
+                    workspace_id: "w-1".into(),
+                    host_path: PathBuf::from("/srv/elsewhere"),
+                },
+                vec![
+                    ("/operation", serde_json::json!("set_workspace_host_path")),
+                    ("/data/workspace_id", serde_json::json!("w-1")),
+                    ("/data/host_path", serde_json::json!("/srv/elsewhere")),
+                ],
+            ),
+            (
+                Request::ConvertSessionProvider {
+                    id: "styra-1".into(),
+                },
+                vec![
+                    ("/operation", serde_json::json!("convert_session_provider")),
+                    ("/data/id", serde_json::json!("styra-1")),
+                ],
+            ),
+            (
+                Request::RenameSession(RenameSession {
+                    id: "styra-1".into(),
+                    name: Some("Fix session picker".into()),
+                }),
+                vec![
+                    ("/operation", serde_json::json!("rename_session")),
+                    ("/data/id", serde_json::json!("styra-1")),
+                    ("/data/name", serde_json::json!("Fix session picker")),
+                ],
+            ),
+            (
+                Request::SendMessage {
+                    id: "styra-1".into(),
+                    // The CLI uses this constructor for ordinary messages.
+                    message: SendMessage::new("hello"),
+                },
+                vec![
+                    ("/operation", serde_json::json!("send_message")),
+                    ("/data/id", serde_json::json!("styra-1")),
+                    ("/data/message/text", serde_json::json!("hello")),
+                ],
+            ),
+        ] {
+            let json = serde_json::to_value(&request).unwrap();
+            for (pointer, expected) in fields {
+                assert_eq!(
+                    json.pointer(pointer),
+                    Some(&expected),
+                    "{request:?}: {pointer}"
+                );
+            }
+            assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+        }
+    }
+
+    #[test]
     fn update_stream_has_an_explicit_cursor_and_tagged_payload() {
         let response = Updates {
             updates: vec![SequencedUpdate {
@@ -1020,19 +1128,6 @@ mod tests {
         assert!(!one.admits("s-2", "w-1", Pending, CompletionState::Active));
     }
 
-    #[test]
-    fn workspace_rename_is_a_named_request_with_a_workspace_summary_response() {
-        let request = Request::RenameWorkspace(RenameWorkspace {
-            id: "workspace-1".into(),
-            name: Some("payments".into()),
-        });
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["operation"], "rename_workspace");
-        assert_eq!(json["data"]["id"], "workspace-1");
-        assert_eq!(json["data"]["name"], "payments");
-        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
-    }
-
     /// The scope is optional on the wire, so a client asking about every
     /// Workspace sends the operation and nothing else.
     #[test]
@@ -1094,15 +1189,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_raw_request_names_the_durable_session() {
-        let request = Request::ProviderRaw { id: "s-1".into() };
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["operation"], "provider_raw");
-        assert_eq!(json["data"]["id"], "s-1");
-        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
-    }
-
-    #[test]
     fn audio_transcription_names_only_a_host_file() {
         let request = Request::TranscribeAudio {
             path: PathBuf::from("/tmp/note.wav"),
@@ -1133,30 +1219,6 @@ mod tests {
         .unwrap();
         assert_eq!(failed["operation"], "audio_transcription_error");
         assert_eq!(failed["data"]["error"], "no input");
-    }
-
-    #[test]
-    fn session_creation_carries_a_structured_agent_selection() {
-        let request = Request::CreateSession(CreateSession {
-            workspace_id: "w-1".into(),
-            selection: crate::agent::Selection {
-                provider: crate::agent::Provider::Claude,
-                model: "claude-opus-5".into(),
-                effort: crate::agent::Effort::XHigh,
-            },
-            launch: LaunchPolicy::default(),
-            create_worktree: false,
-            checkout_from: None,
-            message: None,
-            name: None,
-            contract: None,
-            focus: false,
-        });
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["data"]["selection"]["provider"], "claude");
-        assert_eq!(json["data"]["selection"]["model"], "claude-opus-5");
-        assert_eq!(json["data"]["selection"]["effort"], "xhigh");
-        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 
     #[test]
@@ -1236,35 +1298,21 @@ mod tests {
             "a resume that keeps the stored selection names none"
         );
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
-    }
-
-    #[test]
-    fn a_session_worktree_request_names_the_existing_session() {
-        let request = Request::CreateSessionWorktree {
-            id: "styra-1".into(),
-        };
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["operation"], "create_session_worktree");
-        assert_eq!(json["data"]["id"], "styra-1");
-        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
-    }
-
-    /// A resume may name the model and effort to revive on, so an operator's
-    /// choice made while nothing was running reaches the launch.
-    #[test]
-    fn a_resume_may_name_the_selection_to_revive_on() {
-        let request: Request = serde_json::from_str(
-            r#"{"operation":"resume_session","data":{"id":"styra-1",
+        // Legacy/default and explicitly supplied wire fields use the same contract.
+        {
+            let request: Request = serde_json::from_str(
+                r#"{"operation":"resume_session","data":{"id":"styra-1",
                  "selection":{"provider":"codex","model":"gpt-5.6-luna","effort":"low"}}}"#,
-        )
-        .unwrap();
-        let Request::ResumeSession(resume) = request else {
-            panic!("expected a resume request");
-        };
-        assert_eq!(
-            resume.selection,
-            Some(Selection::parse("codex:gpt-5.6-luna/low").unwrap())
-        );
+            )
+            .unwrap();
+            let Request::ResumeSession(resume) = request else {
+                panic!("expected a resume request");
+            };
+            assert_eq!(
+                resume.selection,
+                Some(Selection::parse("codex:gpt-5.6-luna/low").unwrap())
+            );
+        }
     }
 
     /// A launch that names no policy of its own is the ordinary case — it runs
@@ -1340,19 +1388,6 @@ mod tests {
     }
 
     #[test]
-    fn a_workspace_host_path_can_be_changed() {
-        let request = Request::SetWorkspaceHostPath {
-            workspace_id: "w-1".into(),
-            host_path: PathBuf::from("/srv/elsewhere"),
-        };
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["operation"], "set_workspace_host_path");
-        assert_eq!(json["data"]["workspace_id"], "w-1");
-        assert_eq!(json["data"]["host_path"], "/srv/elsewhere");
-        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
-    }
-
-    #[test]
     fn templates_are_listed_per_workspace_with_their_descriptions() {
         let request = Request::ListTemplates {
             workspace_id: "w-1".into(),
@@ -1370,17 +1405,6 @@ mod tests {
         assert_eq!(json["type"], "templates");
         assert_eq!(json["data"][0]["name"], "rust");
         assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
-    }
-
-    #[test]
-    fn convert_session_provider_names_only_the_source_session() {
-        let request = Request::ConvertSessionProvider {
-            id: "styra-1".into(),
-        };
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["operation"], "convert_session_provider");
-        assert_eq!(json["data"]["id"], "styra-1");
-        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 
     #[test]
@@ -1436,19 +1460,6 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(legacy.history, BranchHistory::ThroughSelected);
-    }
-
-    #[test]
-    fn rename_session_carries_a_nullable_display_name() {
-        let request = Request::RenameSession(RenameSession {
-            id: "styra-1".into(),
-            name: Some("Fix session picker".into()),
-        });
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["operation"], "rename_session");
-        assert_eq!(json["data"]["id"], "styra-1");
-        assert_eq!(json["data"]["name"], "Fix session picker");
-        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 
     #[test]
@@ -1538,24 +1549,22 @@ mod tests {
         assert_eq!(json["operation"], "send_message");
         assert_eq!(json["data"]["message"]["contract"], "files");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
-    }
-
-    /// A client that predates typed turns omits the field, and its messages
-    /// must keep meaning exactly what they meant before: an untyped turn.
-    #[test]
-    fn an_absent_contract_is_an_ordinary_turn() {
-        let json = serde_json::json!({
-            "operation": "send_message",
-            "data": { "id": "styra-1", "message": { "text": "hello" } }
-        });
-        let Request::SendMessage { message, .. } = serde_json::from_value::<Request>(json).unwrap()
-        else {
-            panic!("the operation must decode as send_message");
-        };
-        assert_eq!(message.contract, None);
-        // And a typed turn does not appear in the JSON of an untyped one.
-        let round_tripped = serde_json::to_value(&message).unwrap();
-        assert!(round_tripped.get("contract").is_none());
+        // Legacy/default and explicitly supplied wire fields use the same contract.
+        {
+            let json = serde_json::json!({
+                "operation": "send_message",
+                "data": { "id": "styra-1", "message": { "text": "hello" } }
+            });
+            let Request::SendMessage { message, .. } =
+                serde_json::from_value::<Request>(json).unwrap()
+            else {
+                panic!("the operation must decode as send_message");
+            };
+            assert_eq!(message.contract, None);
+            // And a typed turn does not appear in the JSON of an untyped one.
+            let round_tripped = serde_json::to_value(&message).unwrap();
+            assert!(round_tripped.get("contract").is_none());
+        }
     }
 
     #[test]
