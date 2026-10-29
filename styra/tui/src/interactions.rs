@@ -795,7 +795,8 @@ impl LiveInteractions {
             .iter()
             .position(|index| self.items[*index].id == current)
             .map(|position| (position + 1).min(visible.len().saturating_sub(1)))
-            .unwrap_or(0);
+            // Match the bottom-aligned viewport when nothing is selected.
+            .unwrap_or_else(|| visible.len().saturating_sub(1));
         visible
             .get(index)
             .and_then(|index| self.items.get(*index))
@@ -807,9 +808,10 @@ impl LiveInteractions {
         let position = visible
             .iter()
             .position(|index| self.items[*index].id == current)
-            .unwrap_or(0);
+            .map(|position| position.saturating_sub(1))
+            .unwrap_or_else(|| visible.len().saturating_sub(1));
         visible
-            .get(position.saturating_sub(1))
+            .get(position)
             .and_then(|index| self.items.get(*index))
             .cloned()
     }
@@ -2993,6 +2995,54 @@ pub(crate) mod tests {
             display(&live, Some("workspace")),
             [("sibling", 0), ("source", 0), ("branch", 0)]
         );
+    }
+
+    #[test]
+    fn row_navigation_without_a_selection_starts_at_the_bottom() {
+        for backwards in [false, true] {
+            let mut live = LiveInteractions::default();
+            let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
+            elsewhere.workspace_id = "other-workspace".into();
+            live.open(
+                vec![
+                    interaction("one", InteractionActivity::Pending),
+                    interaction("two", InteractionActivity::Pending),
+                    interaction("three", InteractionActivity::Pending),
+                    elsewhere,
+                ],
+                vec![],
+            );
+            live.toggle_workspace_scope();
+            let scope = Some("workspace");
+            assert_eq!(
+                display(&live, scope),
+                [("three", 0), ("two", 0), ("one", 0)]
+            );
+
+            // The current interaction can be absent or hidden by the scope.
+            for current in ["missing", "elsewhere"] {
+                live.rest();
+                if backwards {
+                    live.cursor_previous(current, scope);
+                } else {
+                    live.cursor_next(current, scope);
+                }
+                assert_eq!(live.cursor(current), "one");
+                assert_eq!(live.pending(current).unwrap().id, "one");
+                assert!(live.due(current).is_none());
+
+                live.cursor_previous(current, scope);
+                assert_eq!(live.cursor(current), "two");
+                live.cursor_next(current, scope);
+                assert_eq!(live.cursor(current), "one");
+            }
+        }
+
+        let mut empty = LiveInteractions::default();
+        empty.cursor_next("missing", None);
+        empty.cursor_previous("missing", None);
+        assert_eq!(empty.cursor("missing"), "missing");
+        assert!(empty.pending("missing").is_none());
     }
 
     #[test]
