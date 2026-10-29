@@ -914,6 +914,9 @@ fn render_inside(
                     Style::default().fg(theme::ERROR),
                 ))],
             };
+            if view.per_file && selected_file.is_some() && shown.is_ok() {
+                lines.push(end_of_file(width));
+            }
             fill_changed_rows(&mut lines, width);
             let limit = u16::try_from(lines.len())
                 .unwrap_or(u16::MAX)
@@ -1503,7 +1506,7 @@ fn render_split(
         0
     };
     let numbered = |cell: &Cell| cell.number.is_some() && gutter > 0;
-    let limit = u16::try_from(plan.len())
+    let limit = u16::try_from(plan.len() + usize::from(per_file))
         .unwrap_or(u16::MAX)
         .saturating_sub(area.height);
     let effective = scroll.min(limit);
@@ -1613,6 +1616,18 @@ fn render_split(
                     Rect::new(area.x + left_width + 1, y, area.width - left_width - 1, 1),
                 );
             }
+        }
+    }
+    if per_file {
+        if let Some(offset) = plan
+            .len()
+            .checked_sub(usize::from(effective))
+            .filter(|offset| *offset < usize::from(area.height))
+        {
+            frame.render_widget(
+                Paragraph::new(end_of_file(usize::from(area.width))),
+                Rect::new(area.x, area.y + offset as u16, area.width, 1),
+            );
         }
     }
     (limit, effective, pan)
@@ -2213,6 +2228,18 @@ fn rule(glyph: char, width: usize) -> Line<'static> {
     ))
 }
 
+/// A terminator that scrolls with the selected file's content.
+fn end_of_file(width: usize) -> Line<'static> {
+    let label = "── End of file ";
+    Line::styled(
+        format!(
+            "{label}{}",
+            "─".repeat(width.saturating_sub(label.chars().count()))
+        ),
+        Style::default().fg(theme::MUTED_TEXT),
+    )
+}
+
 /// For each row `text` is drawn as with nothing hidden, whether hiding
 /// removed lines hides it.
 pub(crate) fn removed_rows(text: &str) -> Vec<bool> {
@@ -2650,11 +2677,16 @@ index 1111111..2222222 100644
             assert!(output.contains("src/a.rs [M]"), "{output}");
             assert!(output.contains("┄┄┄"), "{output}");
             assert!(output.contains("fn c() {}"), "{output}");
+            assert!(
+                output.find("End of file").unwrap() > output.find("fn d() {}").unwrap(),
+                "{output}"
+            );
             for metadata in ["diff --git", "index 1111111", "--- a/", "+++ b/"] {
                 assert!(!output.contains(metadata), "{output}");
             }
         }
         let (combined, _) = screen(Ok(DIFF), None, 0);
+        assert!(!combined.contains("End of file"), "{combined}");
         assert!(combined.contains("src/a.rs"), "{combined}");
         for metadata in ["diff --git", "index 1111111", "--- a/", "+++ b/"] {
             assert!(!combined.contains(metadata), "{combined}");
