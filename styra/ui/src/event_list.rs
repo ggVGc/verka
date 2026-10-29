@@ -22,7 +22,6 @@ use std::time::Duration;
 use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 use styra_protocol::{Contract, QueuedMessage};
 
-const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
 
 /// Which row this is, and which state of it — see the host's event identity
@@ -1273,7 +1272,7 @@ fn build_entry_rows(
     }
     let mut lines = vec![summary];
     let mut detail =
-        detail_lines_with_links(entry.event, protocol, None, links, entry.link_highlight);
+        detail_lines_with_links(entry.event, protocol, links, entry.link_highlight);
     // The first detail line is the summary already shown above. Link focus is
     // rendered on that summary, so it never needs a duplicate body line.
     if !detail.is_empty() {
@@ -1288,14 +1287,6 @@ fn build_entry_rows(
             )),
         );
     }
-    if detail.len() > MAX_DETAIL_LINES {
-        let hidden = detail.len() - MAX_DETAIL_LINES;
-        detail.truncate(MAX_DETAIL_LINES);
-        detail.push(Line::from(Span::styled(
-            format!("{DETAIL_INDENT}… {hidden} more lines"),
-            Style::default().fg(theme::MUTED_TEXT),
-        )));
-    }
     lines.extend(detail);
     let mut wrapped = wrap_log_lines(lines, width, summary_indent);
     // Cut rather than wrapped, so it stays the one line the navigator has.
@@ -1303,9 +1294,7 @@ fn build_entry_rows(
         wrapped.push(truncate_line(line, width, false));
     }
     crate::diff::fill_changed_rows(&mut wrapped, width);
-    // The cap above bounds logical detail lines, which say nothing about how
-    // many rows they occupy once wrapped, so the height has to be bounded
-    // again here.
+    // Bounded to the rows the caller has room for: see [`entry_item`].
     if wrapped.len() > max_rows {
         if max_rows == 1 {
             wrapped.truncate(1);
@@ -2003,13 +1992,11 @@ pub(crate) fn branch_message_line(branch: &BranchLink<'_>) -> Option<Line<'stati
     })
 }
 
-/// The pretty, provider-aware expandable body of an entry. `cap` bounds how
-/// many lines are shown inline in the list so one noisy command cannot bury
-/// the rest of the session. The preview panel owns the optional raw view.
+/// The pretty, provider-aware expandable body of an entry. The preview panel
+/// owns the optional raw view.
 pub fn detail_lines_with_links(
     event: &AgentEvent,
     protocol: Protocol,
-    cap: Option<usize>,
     links: LinkDisplay,
     highlight: Option<EntryIndex>,
 ) -> Vec<Line<'static>> {
@@ -2040,16 +2027,6 @@ pub fn detail_lines_with_links(
                     DETAIL_INDENT,
                 ));
             }
-        }
-    }
-    if let Some(cap) = cap {
-        if lines.len() > cap {
-            let hidden = lines.len() - cap;
-            lines.truncate(cap);
-            lines.push(Line::from(Span::styled(
-                format!("{DETAIL_INDENT}… {hidden} more lines"),
-                Style::default().fg(theme::MUTED_TEXT),
-            )));
         }
     }
     lines
