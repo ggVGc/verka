@@ -1242,6 +1242,31 @@ fn build_entry_rows(
     max_rows: usize,
     render: EntryRender<'_>,
 ) -> Vec<Line<'static>> {
+    let mut rows = build_entry_content_rows(entry, width, max_rows, render);
+    if matches!(
+        entry.event,
+        AgentEvent::Branched {
+            direction: styra_protocol::event::BranchDirection::From,
+            ..
+        }
+    ) {
+        rows.insert(
+            0,
+            Line::from(Span::styled(
+                "─".repeat(width),
+                Style::default().fg(theme::BRANCH_FROM),
+            )),
+        );
+    }
+    rows
+}
+
+fn build_entry_content_rows(
+    entry: &EventEntry<'_>,
+    width: usize,
+    max_rows: usize,
+    render: EntryRender<'_>,
+) -> Vec<Line<'static>> {
     let EntryRender {
         protocol,
         links,
@@ -1271,8 +1296,7 @@ fn build_entry_rows(
             .collect();
     }
     let mut lines = vec![summary];
-    let mut detail =
-        detail_lines_with_links(entry.event, protocol, links, entry.link_highlight);
+    let mut detail = detail_lines_with_links(entry.event, protocol, links, entry.link_highlight);
     // The first detail line is the summary already shown above. Link focus is
     // rendered on that summary, so it never needs a duplicate body line.
     if !detail.is_empty() {
