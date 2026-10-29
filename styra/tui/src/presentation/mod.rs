@@ -850,7 +850,7 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
         app.timeline.rendered_selection = Some(app.timeline.selected);
     }
     if let Some(offset) = feedback.navigator_offset {
-        app.interactions.scroll_offset = offset;
+        app.interactions.scroll_offset = Some(offset);
     }
     for scroll in &feedback.scroll {
         match &scroll.panel {

@@ -168,8 +168,8 @@ pub struct InteractionNavigator<'a> {
     pub typing_filter: bool,
     /// The first line shown last frame. [`render`] keeps it unless the cursor
     /// comes within [`SCROLL_MARGIN`] rows of an edge, and returns the line it
-    /// actually drew from.
-    pub requested_offset: usize,
+    /// actually drew from. `None` starts at the bottom on the first draw.
+    pub requested_offset: Option<usize>,
     pub rows: Vec<InteractionRow<'a>>,
 }
 
@@ -366,7 +366,7 @@ fn scroll_offset(
 ) -> usize {
     // The foot of the pane is never left empty while there is list to fill it.
     let last = total.saturating_sub(viewport);
-    let mut offset = view.requested_offset.min(last);
+    let mut offset = view.requested_offset.unwrap_or(last).min(last);
     let Some(selected) = selected else {
         return last;
     };
@@ -1173,7 +1173,7 @@ mod tests {
             tag_filter: &[],
             filter: None,
             typing_filter: false,
-            requested_offset: 0,
+            requested_offset: Some(0),
             rows: vec![
                 InteractionRow::Workspace("Payments".into()),
                 InteractionRow::Interaction {
@@ -1613,7 +1613,7 @@ mod tests {
             tag_filter: &[],
             filter: None,
             typing_filter: false,
-            requested_offset: 0,
+            requested_offset: Some(0),
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 level: 0,
@@ -1651,7 +1651,7 @@ mod tests {
             tag_filter: &[],
             filter: None,
             typing_filter: false,
-            requested_offset: 0,
+            requested_offset: Some(0),
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 level: 0,
@@ -1691,7 +1691,7 @@ mod tests {
             tag_filter: &[],
             filter: None,
             typing_filter: false,
-            requested_offset: 0,
+            requested_offset: Some(0),
             rows: vec![InteractionRow::Interaction {
                 name: "repair checkout".into(),
                 level: 0,
@@ -1727,7 +1727,7 @@ mod tests {
             tag_filter: &[],
             filter: None,
             typing_filter: false,
-            requested_offset: 0,
+            requested_offset: Some(0),
             rows: (0..8)
                 .map(|index| InteractionRow::Interaction {
                     name: format!("task {index}").into(),
@@ -1790,6 +1790,20 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_list_starts_at_the_bottom_with_the_current_interaction_selected() {
+        let mut view = many_rows(4);
+        view.requested_offset = None;
+        assert_eq!(scroll_offset(&view, Some(4), 14, 16), 2);
+        // A saved offset still wins when the selection fits within its margins.
+        view.requested_offset = Some(0);
+        assert_eq!(scroll_offset(&view, Some(4), 14, 16), 0);
+        // An older current interaction must remain visible on the first draw.
+        view = many_rows(0);
+        view.requested_offset = None;
+        assert_eq!(scroll_offset(&view, Some(0), 10, 16), 0);
+    }
+
+    #[test]
     fn an_unselected_list_shows_the_bottom() {
         // An index outside the list leaves every interaction unselected.
         assert_eq!(drawn_offset(usize::MAX, 0), 6);
@@ -1812,7 +1826,7 @@ mod tests {
     /// inside its border: five two-line rows.
     fn drawn_offset(selected: usize, requested_offset: usize) -> usize {
         let view = InteractionNavigator {
-            requested_offset,
+            requested_offset: Some(requested_offset),
             ..many_rows(selected)
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();

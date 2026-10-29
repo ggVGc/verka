@@ -93,8 +93,9 @@ pub struct LiveInteractions {
     flashed: HashMap<String, Instant>,
     /// The first line the navigator showed when last drawn. The cursor moves
     /// freely within the view and only scrolls it near an edge, so where the
-    /// view sits has to be remembered between frames.
-    pub scroll_offset: usize,
+    /// view sits has to be remembered between frames. `None` starts a fresh
+    /// client at the bottom before keeping the current interaction in view.
+    pub scroll_offset: Option<usize>,
 }
 
 /// The event list's tally of listed Interactions by activity, rendered on the
