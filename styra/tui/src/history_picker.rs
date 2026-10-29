@@ -111,7 +111,7 @@ mod tests {
     }
 
     fn run_keys(rows: &Rows, keys: impl IntoIterator<Item = KeyCode>) -> Option<usize> {
-        let mut terminal = styra_ui::TestUi::new(100, 20).unwrap();
+        let mut terminal = crate::test_ui::TestUi::default();
         terminal.script(keys.into_iter().map(|key| Event::Key(KeyEvent::from(key))));
         run(&mut terminal, rows).unwrap()
     }

@@ -230,11 +230,24 @@ mod tests {
             ],
             protocol,
         ));
-        let screen = test_support::screen_sized(&app, 140, 30);
-        let (preview_x, _) = screen.find("branch log · C: command");
-        let (message_x, _) = screen.find("try the other approach");
-        assert!(message_x > preview_x, "the branch's log is in the preview");
-        assert!(screen.all().contains("done it the other way"));
+        let view = crate::presentation::preview::view(&app, false);
+        let Some(styra_ui::preview::BranchLog::Ready {
+            events,
+            protocol: actual,
+        }) = view.branch_log
+        else {
+            panic!("linked log expected")
+        };
+        assert_eq!(actual, protocol);
+        assert_eq!(
+            events,
+            [
+                said("try the other approach"),
+                AgentEvent::AgentMessage {
+                    text: "done it the other way".into()
+                }
+            ]
+        );
     }
 
     /// Until the marker the cursor reached is loaded, the pane says so rather
@@ -248,9 +261,10 @@ mod tests {
             vec![said("another branch entirely")],
             protocol,
         ));
-        let screen = test_support::screen_sized(&app, 140, 30).all();
-        assert!(screen.contains("loading…"), "{screen}");
-        assert!(!screen.contains("another branch entirely"));
+        assert!(matches!(
+            crate::presentation::preview::view(&app, false).branch_log,
+            Some(styra_ui::preview::BranchLog::Loading)
+        ));
     }
 
     #[test]

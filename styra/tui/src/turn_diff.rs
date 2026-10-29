@@ -332,14 +332,14 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "src/retry.rs");
         assert!(shown(&app).contains("+delay * 2"));
-        let screen = test_support::screen_sized(&app, 140, 40).all();
-        assert!(screen.contains("fix the retry backoff"), "{screen}");
         assert!(
-            screen.contains("turn 1 · as the agent reported"),
-            "{screen}"
+            matches!(app.turn_message(), Some(AgentEvent::UserMessage { text }) if text == "fix the retry backoff")
         );
-        assert!(screen.contains("delay * 2"), "{screen}");
-        assert!(!screen.contains("new_name"), "{screen}");
+        let Source::Supplied(supplied) = &app.shown_diff().unwrap().source else {
+            panic!()
+        };
+        assert_eq!(supplied.label, "turn 1 · as the agent reported its changes");
+        assert!(!shown(&app).contains("new_name"));
     }
 
     /// Moving to the next turn starts its diff from the top, with the view's
@@ -381,8 +381,10 @@ mod tests {
             assert!(app.sync_turn_diff());
             assert!(shown(&app).contains("snapshot_name"));
             assert!(!shown(&app).contains("new_name\n"));
-            let screen = test_support::screen_sized(&app, 140, 40).all();
-            assert!(screen.contains(label), "{screen}");
+            let Source::Supplied(supplied) = &app.shown_diff().unwrap().source else {
+                panic!()
+            };
+            assert_eq!(supplied.label, label);
         }
     }
 
@@ -398,9 +400,9 @@ mod tests {
         ));
         app.sync_turn_diff();
         assert_eq!(shown(&app), "");
-        let screen = test_support::screen_sized(&app, 140, 40).all();
-        assert!(screen.contains("no changes"), "{screen}");
-        assert!(!screen.contains("delay * 2"), "{screen}");
+        test_support::inspect(&app, |v| {
+            assert!(matches!(v.main, styra_ui::application::MainView::Events(_)))
+        });
     }
 
     /// Codex's whole-turn diff already names its files, and the newest one

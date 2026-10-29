@@ -86,16 +86,9 @@ mod tests {
         app.timeline.all_events = false;
         app.timeline.selected = 0;
         app.toggle_entry_log();
-        let screen = test_support::screen_sized(&app, 120, 30);
-        let (_, entry_log_y) = screen.find("entry log · follows selection");
-        let (_, command_y) = screen.find("cargo test backoff");
-        assert!(
-            command_y > entry_log_y,
-            "the scoped entry is below its title"
-        );
-        // The next message begins its own stretch, so neither it nor the work
-        // under it belongs to this one.
-        assert!(!screen.body().contains("git commit --amend"));
+        let view = super::view(&app);
+        assert_eq!(view.entries.len(), 2);
+        assert_eq!(view.entries[1].event, app.timeline.entries[1].event());
     }
 
     /// The view exists for the conversation-only reader, so the entries it
@@ -106,7 +99,7 @@ mod tests {
         app.timeline.all_events = false;
         app.timeline.selected = 0;
         app.toggle_entry_log();
-        assert!(test_support::rendered(&app).contains("cargo test backoff"));
+        assert!(super::view(&app).entries.iter().any(|e| matches!(e.event, AgentEvent::CommandStarted { command } if command == "cargo test backoff")));
     }
 
     /// `m` says whether minor lifecycle events are worth screen space, and it
@@ -130,12 +123,12 @@ mod tests {
         app.toggle_entry_log();
         assert!(!app.timeline.show_minor);
 
-        let screen = test_support::rendered(&app);
-        assert!(screen.contains("cargo test backoff"));
-        assert!(!screen.contains("weighing the retry backoff"));
-
+        assert!(!super::view(&app)
+            .entries
+            .iter()
+            .any(|e| matches!(e.event, AgentEvent::Thinking { .. })));
         app.toggle_minor();
-        assert!(test_support::rendered(&app).contains("weighing the retry backoff"));
+        assert!(super::view(&app).entries.iter().any(|e| matches!(e.event, AgentEvent::Thinking { text, .. } if text == "weighing the retry backoff")));
     }
 
     /// The cursor walks what the pane draws, so a hidden entry is not a row it
@@ -179,11 +172,8 @@ mod tests {
         assert_eq!(span, 0..2);
     }
 
-    /// This is a scoped list, not a detail preview. The shared collapsed-row
-    /// renderer must keep command output out of this window just as it does in
-    /// the main interaction log.
     #[test]
-    fn entry_log_keeps_each_scoped_entry_to_one_line() {
+    fn entry_log_passes_collapsed_entries_with_their_full_events() {
         let mut app = test_support::app("s1");
         app.timeline.all_events = false;
         app.push_event(AgentEvent::UserMessage {
@@ -198,35 +188,36 @@ mod tests {
         app.select_first();
         app.toggle_entry_log();
 
-        let screen = test_support::screen_sized(&app, 120, 30);
-        let (_, command_y) = screen.find("cargo test");
-        assert!(command_y > 15, "the command summary is in the bottom pane");
-        assert!(!screen.body().contains("this command output"));
+        let view = super::view(&app);
+        assert_eq!(view.entries.len(), 2);
+        assert!(view.entries.iter().all(|e| !e.expanded));
+        assert!(
+            matches!(view.entries[1].event, AgentEvent::CommandCompleted { output, .. } if output == "this command output must not be in the entry log")
+        );
     }
 
-    /// The pane occupies the bottom of the Events screen while the list stays
-    /// above it. Until `Tab` hands it the keys, moving that list is what
-    /// changes the pane's content.
     #[test]
-    fn entry_log_is_a_selection_following_pane_below_the_event_list() {
+    fn entry_log_data_follows_the_list_selection() {
         let mut app = app_with_two_turns();
         app.timeline.all_events = false;
         app.timeline.selected = 0;
         app.toggle_entry_log();
 
-        let screen = test_support::screen_sized(&app, 120, 30);
-        let (_, entry_log_y) = screen.find("entry log · follows selection");
-        let (_, command_y) = screen.find("cargo test backoff");
-        assert!(entry_log_y > 15, "the entry log is the bottom pane");
-        assert!(
-            command_y > entry_log_y,
-            "the selected entry's work is in that pane"
-        );
-
+        test_support::inspect(&app, |v| {
+            let styra_ui::application::MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert!(!e.entry_log.unwrap().focused);
+            assert_eq!(
+                e.entry_log.unwrap().entries[1].event,
+                app.timeline.entries[1].event()
+            );
+        });
         app.select_next_line();
-        let screen = test_support::screen_sized(&app, 120, 30);
-        let (_, y) = screen.find("git commit --amend");
-        assert!(y > entry_log_y, "the pane followed the list selection");
+        assert_eq!(
+            super::view(&app).entries[1].event,
+            app.timeline.entries[3].event()
+        );
     }
 
     /// `Tab` makes the pane the window the movement keys act on. The preview
@@ -263,7 +254,7 @@ mod tests {
             app.timeline.selected, 0,
             "the event list keeps its own place"
         );
-        assert!(test_support::rendered(&app).contains("cargo test backoff"));
+        assert!(super::view(&app).entries.iter().any(|e| matches!(e.event, AgentEvent::CommandStarted { command } if command == "cargo test backoff")));
         assert_eq!(
             app.preview_entry().map(|entry| entry.event().tag()),
             Some("user"),
@@ -321,11 +312,8 @@ mod tests {
         );
     }
 
-    /// A stretch taller than the pane. The cursor is the operator's place in
-    /// it, so moving it past the bottom row scrolls the pane rather than
-    /// leaving the highlight off screen.
     #[test]
-    fn the_pane_scrolls_to_keep_its_cursor_on_screen() {
+    fn entry_log_marks_the_entry_its_cursor_reaches() {
         let mut app = test_support::app("s1");
         app.timeline.all_events = false;
         app.push_event(AgentEvent::UserMessage {
@@ -341,19 +329,16 @@ mod tests {
         app.toggle_entry_log_focus();
         app.entry_log_select_first();
 
-        let screen = test_support::screen_sized(&app, 120, 30);
-        assert!(screen.body().contains("cargo test case-0"));
-        assert!(!screen.body().contains("cargo test case-39"));
-
+        assert!(super::view(&app).entries[0].selected);
         app.entry_log_select_last();
-        let screen = test_support::screen_sized(&app, 120, 30);
-        assert!(screen.body().contains("cargo test case-39"));
-        assert!(!screen.body().contains("cargo test case-0"));
+        let view = super::view(&app);
+        assert!(view.entries.last().unwrap().selected);
+        assert!(
+            matches!(view.entries.last().unwrap().event, AgentEvent::CommandStarted { command } if command == "cargo test case-39")
+        );
         assert_eq!(
-            app.preview_entry()
-                .map(|entry| crate::files::entry_text(entry).contains("case-39")),
-            Some(true),
-            "the preview shows the entry the cursor reached"
+            app.preview_entry().unwrap().event(),
+            view.entries.last().unwrap().event
         );
     }
 
@@ -364,12 +349,11 @@ mod tests {
         let mut app = app_with_two_turns();
         app.timeline.selected = 0;
         app.toggle_entry_log();
-        assert!(test_support::rendered(&app).contains("follows selection"));
-
+        assert!(!super::view(&app).focused);
         app.toggle_entry_log_focus();
-        let screen = test_support::rendered(&app);
-        assert!(screen.contains("Tab: back to the list"));
-        assert!(!screen.contains("follows selection"));
+        let view = super::view(&app);
+        assert!(view.focused);
+        assert_eq!(view.focus_key, "Tab/Shift+Tab");
     }
 
     /// `Tab` is the pane's key. With the pane closed there is only one window
@@ -382,41 +366,23 @@ mod tests {
         assert_eq!(app.entry_log_index(), None);
     }
 
-    /// The scoped log belongs to the interaction-log pane on the left. A
-    /// preview stays beside that whole pane, so it begins at the top and runs
-    /// the screen's full primary height rather than being shortened to the
-    /// main list's upper half.
     #[test]
-    fn preview_stays_full_height_when_the_entry_log_is_open() {
+    fn entry_log_and_preview_are_dispatched_together() {
         let mut app = app_with_two_turns();
         app.timeline.all_events = true;
         app.timeline.selected = 0;
         app.toggle_entry_log();
         app.preview.show();
 
-        let (width, height) = (120, 30);
-        let split = width / 2;
-        let screen = test_support::screen_sized(&app, width, height);
-        let (preview_x, preview_y) = screen.find("preview · C: command");
-        let (entry_log_x, entry_log_y) = screen.find("entry log · follows selection");
-        let (_, list_bottom) = screen.find("all events");
-
-        assert!(preview_x > split, "the preview is the right-hand pane");
-        assert_eq!(preview_y, 0, "the preview starts at the top");
-        assert!(entry_log_x < split, "the entry log stays in the left pane");
-        assert!(
-            entry_log_y > list_bottom,
-            "the entry log stays below the main list"
-        );
-        // The left pane closes and reopens around the entry log; the preview's
-        // own box closes only at the bottom of the primary area.
-        let bottom = screen.row(height - 2);
-        assert!(
-            bottom
-                .chars()
-                .skip(usize::from(split))
-                .any(|glyph| glyph == '└'),
-            "the preview runs the full primary height: {bottom:?}"
-        );
+        test_support::inspect(&app, |v| {
+            let styra_ui::application::MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert!(e.entry_log.is_some());
+            assert!(matches!(
+                e.preview,
+                Some(styra_ui::application::SidePreview::Entry(_))
+            ));
+        });
     }
 }

@@ -178,19 +178,25 @@ mod tests {
     }
 
     #[test]
-    fn the_pane_takes_the_bottom_half_below_the_event_list() {
+    fn process_pane_dispatches_listing_without_taking_selection() {
         let mut app = crate::presentation::test_support::app("s1");
         app.processes.replace(
             "s1",
             Ok(Some(vec![process(101, 1, 100), process(102, 2, 101)])),
         );
         app.toggle_processes_pane();
-        let screen = crate::presentation::test_support::screen_sized(&app, 100, 30);
-        let (_, header) = screen.find("COMMAND");
-        let (_, row) = screen.find("└ command 2");
-        assert!((13..=17).contains(&header), "header at row {header}");
-        assert_eq!(row, header + 2);
-        assert!(screen.all().contains("H: full screen"));
+        crate::presentation::test_support::inspect(&app, |v| {
+            let styra_ui::application::MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert!(e.entry_log.is_none());
+            let processes = e.processes.expect("process pane");
+            assert!(processes.selected.is_none());
+            let styra_ui::processes::ProcessListing::Running(rows) = processes.listing else {
+                panic!()
+            };
+            assert_eq!(rows.len(), 2);
+        });
     }
 
     #[test]

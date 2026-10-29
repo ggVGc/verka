@@ -542,3 +542,6 @@ mod tests {
         assert!(washed("Provider::x()"), "{row}");
     }
 }
+
+#[cfg(test)]
+mod fixture_tests;

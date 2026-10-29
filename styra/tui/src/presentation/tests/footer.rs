@@ -3,7 +3,8 @@
 #[cfg(test)]
 mod tests {
     use super::super::test_support;
-    use super::super::test_support::rendered;
+    use super::super::test_support::inspect;
+    use styra_ui::application::MainView;
 
     use std::path::PathBuf;
     use styra_protocol::{CompletionState, InteractionActivity, InteractionSummary};
@@ -43,12 +44,9 @@ mod tests {
     fn footer_shows_the_working_directory() {
         let mut app = test_support::app("s1");
         app.workspace.enter("/tmp/styra/workspace".into());
-        // A non-`main` build names its branch ahead of the directory, so
-        // widen by it to keep the directory on screen on any branch.
-        let width = 80 + styra_ui::footer::BUILD_BRANCH.chars().count() as u16;
-        let screen = test_support::screen_sized(&app, width, 20).all();
-        assert!(screen.contains("/tmp/styra/workspace"));
-        assert!(!screen.contains("j/k next/prev"));
+        inspect(&app, |v| {
+            assert_eq!(v.footer.working_directory, "/tmp/styra/workspace")
+        });
     }
 
     /// An armed rate-limit retry has to be visible from the interaction the
@@ -57,14 +55,9 @@ mod tests {
     #[test]
     fn footer_reports_an_armed_rate_limit_retry() {
         let mut app = test_support::app("s1");
-        assert!(
-            !rendered(&app).contains("rate-limit retry"),
-            "off is the default and takes no footer space"
-        );
-
+        inspect(&app, |v| assert!(!v.footer.auto_retry));
         app.auto_retry = true;
-
-        assert!(rendered(&app).contains("R rate-limit retry: on"));
+        inspect(&app, |v| assert!(v.footer.auto_retry));
     }
 
     /// An edit report takes a while and is asked for from the diff, which the
@@ -72,13 +65,14 @@ mod tests {
     #[test]
     fn footer_reports_edits_being_described() {
         let mut app = test_support::app("s1");
-        assert!(!rendered(&app).contains("describing edits"));
-
-        app.describing_edits = 1;
-        assert!(rendered(&app).contains("⟳ describing edits"));
-
-        app.describing_edits = 2;
-        assert!(rendered(&app).contains("describing edits of 2 interactions"));
+        for (count, expected) in [
+            (0, None),
+            (1, Some("describing edits")),
+            (2, Some("describing edits of 2 interactions")),
+        ] {
+            app.describing_edits = count;
+            inspect(&app, |v| assert_eq!(v.footer.background, expected));
+        }
     }
 
     /// Committing turns is on by default in a worktree, so the footer has to
@@ -87,11 +81,11 @@ mod tests {
     #[test]
     fn footer_reports_that_turns_are_committed() {
         let mut app = test_support::app("s1");
-        assert!(!rendered(&app).contains("auto-commit"));
-
+        inspect(&app, |v| assert!(!v.footer.auto_commit));
         app.auto_commit = true;
-
-        assert!(rendered(&app).contains("^G auto-commit"));
+        inspect(&app, |v| assert!(v.footer.auto_commit));
+        app.session_id.clear();
+        inspect(&app, |v| assert!(!v.footer.auto_commit));
     }
 
     /// Beside the fleet's tally on the panel's bottom border, not in the
@@ -114,11 +108,20 @@ mod tests {
             other,
         ]);
 
-        let screen = test_support::screen(&app);
-        // 20 rows tall: the footer is the last, the panel's bottom border the
-        // one above it.
-        assert!(screen.row(18).contains("1/1/0 ^a 1 interaction idle"));
-        assert!(!screen.row(19).contains("interaction idle"));
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert_eq!(
+                (
+                    e.list.activity.running,
+                    e.list.activity.idle,
+                    e.list.activity.stopped,
+                    e.list.activity.newly_idle
+                ),
+                (1, 1, 0, 1)
+            );
+        });
     }
 
     /// The attached interaction's own checkout, not any other idle one's: the
@@ -132,7 +135,12 @@ mod tests {
             interaction("current", InteractionActivity::Pending),
             elsewhere,
         ]);
-        assert!(!rendered(&app).contains("uncommitted changes"));
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert!(!e.list.uncommitted_changes);
+        });
 
         let mut current = interaction("current", InteractionActivity::Pending);
         current.uncommitted_changes = true;
@@ -141,23 +149,20 @@ mod tests {
             interaction("other", InteractionActivity::Pending),
         ]);
 
-        let screen = test_support::screen(&app);
-        // 20 rows tall: the footer is the last, the panel's bottom border the
-        // one above it.
-        let bottom_border = screen.row(18);
-        assert!(
-            bottom_border.contains("uncommitted changes"),
-            "{bottom_border}"
-        );
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert!(e.list.uncommitted_changes);
+        });
     }
 
     #[test]
-    fn working_directory_is_shown_on_the_bottom_row() {
+    fn footer_data_uses_the_entered_workspace() {
         let mut app = test_support::app("s1");
         app.workspace.enter("/workspace".into());
-        // Feature-branch builds show their branch before the directory. Leave
-        // room for that label and check the directory's row, not its column.
-        let bottom_row = test_support::screen(&app).row(19);
-        assert!(bottom_row.contains("/workspace"), "{bottom_row}");
+        inspect(&app, |v| {
+            assert_eq!(v.footer.working_directory, "/workspace")
+        });
     }
 }

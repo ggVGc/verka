@@ -177,12 +177,11 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{apply_feedback, draw_application, test_support};
+    use super::super::{apply_feedback, test_support};
     use super::view;
     use crate::app::App;
 
     use styra_protocol::event::AgentEvent;
-    use styra_ui::{TestUi, Ui};
 
     /// The `/` prompt is shown along the bottom of the list it is marking, and
     /// holds every printable key while it is open — including the letters that
@@ -200,17 +199,16 @@ mod tests {
             crate::input::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char(character)));
         }
 
-        assert!(test_support::rendered(&app).contains("/que▌"));
+        assert_eq!(view(&app).search.query, Some("que"));
+        assert!(view(&app).search.typing);
 
         // `q` quits the list; here it is a letter of the term.
         crate::input::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char('q')));
         assert_eq!(app.search.query(), Some("queq"));
     }
 
-    /// Messages written while the agent is busy are listed at the end of the
-    /// log, under the status tail and in the order they will be sent.
     #[test]
-    fn queued_messages_are_listed_after_the_status_tail() {
+    fn queued_messages_are_passed_in_send_order() {
         use styra_protocol::QueuedMessage;
 
         let mut app = test_support::app("s1");
@@ -222,22 +220,12 @@ mod tests {
             QueuedMessage::new("and commit it\nwith a short message"),
         ]);
 
-        let screen = test_support::screen(&app);
-        let (_, working) = screen.find("working");
-        let (_, first) = screen.find("queued » then run the tests");
-        let (_, second) = screen.find("queued » and commit it");
-        assert!(working < first && first < second, "{}", screen.all());
-        assert!(
-            screen.locate("with a short message").is_none(),
-            "a queued message takes one row: {}",
-            screen.all()
-        );
+        assert_eq!(view(&app).queued, app.outbox.queued());
+        assert_eq!(view(&app).queued.len(), 2);
     }
 
-    /// A long queue is counted past a few rows rather than listed, so it
-    /// cannot push the status tail off the screen.
     #[test]
-    fn a_long_queue_is_counted_rather_than_listed() {
+    fn the_entire_queue_is_passed_to_ui() {
         use styra_protocol::QueuedMessage;
 
         let mut app = test_support::app("s1");
@@ -250,69 +238,33 @@ mod tests {
                 .collect(),
         );
 
-        let screen = test_support::screen(&app);
-        assert!(screen.locate("follow-up 4").is_some(), "{}", screen.all());
-        assert!(screen.locate("follow-up 5").is_none(), "{}", screen.all());
-        assert!(screen.all().contains("+3 more queued"), "{}", screen.all());
+        assert_eq!(
+            view(&app).queued.len(),
+            8,
+            "all data is passed; UI chooses how much fits"
+        );
+        assert_eq!(view(&app).queued, app.outbox.queued());
     }
 
-    /// Opening a new interaction shows the prompt that was typed into it, not
-    /// a row from the interaction on screen before it.
-    ///
-    /// The renderer caches finished rows in a thread-local that lives as long
-    /// as the process, keyed on the entry's identity rather than its text. A
-    /// new interaction is a new [`App`] with a new timeline, so if identities
-    /// restart with each timeline, its first prompt asks the cache the same
-    /// question the previous interaction's first prompt did, and is answered
-    /// with that prompt's rows. Restarting styra empties the cache, which is
-    /// why the right prompt shows after a restart.
     #[test]
-    fn a_new_interaction_shows_its_own_prompt_not_the_previous_ones() {
+    fn new_interactions_pass_distinct_entry_identities_and_events() {
         let mut earlier = test_support::app("s1");
         earlier.push_event(AgentEvent::UserMessage {
             text: "rename the config loader".into(),
         });
-        let screen = test_support::screen(&earlier);
-        assert!(
-            screen.body().contains("rename the config loader"),
-            "the earlier interaction shows its prompt: {}",
-            screen.body()
-        );
-
-        // Drawn on the same thread, at the same size, with the same flags —
-        // as the event loop draws whichever interaction is current.
         let mut next = test_support::app("s2");
         next.push_event(AgentEvent::UserMessage {
             text: "add retries to the uploader".into(),
         });
-        let screen = test_support::screen(&next);
-
-        assert!(
-            screen.body().contains("add retries to the uploader"),
-            "the new interaction shows the prompt typed into it: {}",
-            screen.body()
-        );
-        assert!(
-            !screen.body().contains("rename the config loader"),
-            "and not the previous interaction's: {}",
-            screen.body()
-        );
+        let old = view(&earlier);
+        let new = view(&next);
+        assert_ne!(old.entries[0].version.id, new.entries[0].version.id);
+        assert_eq!(new.entries[0].event, next.timeline.entries[0].event());
     }
 
-    /// Draw `app` and feed the render's own offset back into it, exactly as
-    /// the event loop does. The viewport offset only survives across frames
-    /// through this round trip, so a test about scrolling has to make it.
-    fn draw(ui: &mut dyn Ui, app: &mut App) {
-        let feedback = draw_application(ui, app).unwrap();
-        apply_feedback(app, &feedback);
-    }
-
-    /// A running interaction whose log is longer than the viewport, so it has
-    /// scrolled away from the top and a reset is observable.
-    fn scrolled_conversation(ui: &mut dyn Ui) -> App {
+    fn scrolled_conversation() -> App {
         let mut app = test_support::app("s1");
         app.timeline.all_events = false;
-        app.timeline.show_minor = false;
         app.push_event(AgentEvent::UserMessage {
             text: "please refactor the retry backoff logic".into(),
         });
@@ -321,10 +273,14 @@ mod tests {
                 text: format!("step {step}: looking at the backoff code in detail"),
             });
         }
-        draw(ui, &mut app);
-        assert!(
-            app.timeline.list_offset > 0,
-            "the log must have scrolled for a reset to be visible"
+        // The UI reports the anchor. Application tests must not calculate it.
+        apply_feedback(
+            &mut app,
+            &styra_ui::RenderFeedback {
+                list_offset: Some(7),
+                list_row_offset: Some(0),
+                ..Default::default()
+            },
         );
         app
     }
@@ -343,17 +299,16 @@ mod tests {
     /// reset is persisted rather than lasting a single frame.
     #[test]
     fn a_hidden_tool_finishing_does_not_scroll_the_conversation() {
-        let mut ui = TestUi::new(80, 16).unwrap();
-        let mut app = scrolled_conversation(&mut ui);
+        let mut app = scrolled_conversation();
         let anchored = app.timeline.list_offset;
-        let top = ui.rows()[1].clone();
 
         app.push_event(AgentEvent::ToolStarted {
             id: "x1".into(),
             name: "Bash".into(),
             detail: "{\"command\":\"cargo test backoff\"}".into(),
         });
-        draw(&mut ui, &mut app);
+        assert_eq!(view(&app).requested_offset, anchored);
+        assert!(view(&app).entries.iter().any(|entry| entry.selected));
         assert_eq!(
             app.timeline.list_offset, anchored,
             "a hidden row arriving is not a reason to scroll"
@@ -366,13 +321,13 @@ mod tests {
             status: "ok".into(),
             output: "test result: ok\n".into(),
         });
-        draw(&mut ui, &mut app);
+        assert_eq!(view(&app).requested_offset, anchored);
+        assert!(view(&app).entries.iter().any(|entry| entry.selected));
 
         assert_eq!(
             app.timeline.list_offset, anchored,
             "the tool completion replaced a hidden row, so the viewport stays"
         );
-        assert_eq!(ui.rows()[1], top, "the same entry is still at the top");
     }
 
     /// The same defect through the other replacement path: a shell command
@@ -380,10 +335,8 @@ mod tests {
     /// both are hidden by the conversation filter.
     #[test]
     fn a_hidden_command_finishing_does_not_scroll_the_conversation() {
-        let mut ui = TestUi::new(80, 16).unwrap();
-        let mut app = scrolled_conversation(&mut ui);
+        let mut app = scrolled_conversation();
         let anchored = app.timeline.list_offset;
-        let top = ui.rows()[1].clone();
 
         app.push_event(AgentEvent::CommandStarted {
             command: "cargo test backoff".into(),
@@ -394,65 +347,41 @@ mod tests {
             exit_code: Some(0),
             output: "test result: ok\n".into(),
         });
-        draw(&mut ui, &mut app);
+        assert_eq!(view(&app).requested_offset, anchored);
+        assert!(view(&app).entries.iter().any(|entry| entry.selected));
 
         assert_eq!(
             app.timeline.list_offset, anchored,
             "the command completion replaced a hidden row, so the viewport stays"
         );
-        assert_eq!(ui.rows()[1], top, "the same entry is still at the top");
     }
 
-    /// Moving between entries leaves the viewport alone while the selection
-    /// stays on screen — even onto its top row, where scrolloff used to pull
-    /// earlier entries into view — and so does activity arriving below an
-    /// entry other than the newest.
     #[test]
-    fn moving_between_entries_does_not_scroll_the_conversation() {
-        let mut ui = TestUi::new(80, 16).unwrap();
-        let mut app = scrolled_conversation(&mut ui);
+    fn navigation_passes_the_existing_viewport_anchor() {
+        let mut app = scrolled_conversation();
         let anchored = app.timeline.list_offset;
-        let top = ui.rows()[1].clone();
-
-        while app.timeline.selected > anchored {
-            app.select_prev_line();
-            draw(&mut ui, &mut app);
-            assert_eq!(app.timeline.list_offset, anchored, "moving up");
-        }
+        app.select_prev_line();
+        assert_eq!(view(&app).requested_offset, anchored);
+        assert!(view(&app).entries.iter().any(|entry| entry.selected));
+        assert!(view(&app).entries.iter().any(|e| e.selected));
         app.select_next_line();
-        draw(&mut ui, &mut app);
-        assert_eq!(app.timeline.list_offset, anchored, "moving down");
-
-        app.push_event(AgentEvent::AgentMessage {
-            text: "step 12: one more".into(),
-        });
-        draw(&mut ui, &mut app);
-        assert_eq!(app.timeline.list_offset, anchored, "a new message below");
-        assert_eq!(ui.rows()[1], top, "the same entry is still at the top");
+        assert_eq!(view(&app).requested_offset, anchored);
+        assert!(view(&app).entries.iter().any(|entry| entry.selected));
     }
 
-    /// With the newest entry selected, a new message scrolls the view to it,
-    /// however the selection got there.
     #[test]
-    fn a_new_message_scrolls_to_itself_when_the_newest_entry_is_selected() {
-        let mut ui = TestUi::new(80, 16).unwrap();
-        let mut app = scrolled_conversation(&mut ui);
+    fn new_messages_request_anchoring_when_following_the_tail() {
+        let mut app = scrolled_conversation();
         app.select_prev_line();
         app.select_next_line();
-        draw(&mut ui, &mut app);
-        let anchored = app.timeline.list_offset;
-
         app.push_event(AgentEvent::AgentMessage {
             text: "step 12: the newest".into(),
         });
-        draw(&mut ui, &mut app);
-
-        assert!(app.timeline.list_offset > anchored, "the view followed");
+        let view = view(&app);
+        assert!(view.anchor_selection);
+        assert!(view.entries.last().unwrap().selected);
         assert!(
-            ui.rows()
-                .iter()
-                .any(|row| row.contains("step 12: the newest")),
-            "the new message is on screen"
+            matches!(view.entries.last().unwrap().event, AgentEvent::AgentMessage { text } if text == "step 12: the newest")
         );
     }
 
@@ -461,8 +390,7 @@ mod tests {
     /// hidden one is what leaves the list rendering with nothing selected.
     #[test]
     fn following_the_tail_lands_on_a_row_the_filters_show() {
-        let mut ui = TestUi::new(80, 16).unwrap();
-        let mut app = scrolled_conversation(&mut ui);
+        let mut app = scrolled_conversation();
 
         app.push_event(AgentEvent::ToolStarted {
             id: "x1".into(),

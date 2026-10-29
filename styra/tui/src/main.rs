@@ -1322,3 +1322,6 @@ mod cli_tests {
         std::fs::remove_dir_all(root).ok();
     }
 }
+
+#[cfg(test)]
+mod test_ui;

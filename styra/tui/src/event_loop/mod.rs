@@ -330,7 +330,7 @@ mod tests {
         diff_error.id = "diff-error".into();
         let interactions = vec![interaction, other, no_snapshot, no_checkout, diff_error];
         app.interactions.open(interactions.clone(), Vec::new());
-        let mut terminal = styra_ui::TestUi::new(100, 30).unwrap();
+        let mut terminal = crate::test_ui::TestUi::default();
         let client = Client::in_process(std::sync::Arc::new(DiffServer(interactions)));
         let mut live = Attachment::Detached;
         let mut history = InteractionHistory::default();
@@ -494,7 +494,7 @@ mod tests {
             );
             app.enter_list();
             app.interactions.show(Vec::new());
-            let mut terminal = styra_ui::TestUi::new(100, 30).unwrap();
+            let mut terminal = crate::test_ui::TestUi::default();
             terminal.script([Event::Key(crossterm::event::KeyEvent::from(code))]);
             let mut history = InteractionHistory::default();
             history.record("previous");
@@ -533,7 +533,7 @@ mod tests {
         let mut history = InteractionHistory::default();
         history.record("earlier");
         history.record("s1");
-        let mut terminal = styra_ui::TestUi::new(100, 30).unwrap();
+        let mut terminal = crate::test_ui::TestUi::default();
         terminal.script([
             Event::Key(crossterm::event::KeyEvent::new(
                 KeyCode::Char('o'),
@@ -580,7 +580,7 @@ mod tests {
         diff.diff = Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n".into());
         app.checkout_diff = Some(diff);
         assert!(app.diff_focused());
-        let mut terminal = styra_ui::TestUi::new(100, 30).unwrap();
+        let mut terminal = crate::test_ui::TestUi::default();
         terminal.script(
             keys.chars()
                 .map(|key| Event::Key(crossterm::event::KeyEvent::from(KeyCode::Char(key)))),

@@ -162,15 +162,16 @@ mod tests {
         app.preview.toggle_target();
         app.highlight_first_link();
 
-        let screen = test_support::screen_sized(&app, 120, 30).all();
-        assert!(screen.contains("answer · lines"), "{screen}");
-        assert!(screen.contains("first answer"), "{screen}");
-        assert!(!screen.contains("second answer"), "{screen}");
-
+        let first = super::view(&app, false)
+            .answer_target
+            .expect("first answer");
+        assert_eq!(first, app.highlighted_answer().unwrap());
         app.highlight_next_link();
-        let screen = test_support::screen_sized(&app, 120, 30).all();
-        assert!(screen.contains("second answer"), "{screen}");
-        assert!(!screen.contains("first answer"), "{screen}");
+        let second = super::view(&app, false)
+            .answer_target
+            .expect("second answer");
+        assert_eq!(second, app.highlighted_answer().unwrap());
+        assert_ne!(first, second);
 
         app.highlight_next_link();
         assert!(super::view(&app, false).answer_target.is_none());
@@ -183,8 +184,8 @@ mod tests {
     }
 
     #[test]
-    fn a_highlighted_file_link_opens_at_its_line_and_pages_through_the_file() {
-        use super::super::{apply_feedback, draw_application};
+    fn file_link_data_contains_content_position_and_scroll_requests() {
+        use super::super::apply_feedback;
         let root = std::env::temp_dir().join("styra-preview-file-scroll");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
@@ -199,27 +200,44 @@ mod tests {
         });
         app.preview.show();
         app.highlight_first_link();
-        let mut ui = styra_ui::TestUi::new(120, 30).unwrap();
-        let mut draw = |app: &mut App| {
-            let feedback = draw_application(&mut ui, app).unwrap();
-            apply_feedback(app, &feedback);
-            ui.rows().concat()
+        let view = super::view(&app, false);
+        let target = view.file_target.unwrap();
+        assert_eq!(target.line, Some(100));
+        assert!(
+            matches!(target.content, styra_ui::preview::FileTargetContent::Ready(ref content) if content.lines().count() == 200)
+        );
+        let feedback = styra_ui::RenderFeedback {
+            scroll: vec![styra_ui::ScrollFeedback {
+                panel: styra_ui::PanelId::Preview {
+                    session: "s1".into(),
+                    target: styra_ui::PreviewPanel::Selection,
+                },
+                limit: 175,
+                effective_offset: 99,
+                viewport: 25,
+            }],
+            ..Default::default()
         };
-
-        let screen = draw(&mut app);
-        assert!(screen.contains("row 100"), "{screen}");
-        assert!(!screen.contains("row 001"), "{screen}");
-        let opened = app.preview.scroll.offset;
-        assert!(opened > 0);
-
+        apply_feedback(&mut app, &feedback);
+        assert_eq!(super::view(&app, false).requested_scroll, 99);
         app.preview.scroll.half_page_down();
-        let screen = draw(&mut app);
-        assert!(app.preview.scroll.offset > opened);
-        assert!(!screen.contains("row 100"), "{screen}");
-
+        assert!(super::view(&app, false).requested_scroll > 99);
         app.preview.scroll.scroll_to_end();
-        let screen = draw(&mut app);
-        assert!(screen.contains("row 200"), "{screen}");
+        assert_eq!(super::view(&app, false).requested_scroll, u16::MAX);
+        let feedback = styra_ui::RenderFeedback {
+            scroll: vec![styra_ui::ScrollFeedback {
+                panel: styra_ui::PanelId::Preview {
+                    session: "s1".into(),
+                    target: styra_ui::PreviewPanel::Selection,
+                },
+                limit: 175,
+                effective_offset: 175,
+                viewport: 25,
+            }],
+            ..Default::default()
+        };
+        apply_feedback(&mut app, &feedback);
+        assert_eq!(super::view(&app, false).requested_scroll, 175);
 
         app.clear_link_highlight();
         assert_eq!(app.preview.scroll.offset, 0);
@@ -262,10 +280,11 @@ mod tests {
     #[test]
     fn a_selected_message_previews_as_itself() {
         let app = app_with_two_turns();
-        let screen = test_support::screen_sized(&app, 120, 30).all();
-        assert!(screen.contains("preview · C: command"), "{screen}");
-        assert!(!screen.contains("turn diff"), "{screen}");
-        assert!(!screen.contains("delay * 2"), "{screen}");
+        let view = super::view(&app, false);
+        assert!(
+            matches!(view.entry.unwrap().event, AgentEvent::UserMessage { text } if text == "fix the retry backoff")
+        );
+        assert!(view.entry_change.is_none());
     }
 
     /// A file change is its own diff, its path from the Workspace on, and a
@@ -297,13 +316,19 @@ mod tests {
         app.select_first();
         app.select_next_line();
         app.preview.show();
-        let screen = test_support::screen_sized(&app, 160, 30).all();
-        assert!(screen.contains("3 +let delay = base * 2;"), "{screen}");
-        assert!(screen.contains("3 -let delay = base * 3;"), "{screen}");
-
+        let view = super::view(&app, false);
+        let change = view.entry_change.unwrap();
+        assert_eq!(change.paths, [file.display().to_string()]);
+        assert!(change.diff.unwrap().contains("@@ -3,1 +3,1 @@"));
         app.select_next_line();
-        let screen = test_support::screen_sized(&app, 160, 30).all();
-        assert!(screen.contains("ws:src/helper.rs"), "{screen}");
+        let view = super::view(&app, false);
+        assert_eq!(
+            view.entry_change.unwrap().paths,
+            [workspace.join("src/helper.rs").display().to_string()]
+        );
+        assert!(view
+            .workspace_roots
+            .contains(&workspace.display().to_string()));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

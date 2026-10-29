@@ -833,7 +833,8 @@ where
     }
 }
 
-/// In-memory implementation used by renderer and presentation-adapter tests.
+/// In-memory implementation for renderer tests using presentation fixtures.
+/// Application tests should inspect `Ui` calls without invoking this renderer.
 /// It exercises the exact same dispatch as the production terminal without
 /// entering raw mode or touching process-global terminal state.
 impl TestUi {

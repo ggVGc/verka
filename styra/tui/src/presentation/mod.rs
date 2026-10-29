@@ -5,6 +5,10 @@
 //! performs application-owned I/O before a draw, and applies measurements
 //! returned by the renderer. Widgets, layout, styling, terminal access, and
 //! rendering caches live in the separate `styra_ui` crate.
+//!
+//! Tests here assert the data passed to `Ui` and the application of explicit
+//! feedback. Screen, layout, and styling regressions belong in `styra_ui`,
+//! using view fixtures independent of `App`.
 
 mod driva;
 mod entry_log;
@@ -913,10 +917,38 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{self, rendered};
+    use super::test_support::{self, inspect};
     use super::*;
     use styra_protocol::event::{AgentEvent, TurnOutcome, TurnUsage};
     use styra_protocol::{CheckoutState, InteractionSummary};
+    use styra_ui::application::MainView;
+
+    #[test]
+    fn ui_receives_requested_anchor_and_feedback_is_applied_explicitly() {
+        let mut app = test_support::app("s1");
+        app.timeline.list_offset = 19;
+        let mut ui = crate::test_ui::TestUi::default();
+        ui.application = Box::new(|view| {
+            assert_eq!(view.session_id, "s1");
+            let MainView::Events(events) = &view.main else {
+                panic!("events expected")
+            };
+            assert_eq!(events.list.requested_offset, 19);
+            Ok(styra_ui::RenderFeedback {
+                list_offset: Some(7),
+                list_row_offset: Some(2),
+                ..Default::default()
+            })
+        });
+        let feedback = draw_application(&mut ui, &app).unwrap();
+        assert_eq!(ui.applications, 1);
+        assert_eq!(app.timeline.list_offset, 19);
+        apply_feedback(&mut app, &feedback);
+        assert_eq!(
+            (app.timeline.list_offset, app.timeline.list_row_offset),
+            (7, 2)
+        );
+    }
 
     /// What lets the event loop stop drawing an idle Styra: an idle frame has
     /// nothing on it read off the clock, so leaving it up is leaving it right.
@@ -1036,53 +1068,58 @@ mod tests {
     }
 
     #[test]
-    fn header_shows_selection_and_status() {
-        let title = test_support::screen(&test_support::app("s1")).title();
-        // Scoped to the title row, and stated positively. The old form was
-        // `!rendered(..).contains("styra")` over the flattened buffer, meant
-        // to say the title no longer opens with the program's name — but the
-        // footer renders the host's working directory, so it also failed in
-        // any checkout whose path happened to contain the word.
-        assert!(title.starts_with("┌ codex · "), "{title}");
-        assert!(title.contains("running"), "{title}");
+    fn header_data_contains_selection_and_status() {
+        inspect(&test_support::app("s1"), |v| {
+            let MainView::Events(events) = &v.main else {
+                panic!("events expected")
+            };
+            assert_eq!(events.list.chrome.agent, "codex");
+            assert_eq!(events.list.chrome.status, "running");
+        });
     }
 
     #[test]
-    fn header_opens_with_the_workspace_name_at_the_top_left() {
+    fn header_data_resolves_workspace_name() {
         let mut app = test_support::app("s1");
         app.workspace.name = Some("payments".into());
-        let screen = test_support::screen(&app);
-
-        // Spelled as the row it produces rather than as a column number: what
-        // the test means is that the workspace name comes first, ahead of the
-        // agent, and a bare `(x, y)` says that only by arithmetic over the
-        // border and the title's leading pad.
-        assert!(
-            screen.title().starts_with("┌ payments · codex · "),
-            "{}",
-            screen.title()
-        );
+        inspect(&app, |v| {
+            let MainView::Events(events) = &v.main else {
+                panic!("events expected")
+            };
+            assert_eq!(events.list.chrome.workspace.as_deref(), Some("payments"));
+        });
     }
 
     #[test]
-    fn header_shows_the_interaction_title_just_after_the_workspace_name() {
+    fn header_data_resolves_interaction_title() {
         let mut app = test_support::app("s1");
         app.workspace.name = Some("payments".into());
         app.interactions.note_name("s1", Some("Fix retries".into()));
-        let title = test_support::screen(&app).title();
-        assert!(title.starts_with("┌ payments · Fix retries · "), "{title}");
+        inspect(&app, |v| {
+            let MainView::Events(events) = &v.main else {
+                panic!("events expected")
+            };
+            assert_eq!(events.list.chrome.session.as_deref(), Some("Fix retries"));
+        });
     }
 
     #[test]
-    fn lone_event_list_has_no_selection_border() {
+    fn lone_event_list_only_requests_focus_when_another_pane_opens() {
         let mut app = test_support::app("s1");
-        assert_eq!(app.focus, Focus::List);
-        assert!(!panel_chrome(&app, None).focused);
-        assert!(test_support::screen(&app).locate("┏").is_none());
-
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert!(!e.list.chrome.focused);
+        });
         app.preview.open = true;
-        assert!(panel_chrome(&app, None).focused);
-        assert!(test_support::screen(&app).title().starts_with('┏'));
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert!(e.list.chrome.focused);
+            assert!(e.preview.is_some());
+        });
     }
 
     fn interaction_with_checkout(id: &str, checkout: Option<CheckoutState>) -> InteractionSummary {
@@ -1131,8 +1168,12 @@ mod tests {
             }),
         )];
 
-        let title = test_support::screen(&app).title();
-        assert!(title.contains("fix-retries"), "{title}");
+        inspect(&app, |v| {
+            let MainView::Events(events) = &v.main else {
+                panic!("events expected")
+            };
+            assert_eq!(events.list.chrome.worktree.as_deref(), Some("fix-retries"));
+        });
     }
 
     /// The agent's own checkout is the Workspace's, so naming it again in the
@@ -1149,34 +1190,54 @@ mod tests {
             }),
         )];
 
-        let title = test_support::screen(&app).title();
-        assert!(!title.contains("main"), "{title}");
+        inspect(&app, |v| {
+            let MainView::Events(events) = &v.main else {
+                panic!("events expected")
+            };
+            assert!(events.list.chrome.worktree.is_none());
+        });
     }
 
     #[test]
-    fn event_list_border_marks_all_events_and_whether_minor_ones_are_shown() {
+    fn event_list_data_carries_both_filter_flags() {
         let mut app = test_support::app("s1");
-        app.timeline.all_events = false;
-        assert!(!rendered(&app).contains("all events"));
-
-        app.timeline.all_events = true;
-        app.timeline.show_minor = false;
-        assert!(rendered(&app).contains("all events · minor hidden"));
-
-        app.timeline.show_minor = true;
-        assert!(rendered(&app).contains("all events · minor shown"));
+        for (all, minor) in [(false, false), (true, false), (true, true)] {
+            app.timeline.all_events = all;
+            app.timeline.show_minor = minor;
+            inspect(&app, |v| {
+                let MainView::Events(e) = &v.main else {
+                    panic!()
+                };
+                assert_eq!((e.list.all_events, e.list.show_minor), (all, minor));
+            });
+        }
     }
 
     #[test]
-    fn header_shows_a_dot_indicating_running_vs_idle() {
+    fn turn_completion_updates_header_status_tone() {
         let mut app = test_support::app("s1");
-        assert!(rendered(&app).contains('●'));
-
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert_eq!(
+                e.list.chrome.status_tone,
+                styra_ui::chrome::StatusTone::Running
+            );
+        });
         app.push_event(AgentEvent::TurnCompleted {
             outcome: TurnOutcome::Completed,
             usage: TurnUsage::default(),
         });
-        assert!(rendered(&app).contains("idle"));
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert_eq!(
+                e.list.chrome.status_tone,
+                styra_ui::chrome::StatusTone::Idle
+            );
+        });
     }
 
     /// Completion is a property of the Session, not a fact the update stream
@@ -1185,15 +1246,24 @@ mod tests {
     #[test]
     fn header_names_completion_in_the_status() {
         let mut app = test_support::app("s1");
-        app.activity.status =
-            crate::activity::Status::Stopped(crate::activity::StopReason::Completed);
-        let title = rendered(&app);
-        assert!(title.contains("completed"), "{title}");
-
-        app.activity.status =
-            crate::activity::Status::Stopped(crate::activity::StopReason::Abandoned);
-        let title = rendered(&app);
-        assert!(title.contains("abandoned"), "{title}");
+        for (reason, expected) in [
+            (
+                crate::activity::StopReason::Completed,
+                "stopped · completed",
+            ),
+            (
+                crate::activity::StopReason::Abandoned,
+                "stopped · abandoned",
+            ),
+        ] {
+            app.activity.status = crate::activity::Status::Stopped(reason);
+            inspect(&app, |v| {
+                let MainView::Events(e) = &v.main else {
+                    panic!()
+                };
+                assert_eq!(e.list.chrome.status, expected);
+            });
+        }
     }
 
     /// Integration stops the agent itself, so the update stream only says the
@@ -1212,19 +1282,17 @@ mod tests {
         app.activity.status = crate::activity::Status::ended(Some(0), None);
 
         assert!(app.adopt_integration());
-        let title = rendered(&app);
-        assert!(title.contains("integrated into main · 0123456"), "{title}");
-        assert!(!title.contains("ended"), "{title}");
-        assert!(
-            !app.adopt_integration(),
-            "the second reading changes nothing"
-        );
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert_eq!(e.list.chrome.status, "integrated into main · 0123456");
+        });
+        assert!(!app.adopt_integration());
     }
 
-    /// The integration prompt says which branch the commit will land on, in
-    /// its top-right corner.
     #[test]
-    fn integration_prompt_names_the_target_branch_top_right() {
+    fn integration_prompt_data_resolves_target_branch() {
         let mut app = test_support::app("s1");
         let mut interaction = interaction_with_checkout("s1", None);
         interaction.branched_from = Some(styra_protocol::BranchPoint {
@@ -1234,15 +1302,10 @@ mod tests {
         app.interactions.items.push(interaction);
         app.integration_prompt = Some("Ship it".into());
 
-        let screen = test_support::screen(&app);
-        let top = (0..20)
-            .map(|y| screen.row(y))
-            .find(|row| row.contains("integration commit message"))
-            .expect("the prompt is drawn");
-        let title = top.find("integration commit message").unwrap();
-        let target = top.find("into release").expect(&top);
-        assert!(target > title, "{top}");
-        assert!(top[target..].starts_with("into release ┐"), "{top}");
+        inspect(&app, |v| {
+            assert_eq!(v.overlays.integration_message, Some("Ship it"));
+            assert_eq!(v.overlays.integration_target, Some("release"));
+        });
     }
 
     #[test]
@@ -1257,32 +1320,42 @@ mod tests {
                 repository: "/workspace".into(),
             }),
         ));
-        let title = test_support::screen(&app).title();
-        assert!(title.contains("from styra/source-work"), "{title}");
-        assert!(modal_input(&app).notice.is_none());
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert_eq!(
+                e.list.chrome.source_branch.as_deref(),
+                Some("styra/source-work")
+            );
+        });
         app.checkout_from = None;
-        let title = test_support::screen(&app).title();
-        assert!(title.contains("from Workspace branch"), "{title}");
-        assert!(modal_input(&app).notice.is_none());
-
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert_eq!(
+                e.list.chrome.source_branch.as_deref(),
+                Some("Workspace branch")
+            );
+        });
         app.session_id = "source-session".into();
-        let title = test_support::screen(&app).title();
-        assert!(!title.contains("from "), "{title}");
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert!(e.list.chrome.source_branch.is_none());
+        });
     }
 
     #[test]
-    fn message_box_floats_in_the_center_of_the_primary_view() {
+    fn entering_input_supplies_message_box_data() {
         let mut app = test_support::app("s1");
         app.enter_input();
 
-        let screen = test_support::screen(&app);
-        let (_, input_y) = screen.find("type a message, Enter to send");
-        let (_, view_y) = screen.find("codex");
-        assert_eq!(input_y, 9);
-        assert!(
-            input_y > view_y,
-            "the message box should float over the primary view"
-        );
+        inspect(&app, |v| {
+            assert!(v.overlays.input.is_some());
+        });
     }
 
     /// A recording takes the message box's place rather than sitting beside
@@ -1295,14 +1368,14 @@ mod tests {
         app.composer.insert("half a sentence");
         app.recording = Some(crate::audio::Recorded::for_test(0.4, 0.6, 2.0));
 
-        let screen = test_support::screen(&app);
-
-        assert!(screen.all().contains("recording"), "{}", screen.all());
-        assert!(screen.all().contains("boost ×2"), "{}", screen.all());
-        assert!(
-            screen.locate("half a sentence").is_none(),
-            "the buffer is not being typed into while the microphone is open"
-        );
+        inspect(&app, |v| {
+            assert!(v.overlays.input.is_none());
+            let recording = v.overlays.recording.expect("capture data");
+            assert_eq!(
+                (recording.level, recording.loudest, recording.gain),
+                (0.4, 0.6, 2.0)
+            );
+        });
     }
 
     /// Creating a Git workspace blocks the loop, so while it runs the message
@@ -1315,17 +1388,12 @@ mod tests {
         app.composer.insert("start on the picker");
         app.busy = Some("creating a new Git workspace…".into());
 
-        let screen = test_support::screen(&app);
-
-        assert!(
-            screen.all().contains("creating a new Git workspace…"),
-            "{}",
-            screen.all()
-        );
-        assert!(
-            screen.locate("start on the picker").is_none(),
-            "the message box is gone while the client is blocked"
-        );
+        inspect(&app, |v| {
+            assert_eq!(
+                v.overlays.busy.as_ref().unwrap().message,
+                "creating a new Git workspace…"
+            );
+        });
     }
 
     /// Every view's status line must name the model and effort in use, since
@@ -1334,37 +1402,31 @@ mod tests {
     #[test]
     fn the_status_line_names_the_model_and_effort_in_use() {
         let mut app = test_support::app("s-1");
-        let expected = format!(
-            " codex · {} · {}",
-            test_support::MODEL,
-            test_support::EFFORT
-        );
-        assert!(rendered(&app).contains(&expected), "{}", rendered(&app));
-
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "t-9".into(),
             model: Some(test_support::MODEL.into()),
             effort: Some(test_support::EFFORT.into()),
         });
-        let screen = rendered(&app);
-        assert!(
-            screen.contains(&format!("{expected} · ● running")),
-            "{screen}"
-        );
-
-        // Every other view carries the same status line, so switching away from
-        // the event list does not lose it.
-        let toggles: [fn(&mut App); 4] = [
-            App::toggle_raw,
-            |app| app.toggle_view(View::Log),
-            |app| app.toggle_view(View::Transcript),
-            |app| app.toggle_view(View::Driva),
-        ];
-        for toggle in toggles {
-            toggle(&mut app);
-            let named = format!("{} · {}", test_support::MODEL, test_support::EFFORT);
-            assert!(rendered(&app).contains(&named), "{}", rendered(&app));
-            toggle(&mut app);
+        for view in [
+            View::Events,
+            View::Raw,
+            View::Log,
+            View::Transcript,
+            View::Driva,
+        ] {
+            app.view = view;
+            inspect(&app, |v| {
+                let chrome = match &v.main {
+                    MainView::Events(e) => &e.list.chrome,
+                    MainView::Raw(r) => &r.chrome,
+                    MainView::Log { chrome, .. } => chrome,
+                    MainView::Transcript(t) => &t.chrome,
+                    MainView::Driva(d) => &d.chrome,
+                    _ => panic!("unexpected view"),
+                };
+                assert_eq!(chrome.model, test_support::MODEL);
+                assert_eq!(chrome.effort.as_deref(), Some(test_support::EFFORT));
+            });
         }
     }
 
@@ -1382,21 +1444,23 @@ mod tests {
         diff.side_by_side = true;
         app.checkout_diff = Some(diff);
         app.view = View::CheckoutDiff;
-        for (width, split) in [(120, true), (80, false), (120, true)] {
-            let mut ui = styra_ui::TestUi::new(width, 25).unwrap();
-            let feedback = draw_application(&mut ui, &app).unwrap();
-            assert_eq!(feedback.diff_layout.unwrap().0, split);
+        inspect(&app, |v| {
+            assert!(matches!(v.main, MainView::CheckoutDiff(_)));
+        });
+        for split in [true, false, true] {
+            let feedback = styra_ui::RenderFeedback {
+                diff_layout: Some((split, 7)),
+                ..Default::default()
+            };
             apply_feedback(&mut app, &feedback);
-            assert_eq!(app.checkout_diff.as_ref().unwrap().rendered_side, split);
-            assert!(app.checkout_diff.as_ref().unwrap().side_by_side);
+            let diff = app.checkout_diff.as_ref().unwrap();
+            assert_eq!((diff.rendered_side, diff.horizontal_scroll), (split, 7));
+            assert!(diff.side_by_side);
         }
     }
 
-    /// The report page opened from the side diff is drawn inside the side
-    /// pane's frame, where the diff is, and not over the frame or the rest of
-    /// the screen.
     #[test]
-    fn the_side_diffs_report_page_stays_in_the_side_pane() {
+    fn opening_a_side_diff_report_keeps_the_events_view() {
         let mut app = test_support::app("s1");
         let mut diff = styra_diff::CheckoutDiff::read(styra_diff::DiffTarget {
             worktree: "/no-such-styra-diff-checkout".into(),
@@ -1414,28 +1478,20 @@ mod tests {
             crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Char('o')),
         );
         assert_eq!(app.view, View::Events, "the diff stays in its pane");
-        let screen = test_support::screen_sized(&app, 160, 30);
-        let column = |y, text| {
-            let row = screen.row(y);
-            row.find(text).map(|byte| row[..byte].chars().count())
-        };
-        assert!(
-            column(0, "diff · ").unwrap() >= 80,
-            "the pane's own frame stays above it: {}",
-            screen.all()
-        );
-        assert!(column(1, "Edit report").unwrap() >= 80, "{}", screen.all());
-        assert!(column(4, "▌ a.rs [M]").unwrap() >= 80, "{}", screen.all());
-        assert!(
-            column(1, "waiting for the agent").unwrap() < 80,
-            "the events beside it are left: {}",
-            screen.all()
-        );
+        assert!(app.checkout_diff.as_ref().unwrap().report_page.is_some());
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert!(matches!(
+                e.preview,
+                Some(styra_ui::application::SidePreview::CheckoutDiff(_))
+            ));
+        });
     }
 
-    /// The diff view says what it compares before it shows the diff.
     #[test]
-    fn the_checkout_diff_names_both_branches_above_the_diff() {
+    fn checkout_diff_is_dispatched_to_fullscreen_and_side_views() {
         let mut app = test_support::app("s1");
         app.checkout_diff = Some(styra_diff::CheckoutDiff {
             commits: Default::default(),
@@ -1478,54 +1534,30 @@ mod tests {
         });
         app.view = View::CheckoutDiff;
 
-        let screen = rendered(&app);
-        assert!(
-            screen.contains("styra/rename  against  main at 4bf5c35d"),
-            "{screen}"
-        );
-        assert!(screen.contains("1 file changed  +1 -1"), "{screen}");
-        assert!(screen.contains("new"), "{screen}");
-
+        inspect(&app, |v| {
+            assert!(matches!(v.main, MainView::CheckoutDiff(_)));
+        });
         for view in [View::Events, View::Files] {
             app.view = view;
             app.diff_preview = true;
-            assert!(!app.preview.open);
             assert!(panel_chrome(&app, Some("diff")).focused);
-            assert!(!panel_chrome(&app, None).focused);
-            let screen = test_support::screen_sized(&app, 160, 40);
-            assert!(screen.locate("DIFF FOCUSED").is_none());
-            assert!(screen.find("┏").0 >= 80, "the diff owns the thick border");
-            let (x, _) = screen.find("+new");
-            assert!(
-                x >= 80,
-                "the checkout diff is in the preview pane: {view:?}"
-            );
+            inspect(&app, |v| {
+                let preview = match &v.main {
+                    MainView::Events(e) => e.preview,
+                    MainView::Files(f) => f.preview,
+                    _ => panic!(),
+                };
+                assert!(matches!(
+                    preview,
+                    Some(styra_ui::application::SidePreview::CheckoutDiff(_))
+                ));
+            });
             app.diff_interaction_focus = true;
             assert!(!panel_chrome(&app, Some("diff")).focused);
             assert!(panel_chrome(&app, None).focused);
-            let screen = test_support::screen_sized(&app, 160, 40);
-            assert!(screen.all().contains("+new"));
-            assert!(
-                screen.find("┏").0 < 80,
-                "the interaction owns the thick border"
-            );
-            if view == View::Events {
-                app.interactions.open = true;
-                assert!(!panel_chrome(&app, None).focused);
-                assert!(!panel_chrome(&app, Some("diff")).focused);
-                let screen = test_support::screen_sized(&app, 160, 40);
-                assert!(
-                    screen.title().starts_with('┏'),
-                    "the dropdown owns the thick border"
-                );
-                app.interactions.open = false;
-            }
             app.diff_interaction_focus = false;
             app.enter_input();
             assert!(!panel_chrome(&app, Some("diff")).focused);
-            let screen = test_support::screen_sized(&app, 160, 40);
-            assert!(screen.all().contains("+new"));
-            assert!(screen.locate("┏").is_none());
             app.enter_list();
         }
     }

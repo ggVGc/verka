@@ -2915,9 +2915,12 @@ mod tests {
         assert_eq!(app.view, View::CheckoutDiff);
         assert!(app.turn_diff_shown());
         assert!(app.shown_diff().unwrap().per_file, "the same turn diff");
-        let screen = crate::presentation::test_support::screen_sized(&app, 140, 30).all();
-        assert!(screen.contains("change a"), "{screen}");
-        assert!(screen.contains("turn diff · u: full diff"), "{screen}");
+        crate::presentation::test_support::inspect(&app, |v| {
+            assert!(matches!(
+                v.main,
+                styra_ui::application::MainView::CheckoutDiff(_)
+            ))
+        });
         press(&mut app, KeyCode::Char('u'));
         assert!(!app.turn_diff_shown());
         assert!(app.shown_diff().unwrap().target().is_some());

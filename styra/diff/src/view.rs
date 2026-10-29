@@ -3948,6 +3948,41 @@ index 1111111..2222222 100644
         }
     }
 
+    /// A report embedded by a host must respect a pane with a nonzero origin.
+    #[test]
+    fn a_report_page_stays_inside_the_supplied_side_pane() {
+        let mut terminal = Terminal::new(TestBackend::new(160, 30)).unwrap();
+        let report = ReportState {
+            report: Some(crate::Report::default()),
+            ..Default::default()
+        };
+        terminal
+            .draw(|frame| {
+                frame.render_widget(
+                    Paragraph::new("conversation beside the diff"),
+                    Rect::new(0, 0, 80, 29),
+                );
+                let before = frame.buffer_mut().clone();
+                let mut view = CheckoutDiffView::unread(Block::bordered().title("diff"));
+                view.diff = Ok(DIFF);
+                view.report = Some(&report);
+                view.report_page = Some(ReportPage::default());
+                render(frame, &view, Rect::new(80, 0, 80, 29));
+                for y in 0..30 {
+                    for x in 0..80 {
+                        assert_eq!(frame.buffer_mut()[(x, y)], before[(x, y)], "({x}, {y})");
+                    }
+                }
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let right: String = (0..29)
+            .flat_map(|y| (80..160).map(move |x| (x, y)))
+            .map(|position| buffer[position].symbol())
+            .collect();
+        assert!(right.contains("Edit report"));
+    }
+
     #[test]
     fn file_search_filters_names_and_the_selected_patch_together() {
         let text =
