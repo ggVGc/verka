@@ -8,7 +8,7 @@ use super::{
     profile_name, Effort, ExecutionMode, MessageFormat, MountSpec, Profile, Provider, SandboxLayout,
 };
 use crate::event::Protocol;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -104,8 +104,24 @@ impl ProviderOps for Ops {
         codex(mode, layout, executable, model, effort)
     }
 
-    // Codex resumes through the host's app-server handshake.
-    fn resume(&self, _profile: &mut Profile, _provider_session_id: &str) -> Result<()> {
+    /// A conversation resumes through the host's app-server handshake, so its
+    /// command line is left alone. A single-turn profile resumes with
+    /// `codex exec resume ID -`: the exec subcommand's own resume, which takes
+    /// the same options and reads the prompt from stdin the same way.
+    fn resume(&self, profile: &mut Profile, provider_session_id: &str) -> Result<()> {
+        if !profile.single_turn {
+            return Ok(());
+        }
+        let exec = profile
+            .command
+            .iter()
+            .position(|argument| argument == "exec")
+            .context("a single-turn codex profile runs `codex exec`")?;
+        let prompt = profile.command.len() - 1;
+        profile
+            .command
+            .insert(prompt, provider_session_id.to_owned());
+        profile.command.insert(exec + 1, "resume".into());
         Ok(())
     }
 }
@@ -410,15 +426,20 @@ mod tests {
         }
     }
 
-    /// A one-shot run has no thread to reopen, and says so rather than
-    /// launching something that silently starts over.
+    /// A one-shot run can still be the next turn of a thread: `exec resume`,
+    /// with exec's own options, the thread and stdin's prompt last.
     #[test]
-    fn codex_exec_refuses_to_resume() {
+    fn codex_exec_resumes_through_its_own_subcommand() {
         let mut profile = batch("codex", &SandboxLayout::default());
-        let error = profile
-            .resume(Provider::Codex, "thread-1")
-            .expect_err("a one-shot run cannot be resumed");
-        assert!(format!("{error:#}").contains("does not support resuming"));
+        profile.resume(Provider::Codex, "thread-1").unwrap();
+        let command = &profile.command;
+        let exec = command
+            .iter()
+            .position(|argument| argument == "exec")
+            .unwrap();
+        assert_eq!(command[exec + 1], "resume");
+        assert_eq!(command[command.len() - 2..], ["thread-1", "-"]);
+        assert!(command.iter().any(|argument| argument == "--json"));
     }
 
     /// Codex resumes through the app-server handshake, so the command line the

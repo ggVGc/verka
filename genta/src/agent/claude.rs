@@ -115,7 +115,8 @@ impl ProviderOps for Ops {
     }
 
     /// Claude Code resumes at process launch time, so the id joins the command
-    /// line the profile carries.
+    /// line the profile carries. A single-turn profile is the same command with
+    /// stdin closed after one message, so it resumes the same way.
     fn resume(&self, profile: &mut Profile, provider_session_id: &str) -> Result<()> {
         profile.command.push("--resume".into());
         profile.command.push(provider_session_id.to_owned());

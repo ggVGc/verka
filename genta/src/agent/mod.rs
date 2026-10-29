@@ -486,7 +486,8 @@ pub struct Profile {
     pub network: bool,
     pub message_format: MessageFormat,
     /// The host closes stdin after one prompt and runs the agent to completion.
-    /// Further messages and resuming this profile are not supported.
+    /// Further messages are not supported; resuming makes that one prompt the
+    /// next turn of an existing conversation.
     pub single_turn: bool,
 }
 
@@ -531,9 +532,6 @@ impl Profile {
     pub fn resume(&mut self, provider: Provider, provider_session_id: &str) -> Result<()> {
         if provider_session_id.trim().is_empty() {
             bail!("cannot resume an empty provider session id");
-        }
-        if self.single_turn {
-            bail!("a single-turn profile does not support resuming sessions");
         }
         provider.spec().ops.resume(self, provider_session_id)
     }
@@ -873,7 +871,7 @@ mod tests {
             let conversation = selection
                 .resolve_on_path(&layout, agent_bin().as_os_str())
                 .unwrap();
-            let mut batch = selection
+            let batch = selection
                 .resolve_for_on_path(ExecutionMode::Batch, &layout, agent_bin().as_os_str())
                 .unwrap();
             assert_eq!(batch.name, selection.name());
@@ -883,7 +881,6 @@ mod tests {
             assert_eq!(conversation.network, batch.network);
             assert!(!conversation.single_turn);
             assert!(batch.single_turn);
-            assert!(batch.resume(provider, "previous-session").is_err());
             match provider {
                 Provider::Codex => {
                     assert_eq!(conversation.protocol, Protocol::CodexAppServer);

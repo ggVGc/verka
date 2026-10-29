@@ -29,8 +29,17 @@
 //!   surroundings is then safe to keep, because those surroundings are empty:
 //!   the errand reads a prompt that may be anything the operator pasted, and
 //!   there is nothing in reach for it to act on.
+//!
+//! An errand can also be put to a Session's own agent, as one more turn of its
+//! conversation ([`Errand::resuming`]): a question about the Session's work is
+//! answered best by the agent that did it, from what it already read. That is
+//! a throwaway branch of the conversation, and the sandbox is what makes it
+//! one. The Session's checkout is mounted, so the agent can look at it again,
+//! but read-only; the provider's state directory, where its transcript is, is
+//! an overlay, so the turn the agent adds to the conversation is discarded with
+//! the sandbox. Nothing the errand holds is mounted writable.
 
-use crate::agent::{Profile, Provider, SandboxLayout, Selection};
+use crate::agent::{MountSpec, Profile, Provider, SandboxLayout, Selection};
 use crate::event::{decode_line, AgentEvent, Protocol};
 use anyhow::{bail, Context, Result};
 use driva::{
@@ -51,9 +60,25 @@ const SCRATCH: &str = "/tmp/styra/errand";
 
 /// One question, and the agent that will answer it.
 pub struct Errand {
-    provider: Provider,
+    selection: Selection,
     prompt: String,
     timeout: Duration,
+    resume: Option<Resume>,
+}
+
+/// A Session's conversation, for an errand to be its next, discarded turn.
+pub struct Resume {
+    /// What the Session runs on. Kept rather than traded for the cheap tier:
+    /// the conversation is the provider's cached prompt for this model, and
+    /// the agent should be the one that did the work.
+    pub selection: Selection,
+    pub provider_session_id: String,
+    /// Where the Session's agent works, so the conversation is resumed where
+    /// it says it took place.
+    pub working_directory: PathBuf,
+    /// The Session's checkout and what it needs beside itself, mounted
+    /// read-only whatever they ask for.
+    pub mounts: Vec<MountSpec>,
 }
 
 impl Errand {
@@ -66,9 +91,25 @@ impl Errand {
     /// Ask `provider` the question in `prompt`.
     pub fn new(provider: Provider, prompt: impl Into<String>) -> Self {
         Self {
-            provider,
+            selection: Selection {
+                provider,
+                model: provider.cheapest_model().to_owned(),
+                effort: provider.cheapest_effort(),
+            },
             prompt: prompt.into(),
             timeout: Self::DEFAULT_TIMEOUT,
+            resume: None,
+        }
+    }
+
+    /// Ask the agent of the conversation `resume` names the question in
+    /// `prompt`, as its next turn, which is then discarded.
+    pub fn resuming(resume: Resume, prompt: impl Into<String>) -> Self {
+        Self {
+            selection: resume.selection.clone(),
+            prompt: prompt.into(),
+            timeout: Self::DEFAULT_TIMEOUT,
+            resume: Some(resume),
         }
     }
 
@@ -79,17 +120,13 @@ impl Errand {
     }
 
     /// What this errand runs on: the one-shot form of the operator's provider,
-    /// on its cheapest model and lowest effort.
+    /// on its cheapest model and lowest effort — or, resuming a Session, on
+    /// what that Session runs on.
     ///
     /// Execution mode is chosen when resolving the profile; the provider
     /// remains the same as the operator's session.
     pub fn selection(&self) -> Selection {
-        let provider = self.provider;
-        Selection {
-            provider,
-            model: provider.cheapest_model().to_owned(),
-            effort: provider.cheapest_effort(),
-        }
+        self.selection.clone()
     }
 
     /// Run the errand and return the agent's final message, trimmed.
@@ -101,14 +138,18 @@ impl Errand {
     /// for the failure rather than to propagate it.
     pub fn answer(&self) -> Result<String> {
         let base = driva::BaseConfig::default();
-        let profile = self
-            .selection()
+        let provider = self.selection.provider;
+        let mut profile = self
+            .selection
             .resolve_for(
                 genta::agent::ExecutionMode::Batch,
-                &SandboxLayout::same_path(SCRATCH),
+                &SandboxLayout::same_path(working_directory(self.resume.as_ref())),
             )
-            .with_context(|| format!("resolving the {} errand profile", self.provider.as_str()))?;
-        let request = request(&profile, &base)?;
+            .with_context(|| format!("resolving the {} errand profile", provider.as_str()))?;
+        if let Some(resume) = &self.resume {
+            profile.resume(provider, &resume.provider_session_id)?;
+        }
+        let request = request(&profile, &base, self.resume.as_ref())?;
         let backend = driva::BwrapIsolation {
             executable: "bwrap".into(),
             rootfs: None,
@@ -166,32 +207,58 @@ impl Errand {
 /// none of them. Listing the three it does have — scratch, the agent
 /// executable, the provider's own credential mounts — is what makes that
 /// visible, and reviewable, in one place.
-fn request(profile: &Profile, base: &driva::BaseConfig) -> Result<ExecutionRequest> {
+///
+/// Resuming a Session, scratch gives way to the Session's checkout, read-only,
+/// and the provider's mounts become overlays, so its writes — the turn it adds
+/// to the conversation among them — never reach the host.
+fn request(
+    profile: &Profile,
+    base: &driva::BaseConfig,
+    resume: Option<&Resume>,
+) -> Result<ExecutionRequest> {
     let executable = profile
         .command
         .first()
         .context("the errand profile names no executable")?;
-    let mut mounts = vec![Mount::Temporary {
-        destination: PathBuf::from(SCRATCH),
-    }];
+    let mut mounts = match resume {
+        None => vec![Mount::Temporary {
+            destination: PathBuf::from(SCRATCH),
+        }],
+        Some(resume) => {
+            // A Session working in its repository's own directory is handed
+            // that directory twice, as its checkout and as the repository;
+            // every mount here is read-only, so once is all of it.
+            let mut mounts: Vec<Mount> = Vec::new();
+            for mount in &resume.mounts {
+                let mount = bind(mount, MountAccess::ReadOnly);
+                if !mounts.contains(&mount) {
+                    mounts.push(mount);
+                }
+            }
+            mounts
+        }
+    };
     mounts.extend(
         crate::tooling::executable_mounts(&[PathBuf::from(executable)], base)?
             .into_iter()
             .map(|mount| bind(&mount, MountAccess::ReadOnly)),
     );
-    mounts.extend(profile.mounts.iter().map(|mount| {
-        bind(
-            mount,
-            if mount.writable {
-                MountAccess::ReadWrite
-            } else {
-                MountAccess::ReadOnly
-            },
-        )
-    }));
+    mounts.extend(
+        profile
+            .mounts
+            .iter()
+            .map(|mount| match (mount.writable, resume) {
+                (true, Some(_)) => Mount::Overlay {
+                    source: mount.source.clone(),
+                    destination: mount.destination.clone(),
+                },
+                (true, None) => bind(mount, MountAccess::ReadWrite),
+                (false, _) => bind(mount, MountAccess::ReadOnly),
+            }),
+    );
     Ok(ExecutionRequest {
         command: profile.command.iter().map(OsString::from).collect(),
-        working_directory: PathBuf::from(SCRATCH),
+        working_directory: working_directory(resume),
         mounts,
         writable_mounts: WritableMountMode::Direct,
         environment: profile
@@ -204,6 +271,15 @@ fn request(profile: &Profile, base: &driva::BaseConfig) -> Result<ExecutionReque
         interactive: false,
         new_session: true,
     })
+}
+
+/// Where an errand's agent stands: scratch, or where the Session it resumes
+/// worked.
+fn working_directory(resume: Option<&Resume>) -> PathBuf {
+    resume.map_or_else(
+        || PathBuf::from(SCRATCH),
+        |resume| resume.working_directory.clone(),
+    )
 }
 
 fn bind(mount: &crate::agent::MountSpec, access: MountAccess) -> Mount {
@@ -336,7 +412,7 @@ mod tests {
     fn the_sandbox_holds_nothing_but_scratch_the_agent_and_its_credentials() {
         let profile = stub_profile(Provider::Claude);
         let base = driva::BaseConfig::default();
-        let request = request(&profile, &base).unwrap();
+        let request = request(&profile, &base, None).unwrap();
 
         assert_eq!(request.working_directory, PathBuf::from(SCRATCH));
         assert!(matches!(
@@ -362,12 +438,77 @@ mod tests {
         assert!(!request.interactive);
     }
 
+    /// Resuming a Session, nothing is mounted writable: its checkout and
+    /// repository are read-only whatever they asked for, the provider's state
+    /// is an overlay whose writes are discarded, and the agent stands where
+    /// the Session did rather than in scratch.
+    #[test]
+    fn a_resumed_errand_writes_nothing_back() {
+        let profile = stub_profile(Provider::Claude);
+        let resume = Resume {
+            selection: Selection::new(Provider::Claude),
+            provider_session_id: "claude-session-1".into(),
+            working_directory: "/tmp/styra/workspace".into(),
+            mounts: vec![
+                MountSpec {
+                    source: "/host/checkout".into(),
+                    destination: "/tmp/styra/workspace".into(),
+                    writable: false,
+                },
+                MountSpec {
+                    source: "/host/repository/.git".into(),
+                    destination: "/host/repository/.git".into(),
+                    writable: true,
+                },
+                MountSpec {
+                    source: "/host/checkout".into(),
+                    destination: "/tmp/styra/workspace".into(),
+                    writable: false,
+                },
+            ],
+        };
+        let request = request(&profile, &driva::BaseConfig::default(), Some(&resume)).unwrap();
+
+        assert_eq!(request.working_directory, Path::new("/tmp/styra/workspace"));
+        let checkouts = request
+            .mounts
+            .iter()
+            .filter(|mount| mount.destination() == Path::new("/tmp/styra/workspace"))
+            .count();
+        assert_eq!(
+            checkouts, 1,
+            "the same directory asked for twice is bound once"
+        );
+        assert!(request
+            .mounts
+            .iter()
+            .all(|mount| !matches!(mount, Mount::Temporary { .. })));
+        assert!(request.mounts.iter().all(|mount| !matches!(
+            mount,
+            Mount::Bind {
+                access: MountAccess::ReadWrite,
+                ..
+            }
+        )));
+        for state in profile.mounts.iter().filter(|mount| mount.writable) {
+            assert!(request.mounts.iter().any(|mount| matches!(
+                mount,
+                Mount::Overlay { destination, .. } if *destination == state.destination
+            )));
+        }
+        assert!(request.mounts.contains(&Mount::Bind {
+            source: "/host/repository/.git".into(),
+            destination: "/host/repository/.git".into(),
+            access: MountAccess::ReadOnly,
+        }));
+    }
+
     /// The prompt reaches the agent as a message in its own input format, not
     /// as a command-line argument — a first prompt can be anything at all.
     #[test]
     fn the_prompt_is_written_to_stdin_in_the_agents_own_format() {
         let profile = stub_profile(Provider::Codex);
-        let request = request(&profile, &driva::BaseConfig::default()).unwrap();
+        let request = request(&profile, &driva::BaseConfig::default(), None).unwrap();
 
         assert_eq!(request.command.last().unwrap(), "-");
         let encoded = String::from_utf8(profile.encode_message("Fix the flaky test")).unwrap();

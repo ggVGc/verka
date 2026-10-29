@@ -103,7 +103,8 @@ pub(crate) trait ProviderOps: Sync {
 
     /// Reopen an existing provider conversation, by whatever mechanism this
     /// agent offers — a launch flag, a protocol handshake the host performs
-    /// afterwards, or not at all. `provider_session_id` is already known to be
-    /// non-empty.
+    /// afterwards, or not at all. A single-turn profile resumes for one more
+    /// turn: the prompt is still read from stdin, and the agent exits once it
+    /// has answered. `provider_session_id` is already known to be non-empty.
     fn resume(&self, profile: &mut Profile, provider_session_id: &str) -> Result<()>;
 }

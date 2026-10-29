@@ -292,12 +292,19 @@ edited, `R` moved, `R+` moved with edits, `C` copied, `C+` copied with edits,
 and `T` file mode changed. A fixed row above the selected patch explains its
 change and shows the source path for moves and copies. Moves are detected
 using Git's rename similarity threshold.
-`E` in the diff writes an edit report: the server has the interaction's agent,
-on its cheapest model, describe each file of the diff — its main edits and why,
-from the patch, the interaction's first prompt, and the branch's commit
-messages. It runs in the background — the footer says so, whatever view is open
-— and is kept with the Session, so reopening the diff shows it again. Files are
-described a batch at a time, and any a batch failed or passed over are tried
+`E` in the diff writes an edit report: the server has an agent describe each
+file of the diff — its main edits and why. It runs in the background — the footer says so, whatever view is open
+— and is kept with the Session, so reopening the diff shows it again. The
+interaction's own agent is asked first, as one more turn of its conversation in
+a throwaway sandbox: its checkout read-only, and its provider state an overlay,
+so the turn is discarded and nothing it writes reaches the host. It is sent
+only the paths and their changed-line counts, since it remembers the edits and
+can read the rest. Files it leaves undescribed, or every file when the
+interaction has no conversation to resume, go to an errand on the cheapest
+model, which works from the patches, the interaction's first prompt and the
+branch's commit messages. It gets every file in one prompt and answers with Styra's files contract, a line
+per file with its path and a short description; only a diff too long for one
+prompt is split into batches. Any file a prompt failed or passed over is tried
 once more; what still fails is reported with its error. The per-file view shows
 the selected file's description above its patch (`e` hides or shows it), noting
 when the file has changed since it was described, or why describing it failed.
