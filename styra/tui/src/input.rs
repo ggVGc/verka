@@ -2111,7 +2111,7 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
         assert!(handle_overview_key(&mut app, key));
         assert!(app.interactions.only_current_workspace);
-        assert_eq!(app.interactions.visible_indices(Some("here")).len(), 1);
+        assert_eq!(app.interactions.visible_indices("", Some("here")).len(), 1);
         assert_eq!(
             app.overview.indices(&app.interactions, Some("here")).len(),
             1

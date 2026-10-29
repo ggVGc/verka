@@ -242,7 +242,7 @@ mod tests {
         app.interactions.open(interactions, workspaces);
         app.workspace_jump = Some(jump);
         narrow_navigator_to_jump(&mut app);
-        assert_eq!(app.interactions.visible_indices(None), vec![0, 1]);
+        assert_eq!(app.interactions.visible_indices("", None), vec![0, 1]);
 
         for character in "oth".chars() {
             app.workspace_jump
@@ -251,12 +251,12 @@ mod tests {
                 .handle_key(press(character));
         }
         narrow_navigator_to_jump(&mut app);
-        assert_eq!(app.interactions.visible_indices(None), vec![1]);
+        assert_eq!(app.interactions.visible_indices("", None), vec![1]);
 
         app.workspace_jump = None;
         narrow_navigator_to_jump(&mut app);
         assert!(app.interactions.open);
-        assert_eq!(app.interactions.visible_indices(None), vec![0, 1]);
+        assert_eq!(app.interactions.visible_indices("", None), vec![0, 1]);
     }
 
     /// Over the grid, the jump narrows the grid to its highlighted Workspace

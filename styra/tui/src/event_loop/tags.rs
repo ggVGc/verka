@@ -204,10 +204,10 @@ mod tests {
 
         toggle_tag_picker_exclusion(&mut app);
         assert_eq!(app.interactions.tag_filter(), ["-bug"]);
-        assert_eq!(app.interactions.visible_indices(None), vec![0]);
+        assert_eq!(app.interactions.visible_indices("", None), vec![0]);
 
         toggle_tag_picker_exclusion(&mut app);
         assert!(app.interactions.tag_filter().is_empty());
-        assert_eq!(app.interactions.visible_indices(None), vec![0, 1]);
+        assert_eq!(app.interactions.visible_indices("", None), vec![0, 1]);
     }
 }

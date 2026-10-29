@@ -9,7 +9,9 @@ use styra_ui::interactions::{
 };
 
 pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
-    let ordered = app.interactions.display_rows(app.workspace.id.as_deref());
+    let ordered = app
+        .interactions
+        .display_rows(&app.session_id, app.workspace.id.as_deref());
     let cursor = app.interactions.cursor(&app.session_id);
     let loading = app
         .interactions

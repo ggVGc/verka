@@ -388,13 +388,18 @@ impl LiveInteractions {
             || workspace_id.is_some_and(|id| interaction.workspace_id == id)
     }
 
-    pub fn visible_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
+    /// The rows the navigator lists, in item order. `current`, the
+    /// Interaction on screen, is listed whatever its state: completing,
+    /// integrating or stopping it must not take it, and with it its place
+    /// among its branches, out of the list while it is still being looked at.
+    pub fn visible_indices(&self, current: &str, workspace_id: Option<&str>) -> Vec<usize> {
         self.items
             .iter()
             .enumerate()
             .filter_map(|(index, interaction)| {
                 (self.in_workspace_scope(interaction, workspace_id)
-                    && self.lists(interaction)
+                    && (self.lists(interaction)
+                        || interaction.id == current && self.matches_tag_filter(interaction))
                     && self.matches_typed_filter(interaction)
                     && self
                         .jump_workspaces
@@ -463,8 +468,8 @@ impl LiveInteractions {
     ///
     /// Within that, a branch follows the entry it was branched from, as the
     /// Session picker nests it: see [`Self::display_rows`].
-    pub fn display_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
-        self.display_rows(workspace_id)
+    pub fn display_indices(&self, current: &str, workspace_id: Option<&str>) -> Vec<usize> {
+        self.display_rows(current, workspace_id)
             .into_iter()
             .map(|row| row.index)
             .collect()
@@ -473,11 +478,11 @@ impl LiveInteractions {
     /// [`Self::display_indices`], each placed as the navigator draws it — see
     /// [`DisplayRow`]. A branch whose source is not shown — closed, hidden as
     /// completed, or out of scope — stands at the root of its checkout.
-    pub fn display_rows(&self, workspace_id: Option<&str>) -> Vec<DisplayRow> {
+    pub fn display_rows(&self, current: &str, workspace_id: Option<&str>) -> Vec<DisplayRow> {
         display_tree(
             &self.items,
             &self.workspaces,
-            self.visible_indices(workspace_id),
+            self.visible_indices(current, workspace_id),
         )
     }
 
@@ -695,14 +700,14 @@ impl LiveInteractions {
 
     pub fn cursor_next(&mut self, current: &str, workspace_id: Option<&str>) {
         let from = self.cursor(current).to_owned();
-        if let Some(next) = self.next(&from, workspace_id) {
+        if let Some(next) = self.next(&from, current, workspace_id) {
             self.move_cursor_to(next.id, current);
         }
     }
 
     pub fn cursor_previous(&mut self, current: &str, workspace_id: Option<&str>) {
         let from = self.cursor(current).to_owned();
-        if let Some(previous) = self.previous(&from, workspace_id) {
+        if let Some(previous) = self.previous(&from, current, workspace_id) {
             self.move_cursor_to(previous.id, current);
         }
     }
@@ -710,7 +715,7 @@ impl LiveInteractions {
     /// Page through the displayed interactions, keeping the usual cursor
     /// settle and stopping at either end of the filtered list.
     pub fn cursor_page(&mut self, current: &str, workspace_id: Option<&str>, down: bool) {
-        let visible = self.display_indices(workspace_id);
+        let visible = self.display_indices(current, workspace_id);
         let position = visible
             .iter()
             .position(|index| self.items[*index].id == self.cursor(current));
@@ -726,13 +731,13 @@ impl LiveInteractions {
     }
 
     pub fn cursor_first(&mut self, current: &str, workspace_id: Option<&str>) {
-        if let Some(index) = self.display_indices(workspace_id).first() {
+        if let Some(index) = self.display_indices(current, workspace_id).first() {
             self.move_cursor_to(self.items[*index].id.clone(), current);
         }
     }
 
     pub fn cursor_last(&mut self, current: &str, workspace_id: Option<&str>) {
-        if let Some(index) = self.display_indices(workspace_id).last() {
+        if let Some(index) = self.display_indices(current, workspace_id).last() {
             self.move_cursor_to(self.items[*index].id.clone(), current);
         }
     }
@@ -742,14 +747,14 @@ impl LiveInteractions {
     /// on rather than one per group passed through.
     pub fn cursor_next_workspace(&mut self, current: &str, workspace_id: Option<&str>) {
         let from = self.cursor(current).to_owned();
-        if let Some(next) = self.next_workspace(&from, workspace_id) {
+        if let Some(next) = self.next_workspace(&from, current, workspace_id) {
             self.move_cursor_to(next.id, current);
         }
     }
 
     pub fn cursor_previous_workspace(&mut self, current: &str, workspace_id: Option<&str>) {
         let from = self.cursor(current).to_owned();
-        if let Some(previous) = self.previous_workspace(&from, workspace_id) {
+        if let Some(previous) = self.previous_workspace(&from, current, workspace_id) {
             self.move_cursor_to(previous.id, current);
         }
     }
@@ -767,7 +772,7 @@ impl LiveInteractions {
             self.only_current_workspace = false;
         }
         let Some(index) = self
-            .display_indices(workspace_id)
+            .display_indices(current, workspace_id)
             .into_iter()
             .find(|index| self.items[*index].workspace_id == target)
         else {
@@ -789,11 +794,16 @@ impl LiveInteractions {
         self.settle_from = Some(Instant::now());
     }
 
-    fn next(&self, current: &str, workspace_id: Option<&str>) -> Option<InteractionSummary> {
-        let visible = self.display_indices(workspace_id);
+    fn next(
+        &self,
+        from: &str,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        let visible = self.display_indices(current, workspace_id);
         let index = visible
             .iter()
-            .position(|index| self.items[*index].id == current)
+            .position(|index| self.items[*index].id == from)
             .map(|position| (position + 1).min(visible.len().saturating_sub(1)))
             // Match the bottom-aligned viewport when nothing is selected.
             .unwrap_or_else(|| visible.len().saturating_sub(1));
@@ -803,11 +813,16 @@ impl LiveInteractions {
             .cloned()
     }
 
-    fn previous(&self, current: &str, workspace_id: Option<&str>) -> Option<InteractionSummary> {
-        let visible = self.display_indices(workspace_id);
+    fn previous(
+        &self,
+        from: &str,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        let visible = self.display_indices(current, workspace_id);
         let position = visible
             .iter()
-            .position(|index| self.items[*index].id == current)
+            .position(|index| self.items[*index].id == from)
             .map(|position| position.saturating_sub(1))
             .unwrap_or_else(|| visible.len().saturating_sub(1));
         visible
@@ -822,11 +837,12 @@ impl LiveInteractions {
     /// no jump to make.
     fn next_workspace(
         &self,
+        from: &str,
         current: &str,
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        let leaders = self.workspace_leaders(workspace_id);
-        let group = self.group_of(current, workspace_id)?;
+        let leaders = self.workspace_leaders(current, workspace_id);
+        let group = self.group_of(from, current, workspace_id)?;
         leaders
             .get(group + 1)
             .and_then(|index| self.items.get(*index))
@@ -839,13 +855,14 @@ impl LiveInteractions {
     /// group above.
     fn previous_workspace(
         &self,
+        from: &str,
         current: &str,
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        let leaders = self.workspace_leaders(workspace_id);
-        let group = self.group_of(current, workspace_id)?;
+        let leaders = self.workspace_leaders(current, workspace_id);
+        let group = self.group_of(from, current, workspace_id)?;
         let leader = self.items.get(*leaders.get(group)?)?;
-        if leader.id != current {
+        if leader.id != from {
             return Some(leader.clone());
         }
         leaders
@@ -856,13 +873,13 @@ impl LiveInteractions {
 
     /// The first visible entry of each Workspace group, in display order.
     /// Empty in Workspace scope: the entries are not grouped there.
-    fn workspace_leaders(&self, workspace_id: Option<&str>) -> Vec<usize> {
+    fn workspace_leaders(&self, current: &str, workspace_id: Option<&str>) -> Vec<usize> {
         if self.only_current_workspace {
             return Vec::new();
         }
 
         let mut leaders: Vec<usize> = Vec::new();
-        for index in self.display_indices(workspace_id) {
+        for index in self.display_indices(current, workspace_id) {
             let workspace_id = &self.items[index].workspace_id;
             if leaders
                 .last()
@@ -874,16 +891,16 @@ impl LiveInteractions {
         leaders
     }
 
-    /// Which Workspace group `current` sits in, counted over
+    /// Which Workspace group `from` sits in, counted over
     /// [`Self::workspace_leaders`].
-    fn group_of(&self, current: &str, workspace_id: Option<&str>) -> Option<usize> {
-        let current = self
+    fn group_of(&self, from: &str, current: &str, workspace_id: Option<&str>) -> Option<usize> {
+        let from = self
             .items
             .iter()
-            .find(|interaction| interaction.id == current)?;
-        self.workspace_leaders(workspace_id)
+            .find(|interaction| interaction.id == from)?;
+        self.workspace_leaders(current, workspace_id)
             .iter()
-            .position(|leader| self.items[*leader].workspace_id == current.workspace_id)
+            .position(|leader| self.items[*leader].workspace_id == from.workspace_id)
     }
 
     /// Start typing the `/` filter, afresh.
@@ -937,7 +954,7 @@ impl LiveInteractions {
     /// under it is filtered out, it moves to the first that still matches,
     /// and loads there once it rests like any other move.
     fn follow_filter(&mut self, current: &str, workspace_id: Option<&str>) {
-        let shown = self.display_indices(workspace_id);
+        let shown = self.display_indices(current, workspace_id);
         let cursor = self.cursor(current);
         if shown.iter().any(|index| self.items[*index].id == cursor) {
             return;
@@ -1036,7 +1053,7 @@ impl LiveInteractions {
         let own_workspace = &self.items[hidden].workspace_id;
         // The finished row is placed among the visible ones, even when it is
         // itself hidden, so "nearest" is measured from where it was drawn.
-        let mut shown = self.visible_indices(workspace_id);
+        let mut shown = self.visible_indices("", workspace_id);
         if !shown.contains(&hidden) {
             shown.push(hidden);
             shown.sort_unstable();
@@ -1101,14 +1118,14 @@ impl LiveInteractions {
     ) -> Option<InteractionSummary> {
         // The cursor is not left on an entry the navigator no longer offers.
         self.rest();
-        if self.visible_indices(workspace_id).is_empty() {
+        if self.visible_indices("", workspace_id).is_empty() {
             self.only_current_workspace = false;
         }
-        if self.visible_indices(workspace_id).is_empty() {
+        if self.visible_indices("", workspace_id).is_empty() {
             self.clear_filter();
             self.tag_filter.clear();
         }
-        let visible = self.visible_indices(workspace_id);
+        let visible = self.visible_indices("", workspace_id);
         visible
             .iter()
             .copied()
@@ -1813,7 +1830,7 @@ pub(crate) mod tests {
                 "0000000000400-paused"
             ]
         );
-        assert_eq!(live.display_indices(Some("workspace")), [3, 2, 1, 0]);
+        assert_eq!(live.display_indices("", Some("workspace")), [3, 2, 1, 0]);
     }
 
     #[test]
@@ -1826,7 +1843,7 @@ pub(crate) mod tests {
             ],
             vec![],
         );
-        let previous = live.previous("one", Some("workspace")).unwrap();
+        let previous = live.previous("one", "", Some("workspace")).unwrap();
         assert_eq!(previous.id, "two");
         let mut refreshed_two = interaction("two", InteractionActivity::Pending);
         refreshed_two.last_message = Some("new response".into());
@@ -1895,12 +1912,12 @@ pub(crate) mod tests {
         );
 
         assert_eq!(
-            live.visible_indices(Some("workspace")),
+            live.visible_indices("", Some("workspace")),
             vec![1],
             "completed and abandoned rows are hidden by default"
         );
         live.toggle_completed();
-        assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
+        assert_eq!(live.visible_indices("", Some("workspace")), vec![0, 1, 2]);
     }
 
     /// Finished rows are left on the server until the operator asks to see
@@ -1936,14 +1953,44 @@ pub(crate) mod tests {
             vec![],
         );
         live.show_completed = true;
-        assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
+        assert_eq!(live.visible_indices("", Some("workspace")), vec![0, 1, 2]);
 
         live.toggle_stopped();
 
         assert_eq!(
-            live.visible_indices(Some("workspace")),
+            live.visible_indices("", Some("workspace")),
             vec![1],
             "stopped rows, completed ones included, are hidden"
+        );
+    }
+
+    /// Integrating the Interaction on screen completes it; it stays listed,
+    /// with its branches nested under it, for as long as it is on screen.
+    #[test]
+    fn the_current_row_is_listed_whatever_its_state() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                completed("current"),
+                interaction("stopped", InteractionActivity::Stopped),
+                completed("other"),
+            ],
+            vec![],
+        );
+        assert_eq!(
+            live.visible_indices("current", Some("workspace")),
+            vec![0, 1]
+        );
+
+        live.toggle_stopped();
+        assert_eq!(live.visible_indices("current", Some("workspace")), vec![0]);
+        assert!(live.visible_indices("", Some("workspace")).is_empty());
+
+        live.set_tag_filter(vec!["missing".into()], "current", Some("workspace"));
+        assert!(
+            live.visible_indices("current", Some("workspace"))
+                .is_empty(),
+            "the tag filter still narrows the list"
         );
     }
 
@@ -1972,11 +2019,11 @@ pub(crate) mod tests {
     fn an_interaction_started_again_is_no_longer_completed() {
         let mut live = LiveInteractions::default();
         live.open(vec![completed("finished")], vec![]);
-        assert!(live.visible_indices(Some("workspace")).is_empty());
+        assert!(live.visible_indices("", Some("workspace")).is_empty());
 
         live.refresh(vec![interaction("finished", InteractionActivity::Running)]);
 
-        assert_eq!(live.visible_indices(Some("workspace")), vec![0]);
+        assert_eq!(live.visible_indices("", Some("workspace")), vec![0]);
     }
 
     /// Completing the interaction on screen leaves it listed — the navigator
@@ -2656,12 +2703,15 @@ pub(crate) mod tests {
 
         live.toggle_workspace_scope();
         assert!(live.only_current_workspace);
-        assert_eq!(live.visible_indices(Some("workspace")), vec![0, 2]);
-        assert_eq!(live.next("current", Some("workspace")).unwrap().id, "next");
+        assert_eq!(live.visible_indices("", Some("workspace")), vec![0, 2]);
+        assert_eq!(
+            live.next("current", "", Some("workspace")).unwrap().id,
+            "next"
+        );
 
         live.toggle_workspace_scope();
         assert!(!live.only_current_workspace);
-        assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
+        assert_eq!(live.visible_indices("", Some("workspace")), vec![0, 1, 2]);
     }
 
     /// Interactions working in the same checkout are drawn together, each
@@ -2693,7 +2743,7 @@ pub(crate) mod tests {
             vec![],
         );
         let ordered = |live: &LiveInteractions| {
-            live.display_indices(Some("workspace"))
+            live.display_indices("", Some("workspace"))
                 .into_iter()
                 .map(|index| live.items[index].id.clone())
                 .collect::<Vec<_>>()
@@ -2703,7 +2753,7 @@ pub(crate) mod tests {
             ["other", "main-2", "main-1", "feature-2", "feature-1"]
         );
         assert_eq!(
-            live.next("main-1", Some("workspace")).unwrap().id,
+            live.next("main-1", "", Some("workspace")).unwrap().id,
             "feature-2"
         );
 
@@ -2729,7 +2779,7 @@ pub(crate) mod tests {
         live: &'a LiveInteractions,
         workspace_id: Option<&str>,
     ) -> Vec<(&'a str, usize)> {
-        live.display_rows(workspace_id)
+        live.display_rows("", workspace_id)
             .into_iter()
             .map(|row| (live.items[row.index].id.as_str(), row.depth))
             .collect()
@@ -2771,13 +2821,13 @@ pub(crate) mod tests {
         );
         // Walking the list follows the tree the navigator draws.
         assert_eq!(
-            live.next("0000000000100-source", Some("workspace"))
+            live.next("0000000000100-source", "", Some("workspace"))
                 .unwrap()
                 .id,
             "0000000000300-branch"
         );
         assert_eq!(
-            live.next("0000000000400-twig", Some("workspace"))
+            live.next("0000000000400-twig", "", Some("workspace"))
                 .unwrap()
                 .id,
             "0000000000200-other"
@@ -2849,7 +2899,7 @@ pub(crate) mod tests {
     );
 
     fn placements(live: &LiveInteractions) -> Vec<Placement<'_>> {
-        live.display_rows(Some("workspace"))
+        live.display_rows("", Some("workspace"))
             .into_iter()
             .map(|row| {
                 (
@@ -2906,7 +2956,7 @@ pub(crate) mod tests {
             ]
         );
         // Walking the list follows the same order.
-        assert_eq!(live.next("jwt", Some("workspace")).unwrap().id, "spike");
+        assert_eq!(live.next("jwt", "", Some("workspace")).unwrap().id, "spike");
     }
 
     /// A branch working in a worktree of its own still follows the entry it
@@ -2939,7 +2989,10 @@ pub(crate) mod tests {
                 ("newest", 0, 0, None, None),
             ]
         );
-        assert_eq!(live.next("nested", Some("workspace")).unwrap().id, "spike");
+        assert_eq!(
+            live.next("nested", "", Some("workspace")).unwrap().id,
+            "spike"
+        );
     }
 
     /// A worktree made from one whose interactions are all hidden has no
@@ -3065,7 +3118,7 @@ pub(crate) mod tests {
         );
 
         let ordered = live
-            .display_indices(Some("workspace"))
+            .display_indices("", Some("workspace"))
             .into_iter()
             .map(|index| live.items[index].id.as_str())
             .collect::<Vec<_>>();
@@ -3075,19 +3128,23 @@ pub(crate) mod tests {
         );
 
         assert_eq!(
-            live.next("other-running", Some("workspace")).unwrap().id,
+            live.next("other-running", "", Some("workspace"))
+                .unwrap()
+                .id,
             "other-pending"
         );
         assert_eq!(
-            live.next("other-pending", Some("workspace")).unwrap().id,
+            live.next("other-pending", "", Some("workspace"))
+                .unwrap()
+                .id,
             "running"
         );
         assert_eq!(
-            live.previous("running", Some("workspace")).unwrap().id,
+            live.previous("running", "", Some("workspace")).unwrap().id,
             "other-pending"
         );
         assert_eq!(
-            live.previous("pending", Some("workspace")).unwrap().id,
+            live.previous("pending", "", Some("workspace")).unwrap().id,
             "running"
         );
     }
@@ -3115,38 +3172,44 @@ pub(crate) mod tests {
 
         // Display order: third | other-running, other-pending | running, pending
         assert_eq!(
-            live.next_workspace("third", workspace).unwrap().id,
+            live.next_workspace("third", "", workspace).unwrap().id,
             "other-running"
         );
         assert_eq!(
-            live.next_workspace("other-pending", workspace).unwrap().id,
+            live.next_workspace("other-pending", "", workspace)
+                .unwrap()
+                .id,
             "running"
         );
         assert_eq!(
-            live.next_workspace("other-running", workspace).unwrap().id,
+            live.next_workspace("other-running", "", workspace)
+                .unwrap()
+                .id,
             "running"
         );
-        assert!(live.next_workspace("pending", workspace).is_none());
+        assert!(live.next_workspace("pending", "", workspace).is_none());
 
         // From the middle of a group, ctrl-k stops at that group's own first
         // entry before leaving it.
         assert_eq!(
-            live.previous_workspace("other-pending", workspace)
+            live.previous_workspace("other-pending", "", workspace)
                 .unwrap()
                 .id,
             "other-running"
         );
         assert_eq!(
-            live.previous_workspace("other-running", workspace)
+            live.previous_workspace("other-running", "", workspace)
                 .unwrap()
                 .id,
             "third"
         );
         assert_eq!(
-            live.previous_workspace("pending", workspace).unwrap().id,
+            live.previous_workspace("pending", "", workspace)
+                .unwrap()
+                .id,
             "running"
         );
-        assert!(live.previous_workspace("third", workspace).is_none());
+        assert!(live.previous_workspace("third", "", workspace).is_none());
     }
 
     /// The group jump crosses more of the list per press than j/k, so it has
@@ -3230,7 +3293,7 @@ pub(crate) mod tests {
         );
 
         let ordered = |live: &LiveInteractions| {
-            live.display_indices(Some("workspace"))
+            live.display_indices("", Some("workspace"))
                 .into_iter()
                 .map(|index| live.items[index].id.to_owned())
                 .collect::<Vec<_>>()
@@ -3261,8 +3324,12 @@ pub(crate) mod tests {
         );
         live.toggle_workspace_scope();
 
-        assert!(live.next_workspace("current", Some("workspace")).is_none());
-        assert!(live.previous_workspace("next", Some("workspace")).is_none());
+        assert!(live
+            .next_workspace("current", "", Some("workspace"))
+            .is_none());
+        assert!(live
+            .previous_workspace("next", "", Some("workspace"))
+            .is_none());
     }
 
     #[test]
@@ -3378,14 +3445,14 @@ pub(crate) mod tests {
         for character in "CHECK".chars() {
             live.type_filter(Edit::Push(character), "one", Some("workspace"));
         }
-        assert_eq!(live.visible_indices(Some("workspace")), vec![0]);
+        assert_eq!(live.visible_indices("", Some("workspace")), vec![0]);
 
         live.clear_filter();
         live.start_filter();
         for character in "bill".chars() {
             live.type_filter(Edit::Push(character), "one", Some("workspace"));
         }
-        assert_eq!(live.visible_indices(Some("workspace")), vec![2]);
+        assert_eq!(live.visible_indices("", Some("workspace")), vec![2]);
 
         // Enter keeps the filter but hands the keys back to the list.
         live.finish_filter();
@@ -3393,7 +3460,7 @@ pub(crate) mod tests {
         assert_eq!(live.filter(), Some("bill"));
 
         live.clear_filter();
-        assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
+        assert_eq!(live.visible_indices("", Some("workspace")), vec![0, 1, 2]);
     }
 
     /// A cursor left on a row the filter hid would act on something the
@@ -3438,14 +3505,14 @@ pub(crate) mod tests {
         live.open(items.clone(), vec![]);
 
         live.set_tag_filter(vec!["bug".into(), "urgent".into()], "one", None);
-        assert_eq!(live.visible_indices(None), vec![1]);
+        assert_eq!(live.visible_indices("", None), vec![1]);
         assert_eq!(live.cursor("one"), "two");
 
         live.open(items, vec![]);
-        assert_eq!(live.visible_indices(None), vec![1]);
+        assert_eq!(live.visible_indices("", None), vec![1]);
 
         live.set_tag_filter(Vec::new(), "one", None);
-        assert_eq!(live.visible_indices(None), vec![0, 1, 2]);
+        assert_eq!(live.visible_indices("", None), vec![0, 1, 2]);
     }
 
     #[test]
@@ -3466,7 +3533,7 @@ pub(crate) mod tests {
         );
 
         live.set_tag_filter(vec!["bug".into(), "-wip".into()], "one", None);
-        assert_eq!(live.visible_indices(None), vec![0]);
+        assert_eq!(live.visible_indices("", None), vec![0]);
     }
 
     #[test]
