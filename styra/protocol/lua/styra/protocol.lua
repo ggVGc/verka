@@ -226,6 +226,7 @@ M.types.Request = {
         { name = "id", required = true, type = { kind = "string" } },
         { name = "at_ms", required = false, type = { kind = "optional", inner = { kind = "number", integer = true } } },
         { name = "history", required = false, type = { kind = "ref", name = "BranchHistory" } },
+        { name = "checkout", required = false, type = { kind = "optional", inner = { kind = "ref", name = "BranchCheckout" } } },
         { name = "provider", required = false, type = { kind = "optional", inner = { kind = "ref", name = "Provider" } } },
         { name = "selection", required = false, type = { kind = "optional", inner = { kind = "ref", name = "Selection" } } },
       },
@@ -671,6 +672,17 @@ M.types.BranchHistory = {
   variants = {
     { name = "through_selected", payload = { kind = "unit" } },
     { name = "selected_only", payload = { kind = "unit" } },
+  },
+}
+
+--- Where a branched conversation works, independently of its copied history.
+M.types.BranchCheckout = {
+  kind = "enum",
+  tagging = { style = "external" },
+  plain = true,
+  variants = {
+    { name = "share_source", payload = { kind = "unit" } },
+    { name = "new_worktree", payload = { kind = "unit" } },
   },
 }
 
@@ -2237,6 +2249,13 @@ M.BranchHistory = {
   SELECTED_ONLY = "selected_only",
 }
 
+M.enums.BranchCheckout = { "share_source", "new_worktree" }
+--- Wire spellings of `BranchCheckout`.
+M.BranchCheckout = {
+  SHARE_SOURCE = "share_source",
+  NEW_WORKTREE = "new_worktree",
+}
+
 M.enums.Provider = { "codex", "claude" }
 --- Wire spellings of `Provider`.
 M.Provider = {
@@ -3171,6 +3190,7 @@ end
 ---   id         string
 ---   at_ms      number|null  (optional)
 ---   history    BranchHistory  (optional)
+---   checkout   BranchCheckout|null  (optional)
 ---   provider   Provider|null  (optional)
 ---   selection  Selection|null  (optional)
 function M.request.branch_session(data)

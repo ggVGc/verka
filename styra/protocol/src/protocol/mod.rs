@@ -14,14 +14,14 @@ mod types;
 
 pub use types::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
-    BranchHistory, BranchPoint, CheckoutState, CleanedWorktree, CompletionState, Contract,
-    DiffBase, Direction, DrivaOptions, EditReport, EditReportFile, FileEditReport, FileLocation,
-    Integration, IntegrationResult, InteractionActivity, InteractionActivityReason, InteractionEnd,
-    InteractionQuery, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
-    LogLevel, ModelSummary, MountOrigin, ProjectAction, QueuedMessage, QuotaEvent, QuotaStatus,
-    RawLine, RebaseStatus, RecentBranch, RecentMessage, SandboxProcess, SavedBranch, SessionOrigin,
-    SessionSummary, TemplateSummary, TurnDiff, VariableOrigin, WorkspaceSummary, WorktreeCleanup,
-    WorktreeSession, WorktreeSummary, WORKTREES_DIR,
+    BranchCheckout, BranchHistory, BranchPoint, CheckoutState, CleanedWorktree, CompletionState,
+    Contract, DiffBase, Direction, DrivaOptions, EditReport, EditReportFile, FileEditReport,
+    FileLocation, Integration, IntegrationResult, InteractionActivity, InteractionActivityReason,
+    InteractionEnd, InteractionQuery, InteractionSummary, InteractionUpdate, LaunchMount,
+    LaunchPolicy, LogEntry, LogLevel, ModelSummary, MountOrigin, ProjectAction, QueuedMessage,
+    QuotaEvent, QuotaStatus, RawLine, RebaseStatus, RecentBranch, RecentMessage, SandboxProcess,
+    SavedBranch, SessionOrigin, SessionSummary, TemplateSummary, TurnDiff, VariableOrigin,
+    WorkspaceSummary, WorktreeCleanup, WorktreeSession, WorktreeSummary, WORKTREES_DIR,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -511,6 +511,12 @@ pub enum Request {
         at_ms: Option<u64>,
         #[serde(default)]
         history: BranchHistory,
+        /// Choose a shared source checkout or a new Git branch and worktree.
+        /// Omission preserves the legacy behavior: fork a managed source
+        /// checkout, otherwise share the Workspace directory. History never
+        /// rewinds the working files.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkout: Option<BranchCheckout>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider: Option<Provider>,
         /// Exact model and effort for the branch; its provider must agree with
@@ -1383,6 +1389,7 @@ mod tests {
             id: "styra-1".into(),
             at_ms: Some(42),
             history: BranchHistory::SelectedOnly,
+            checkout: Some(BranchCheckout::ShareSource),
             provider: Some(crate::agent::Provider::Claude),
             selection: Some(Selection::parse("claude:opus/high").unwrap()),
         };
@@ -1390,6 +1397,7 @@ mod tests {
         assert_eq!(json["operation"], "branch_session");
         assert_eq!(json["data"]["at_ms"], 42);
         assert_eq!(json["data"]["history"], "selected_only");
+        assert_eq!(json["data"]["checkout"], "share_source");
         assert_eq!(json["data"]["provider"], "claude");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
 
@@ -1404,6 +1412,7 @@ mod tests {
                 id: "styra-1".into(),
                 at_ms: None,
                 history: BranchHistory::ThroughSelected,
+                checkout: None,
                 provider: None,
                 selection: None,
             }

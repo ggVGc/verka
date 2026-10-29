@@ -263,3 +263,15 @@ or resuming its interaction. It changes the diff comparison only.
 
 `diff_base` resolves the selected branch’s merge base with the checkout’s
 HEAD. An invalid, missing, or unrelated branch is rejected before saving.
+
+### Branch checkout choice
+
+`branch_session` accepts an optional `checkout`: `share_source` copies the
+chosen conversation history while reusing the source directory and Git branch,
+including uncommitted changes; `new_worktree` creates a separate branch and
+linked worktree at the source branch tip (or Workspace HEAD when the source
+has no managed checkout). It requires a Git repository. Omitting `checkout`
+preserves existing behavior: fork a managed source checkout, otherwise share
+the Workspace directory. The history cutoff never rewinds files. Each sibling
+records its checkout independently and retains its own native transcript and
+conversation origin. A cleaned source checkout is restored when shared again.

@@ -325,7 +325,7 @@ pub fn handle_git_repository_prompt_key(app: &mut App, client: &Client, key: Key
     }
 }
 
-/// Keys for the two-way branch choice. Confirming closes the modal before the
+/// Keys for the history and checkout choices. Confirming closes the modal before the
 /// server call, so success can replace the screen and failure returns to it.
 pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
     let Some(prompt) = app.branch_prompt.as_mut() else {
@@ -334,11 +334,13 @@ pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
     match key {
         k if BRANCH_NEXT.matches(k) => prompt.select_next(),
         k if BRANCH_PREV.matches(k) => prompt.select_previous(),
+        k if BRANCH_CHANGE.matches(k) => prompt.change(),
         k if BRANCH_CONFIRM.matches(k) => {
             let at_ms = prompt.at_ms();
-            let history = prompt.selected();
+            let history = prompt.history();
+            let checkout = prompt.checkout();
             app.branch_prompt = None;
-            session::branch_session(app, client, at_ms, history);
+            session::branch_session(app, client, at_ms, history, checkout);
         }
         k if BRANCH_CANCEL.matches(k) => app.branch_prompt = None,
         _ => {}

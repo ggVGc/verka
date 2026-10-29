@@ -136,7 +136,7 @@ where `Space` keeps its own link menu.
 | `Esc` (several boxes) | choose between the boxes: `j`/`k` move, `Enter`/`i` type in the chosen box, `d` deletes it, `Ctrl+N` adds one after it, `Esc` again leaves the editor with the boxes kept |
 | `s` / `S` | interrupt the active turn / stop its interaction |
 | `n` / `N` / `Ctrl+N` | go to a newly idle interaction, or the next running one / cycle actively running interactions / start a new session in the current Session's checkout when it has one; pressed again on that still-blank screen, it starts at the Workspace root instead |
-| `B` | branch from history through, or only, the selected entry; opens the branch and leaves the source running |
+| `B` | branch from history through, or only, the selected entry; choose a new worktree or share the current one; opens the branch and leaves the source running |
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
@@ -208,6 +208,15 @@ worktree heading. Switching back clears the warning.
 A branched interaction is listed beneath the one it was branched from, as in
 the session picker. Branching (`B`) lists the new interaction straight away,
 stopped as `branched, not started`, until a message resumes it.
+
+In the branch dialog, use `↑`/`↓` (or `j`/`k`) to select History or
+Working tree, and `←`/`→`, Space, or Tab to change that setting. Enter creates
+the branch. A new worktree gets its own Git branch at the source branch's tip.
+Sharing the current worktree gives both interactions the same directory and
+Git branch, including uncommitted changes. History selection only controls the
+copied conversation; it never rewinds files. The default is a new worktree for
+a source with a managed checkout, and the shared Workspace directory otherwise.
+
 An interaction that went idle away from every
 client's screen, and has not been focused since, is marked `NEWLY IDLE`; the
 event list's bottom border counts those rows, beside the `running/idle/stopped`

@@ -1052,7 +1052,11 @@ pub fn open_branch_prompt(app: &mut App) {
     let Some(at_ms) = at_ms else {
         return app.show_warning("the selected entry has no branchable history point");
     };
-    app.branch_prompt = Some(crate::branch::BranchPrompt::new(at_ms));
+    let has_checkout = app
+        .interactions
+        .current(&app.session_id)
+        .is_some_and(|interaction| interaction.expected_branch.is_some());
+    app.branch_prompt = Some(crate::branch::BranchPrompt::new(at_ms, has_checkout));
 }
 
 /// Follow the branch marker under the cursor, opening the Session on the
@@ -1085,8 +1089,16 @@ pub fn branch_session(
     client: &Client,
     at_ms: u64,
     history: styra_protocol::BranchHistory,
+    checkout: styra_protocol::BranchCheckout,
 ) {
-    match client.branch_session(&app.session_id, Some(at_ms), history, None) {
+    match client.branch_session_with_checkout(
+        &app.session_id,
+        Some(at_ms),
+        history,
+        None,
+        None,
+        Some(checkout),
+    ) {
         Ok(branched) => {
             app.push_log(LogEntry::info(format!(
                 "branched to session {}",

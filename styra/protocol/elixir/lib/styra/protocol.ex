@@ -236,6 +236,7 @@ defmodule Styra.Protocol do
             %{name: "id", required: true, type: %{kind: :string}},
             %{name: "at_ms", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}},
             %{name: "history", required: false, type: %{kind: :ref, name: "BranchHistory"}},
+            %{name: "checkout", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "BranchCheckout"}}},
             %{name: "provider", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Provider"}}},
             %{name: "selection", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Selection"}}}
           ]
@@ -681,6 +682,17 @@ defmodule Styra.Protocol do
       variants: [
         %{name: "through_selected", payload: %{kind: :unit}},
         %{name: "selected_only", payload: %{kind: :unit}}
+      ]
+    },
+
+    # Where a branched conversation works, independently of its copied history.
+    "BranchCheckout" => %{
+      kind: :enum,
+      tagging: %{style: :external},
+      plain: true,
+      variants: [
+        %{name: "share_source", payload: %{kind: :unit}},
+        %{name: "new_worktree", payload: %{kind: :unit}}
       ]
     },
 
@@ -3083,6 +3095,7 @@ defmodule Styra.Protocol do
       * `id       `  string
       * `at_ms    `  number|null  (optional)
       * `history  `  BranchHistory  (optional)
+      * `checkout `  BranchCheckout|null  (optional)
       * `provider `  Provider|null  (optional)
       * `selection`  Selection|null  (optional)
     """
@@ -3934,6 +3947,51 @@ defmodule Styra.Protocol.BranchHistory do
   Copy only the selected entry.
   """
   def selected_only, do: "selected_only"
+end
+
+defmodule Styra.Protocol.BranchCheckout do
+  @moduledoc ~S"""
+  Wire spellings of `BranchCheckout`.
+
+  Where a branched conversation works, independently of its copied history.
+  """
+
+  @spellings [
+    {:share_source, "share_source"},
+    {:new_worktree, "new_worktree"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  @doc ~S"""
+  Use the source's current directory and Git branch, including dirty files.
+  """
+  def share_source, do: "share_source"
+
+  @doc ~S"""
+  Create a separate Git branch and linked worktree at the source's tip.
+  """
+  def new_worktree, do: "new_worktree"
 end
 
 defmodule Styra.Protocol.Provider do

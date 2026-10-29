@@ -321,12 +321,27 @@ impl Client {
         provider: Option<crate::agent::Provider>,
         selection: Option<crate::agent::Selection>,
     ) -> Result<SessionSummary> {
+        self.branch_session_with_checkout(id, at_ms, history, provider, selection, None)
+    }
+
+    /// Branch with an explicit checkout choice, independently of history.
+    /// `None` preserves the checkout behavior of older clients.
+    pub fn branch_session_with_checkout(
+        &self,
+        id: &str,
+        at_ms: Option<u64>,
+        history: crate::protocol::BranchHistory,
+        provider: Option<crate::agent::Provider>,
+        selection: Option<crate::agent::Selection>,
+        checkout: Option<crate::protocol::BranchCheckout>,
+    ) -> Result<SessionSummary> {
         match self.request(Request::BranchSession {
             id: id.to_owned(),
             at_ms,
             history,
             provider,
             selection,
+            checkout,
         })? {
             Response::SessionBranched(value) => Ok(value),
             other => unexpected("session_branched", other),

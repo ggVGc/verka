@@ -1,5 +1,4 @@
-//! Branching a Session that works in a linked checkout gives the branch a
-//! checkout of its own, forked from the source's branch.
+//! Branching can fork a linked checkout or share its files and Git branch.
 //!
 //! Driven through the real daemon over its socket, on a real repository: what
 //! is being asserted is where Git put the new working tree and what its branch
@@ -14,7 +13,10 @@ use styra_server::agent::{MessageFormat, Profile, Provider, Selection};
 use styra_server::ensure_server;
 use styra_server::event::Protocol;
 use styra_server::journal::{self, Journal};
-use styra_server::protocol::{BranchHistory, InteractionActivity, InteractionActivityReason};
+use styra_server::protocol::{
+    BranchCheckout, BranchHistory, CompletionState, InteractionActivity, InteractionActivityReason,
+    WorktreeCleanup,
+};
 use styra_server::worktree::Checkout;
 
 /// One Codex conversation, in Codex's own on-disk rollout shape.
@@ -67,7 +69,7 @@ fn repository(host: &Path) {
 }
 
 #[test]
-fn branching_a_session_forks_the_checkout_it_works_in() {
+fn branching_sessions_can_fork_or_share_the_source_checkout() {
     let root = scratch();
     let home = root.join("home");
     let host = root.join("project");
@@ -197,7 +199,7 @@ fn branching_a_session_forks_the_checkout_it_works_in() {
     // The source keeps everything it had: a branch takes a copy.
     assert_eq!(
         journal::read_session_checkout(&source_path).unwrap(),
-        Some(Checkout::at(source_checkout))
+        Some(Checkout::at(source_checkout.clone()))
     );
 
     // Nothing runs the branch yet, but it is listed among the interactions,
@@ -225,6 +227,200 @@ fn branching_a_session_forks_the_checkout_it_works_in() {
     assert_eq!(
         loaded.summary.activity_reason,
         Some(InteractionActivityReason::Branched)
+    );
+
+    // A conversation branch can share the exact same checkout, including
+    // uncommitted files, while retaining its own transcript and history.
+    std::fs::write(source_checkout.join("picker.rs"), "unfinished edits\n").unwrap();
+    let refs_before = git(&host, &["for-each-ref", "--format=%(refname)"]);
+    let worktrees_before = git(&host, &["worktree", "list", "--porcelain"]);
+    let shared = client
+        .branch_session_with_checkout(
+            &source_id,
+            None,
+            BranchHistory::ThroughSelected,
+            None,
+            None,
+            Some(BranchCheckout::ShareSource),
+        )
+        .unwrap();
+    assert_ne!(shared.id, source_id);
+    assert_ne!(
+        journal::read_provider_session_id(&shared.path).unwrap(),
+        Some(native_id.into())
+    );
+    assert_eq!(
+        journal::read_session_checkout(&shared.path).unwrap(),
+        journal::read_session_checkout(&source_path).unwrap()
+    );
+    assert_eq!(
+        git(&host, &["for-each-ref", "--format=%(refname)"]),
+        refs_before
+    );
+    assert_eq!(
+        git(&host, &["worktree", "list", "--porcelain"]),
+        worktrees_before
+    );
+    assert_eq!(
+        std::fs::read_to_string(source_checkout.join("picker.rs")).unwrap(),
+        "unfinished edits\n"
+    );
+    assert_eq!(git(&source_checkout, &["rev-parse", "HEAD"]), source_head);
+    let shared_row = client.load_interaction(&shared.id).unwrap().summary;
+    assert_eq!(shared_row.workspace, source_checkout);
+    assert_eq!(shared_row.origin.unwrap().session_id, source_id);
+    assert!(journal::replay(&shared.path, Protocol::CodexJsonl).unwrap().iter().any(|event| {
+        matches!(event, styra_server::event::AgentEvent::UserMessage { text } if text == "teach the picker to filter")
+    }));
+
+    // Selecting one message still shares today's files; it only narrows history.
+    let at_ms = journal::replay_raw(&source_path)
+        .unwrap()
+        .into_iter()
+        .find(|line| line.text == "teach the picker to filter")
+        .unwrap()
+        .at_ms;
+    let selected = client
+        .branch_session_with_checkout(
+            &source_id,
+            Some(at_ms),
+            BranchHistory::SelectedOnly,
+            None,
+            None,
+            Some(BranchCheckout::ShareSource),
+        )
+        .unwrap();
+    assert_eq!(
+        client
+            .load_interaction(&selected.id)
+            .unwrap()
+            .summary
+            .workspace,
+        source_checkout
+    );
+    assert_eq!(
+        std::fs::read_to_string(source_checkout.join("picker.rs")).unwrap(),
+        "unfinished edits\n"
+    );
+    assert_eq!(
+        journal::replay(&selected.path, Protocol::CodexJsonl)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event, styra_server::event::AgentEvent::UserMessage { .. }))
+            .count(),
+        1
+    );
+    client
+        .set_session_completed(&selected.id, CompletionState::Completed)
+        .unwrap();
+
+    // Finishing the source must not remove the checkout of its active sibling.
+    std::fs::write(source_checkout.join("picker.rs"), "filtered\n").unwrap();
+    client
+        .set_session_completed(&source_id, CompletionState::Completed)
+        .unwrap();
+    let cleaned = client.clean_worktrees(Some(&workspace.id)).unwrap();
+    assert!(cleaned.iter().any(|entry| entry.session_id == source_id &&
+        matches!(&entry.outcome, WorktreeCleanup::Shared { session_id } if session_id == &shared.id)));
+    assert!(source_checkout.exists());
+
+    // Once both are finished it may be cleaned. Sharing a historical source
+    // restores that same branch instead of forking a replacement branch.
+    client
+        .set_session_completed(&shared.id, CompletionState::Abandoned)
+        .unwrap();
+    client.clean_worktrees(Some(&workspace.id)).unwrap();
+    assert!(!source_checkout.exists());
+    let restored = client
+        .branch_session_with_checkout(
+            &source_id,
+            None,
+            BranchHistory::ThroughSelected,
+            None,
+            None,
+            Some(BranchCheckout::ShareSource),
+        )
+        .unwrap();
+    let restored_checkout = journal::read_session_checkout(&restored.path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        restored_checkout.branch,
+        format!("styra/teach-the-picker-to-filter-{source_id}")
+    );
+    let restored_path = restored_checkout.path.unwrap();
+    assert!(restored_path.exists());
+    assert_eq!(git(&restored_path, &["rev-parse", "HEAD"]), source_head);
+    assert_eq!(
+        client
+            .load_interaction(&restored.id)
+            .unwrap()
+            .summary
+            .workspace,
+        restored_path
+    );
+    assert_eq!(
+        git(&host, &["for-each-ref", "--format=%(refname)"]),
+        refs_before
+    );
+
+    // Sources in the ordinary Workspace preserve the old default and can
+    // explicitly opt into a new worktree as well.
+    let (mut ordinary_journal, ordinary_id) = Journal::create_in_workspace(
+        &store,
+        &workspace.id,
+        &profile,
+        &selection,
+        Some("ordinary".into()),
+    )
+    .unwrap();
+    ordinary_journal
+        .record_user_message("teach the picker to filter")
+        .unwrap();
+    let ordinary_path = ordinary_journal.path().parent().unwrap().to_path_buf();
+    drop(ordinary_journal);
+    journal::store_provider_session_id(&ordinary_path, native_id).unwrap();
+    let ordinary = client
+        .branch_session(&ordinary_id, None, BranchHistory::ThroughSelected, None)
+        .unwrap();
+    assert_eq!(
+        journal::read_session_checkout(&ordinary.path).unwrap(),
+        None
+    );
+    assert_eq!(
+        client
+            .load_interaction(&ordinary.id)
+            .unwrap()
+            .summary
+            .workspace,
+        host
+    );
+    let isolated = client
+        .branch_session_with_checkout(
+            &ordinary_id,
+            None,
+            BranchHistory::ThroughSelected,
+            None,
+            None,
+            Some(BranchCheckout::NewWorktree),
+        )
+        .unwrap();
+    let isolated_checkout = journal::read_session_checkout(&isolated.path)
+        .unwrap()
+        .unwrap();
+    let isolated_path = isolated_checkout.path.unwrap();
+    assert_ne!(isolated_path, host);
+    assert_eq!(
+        git(&isolated_path, &["rev-parse", "HEAD"]),
+        git(&host, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(
+        client
+            .load_interaction(&isolated.id)
+            .unwrap()
+            .summary
+            .workspace,
+        isolated_path
     );
 
     // The daemon this test spawned is detached, so it would outlive the run

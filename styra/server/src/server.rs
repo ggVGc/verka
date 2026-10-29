@@ -1806,6 +1806,23 @@ impl ServerState {
         self.session_checkout(&source.path, workspace_id, source_id)
     }
 
+    /// Resolve the physical directory shared by two independent Sessions.
+    fn shared_checkout(
+        &self,
+        source: &crate::worktree::Checkout,
+        worktrees: Option<&crate::worktree::Worktrees>,
+    ) -> Result<crate::worktree::Checkout> {
+        let path = match (&source.path, worktrees) {
+            (Some(path), _) => path.clone(),
+            (None, Some(worktrees)) => worktrees.restore(&source.branch)?,
+            (None, None) => anyhow::bail!(
+                "the Session to share a checkout with works on branch {}, whose checkout was removed, and this Workspace is not inside a Git working tree",
+                source.branch
+            ),
+        };
+        Ok(source.with_worktree(path))
+    }
+
     /// Make a fresh checkout from the source Session's current branch, or the
     /// Workspace checkout when the source has no linked checkout.
     fn new_session_worktree(
@@ -2296,19 +2313,9 @@ impl ServerState {
                     // directory, and sharing it means checking that branch out again —
                     // both Sessions then work in the one checkout, as sharing means.
                     (Some(inherited), worktrees) => {
-                        let path = match (&inherited.path, worktrees) {
-                            (Some(path), _) => path.clone(),
-                            (None, Some(worktrees)) => worktrees.restore(&inherited.branch)?,
-                            (None, None) => anyhow::bail!(
-                                "the Session to share a checkout with works on branch {}, whose checkout was removed, and this Workspace is not inside a Git working tree",
-                                inherited.branch
-                            ),
-                        };
-                        journal::store_session_checkout(
-                            journal.path(),
-                            &inherited.with_worktree(path.clone()),
-                        )?;
-                        path
+                        let checkout = self.shared_checkout(inherited, worktrees.as_ref())?;
+                        journal::store_session_checkout(journal.path(), &checkout)?;
+                        checkout.path.expect("a shared checkout has a directory")
                     }
                     (None, Some(worktrees)) => {
                         let made = self.new_session_worktree(
@@ -3280,9 +3287,8 @@ impl ServerState {
     /// Workspace, seeded with its history up to `at_ms` (the whole history
     /// when `None`), optionally under a different provider. The source
     /// Session's native transcript and Styra journal are left untouched — a
-    /// branch is always a fresh copy, never a live reference, so nothing the
-    /// source does afterwards is visible on the branch and nothing the branch
-    /// does is visible on the source.
+    /// conversation is a fresh copy. A shared checkout still exposes file
+    /// changes to both Sessions independently of their conversation histories.
     ///
     /// A branch that changes provider additionally seals the source: the
     /// conversation continues under the new provider, and the old transcript
@@ -3302,6 +3308,7 @@ impl ServerState {
         history: crate::protocol::BranchHistory,
         provider: Option<crate::agent::Provider>,
         selection: Option<Selection>,
+        checkout: Option<crate::protocol::BranchCheckout>,
     ) -> Result<SessionSummary> {
         let summary = self.stored_summary(id)?;
         let from_provider = summary.selection.provider;
@@ -3349,16 +3356,20 @@ impl ServerState {
 
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
-        // A branch works where the Session it came from works. A source with a
-        // linked checkout gets its sibling one of its own, forked from its
-        // branch below — the two conversations continue apart, so their working
-        // trees have to as well. A source working in the Workspace directory
-        // passes that on unchanged. Decided here because the directory the
-        // agent will report is written into the native transcript now, and a
-        // transcript naming a directory the launch does not use is a Session
-        // that cannot be resumed where it says it is.
-        let source_checkout = self.session_checkout(&summary.path, &summary.workspace_id, id)?;
-        let worktrees = self.workspace_worktrees(&owning_workspace, source_checkout.is_some())?;
+        // Checkout policy is independent of the transcript history. Older
+        // clients fork managed checkouts and share the ordinary Workspace.
+        let source_checkout = self.inherited_checkout(&summary.workspace_id, Some(id))?;
+        let new_worktree = match checkout {
+            Some(crate::protocol::BranchCheckout::ShareSource) => false,
+            Some(crate::protocol::BranchCheckout::NewWorktree) => true,
+            None => source_checkout.is_some(),
+        };
+        let worktrees =
+            self.workspace_worktrees(&owning_workspace, new_worktree || source_checkout.is_some())?;
+        anyhow::ensure!(
+            !new_worktree || worktrees.is_some(),
+            "cannot create a new worktree: the Workspace is not inside a Git repository"
+        );
         let layout = launch_layout(worktrees.as_ref(), &owning_workspace.host_path);
         let cwd = layout.workspace.clone();
         let new_native_id = uuid::Uuid::new_v4().to_string();
@@ -3406,13 +3417,25 @@ impl ServerState {
                 // it was promised fails with nothing but an empty Session behind it.
                 // The source's topic comes along: the sibling is about the same work,
                 // and `git branch` should say so.
-                if let (Some(worktrees), Some(source_checkout)) = (&worktrees, &source_checkout) {
-                    let topic = source_checkout
-                        .path
-                        .as_deref()
-                        .and_then(|path| crate::worktree::topic_of(path, id));
-                    let checkout =
-                        worktrees.fork(new_id, topic.as_deref(), &source_checkout.branch)?;
+                let checkout = if new_worktree {
+                    let worktrees = worktrees.as_ref().expect("validated worktree repository");
+                    let topic = source_checkout.as_ref().and_then(|source| {
+                        source
+                            .path
+                            .as_deref()
+                            .and_then(|path| crate::worktree::topic_of(path, id))
+                    });
+                    Some(match &source_checkout {
+                        Some(source) => worktrees.fork(new_id, topic.as_deref(), &source.branch)?,
+                        None => worktrees.checkout(new_id, topic.as_deref())?,
+                    })
+                } else {
+                    source_checkout
+                        .as_ref()
+                        .map(|source| self.shared_checkout(source, worktrees.as_ref()))
+                        .transpose()?
+                };
+                if let Some(checkout) = checkout {
                     journal::store_session_checkout(&directory, &checkout)?;
                 }
                 // The marker goes in twice. Once before the copied history: it is the
@@ -4513,9 +4536,10 @@ impl ServerState {
                 history,
                 provider,
                 selection,
-            } => Ok(Response::SessionBranched(
-                self.branch_session(&id, at_ms, history, provider, selection)?,
-            )),
+                checkout,
+            } => Ok(Response::SessionBranched(self.branch_session(
+                &id, at_ms, history, provider, selection, checkout,
+            )?)),
             Request::RenameSession(request) => {
                 let summary = self.stored_summary(&request.id)?;
                 journal::store_session_name(&summary.path, request.name.as_deref())?;

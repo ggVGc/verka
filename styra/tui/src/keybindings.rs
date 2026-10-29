@@ -297,6 +297,7 @@ bindings! { BRANCH = "Branch from selected entry";
     BRANCH_NEXT: [Key::ch('j'), Key::ch('J'), Key::code(KeyCode::Down)]
         => Action::BranchNext;
     BRANCH_PREV: [Key::ch('k'), Key::ch('K'), Key::code(KeyCode::Up)] => Action::BranchPrev;
+    BRANCH_CHANGE: [Key::code(KeyCode::Left), Key::code(KeyCode::Right), Key::ch('h'), Key::ch('l'), Key::ch(' '), Key::code(KeyCode::Tab)] => Action::BranchChange;
     BRANCH_CONFIRM: [Key::code(KeyCode::Enter)] => Action::BranchConfirm;
     BRANCH_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => Action::BranchCancel;
 }

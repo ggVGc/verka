@@ -214,6 +214,7 @@ pub(crate) enum Action {
     OverviewClose,
     BranchNext,
     BranchPrev,
+    BranchChange,
     BranchConfirm,
     BranchCancel,
     LinkMenuNext,
@@ -555,8 +556,9 @@ impl Action {
                 "search: mark words matching a term of 3+ characters in every tile (Esc clears)"
             }
             Self::OverviewClose => "return to the event list",
-            Self::BranchNext => "entire interaction through this entry",
-            Self::BranchPrev => "only this entry",
+            Self::BranchNext => "next branch setting",
+            Self::BranchPrev => "previous branch setting",
+            Self::BranchChange => "change the selected branch setting",
             Self::BranchConfirm => "branch, and open the result",
             Self::BranchCancel => "cancel",
             Self::LinkMenuNext => "next action",

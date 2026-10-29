@@ -4,7 +4,7 @@ use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 pub fn render_rebase_status(frame: &mut Frame, status: &styra_protocol::RebaseStatus) {
@@ -106,11 +106,13 @@ pub fn render_integration_message(frame: &mut Frame, message: &str, target: Opti
 #[derive(Clone, Copy)]
 pub struct BranchPromptView {
     pub selected: usize,
+    pub history: styra_protocol::BranchHistory,
+    pub checkout: styra_protocol::BranchCheckout,
 }
 
 pub fn render_branch(frame: &mut Frame, prompt: BranchPromptView, frame_area: Rect) {
-    let width = frame_area.width.saturating_sub(4).min(72);
-    let height = 4.min(frame_area.height);
+    let width = frame_area.width.saturating_sub(4).min(78);
+    let height = 9.min(frame_area.height);
     let area = Rect {
         x: frame_area.x + frame_area.width.saturating_sub(width) / 2,
         y: frame_area.y + frame_area.height.saturating_sub(height) / 2,
@@ -122,11 +124,20 @@ pub fn render_branch(frame: &mut Frame, prompt: BranchPromptView, frame_area: Re
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::ACCENT))
         .title(" branch from selected entry · ? keys ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let history = match prompt.history {
+        styra_protocol::BranchHistory::ThroughSelected => "Through this entry",
+        styra_protocol::BranchHistory::SelectedOnly => "Only this entry",
+    };
+    let checkout = match prompt.checkout {
+        styra_protocol::BranchCheckout::NewWorktree => "New worktree",
+        styra_protocol::BranchCheckout::ShareSource => "Share current worktree",
+    };
     let list = List::new([
-        ListItem::new(Line::from("entire interaction through this entry")),
-        ListItem::new(Line::from("only this entry")),
+        ListItem::new(format!("History       ◂ {history} ▸")),
+        ListItem::new(format!("Working tree  ◂ {checkout} ▸")),
     ])
-    .block(block)
     .highlight_style(
         Style::default()
             .bg(theme::SELECTION_BACKGROUND)
@@ -134,7 +145,31 @@ pub fn render_branch(frame: &mut Frame, prompt: BranchPromptView, frame_area: Re
     );
     let mut state = ListState::default();
     state.select(Some(prompt.selected));
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(
+        list,
+        Rect {
+            height: inner.height.min(2),
+            ..inner
+        },
+        &mut state,
+    );
+    let explanation = match prompt.checkout {
+        styra_protocol::BranchCheckout::ShareSource => {
+            "Both interactions edit the same files. Uncommitted changes are shared."
+        }
+        styra_protocol::BranchCheckout::NewWorktree => {
+            "Creates a separate Git branch and worktree at the source branch tip."
+        }
+    };
+    let text = format!("{explanation}\nHistory selection never rewinds files.\n↑/↓ select · ←/→ change · Enter branch · Esc cancel");
+    frame.render_widget(
+        Paragraph::new(text).wrap(Wrap { trim: false }),
+        Rect {
+            y: inner.y.saturating_add(3),
+            height: inner.height.saturating_sub(3),
+            ..inner
+        },
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -524,6 +559,39 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+
+    #[test]
+    fn branch_dialog_shows_independent_history_and_checkout_choices() {
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_branch(
+                    frame,
+                    BranchPromptView {
+                        selected: 1,
+                        history: styra_protocol::BranchHistory::SelectedOnly,
+                        checkout: styra_protocol::BranchCheckout::ShareSource,
+                    },
+                    frame.area(),
+                )
+            })
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        for text in [
+            "Only this entry",
+            "Share current worktree",
+            "Uncommitted changes are shared.",
+            "History selection never rewinds files.",
+        ] {
+            assert!(screen.contains(text), "{text:?} missing from {screen}");
+        }
+    }
 
     fn rendered(prompt: InsertPromptView<'_>) -> String {
         let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();

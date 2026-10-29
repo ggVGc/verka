@@ -1405,6 +1405,16 @@ pub struct SessionOrigin {
     pub history: BranchHistory,
 }
 
+/// Where a branched conversation works, independently of its copied history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchCheckout {
+    /// Use the source's current directory and Git branch, including dirty files.
+    ShareSource,
+    /// Create a separate Git branch and linked worktree at the source's tip.
+    NewWorktree,
+}
+
 /// The source history used to seed a branch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

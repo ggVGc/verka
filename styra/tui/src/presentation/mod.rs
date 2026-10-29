@@ -733,6 +733,8 @@ fn draw_main(
         .as_ref()
         .map(|prompt| styra_ui::overlays::BranchPromptView {
             selected: prompt.selected_index(),
+            history: prompt.history(),
+            checkout: prompt.checkout(),
         });
     let link_labels = app.link_menu.as_ref().map(|menu| menu.labels());
     let link_menu = app
