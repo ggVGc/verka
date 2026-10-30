@@ -203,7 +203,7 @@ on it as soon as it arrives. When an interaction is associated with a Git
 checkout, its row also names the checked-out branch (or says `detached head`).
 For live interactions, the branch is checked at most once every two seconds
 while the client polls. If it differs from the branch assigned to the Session,
-the row highlights `branch changed: assigned → actual`, including beneath a
+the row's branch column highlights `actual (≠ assigned)`, including beneath a
 worktree heading. Switching back clears the warning.
 A branched interaction is listed beneath the one it was branched from, as in
 the session picker. Branching (`B`) lists the new interaction straight away,

@@ -705,8 +705,18 @@ fn interaction_cells(
         ));
     }
     let mut branch_cell = Vec::new();
-    // Worktree rows leave the branch to their heading.
-    if let Some(branch) = branch.filter(|_| *level == 0 && expected_branch.is_none()) {
+    // A switch away from the assigned branch is a warning in the branch
+    // column, which keeps its widest entry whole, naming the branch checked
+    // out and the one assigned. Worktree rows otherwise leave the branch to
+    // their heading, but still show a switch beneath it.
+    if let Some(expected) = expected_branch {
+        branch_cell.push(Span::styled(
+            format!("  {} (≠ {expected})", branch.unwrap_or("detached head")),
+            Style::default()
+                .fg(theme::UNCOMMITTED)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else if let Some(branch) = branch.filter(|_| *level == 0) {
         branch_cell.push(Span::styled(
             format!("  {branch}"),
             Style::default().fg(theme::ACCENT),
@@ -716,28 +726,13 @@ fn interaction_cells(
         format!("  {model}"),
         Style::default().fg(theme::INTERACTION_STATUS_INFO),
     )];
-    let mut labels = Vec::new();
-    // A switch away from the assigned branch is a warning, not the branch
-    // column's entry, so it is told in full among the labels rather than cut
-    // to the column. Nested rows still show it beneath a worktree heading.
-    if let Some(expected) = expected_branch {
-        labels.push(Span::styled(
-            format!(
-                "  branch changed: {expected} → {}",
-                branch.unwrap_or("detached head")
-            ),
-            Style::default()
-                .fg(theme::UNCOMMITTED)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    labels.extend(state_labels(
+    let labels = state_labels(
         *status,
         stop_reason.as_deref(),
         rate_limited.as_deref(),
         *newly_idle,
         *completion,
-    ));
+    );
     Some(InteractionCells {
         lead: main,
         name_index,
@@ -985,7 +980,7 @@ mod tests {
             };
             let screen = squeezed(&rendered_at(&view, 120));
             assert!(
-                screen.contains(&format!("task branch changed: assigned → {actual} gpt-5")),
+                screen.contains(&format!("task {actual} (≠ assigned) gpt-5")),
                 "{screen}"
             );
         }
