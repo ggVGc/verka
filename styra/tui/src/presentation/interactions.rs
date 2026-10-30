@@ -13,10 +13,6 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         .interactions
         .display_rows(&app.session_id, app.workspace.id.as_deref());
     let cursor = app.interactions.cursor(&app.session_id);
-    let loading = app
-        .interactions
-        .pending(&app.session_id)
-        .map(|item| item.id.as_str());
     let all_workspaces = !app.interactions.only_current_workspace;
     let scope = if all_workspaces {
         Cow::Borrowed("All")
@@ -116,7 +112,6 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             }),
             status: state.status,
             selected: interaction.id == cursor,
-            loading: loading == Some(interaction.id.as_str()),
             newly_idle: state.newly_idle,
             flashing: app.interactions.flashing(&interaction.id),
             stop_reason: state.stop_reason.map(Cow::Owned),

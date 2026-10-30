@@ -649,8 +649,8 @@ impl LiveInteractions {
         self.cursor.as_deref().unwrap_or(current)
     }
 
-    /// The entry under the cursor while it is not yet the one on screen: what
-    /// a settled cursor loads, and what the navigator marks as loading.
+    /// The entry under the cursor while it is not yet the one on screen:
+    /// what a settled cursor loads.
     pub fn pending(&self, current: &str) -> Option<&InteractionSummary> {
         let cursor = self.cursor.as_deref()?;
         if cursor == current {

@@ -88,7 +88,6 @@ pub enum InteractionRow<'a> {
         expected_branch: Option<&'a str>,
         status: InteractionStatus,
         selected: bool,
-        loading: bool,
         newly_idle: bool,
         /// Something new just happened on it, so the row is drawn lit for a
         /// moment to catch the eye.

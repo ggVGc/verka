@@ -49,9 +49,8 @@ impl Loop<'_> {
         self.poll_fleet();
         self.poll_timers();
 
-        // A cursor that has come to rest loads the interaction under it. Until
-        // then the navigator says that row is loading and the screen below is
-        // still the interaction it was.
+        // A cursor that has come to rest loads the interaction under it.
+        // Until then, the screen below still shows the previous interaction.
         // A live tag-filter edit can move the navigator cursor when the row
         // under it stops matching. Do not load that row while the picker is
         // still open: loading replaces the whole App and would make Space

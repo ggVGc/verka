@@ -10,7 +10,6 @@ impl InteractionState {
         state_labels(
             self.status,
             self.stop_reason.as_deref(),
-            false,
             self.rate_limited.as_deref(),
             self.newly_idle,
             self.completion,
@@ -327,18 +326,18 @@ fn tree_prefix(columns: &[bool], connected: bool) -> String {
         .collect()
 }
 
-/// How wide the first column of an interaction row is — its tree lines,
-/// status block and name — whatever the names in the list. A name that does
-/// not fit is cut short, so a long prompt cannot push the other columns out.
+/// The initial width of the first column: tree lines, status block and name.
+/// Longer names can use space left after the other columns are allocated.
 const LEAD_COLUMN_WIDTH: usize = 40;
 
 /// How wide each aligned column of the interaction rows is drawn, so the
-/// branch, the tags, the state labels, the model, and loading each
-/// start at the same place down the list. The first column grows up to
-/// [`LEAD_COLUMN_WIDTH`]. The branch and tags columns fit their widest entries;
-/// the others grow no wider than their share of the remaining pane. Every cell is held
-/// to its column's width — see [`fit_cell`] — so a longer entry is cut short
-/// rather than moving the rest of its row.
+/// branch, the tags, the state labels, and the model each
+/// start at the same place down the list. The first column starts at
+/// [`LEAD_COLUMN_WIDTH`] and grows into unused space for longer names. The
+/// branch and tags columns fit their widest entries; the others grow no wider
+/// than their share of the remaining pane. Every cell is held to its column's
+/// width — see [`fit_cell`] — so a longer entry is cut short rather than
+/// moving the rest of its row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ColumnWidths {
     /// Whether any row is flagged as leaving work uncommitted, so every row
@@ -349,7 +348,6 @@ struct ColumnWidths {
     branch: usize,
     model: usize,
     labels: usize,
-    loading: usize,
 }
 
 /// See [`ColumnWidths`]. `tree` is each row's [`tree_columns`], and `width`
@@ -373,26 +371,30 @@ fn column_widths(
     };
     for (row, columns) in view.rows.iter().zip(tree) {
         if let Some(cells) = interaction_cells(row, view.all_workspaces, columns, &widths) {
+            widths.lead = widths.lead.max(spans_width(&cells.lead));
             widths.tags = widths.tags.max(spans_width(&cells.tags));
             widths.branch = widths.branch.max(spans_width(&cells.branch));
             widths.model = widths.model.max(spans_width(&cells.model));
             widths.labels = widths.labels.max(spans_width(&cells.labels));
-            widths.loading = widths.loading.max(spans_width(&cells.loading));
         }
     }
     // Keep worktree names and tags whole, letting the lead shrink in a
-    // narrow pane. Reserve the final column for loading, then fit the model
-    // and state labels in the remaining room.
+    // narrow pane. Fit the model and state labels in the remaining room.
     let branch = widths.branch.min(width);
     let tags = widths.tags;
     let lead = LEAD_COLUMN_WIDTH
         .min(width / 2)
         .min(width.saturating_sub(branch + tags));
-    let room = width.saturating_sub(lead + branch + tags + widths.loading + LABEL_ROOM);
+    let room = width.saturating_sub(lead + branch + tags + LABEL_ROOM);
     let model = widths.model.min(width / 4).min(room);
     let labels = widths
         .labels
-        .min(width.saturating_sub(lead + branch + tags + model + widths.loading));
+        .min(width.saturating_sub(lead + branch + tags + model));
+    let lead = lead.max(
+        widths
+            .lead
+            .min(width.saturating_sub(branch + tags + model + labels)),
+    );
     ColumnWidths {
         uncommitted: widths.uncommitted,
         lead,
@@ -400,7 +402,6 @@ fn column_widths(
         branch,
         model,
         labels,
-        loading: widths.loading,
     }
 }
 
@@ -441,7 +442,6 @@ struct InteractionCells {
     branch: Vec<Span<'static>>,
     model: Vec<Span<'static>>,
     labels: Vec<Span<'static>>,
-    loading: Vec<Span<'static>>,
 }
 
 /// `under_workspaces` says whether the list is drawn under Workspace
@@ -527,17 +527,14 @@ fn row_item(
         branch,
         model,
         labels,
-        loading,
     } = cells;
-    // The name, and the source after it, end the lead, so they are what a
-    // long lead loses.
+    // The name ends the lead, so it is what a long lead loses.
     fit_cell(&mut main, 0, widths.lead);
     for (cell, width) in [
         (branch, widths.branch),
         (tags, widths.tags),
         (labels, widths.labels),
         (model, widths.model),
-        (loading, widths.loading),
     ] {
         let start = main.len();
         main.extend(cell);
@@ -609,7 +606,6 @@ fn interaction_cells(
         expected_branch,
         status,
         selected,
-        loading,
         newly_idle,
         stop_reason,
         rate_limited,
@@ -700,14 +696,6 @@ fn interaction_cells(
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect::<String>();
     main.push(Span::styled(name, name_style));
-    // The source is named after the name, in the first column, where it is
-    // the first thing a long row gives up.
-    if let Some(source) = branched_from {
-        main.push(Span::styled(
-            format!(" from {source}"),
-            Style::default().fg(theme::MUTED_TEXT),
-        ));
-    }
     // Set off from the branch before them like every other column.
     let mut tag_cell = Vec::new();
     if !tags.is_empty() {
@@ -746,7 +734,6 @@ fn interaction_cells(
     labels.extend(state_labels(
         *status,
         stop_reason.as_deref(),
-        false,
         rate_limited.as_deref(),
         *newly_idle,
         *completion,
@@ -758,14 +745,6 @@ fn interaction_cells(
         branch: branch_cell,
         model,
         labels,
-        loading: if *loading {
-            vec![Span::styled(
-                "  loading…",
-                Style::default().fg(theme::INACTIVE),
-            )]
-        } else {
-            Vec::new()
-        },
     })
 }
 
@@ -802,7 +781,6 @@ pub(crate) fn status_block(status: InteractionStatus, selected: bool) -> Span<'s
 pub(crate) fn state_labels(
     status: InteractionStatus,
     stop_reason: Option<&str>,
-    loading: bool,
     rate_limited: Option<&str>,
     newly_idle: bool,
     completion: CompletionState,
@@ -816,12 +794,6 @@ pub(crate) fn state_labels(
             _ => theme::INTERACTION_STATUS_INFO,
         };
         spans.push(Span::styled(format!("  {why}"), Style::default().fg(tone)));
-    }
-    if loading {
-        spans.push(Span::styled(
-            "  loading…",
-            Style::default().fg(theme::INACTIVE),
-        ));
     }
     if matches!(status, InteractionStatus::IdleFailed) {
         spans.push(Span::styled(
@@ -981,7 +953,6 @@ mod tests {
             expected_branch: None,
             status: InteractionStatus::Stopped(StopTone::Paused),
             selected: false,
-            loading: false,
             newly_idle: false,
             flashing: false,
             stop_reason: None,
@@ -1065,7 +1036,6 @@ mod tests {
                     expected_branch: None,
                     status: InteractionStatus::Running { events: 2 },
                     selected: true,
-                    loading: false,
                     newly_idle: true,
                     flashing: false,
                     stop_reason: None,
@@ -1106,7 +1076,6 @@ mod tests {
             expected_branch: None,
             status: InteractionStatus::Idle,
             selected: false,
-            loading: false,
             newly_idle: false,
             flashing: false,
             stop_reason: None,
@@ -1212,7 +1181,7 @@ mod tests {
     /// A worktree integrated into another is headed beneath that one's
     /// heading, after its rows, with the line of the outer worktree carried
     /// past it. A branch in its source's worktree hangs from the source's row;
-    /// one in another worktree names its source, which counts its branches.
+    /// one in another worktree has a fork icon, and its source counts branches.
     #[test]
     fn nested_worktrees_and_branches_are_drawn_in_their_own_ways() {
         let mut rows = vec![
@@ -1244,9 +1213,8 @@ mod tests {
             ..many_rows(0)
         };
         let screen = lines(&view);
-        // A fork icon starts the name it marks; the source a branch came from
-        // follows the name. With no branch on any row, a heading's arrow
-        // starts where the model does.
+        // A fork icon starts the name it marks. With no branch on any row,
+        // a heading's arrow starts where the model does.
         let row = |lead_text: &str, name: &str| {
             format!("┃{}  sonnet", lead(&format!("{lead_text}  {name}")))
         };
@@ -1258,7 +1226,7 @@ mod tests {
             format!("┃{:38} → styra/auth-rework", "├─ [token-tests]"),
             row("│  └─  ●", "tests"),
             format!("┃{:38} → styra/auth-rework", "└─ [jwt-spike]"),
-            row("   └─  ●", "↳ spike from rework"),
+            row("   └─  ●", "↳ spike"),
         ];
         for (line, expected) in screen[1..].iter().zip(&expected) {
             assert!(line.starts_with(expected.as_str()), "{screen:#?}");
@@ -1381,10 +1349,10 @@ mod tests {
         }
     }
 
-    /// The first column is a set width: a long name is cut short there, and
-    /// the branch and tags line up after it whatever the names.
+    /// Long names use spare space while branch, tags and model stay aligned.
+    /// A narrow pane still truncates names to leave room for those columns.
     #[test]
-    fn a_long_name_is_cut_at_the_first_column_and_tags_line_up() {
+    fn long_names_use_spare_space_and_columns_stay_aligned() {
         let bug = vec!["bug".to_owned()];
         let mut long = placed(
             "a prompt far too long to fit in the first column of the list",
@@ -1402,22 +1370,28 @@ mod tests {
             rows: vec![long, short],
             ..many_rows(0)
         };
-        // Wide enough that the branch and tags after the name are not cut.
-        let screen = rendered_at(&view, 120)
-            .chars()
-            .collect::<Vec<_>>()
-            .chunks(120)
-            .map(|line| line.iter().collect::<String>())
-            .collect::<Vec<_>>();
-        assert!(
-            screen[1]
-                .starts_with("┃ ●  a prompt far too long to fit in the…  feature  #bug  sonnet"),
-            "{screen:#?}"
-        );
-        assert!(
-            screen[2].starts_with(&format!("┃{:40}  feature  #bug  sonnet", " ●  short")),
-            "{screen:#?}"
-        );
+        let name = "a prompt far too long to fit in the first column of the list";
+        for width in [80u16, 120, 200] {
+            let screen = rendered_at(&view, width)
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(width.into())
+                .map(|line| line.iter().collect::<String>())
+                .collect::<Vec<_>>();
+            if width >= 120 {
+                assert!(screen[1].contains(name), "{screen:#?}");
+            } else {
+                assert!(!screen[1].contains(name), "{screen:#?}");
+                assert!(screen[1].contains('…'), "{screen:#?}");
+            }
+            for column in ["  feature", "  #bug", "  sonnet"] {
+                let at = |line: &str| {
+                    let byte = line.find(column).expect("column is visible");
+                    line[..byte].chars().count()
+                };
+                assert_eq!(at(&screen[1]), at(&screen[2]), "{screen:#?}");
+            }
+        }
     }
 
     /// Tags keep their full width while long models are cut to fit, with
@@ -1516,11 +1490,9 @@ mod tests {
                 status: row_status,
                 stop_reason: row_stop_reason,
                 rate_limited: row_rate_limited,
-                loading,
                 ..
             } = &mut row
             {
-                *loading = true;
                 *branch = None;
                 *row_status = status;
                 *row_stop_reason = stop_reason.map(Into::into);
@@ -1532,7 +1504,7 @@ mod tests {
             };
             let screen = squeezed(&rendered_at(&view, width));
             assert!(
-                screen.contains(&format!("repair checkout {label} sonnet loading…")),
+                screen.contains(&format!("repair checkout {label} sonnet")),
                 "{label}: {screen}"
             );
         }
@@ -1561,7 +1533,6 @@ mod tests {
                     expected_branch: None,
                     status: InteractionStatus::Idle,
                     selected: index == selected,
-                    loading: false,
                     newly_idle: false,
                     flashing: false,
                     stop_reason: None,
