@@ -1,3 +1,9 @@
+- Split up styra-server and the execution logic:
+  - Library with business logic for worktrees, session management with genta etc
+  - Server only dealing with protocol, clients, socket
+- Merge styra-tui and styra-ui:
+  - Break out business logic into separate library
+- When rebaseing an interaction with child branches, also rebase those automatically
 - As implementation progresses, ask agent to add nota entries as it goes.
   - Relies on nota integration existing first.
 - SvaraAsk should probably not perform edits...
