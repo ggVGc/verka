@@ -292,26 +292,26 @@ mod tests {
     }
 
     #[test]
-    fn tiles_filter_stopped_work_and_order_working_then_newly_idle_then_idle() {
+    fn tiles_filter_stopped_work_and_order_newest_first_whatever_the_state() {
         use InteractionActivity::{Background, Pending, Running, Stopped};
         for (name, activities, unseen, expected) in [
             (
                 "exclude stopped",
                 vec![Running, Stopped, Pending, Background],
                 None,
-                vec!["100-tile", "97-tile", "98-tile"],
+                vec!["100-tile", "98-tile", "97-tile"],
             ),
             (
-                "working before idle",
+                "working does not jump ahead",
                 vec![Pending, Background, Running, Pending],
                 None,
-                vec!["99-tile", "98-tile", "100-tile", "97-tile"],
+                vec!["100-tile", "99-tile", "98-tile", "97-tile"],
             ),
             (
-                "newly idle before idle",
+                "newly idle does not jump ahead",
                 vec![Pending, Running, Pending, Pending],
                 Some(2),
-                vec!["99-tile", "98-tile", "100-tile", "97-tile"],
+                vec!["100-tile", "99-tile", "98-tile", "97-tile"],
             ),
         ] {
             let mut interactions = fleet(&activities);

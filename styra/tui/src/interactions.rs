@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use styra_protocol::{InteractionActivity, InteractionQuery, InteractionSummary, WorkspaceSummary};
+use styra_protocol::{InteractionQuery, InteractionSummary, WorkspaceSummary};
 use styra_ui::query::Edit;
 
 /// How long the cursor must rest on an entry before that Interaction is
@@ -418,15 +418,13 @@ impl LiveInteractions {
 
     /// The Interactions the overview tiles, in the order it lays them out:
     /// every one whose agent still takes turns — working or waiting on the
-    /// operator — working ones first, then newly idle ones, then the rest of
-    /// the idle ones, each grouped by Workspace as the navigator's All scope
-    /// is.
+    /// operator — newest first by creation time.
     ///
     /// Shares the global Workspace scope with the navigator and n/N, while
     /// ignoring the navigator's search, tag and completion filters. Completed
     /// and stopped interactions are never tiled.
     pub fn overview_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
-        let active = self
+        let mut indices: Vec<usize> = self
             .items
             .iter()
             .enumerate()
@@ -437,20 +435,7 @@ impl LiveInteractions {
             })
             .map(|(index, _)| index)
             .collect();
-        let mut indices = grouped_by_workspace(&self.items, &self.workspaces, active);
-        indices.sort_by_key(|index| {
-            let interaction = &self.items[*index];
-            if matches!(
-                interaction.activity,
-                InteractionActivity::Running | InteractionActivity::Background
-            ) {
-                0
-            } else if is_idle(interaction) && interaction.idle_unseen {
-                1
-            } else {
-                2
-            }
-        });
+        indices.sort_by_key(|index| std::cmp::Reverse(created_at_ms(&self.items[*index])));
         indices
     }
 
