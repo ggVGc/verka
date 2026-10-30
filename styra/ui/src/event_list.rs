@@ -105,9 +105,6 @@ pub struct ActivityCounts {
     pub running: usize,
     pub idle: usize,
     pub stopped: usize,
-    /// Interactions that went idle unseen and have not been focused since,
-    /// announced beside the tally until they are.
-    pub newly_idle: usize,
 }
 
 pub struct EventListView<'a> {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::chrome::{launch_spans, PanelChrome};
 use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -7,7 +8,15 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
+/// Draw the footer. `interaction` is the chrome of the main interaction view
+/// when that is on screen: the agent, model and effort it runs with lead the
+/// bar, far left, as that view's title leaves them out.
+pub fn render(
+    frame: &mut Frame,
+    view: &FooterView<'_>,
+    interaction: Option<&PanelChrome>,
+    area: Rect,
+) {
     let quota_width = view
         .quota
         .iter()
@@ -45,6 +54,11 @@ pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
         ])
         .split(area);
     let mut context = Vec::new();
+    if let Some(chrome) = interaction {
+        let separator = || Span::styled(" · ", Style::default().fg(theme::MUTED_TEXT));
+        context.extend(launch_spans(chrome));
+        context.push(separator());
+    }
     if BUILD_BRANCH != "main" {
         context.push(Span::styled(
             format!("[build: {BUILD_BRANCH}] "),
@@ -138,7 +152,7 @@ mod tests {
     fn screen(width: u16, view: &FooterView<'_>) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
         terminal
-            .draw(|frame| render(frame, view, frame.area()))
+            .draw(|frame| render(frame, view, None, frame.area()))
             .unwrap();
         terminal
             .backend()

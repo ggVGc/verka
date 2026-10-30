@@ -4719,6 +4719,7 @@ mod boundary_tests {
             session: None,
             worktree: None,
             source_branch: None,
+            parent: None,
             agent: "codex".into(),
             model: "model".into(),
             model_reported: true,

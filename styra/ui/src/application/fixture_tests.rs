@@ -46,6 +46,7 @@ fn list(events: &[AgentEvent]) -> EventListView<'_> {
             workspace: None,
             worktree: None,
             source_branch: None,
+            parent: None,
             agent: "codex".into(),
             model: "gpt-5.6-sol".into(),
             model_reported: true,
@@ -142,7 +143,7 @@ fn locate(rows: &[String], text: &str) -> (usize, usize) {
 }
 
 #[test]
-fn header_formats_workspace_session_model_and_source_branch() {
+fn header_formats_workspace_session_and_source_branch() {
     let mut list = list(&[]);
     list.chrome.focused = false;
     list.chrome.workspace = Some("payments".into());
@@ -151,16 +152,41 @@ fn header_formats_workspace_session_model_and_source_branch() {
     let footer = footer();
     let (rows, _) = draw(&application(&list, &footer), 160, 20);
     assert!(
-        rows[0].starts_with("┌ payments · Fix retries · codex · gpt-5.6-sol · high"),
+        rows[0].starts_with("┌ payments · Fix retries ─"),
         "{}",
         rows[0]
     );
-    assert!(rows[0].contains("● running"));
+    assert!(!rows[0].contains("codex"), "{}", rows[0]);
+    assert!(!rows[0].contains("● running"), "{}", rows[0]);
     list.chrome.worktree = Some("fix-retries".into());
     list.chrome.source_branch = Some("main".into());
     let (rows, _) = draw(&application(&list, &footer), 160, 20);
     assert!(rows[0].contains("fix-retries"));
     assert!(rows[0].contains("from main"));
+}
+
+/// The agent, model and effort the interaction runs with lead the footer,
+/// rather than the panel's title, and its state leads the panel's bottom
+/// border, ahead of the fleet's tally.
+#[test]
+fn footer_leads_with_the_launch_and_the_border_with_the_state() {
+    let mut list = list(&[]);
+    list.chrome.effort = Some("high".into());
+    list.activity = ActivityCounts {
+        running: 1,
+        idle: 1,
+        stopped: 0,
+    };
+    let footer = footer();
+    let (rows, _) = draw(&application(&list, &footer), 160, 20);
+    assert!(
+        rows[19].starts_with("codex · gpt-5.6-sol · high · "),
+        "{}",
+        rows[19]
+    );
+    assert!(!rows[19].contains("running"), "{}", rows[19]);
+    assert!(rows[19].contains("/workspace"));
+    assert!(rows[18].starts_with("┗ ● running 1/1/0 "), "{}", rows[18]);
 }
 
 #[test]
@@ -171,7 +197,6 @@ fn focus_and_fleet_markers_belong_to_the_panel_border() {
         running: 1,
         idle: 1,
         stopped: 0,
-        newly_idle: 1,
     };
     list.uncommitted_changes = true;
     list.all_events = true;
@@ -179,7 +204,8 @@ fn focus_and_fleet_markers_belong_to_the_panel_border() {
         list.show_minor = minor;
         let (rows, _) = draw(&application(&list, &footer), 160, 20);
         assert!(rows[0].starts_with('┏'));
-        assert!(rows[18].contains("1/1/0 ^a 1 interaction idle"));
+        assert!(rows[18].contains("1/1/0"));
+        assert!(!rows[18].contains("interaction idle"));
         assert!(rows[18].contains("uncommitted changes"));
         assert!(rows[18].contains(if minor {
             "all events · minor shown"

@@ -169,6 +169,7 @@ mod tests {
             workspace: Some("work".into()),
             worktree: None,
             source_branch: None,
+            parent: None,
             agent: "codex".into(),
             model: "gpt".into(),
             model_reported: true,

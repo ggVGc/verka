@@ -35,6 +35,9 @@ pub struct PanelChrome {
     /// The interaction's operator-facing title, shown right after the
     /// Workspace name.
     pub session: Option<String>,
+    /// The name of the interaction this one was branched off, shown after
+    /// its own title. `None` when it was not branched off another.
+    pub parent: Option<String>,
     /// The linked worktree the interaction is working in, when it is not the
     /// Workspace's own checkout. `None` for a plain checkout, so the bar does
     /// not repeat what the Workspace name already said.

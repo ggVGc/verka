@@ -57,10 +57,10 @@ mod tests {
         inspect(&app, |v| assert!(!v.footer.auto_commit));
     }
 
-    /// Beside the fleet's tally on the panel's bottom border, not in the
-    /// footer: the count reads as part of that tally.
+    /// The fleet's tally on the panel's bottom border counts an interaction
+    /// that went idle unseen as idle, like any other.
     #[test]
-    fn panel_border_reports_interactions_that_became_idle_while_unseen() {
+    fn panel_border_counts_interactions_that_became_idle_while_unseen() {
         let mut app = test_support::app("current");
         app.interactions.open(
             vec![
@@ -86,9 +86,8 @@ mod tests {
                     e.list.activity.running,
                     e.list.activity.idle,
                     e.list.activity.stopped,
-                    e.list.activity.newly_idle
                 ),
-                (1, 1, 0, 1)
+                (1, 1, 0)
             );
         });
     }

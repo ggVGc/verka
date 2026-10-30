@@ -169,6 +169,7 @@ mod tests {
             workspace: None,
             worktree: None,
             source_branch: None,
+            parent: None,
             agent: "claude".into(),
             model: "opus".into(),
             model_reported: true,

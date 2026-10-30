@@ -240,6 +240,12 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         elapsed: status_elapsed(app),
         suffix: suffix.map(str::to_owned),
         session: app.interactions.name(&app.session_id).map(str::to_owned),
+        parent: app.interactions.parent(&app.session_id).map(|parent| {
+            app.interactions
+                .name(parent)
+                .unwrap_or("untitled")
+                .to_owned()
+        }),
     }
 }
 
@@ -1127,6 +1133,37 @@ mod tests {
             };
             assert_eq!(events.list.chrome.session.as_deref(), Some("Fix retries"));
         });
+    }
+
+    /// An interaction branched off another names that parent in its header;
+    /// one that was not names none.
+    #[test]
+    fn header_data_names_the_parent_it_was_branched_off() {
+        use styra_protocol::agent::Provider;
+        let mut app = test_support::app("s1");
+        let parent = |app: &App| {
+            let mut parent = None;
+            inspect(app, |v| {
+                let MainView::Events(events) = &v.main else {
+                    panic!("events expected")
+                };
+                parent = events.list.chrome.parent.clone();
+            });
+            parent
+        };
+        assert_eq!(parent(&app), None);
+        let origin = styra_protocol::SessionOrigin {
+            session_id: "source".into(),
+            provider: Provider::Claude,
+            at_ms: None,
+            history: styra_protocol::BranchHistory::ThroughSelected,
+        };
+        app.interactions
+            .note_origin("s1", Provider::Claude, Some(&origin));
+        assert_eq!(parent(&app).as_deref(), Some("untitled"));
+        app.interactions
+            .note_name("source", Some("Retry backoff".into()));
+        assert_eq!(parent(&app).as_deref(), Some("Retry backoff"));
     }
 
     #[test]

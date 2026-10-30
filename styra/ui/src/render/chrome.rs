@@ -58,7 +58,17 @@ pub fn uncommitted_title(block: Block<'static>) -> Block<'static> {
 
 /// Mark the panel that owns the keyboard with the grid's thick selection border.
 pub fn focused_panel_block(chrome: &PanelChrome) -> Block<'static> {
-    let block = panel_block(chrome);
+    focused(titled_block(chrome, true), chrome)
+}
+
+/// The main interaction view's [`focused_panel_block`], whose agent, model,
+/// effort and state ride the footer instead — see [`status_spans`] and
+/// [`launch_spans`].
+pub fn focused_interaction_block(chrome: &PanelChrome) -> Block<'static> {
+    focused(titled_block(chrome, false), chrome)
+}
+
+fn focused(block: Block<'static>, chrome: &PanelChrome) -> Block<'static> {
     if !chrome.focused {
         return block;
     }
@@ -69,7 +79,8 @@ pub fn focused_panel_block(chrome: &PanelChrome) -> Block<'static> {
     )
 }
 
-pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
+/// The interaction's state, `● idle 3s`, in its tone.
+pub fn status_spans(chrome: &PanelChrome) -> Vec<Span<'static>> {
     let tone = match chrome.status_tone {
         StatusTone::Pending => theme::INFO,
         StatusTone::Running => theme::RUNNING_STATUS,
@@ -79,6 +90,25 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
         StatusTone::Ended => theme::INACTIVE,
         StatusTone::Error => theme::ERROR,
     };
+    let mut spans = vec![
+        Span::styled("● ", Style::default().fg(tone)),
+        Span::styled(
+            chrome.status.clone(),
+            Style::default().fg(tone).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if let Some(elapsed) = &chrome.elapsed {
+        spans.push(Span::styled(
+            format!(" {elapsed}"),
+            Style::default().fg(tone),
+        ));
+    }
+    spans
+}
+
+/// The agent, model and effort the interaction runs with, `codex · gpt-5 ·
+/// high`; a model or effort the agent has not reported yet is dimmed.
+pub fn launch_spans(chrome: &PanelChrome) -> Vec<Span<'static>> {
     let text = Style::default().fg(theme::MUTED_TEXT);
     let value = |reported| {
         Style::default().fg(if reported {
@@ -87,6 +117,25 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
             theme::ADDITIONAL_INFO
         })
     };
+    let mut spans = vec![
+        Span::styled(format!("{} · ", chrome.agent), text),
+        Span::styled(chrome.model.clone(), value(chrome.model_reported)),
+    ];
+    if let Some(effort) = &chrome.effort {
+        spans.push(Span::styled(" · ", text));
+        spans.push(Span::styled(effort.clone(), value(chrome.effort_reported)));
+    }
+    spans
+}
+
+pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
+    titled_block(chrome, true)
+}
+
+/// A panel block titled with where the interaction is, and with what it runs
+/// with and its state when `launch_and_status`.
+fn titled_block(chrome: &PanelChrome, launch_and_status: bool) -> Block<'static> {
+    let text = Style::default().fg(theme::MUTED_TEXT);
     let mut spans = vec![Span::raw(" ")];
     if let Some(workspace) = &chrome.workspace {
         spans.push(Span::styled(
@@ -106,6 +155,15 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
         ));
         spans.push(Span::styled(" · ", text));
     }
+    if let Some(parent) = &chrome.parent {
+        // Points up to the interaction this one branched from.
+        spans.push(Span::styled("↱ ", text));
+        spans.push(Span::styled(
+            parent.clone(),
+            Style::default().fg(theme::CONVERSATION_CHANGE),
+        ));
+        spans.push(Span::styled(" · ", text));
+    }
     if let Some(worktree) = &chrome.worktree {
         spans.push(Span::styled(
             worktree.clone(),
@@ -120,27 +178,15 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
         ));
         spans.push(Span::styled(" · ", text));
     }
-    spans.push(Span::styled(format!("{} · ", chrome.agent), text));
-    spans.push(Span::styled(
-        chrome.model.clone(),
-        value(chrome.model_reported),
-    ));
-    if let Some(effort) = &chrome.effort {
+    if launch_and_status {
+        spans.extend(launch_spans(chrome));
         spans.push(Span::styled(" · ", text));
-        spans.push(Span::styled(effort.clone(), value(chrome.effort_reported)));
+        spans.extend(status_spans(chrome));
+    } else if spans.len() > 1 {
+        // Drop the separator left after the last place.
+        spans.pop();
     }
-    spans.push(Span::styled(" · ", text));
-    spans.push(Span::styled("● ", Style::default().fg(tone)));
-    spans.push(Span::styled(
-        chrome.status.clone(),
-        Style::default().fg(tone).add_modifier(Modifier::BOLD),
-    ));
-    if let Some(elapsed) = &chrome.elapsed {
-        spans.push(Span::styled(
-            format!(" {elapsed}"),
-            Style::default().fg(tone),
-        ));
-    }
+    let empty = spans.len() == 1 && chrome.suffix.is_none();
     spans.push(Span::styled(
         chrome
             .suffix
@@ -149,14 +195,18 @@ pub fn panel_block(chrome: &PanelChrome) -> Block<'static> {
             .unwrap_or_else(|| " ".into()),
         text,
     ));
-    Block::default()
+    let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if chrome.focused {
             theme::ACCENT
         } else {
             theme::INACTIVE
-        }))
-        .title(Line::from(spans))
+        }));
+    if empty {
+        block
+    } else {
+        block.title(Line::from(spans))
+    }
 }
 
 #[cfg(test)]
@@ -171,6 +221,7 @@ mod tests {
             session: None,
             worktree: None,
             source_branch: None,
+            parent: None,
             agent: "codex".into(),
             model: "default model".into(),
             model_reported: false,
@@ -192,6 +243,21 @@ mod tests {
         for x in 2..10 {
             assert_eq!(buffer[(x, 0)].fg, theme::WORKSPACE_NAME);
         }
+    }
+
+    #[test]
+    fn a_branched_interaction_names_its_parent_after_its_title() {
+        let area = Rect::new(0, 0, 80, 3);
+        let mut buffer = Buffer::empty(area);
+        let mut chrome = chrome(Some("payments"));
+        chrome.session = Some("Fix retries".into());
+        chrome.parent = Some("Retry backoff".into());
+        focused_interaction_block(&chrome).render(area, &mut buffer);
+        let top: String = (0..area.width).map(|x| buffer[(x, 0)].symbol()).collect();
+        assert!(
+            top.starts_with("┏ payments · Fix retries · ↱ Retry backoff ━"),
+            "{top}"
+        );
     }
 
     /// The point of the tones is telling one ending from another, so no two

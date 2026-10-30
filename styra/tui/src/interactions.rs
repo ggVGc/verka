@@ -290,6 +290,13 @@ impl LiveInteractions {
         (from != to).then_some((*from, *to))
     }
 
+    /// The Session `id` was branched off, when it was branched off another.
+    pub fn parent(&self, id: &str) -> Option<&str> {
+        self.branch_origins
+            .get(id)
+            .map(|(parent, _, _)| parent.as_str())
+    }
+
     /// The current operator-facing name for `id`, shared by every TUI surface.
     pub fn name(&self, id: &str) -> Option<&str> {
         self.names.get(id).and_then(Option::as_deref)
@@ -320,18 +327,8 @@ impl LiveInteractions {
         changed
     }
 
-    /// Number of idle interactions that have not actually been focused since
-    /// becoming idle. The server owns this acknowledgement state.
-    pub fn idle_notification_count(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|interaction| is_idle(interaction) && interaction.idle_unseen)
-            .count()
-    }
-
     /// How the listed Interactions divide between running, idle and stopped:
-    /// the standing tally of the whole fleet, not just the unseen ones
-    /// [`Self::idle_notification_count`] counts. `Background` is work in
+    /// the standing tally of the whole fleet. `Background` is work in
     /// flight, so it counts as running.
     ///
     /// Completed Interactions are left out entirely. Completion is the reason
@@ -2219,18 +2216,6 @@ pub(crate) mod tests {
             None,
             "still listed is not arriving"
         );
-    }
-
-    #[test]
-    fn refresh_keeps_the_servers_unseen_idle_notification() {
-        let mut live = LiveInteractions::default();
-        let mut other = interaction("other", InteractionActivity::Pending);
-        other.idle_unseen = true;
-        live.refresh(vec![other]);
-
-        assert_eq!(live.idle_notification_count(), 1);
-        live.close();
-        assert_eq!(live.idle_notification_count(), 1);
     }
 
     /// The tally is of everything listed, seen or not, and counts background

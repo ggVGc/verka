@@ -333,12 +333,12 @@ fn tree_prefix(columns: &[bool], connected: bool) -> String {
 const LEAD_COLUMN_WIDTH: usize = 40;
 
 /// How wide each aligned column of the interaction rows is drawn, so the
-/// branch, the tags, the model, and the state labels each
-/// start at the same place down the list. The first column is a set width —
-/// see [`LEAD_COLUMN_WIDTH`]. Each other is as wide as its widest entry, but
-/// no wider than its share of the pane. Every cell is held to its column's
-/// width — see [`fit_cell`] — so a longer entry is cut short rather than
-/// moving the rest of its row.
+/// branch, the tags, the state labels, the model, and loading each
+/// start at the same place down the list. The first column grows up to
+/// [`LEAD_COLUMN_WIDTH`]. The branch and tags columns fit their widest entries;
+/// the others grow no wider than their share of the remaining pane. Every cell is held
+/// to its column's width — see [`fit_cell`] — so a longer entry is cut short
+/// rather than moving the rest of its row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ColumnWidths {
     /// Whether any row is flagged as leaving work uncommitted, so every row
@@ -348,6 +348,8 @@ struct ColumnWidths {
     tags: usize,
     branch: usize,
     model: usize,
+    labels: usize,
+    loading: usize,
 }
 
 /// See [`ColumnWidths`]. `tree` is each row's [`tree_columns`], and `width`
@@ -374,37 +376,35 @@ fn column_widths(
             widths.tags = widths.tags.max(spans_width(&cells.tags));
             widths.branch = widths.branch.max(spans_width(&cells.branch));
             widths.model = widths.model.max(spans_width(&cells.model));
+            widths.labels = widths.labels.max(spans_width(&cells.labels));
+            widths.loading = widths.loading.max(spans_width(&cells.loading));
         }
     }
-    // The columns leave room for a label after them, the model taking its
-    // share first, and the branch and then the tags what remains.
-    let lead = LEAD_COLUMN_WIDTH.min(width / 2);
-    let mut room = width.saturating_sub(lead + LABEL_ROOM);
-    let mut take = |natural: usize| {
-        let taken = natural.min(width / 4).min(room);
-        room -= taken;
-        taken
-    };
-    let model = take(widths.model);
-    let branch = take(widths.branch.min(BRANCH_COLUMN_LIMIT));
-    let tags = take(widths.tags);
+    // Keep worktree names and tags whole, letting the lead shrink in a
+    // narrow pane. Reserve the final column for loading, then fit the model
+    // and state labels in the remaining room.
+    let branch = widths.branch.min(width);
+    let tags = widths.tags;
+    let lead = LEAD_COLUMN_WIDTH
+        .min(width / 2)
+        .min(width.saturating_sub(branch + tags));
+    let room = width.saturating_sub(lead + branch + tags + widths.loading + LABEL_ROOM);
+    let model = widths.model.min(width / 4).min(room);
+    let labels = widths
+        .labels
+        .min(width.saturating_sub(lead + branch + tags + model + widths.loading));
     ColumnWidths {
         uncommitted: widths.uncommitted,
         lead,
         tags,
         branch,
         model,
+        labels,
+        loading: widths.loading,
     }
 }
 
-/// The widest the branch column grows, the spaces setting it off included. A worktree drawn
-/// without a heading has its branch on its row, and an agent's branch is
-/// long — it is the target the other worktrees' headings name after `→` — so
-/// it is cut short here rather than taking the pane's room from the columns
-/// after it. Its start, which says what the work is, still shows.
-const BRANCH_COLUMN_LIMIT: usize = 32;
-
-/// How much of the row the aligned columns leave for the labels after them:
+/// How much room the other columns reserve for the state labels:
 /// enough for `  NEWLY IDLE`, so the state a row is in is not pushed off the
 /// edge of a narrow pane.
 const LABEL_ROOM: usize = 14;
@@ -441,6 +441,7 @@ struct InteractionCells {
     branch: Vec<Span<'static>>,
     model: Vec<Span<'static>>,
     labels: Vec<Span<'static>>,
+    loading: Vec<Span<'static>>,
 }
 
 /// `under_workspaces` says whether the list is drawn under Workspace
@@ -526,7 +527,7 @@ fn row_item(
         branch,
         model,
         labels,
-        ..
+        loading,
     } = cells;
     // The name, and the source after it, end the lead, so they are what a
     // long lead loses.
@@ -534,13 +535,14 @@ fn row_item(
     for (cell, width) in [
         (branch, widths.branch),
         (tags, widths.tags),
+        (labels, widths.labels),
         (model, widths.model),
+        (loading, widths.loading),
     ] {
         let start = main.len();
         main.extend(cell);
         fit_cell(&mut main, start, width);
     }
-    main.extend(labels);
     // No trailing spaces where nothing follows to be lined up.
     while main.len() > name_index + 1
         && main
@@ -744,7 +746,7 @@ fn interaction_cells(
     labels.extend(state_labels(
         *status,
         stop_reason.as_deref(),
-        *loading,
+        false,
         rate_limited.as_deref(),
         *newly_idle,
         *completion,
@@ -756,6 +758,14 @@ fn interaction_cells(
         branch: branch_cell,
         model,
         labels,
+        loading: if *loading {
+            vec![Span::styled(
+                "  loading…",
+                Style::default().fg(theme::INACTIVE),
+            )]
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -1002,9 +1012,9 @@ mod tests {
                 rows: vec![switched],
                 ..many_rows(0)
             };
-            let screen = squeezed(&rendered(&view));
+            let screen = squeezed(&rendered_at(&view, 120));
             assert!(
-                screen.contains("task gpt-5 branch changed: assi"),
+                screen.contains(&format!("task branch changed: assigned → {actual} gpt-5")),
                 "{screen}"
             );
         }
@@ -1070,7 +1080,7 @@ mod tests {
         let screen = rendered_at(&view, 120);
         assert!(screen.contains("Payments"), "{screen}");
         assert!(
-            squeezed(&screen).contains("repair checkout fix #bug #urgent gpt-5 NEWLY IDLE"),
+            squeezed(&screen).contains("repair checkout fix #bug #urgent NEWLY IDLE gpt-5"),
             "{screen}"
         );
         assert!(screen.contains("  NEWLY IDLE"), "{screen}");
@@ -1326,14 +1336,14 @@ mod tests {
         }
     }
 
-    /// An unheaded worktree's long agent branch — the target a heading names
-    /// after `→` — is cut to the branch column, so it moves no column after
-    /// it; a row with no branch of its own keeps the column empty.
+    /// Long worktree names remain whole, and every row reserves the same
+    /// branch column even when it has no branch of its own.
     #[test]
-    fn a_long_branch_is_cut_to_its_column() {
+    fn a_long_branch_is_shown_in_full() {
+        let branch_name = "styra/align-live-interactions-columns-1792571015193";
         let mut long = placed("solo", 0, 0, None);
         if let InteractionRow::Interaction { branch, .. } = &mut long {
-            *branch = Some("styra/align-live-interactions-columns-1792571015193");
+            *branch = Some(branch_name);
         }
         let view = InteractionNavigator {
             rows: vec![
@@ -1344,26 +1354,31 @@ mod tests {
             ],
             ..many_rows(0)
         };
-        let screen = lines(&view);
-        // The narrow test pane leaves the branch 17 cells after the model
-        // and room for a label.
-        assert!(
-            screen[1].starts_with(&format!("┃{}{:17}  sonnet", lead(" ●  alone"), "  feature")),
-            "{screen:#?}"
-        );
-        assert!(
-            screen[2].starts_with(&format!("┃{}  styra/align-li…  sonnet", lead(" ●  solo"))),
-            "{screen:#?}"
-        );
-        // The heading's merge target lines up with the rows' branches.
-        assert!(
-            screen[3].starts_with(&format!("┃{:38} → styra/align-live", "[checkout]")),
-            "{screen:#?}"
-        );
-        assert!(
-            screen[4].starts_with(&format!("┃{}{:17}  sonnet", lead("└─  ●  first"), "")),
-            "{screen:#?}"
-        );
+        for width in [80, 120, 200] {
+            let tree = (0..view.rows.len())
+                .map(|index| tree_columns(&view.rows, index))
+                .collect::<Vec<_>>();
+            let widths = column_widths(&view, &tree, width);
+            assert_eq!(widths.branch, crate::text::width(branch_name) + 2);
+            let screen = rendered_at(&view, width as u16);
+            assert!(screen.contains(branch_name), "{screen}");
+            for (row, columns) in view.rows.iter().zip(&tree) {
+                if matches!(row, InteractionRow::Interaction { .. }) {
+                    let item = row_item(row, false, columns, width, &widths);
+                    let line = item[0].to_string();
+                    let branch = line
+                        .chars()
+                        .skip(widths.lead)
+                        .take(widths.branch)
+                        .collect::<String>();
+                    if line.contains("solo") {
+                        assert_eq!(branch, format!("  {branch_name}"));
+                    } else if line.contains("first") {
+                        assert!(branch.trim().is_empty());
+                    }
+                }
+            }
+        }
     }
 
     /// The first column is a set width: a long name is cut short there, and
@@ -1405,11 +1420,10 @@ mod tests {
         );
     }
 
-    /// Where a cell's column, held to a share of the pane, is narrower than
-    /// the cell, the cell is cut short there: the columns after it stay where
-    /// every other row has them.
+    /// Tags keep their full width while long models are cut to fit, with
+    /// state and model columns aligned across rows.
     #[test]
-    fn a_cell_wider_than_its_column_is_cut_and_moves_nothing() {
+    fn tags_stay_whole_and_models_fit_the_remaining_room() {
         let many = ["refactor", "performance", "urgent", "frontend", "backend"]
             .map(String::from)
             .to_vec();
@@ -1423,7 +1437,7 @@ mod tests {
         } = &mut wide
         {
             *tags = &many;
-            *model = "gpt-5.1-codex-max-preview";
+            *model = "gpt-5.1-codex-max-preview-with-a-long-model-name";
             *stop_reason = Some("paused".into());
         }
         if let InteractionRow::Interaction { stop_reason, .. } = &mut narrow {
@@ -1433,7 +1447,12 @@ mod tests {
             rows: vec![wide, narrow],
             ..many_rows(0)
         };
-        for width in [80u16, 120] {
+        let full_tags = "  #refactor #performance #urgent #frontend #backend";
+        for width in [80, 120] {
+            let screen = rendered_at(&view, width);
+            assert!(screen.contains(full_tags), "{screen}");
+        }
+        for width in [140u16, 160] {
             let screen = rendered_at(&view, width)
                 .chars()
                 .collect::<Vec<_>>()
@@ -1445,6 +1464,7 @@ mod tests {
                     .map(|byte| line[..byte].chars().count())
                     .unwrap_or_else(|| panic!("no {needle:?} in {screen:#?}"))
             };
+            assert!(screen[1].contains(full_tags), "{screen:#?}");
             assert!(screen[1].contains('…'), "{screen:#?}");
             for (wide, narrow) in [("  gpt", "  sonnet"), ("  paused", "  paused")] {
                 assert_eq!(at(&screen[1], wide), at(&screen[2], narrow), "{screen:#?}");
@@ -1496,9 +1516,11 @@ mod tests {
                 status: row_status,
                 stop_reason: row_stop_reason,
                 rate_limited: row_rate_limited,
+                loading,
                 ..
             } = &mut row
             {
+                *loading = true;
                 *branch = None;
                 *row_status = status;
                 *row_stop_reason = stop_reason.map(Into::into);
@@ -1510,7 +1532,7 @@ mod tests {
             };
             let screen = squeezed(&rendered_at(&view, width));
             assert!(
-                screen.contains(&format!("repair checkout sonnet {label}")),
+                screen.contains(&format!("repair checkout {label} sonnet loading…")),
                 "{label}: {screen}"
             );
         }

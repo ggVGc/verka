@@ -150,7 +150,12 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     if message_height > 0 {
         messages::render(frame, view.notices, chunks[1]);
     }
-    footer::render(frame, view.footer, chunks[2]);
+    let interaction = match &view.main {
+        MainView::Events(events) => Some(&events.list.chrome),
+        MainView::Files(files) => Some(&files.list.chrome),
+        _ => None,
+    };
+    footer::render(frame, view.footer, interaction, chunks[2]);
     if view.overlays.busy.is_some() {
         // Drawn last, below; the box it replaces is not drawn at all.
     } else if let Some(capture) = view.overlays.recording {

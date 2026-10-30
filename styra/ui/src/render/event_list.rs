@@ -1,5 +1,5 @@
 use super::*;
-use crate::chrome::{all_events_title, focused_panel_block, StopTone};
+use crate::chrome::{all_events_title, focused_interaction_block, StopTone};
 use crate::code::{code_block_lines, is_error_diagnostic};
 use crate::footer::{message_text_color, tag_color};
 use crate::markdown::{
@@ -139,11 +139,17 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         })
         .unwrap_or_default();
     let mut block =
-        focused_panel_block(&view.chrome).title_bottom(Line::from(usage).right_aligned());
+        focused_interaction_block(&view.chrome).title_bottom(Line::from(usage).right_aligned());
+    // The interaction's state leads the bottom border, ahead of the fleet's
+    // tally.
+    let mut status = vec![Span::raw(" ")];
+    status.extend(crate::chrome::status_spans(&view.chrome));
     let activity = activity_spans(view.activity);
-    if !activity.is_empty() {
-        block = block.title_bottom(Line::from(activity));
+    if activity.is_empty() {
+        status.push(Span::raw(" "));
     }
+    status.extend(activity);
+    block = block.title_bottom(Line::from(status));
     if view.all_events {
         block = block.title_bottom(all_events_title(view.show_minor).right_aligned());
     }
@@ -1870,8 +1876,7 @@ pub fn detail_lines_with_links(
 }
 
 /// `running/idle/stopped`, each number in its own colour and nothing else:
-/// the counts are the label. Newly idle interactions follow, with the key that
-/// goes to them.
+/// the counts are the label.
 fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
     if counts == ActivityCounts::default() {
         return Vec::new();
@@ -1879,7 +1884,7 @@ fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
     let separator = || Span::styled("/", Style::default().fg(theme::MUTED_TEXT));
     let count =
         |value: usize, color: Color| Span::styled(value.to_string(), Style::default().fg(color));
-    let mut spans = vec![
+    vec![
         Span::raw(" "),
         count(counts.running, theme::WARNING),
         separator(),
@@ -1887,18 +1892,7 @@ fn activity_spans(counts: ActivityCounts) -> Vec<Span<'static>> {
         separator(),
         count(counts.stopped, theme::MUTED_TEXT),
         Span::raw(" "),
-    ];
-    if counts.newly_idle > 0 {
-        spans.push(Span::styled(
-            format!(
-                "^a {} interaction{} idle ",
-                counts.newly_idle,
-                if counts.newly_idle == 1 { "" } else { "s" }
-            ),
-            Style::default().fg(theme::SUCCESS),
-        ));
-    }
-    spans
+    ]
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -1965,6 +1959,7 @@ mod tests {
                 workspace: None,
                 worktree: None,
                 source_branch: None,
+                parent: None,
                 agent: "codex".into(),
                 model: "gpt-5.6-sol".into(),
                 model_reported: true,
