@@ -1,0 +1,1244 @@
+//! Styra's terminal client: CLI, terminal lifecycle, and the event loop that
+//! drives the application through Styra's JSON Unix-socket API.
+
+// The build without a renderer is an application test target; terminal startup
+// cannot call every internal entry point in that configuration.
+#![cfg_attr(not(feature = "renderer"), allow(dead_code))]
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+mod action_menu;
+mod actions;
+mod activity;
+mod answer;
+mod app;
+mod audio;
+mod branch;
+mod branch_log;
+mod checkout_diff;
+mod cli;
+mod clipboard;
+mod composer;
+mod config;
+mod edit_report;
+mod entry_log;
+mod event_loop;
+mod files;
+mod help;
+mod history_picker;
+mod ingest;
+mod input;
+mod insert;
+mod interaction_history;
+mod interactions;
+mod keybindings;
+mod keyboard;
+mod launch;
+mod launcher;
+mod link_menu;
+mod logging;
+mod mount;
+mod notices;
+mod outbox;
+mod overview;
+mod picker;
+mod preferences;
+mod presentation;
+mod preview;
+mod processes;
+mod raw;
+mod session;
+mod snippet;
+mod tag_picker;
+mod tail;
+mod terminal;
+mod timeline;
+mod turn_diff;
+mod turn_snapshot;
+mod workspace;
+mod workspace_jump;
+mod worktree_picker;
+
+use app::{App, LaunchPolicy};
+use cli::{Cli, CliCommand};
+#[cfg(feature = "renderer")]
+use config::Defaults;
+use event_loop::RunOutcome;
+use session::Attachment;
+#[cfg(feature = "renderer")]
+use styra_protocol::LogEntry;
+use styra_protocol::{
+    CompletionState, InteractionQuery, InteractionSummary, WorkspaceSummary, WorktreeCleanup,
+};
+use styra_server::Client;
+#[cfg(feature = "renderer")]
+use styra_ui::RatatuiUi;
+#[cfg(feature = "renderer")]
+use styra_ui::Ui;
+
+/// Point the app at the Workspace it is now showing: its display name, and the
+/// standing launch policy every interaction started there is layered onto.
+///
+/// Both are resolved from Workspace metadata for the same reason — a Session
+/// carries only the durable Workspace id — and both have to be refreshed at the
+/// same moments, which is why one function does it. Following a Session into
+/// another Workspace without this would leave the Driva view attributing that
+/// Workspace's launches to the policy of the one just left.
+fn refresh_workspace_context(app: &mut App, client: &Client, active: &WorkspaceSummary) {
+    let workspace = app
+        .workspace
+        .id
+        .as_deref()
+        .filter(|id| *id == active.id)
+        .map(|_| active.clone())
+        .or_else(|| {
+            let id = app.workspace.id.as_deref()?;
+            client
+                .list_workspaces()
+                .ok()?
+                .into_iter()
+                .find(|workspace| workspace.id == id)
+        });
+    match workspace {
+        Some(workspace) => app.show_workspace(&workspace),
+        // Nothing to name it with: the Workspace it belongs to is not one this
+        // server still lists.
+        None => {
+            app.workspace.name = None;
+            app.workspace.given_name = None;
+            app.workspace.git_repository = None;
+            app.workspace.host_path = None;
+            app.workspace.server_path = None;
+            app.workspace.session_count = None;
+            app.workspace.age = None;
+            app.workspace.created_at_ms = None;
+            app.workspace.last_accessed_at_ms = None;
+        }
+    }
+}
+
+fn workspace_for_new_session(
+    app: &App,
+    active: &WorkspaceSummary,
+    workspaces: &[WorkspaceSummary],
+) -> WorkspaceSummary {
+    let Some(workspace_id) = app.workspace.id.as_deref() else {
+        return active.clone();
+    };
+    if workspace_id == active.id {
+        return active.clone();
+    }
+    workspaces
+        .iter()
+        .find(|workspace| workspace.id == workspace_id)
+        .cloned()
+        .unwrap_or_else(|| active.clone())
+}
+
+fn pending_app(
+    selection: styra_protocol::agent::Selection,
+    launch: LaunchPolicy,
+    workspace: &WorkspaceSummary,
+) -> App {
+    let mut app = App::pending(selection);
+    app.launch.interaction = launch;
+    app.show_workspace(workspace);
+    // A blank screen starts at the Workspace root, having no interaction that
+    // could have moved somewhere else.
+    app.workspace.enter(workspace.host_path.clone());
+    app
+}
+
+/// Build the blank screen reached with `n`, including the current Session as
+/// the server-side source of any checkout it owns. Naming the Session rather
+/// than copying its path keeps this useful for stored Sessions too, whose
+/// checkout is durable even though the replay screen has no live root.
+///
+/// Only a Session belonging to the Workspace being launched in is named. The
+/// Workspace can differ when the one being viewed has since gone away, and a
+/// checkout is the Workspace's to lend — the server refuses to cross that line,
+/// so a blank screen must not ask it to.
+///
+/// Only a started Session lends its checkout. Pressing `n` again on a blank
+/// screen, which has no Session yet, opens the next one at the Workspace root
+/// even if the first was standing in a worktree. A second press is therefore
+/// the way back out of a checkout.
+fn pending_app_from_session(app: &App, workspace: &WorkspaceSummary) -> App {
+    let mut pending = pending_app(
+        app.selection.clone(),
+        app.launch.interaction.clone(),
+        workspace,
+    );
+    let same_workspace = app.workspace.id.as_deref() == Some(workspace.id.as_str());
+    pending.checkout_from =
+        (same_workspace && !app.session_id.is_empty()).then(|| app.session_id.clone());
+    // The blank screen stands where the launch will land rather than at the
+    // Workspace root, so the footer names the checkout being carried over
+    // instead of a directory this Session is not going to work in.
+    if pending.checkout_from.is_some() {
+        if let Some(source) = app.interactions.current(&app.session_id) {
+            pending.interactions.items.push(source.clone());
+        }
+        if let Some(root) = app.workspace.root() {
+            pending.workspace.enter(root.to_path_buf());
+        }
+    }
+    pending
+}
+
+/// What a new interaction starts from: the operator's saved defaults with this
+/// invocation's flags over them.
+///
+/// `--network` only ever grants, matching the way the server ORs it with the
+/// profile's and template's own policy. A `--template` replaces the saved list
+/// rather than adding to it, because the flag names a whole layering and the
+/// order within it is significant.
+///
+/// This is one launch's *own* policy, not the whole of it: whatever standing
+/// policy the Workspace being launched in carries is layered underneath, on the
+/// server. A client that has saved nothing therefore launches under exactly the
+/// Workspace's policy.
+///
+/// Re-read rather than cached, so a policy saved with `D` during the session
+/// is what the next blank screen offers.
+fn standing_launch(
+    preferences_path: &Path,
+    cli: &Cli,
+) -> Result<(styra_protocol::agent::Selection, LaunchPolicy)> {
+    let defaults = preferences::load_or_default(preferences_path)?;
+    let mut launch = defaults.launch;
+    if cli.network {
+        launch.network = Some(true);
+    }
+    if !cli.template.is_empty() {
+        launch.templates = cli.template.clone();
+    }
+    Ok((defaults.selection, launch))
+}
+
+#[cfg(feature = "renderer")]
+pub fn run() -> Result<()> {
+    if let Some(result) = styra_server::broker::exit_if_requested() {
+        return result;
+    }
+    // The connect-or-spawn path spawns the daemon by re-exec'ing *this* binary
+    // with the serve sentinel in its environment; honour it before parsing the
+    // client CLI so the re-exec'd copy becomes the server instead of a second
+    // TUI. See `styra_protocol::spawn`.
+    if let Some(result) = styra_server::serve_if_requested() {
+        return result;
+    }
+    let cli = Cli::parse();
+    // Keep the TUI log beside the socket, matching the daemon log. A
+    // standalone run is intentionally still usable without XDG_RUNTIME_DIR,
+    // so logging is unavailable there when no explicit socket was supplied.
+    let log_socket = cli
+        .socket
+        .clone()
+        .or_else(|| styra_server::paths::default_socket().ok());
+    if let Some(socket) = log_socket {
+        let log_path = logging::path_for_socket(&socket);
+        logging::install(&log_path, cli.socket.is_none())?;
+        tracing::info!(
+            target: "styra_tui::startup",
+            pid = std::process::id(),
+            log_path = %log_path.display(),
+            "TUI logging started"
+        );
+    }
+    let config = Defaults;
+
+    // `--standalone` never involves a socket, so it is settled before one is
+    // resolved: on a host with no `XDG_RUNTIME_DIR` it is the mode that still
+    // works.
+    let client = if cli.standalone {
+        styra_server::in_process().context("starting the in-process Styra server")?
+    } else {
+        let socket = match &cli.socket {
+            Some(path) => path.clone(),
+            None => styra_server::paths::default_socket()?,
+        };
+
+        // Daemon lifecycle commands run without opening the interface at all.
+        if cli.stop {
+            return stop_daemon(&socket);
+        }
+        if cli.daemon {
+            return start_daemon(&socket);
+        }
+
+        // Connect-or-spawn: use the running server if one answers, otherwise
+        // start a detached daemon bound to this socket and wait for it. The
+        // daemon outlives this client, so live sessions survive detach/quit.
+        styra_server::ensure_server(&socket)
+            .with_context(|| format!("Styra server is unavailable at {}", socket.display()))?
+    };
+    match &cli.command {
+        Some(CliCommand::Shell { session }) => {
+            return match session {
+                Some(session) => attach_shell(&client, session),
+                None => browse_shells(&client),
+            }
+        }
+        Some(CliCommand::Worktrees { all }) => {
+            return list_worktrees(&client, cli.workspace.as_deref(), *all)
+        }
+        Some(CliCommand::CleanWorktrees { all }) => {
+            return clean_worktrees(&client, cli.workspace.as_deref(), *all)
+        }
+        None => {}
+    }
+    let preferences_path = preferences::default_path()?;
+
+    // Bare `--view` (no path) needs an interactive terminal to browse
+    // sessions in, so it is opened early only in that case; the other paths
+    // below still report setup failures before taking over the terminal,
+    // and the terminal the picker opened is reused below rather than torn
+    // down and reopened.
+    let mut terminal: Option<RatatuiUi> = None;
+    let view_target: Option<PathBuf> = match &cli.view {
+        Some(Some(path)) => Some(path.clone()),
+        Some(None) => {
+            let mut sessions = session::all_sessions(&client)?;
+            if sessions.is_empty() {
+                println!("No sessions found by the Styra server");
+                return Ok(());
+            }
+            let mut term = RatatuiUi::new()?;
+            match picker::run_session_picker(
+                &mut term,
+                &client,
+                "styra",
+                &mut sessions,
+                &client.list_interactions(&fleet_query()).unwrap_or_default(),
+                None,
+                false,
+            ) {
+                Ok(Some(picker::SessionChoice::Open(id))) => {
+                    terminal = Some(term);
+                    Some(PathBuf::from(id))
+                }
+                // `n` is not offered when browsing to view a stored log, so
+                // the only other answer is backing out.
+                Ok(Some(picker::SessionChoice::New) | None) => {
+                    term.close()?;
+                    return Ok(());
+                }
+                Err(error) => {
+                    term.close()?;
+                    return Err(error);
+                }
+            }
+        }
+        None => None,
+    };
+
+    // An ordinary interactive launch enters the Workspace associated with the
+    // current directory when one exists. Otherwise it starts with the durable
+    // Workspace list. Explicit CLI targets retain their direct behavior.
+    let ordinary_launch = cli.workspace.is_none() && cli.view.is_none() && cli.command.is_none();
+    // The server's interactions, asked for once and handed to everything
+    // startup decides with — the Workspace picker, where to land, the
+    // navigator — and then to the event loop, which keeps it fresh. The server
+    // takes long enough over this listing that asking at every step was most
+    // of the time before the first frame. A server that cannot answer leaves
+    // it empty, as each step used to treat a failed answer.
+    let mut fleet = if view_target.is_some() {
+        Vec::new()
+    } else {
+        client.list_interactions(&fleet_query()).unwrap_or_default()
+    };
+    // Set when the operator picks a Workspace with `n`: they asked for a new
+    // interaction, so its live work is not joined on the way in.
+    let mut start_fresh = false;
+    let mut active_workspace = if ordinary_launch {
+        let current_directory = session::resolve_workspace(None)?;
+        let mut workspaces = client.list_workspaces()?;
+        if let Some(workspace) = session::find_workspace_for_host(&workspaces, &current_directory) {
+            workspace
+        } else if cli.skip_workspace_list {
+            workspace_without_list(&client, &workspaces, &fleet, current_directory)?
+        } else {
+            let mut term = match terminal.take() {
+                Some(term) => term,
+                None => RatatuiUi::new()?,
+            };
+            let choice = match picker::run_workspace_picker(
+                &mut term,
+                &client,
+                &mut workspaces,
+                &mut fleet,
+                &fleet_query(),
+                Some(&current_directory),
+            ) {
+                Ok(Some(choice)) => choice,
+                Ok(None) => {
+                    term.close()?;
+                    return Ok(());
+                }
+                Err(error) => {
+                    term.close()?;
+                    return Err(error);
+                }
+            };
+            let workspace = match choice {
+                // Fetching the Workspace again records the access, which is
+                // what floats it to the top of the picker next time. The
+                // summary the picker already holds stands in if the server
+                // cannot answer.
+                picker::WorkspaceChoice::Existing(workspace) => {
+                    Ok(client.workspace(&workspace.id).unwrap_or(workspace))
+                }
+                picker::WorkspaceChoice::New(workspace) => {
+                    start_fresh = true;
+                    Ok(client.workspace(&workspace.id).unwrap_or(workspace))
+                }
+                picker::WorkspaceChoice::CreateCurrentDirectory => {
+                    session::workspace_for_host(&client, &current_directory)
+                }
+            };
+            let workspace = match workspace {
+                Ok(workspace) => workspace,
+                Err(error) => {
+                    term.close()?;
+                    return Err(error);
+                }
+            };
+            terminal = Some(term);
+            workspace
+        }
+    } else {
+        let host_path = session::resolve_workspace(cli.workspace.as_deref())?;
+        session::workspace_for_host(&client, &host_path)?
+    };
+
+    // Opening a Workspace that already holds live work lands on the live
+    // Interaction the operator last turned to, with the Interactions navigator
+    // open exactly as `v` does mid-session — whether the Workspace came from
+    // the current directory or from the startup picker. A trailing prompt overrides it below: that is input the
+    // operator has already given, so it starts an Interaction of its own rather
+    // than joining one in flight.
+    let startup_interaction = if ordinary_launch && !start_fresh {
+        interactions::first_live_in_workspace(&fleet, &active_workspace.id)
+    } else {
+        None
+    };
+
+    // Build the application and, unless viewing or awaiting the operator's
+    // first message, a live session up front so a setup failure is reported
+    // plainly before the terminal is taken over.
+    let mut app;
+    let mut live: Attachment;
+    // The launch inputs this client works with, kept alongside `app` because
+    // every rebuilt App adopts them: they belong to the operator's session at
+    // the terminal, not to whichever Session is on screen.
+    let (standing_selection, mut launch) = standing_launch(&preferences_path, &cli)?;
+
+    if let Some(view) = &view_target {
+        // `--view` is explicitly read-only, so this replays the journal rather
+        // than going through `open_session`, which would attach to a live
+        // interaction if one happened to be serving the Session.
+        let id = session::session_id_from_target(view)?;
+        (app, live) = session::open_stored(&client, &id)?;
+        app.launch.interaction = launch.clone();
+    } else {
+        let selection = standing_selection;
+        let prompt = cli.prompt.join(" ");
+        let seed = (!prompt.trim().is_empty()).then_some(prompt.as_str());
+        match seed {
+            // A trailing prompt is input the operator already gave (as a CLI
+            // argument), so it is fine to launch immediately.
+            Some(seed) => {
+                (app, live) = session::launch_live_session(
+                    &client,
+                    &launch,
+                    &active_workspace.id,
+                    &selection,
+                    Some(seed),
+                )?;
+            }
+            // No seed: nothing has been said to an agent yet, so nothing is
+            // launched yet either — unless the Workspace already holds live
+            // work, which this client joins instead of opening blank. Attaching
+            // is best-effort: a Workspace whose live Interaction cannot be
+            // reached still opens, on the blank screen, with the reason logged.
+            None => {
+                app = pending_app(selection, launch.clone(), &active_workspace);
+                live = Attachment::Detached;
+                if let Some(interaction) = startup_interaction {
+                    match session::open_session(
+                        &client,
+                        &interaction.id,
+                        &fleet,
+                        &app.quota_noticed,
+                    ) {
+                        Ok((mut next, next_live)) => {
+                            next.launch.interaction = launch.clone();
+                            app = next;
+                            live = next_live;
+                            event_loop::open_interaction_navigator(
+                                &mut app,
+                                &client,
+                                fleet.clone(),
+                            );
+                        }
+                        Err(error) => app.push_log(LogEntry::error(format!(
+                            "could not open live interaction {}: {error:#}",
+                            interaction.id
+                        ))),
+                    }
+                } else if cli.skip_workspace_list && interactions::first_live(&fleet).is_some() {
+                    // Nothing live here, but there is elsewhere: the operator
+                    // asked to see it rather than pick a Workspace first.
+                    event_loop::open_interaction_navigator(&mut app, &client, fleet.clone());
+                }
+            }
+        }
+    }
+    refresh_workspace_context(&mut app, &client, &active_workspace);
+    // The footer's quota warning is about the account, not about this screen,
+    // so it has to be right from the first frame rather than from whenever a
+    // provider next volunteers a reading. Carried across session switches by
+    // `App::adopt`, so this is asked once per client.
+    event_loop::refresh_quota(&mut app, &client);
+
+    let mut terminal = match terminal {
+        Some(terminal) => terminal,
+        None => RatatuiUi::new()?,
+    };
+
+    // Runs until the operator quits. Workspace and Session selection only
+    // changes what this client views; server-owned Interactions continue. In
+    // standalone mode the server owner's teardown ends them when this process
+    // leaves, after the terminal has been restored below.
+    let mut history = interaction_history::InteractionHistory::default();
+    history.record(&app.session_id);
+    let result = loop {
+        // Every App this loop builds starts on the newest listing there is,
+        // so its first frame has the fleet and nothing has to ask for it. An
+        // empty one may be a server that could not answer, so it is left for
+        // the loop to ask about.
+        if !app.interactions.listed() && !fleet.is_empty() {
+            app.interactions.refresh(std::mem::take(&mut fleet));
+        }
+        let outcome = match event_loop::run(
+            &mut terminal,
+            &mut app,
+            &client,
+            &mut live,
+            event_loop::RunContext {
+                standing_launch: &launch,
+                preferences_path: &preferences_path,
+                config: &config,
+                history: &mut history,
+            },
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => break Err(error),
+        };
+        if event_loop::stops_current_interaction(&outcome, &live) {
+            client.stop_interaction(&app.session_id).ok();
+        }
+        // The screen about to be replaced holds the listing the loop kept
+        // fresh; it is what the next one opens with and starts from.
+        fleet = app.interactions.snapshot();
+        match outcome {
+            RunOutcome::Quit => break Ok(()),
+            RunOutcome::OpenWorkspace {
+                workspace,
+                session_id,
+                open_interactions,
+            } => {
+                active_workspace = *workspace;
+                match session_id {
+                    Some(session_id) => {
+                        if open_session_view(
+                            &client,
+                            &launch,
+                            &fleet,
+                            &mut app,
+                            &mut live,
+                            &session_id,
+                        ) {
+                            if open_interactions {
+                                event_loop::open_interaction_navigator(
+                                    &mut app,
+                                    &client,
+                                    fleet.clone(),
+                                );
+                            } else {
+                                history.record(&app.session_id);
+                            }
+                        }
+                    }
+                    None => {
+                        let (selection, standing) = standing_launch(&preferences_path, &cli)?;
+                        launch = standing;
+                        app = pending_app(selection, launch.clone(), &active_workspace);
+                        live = Attachment::Detached;
+                    }
+                }
+            }
+            // Switch only this client's view. In particular, a running
+            // interaction for the Session being left remains server-owned.
+            RunOutcome::OpenSession(session_id) => {
+                let left = app.session_id.clone();
+                if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id) {
+                    history.record(&left);
+                    history.record(&session_id);
+                }
+            }
+            RunOutcome::OpenBranch(session_id) => {
+                let left = app.session_id.clone();
+                if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id) {
+                    history.record(&left);
+                    history.record(&session_id);
+                    app.branch_needs_prompt_name = true;
+                    app.enter_input();
+                }
+            }
+            RunOutcome::JumpTo(index) => {
+                if let Some(session_id) = history.entries().get(index).cloned() {
+                    if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id)
+                    {
+                        history.arrive(index);
+                    }
+                }
+            }
+            RunOutcome::JumpBack | RunOutcome::JumpForward => {
+                let forward = matches!(outcome, RunOutcome::JumpForward);
+                if let Some((index, session_id)) = history.target(&app.session_id, forward) {
+                    let session_id = session_id.to_owned();
+                    if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id)
+                    {
+                        history.arrive(index);
+                    }
+                } else {
+                    app.show_warning(if forward {
+                        "no next interaction in history"
+                    } else {
+                        "no previous interaction in history"
+                    });
+                }
+            }
+            // Return to the blank start screen. Reset has already stopped the
+            // current interaction and returns to the standing launch default.
+            RunOutcome::Reset => {
+                live = Attachment::Detached;
+                let (selection, standing) = standing_launch(&preferences_path, &cli)?;
+                launch = standing;
+                app = pending_app(selection, launch.clone(), &active_workspace);
+            }
+            // A new interaction inherits the context currently being viewed,
+            // even when it was reached through the global Session or
+            // Interaction picker and therefore belongs to another Workspace.
+            // The outgoing interaction remains server-owned and keeps running.
+            RunOutcome::NewSession => {
+                live = Attachment::Detached;
+                // The sandbox policy is part of that inherited context: a new
+                // session started from here begins with whatever the operator
+                // had built up, rather than resetting to the saved default.
+                launch = app.launch.interaction.clone();
+                active_workspace =
+                    workspace_for_new_session(&app, &active_workspace, &client.list_workspaces()?);
+                app = pending_app_from_session(&app, &active_workspace);
+            }
+        }
+        refresh_workspace_context(&mut app, &client, &active_workspace);
+    };
+
+    terminal.close()?;
+    result
+}
+
+/// Switch this client's view to `session_id`, carrying the operator's state
+/// across, and logging on the screen being left when it cannot be opened.
+/// Reports whether the switch happened.
+#[cfg(feature = "renderer")]
+fn open_session_view(
+    client: &Client,
+    launch: &LaunchPolicy,
+    interactions: &[InteractionSummary],
+    app: &mut App,
+    live: &mut Attachment,
+    session_id: &str,
+) -> bool {
+    match session::open_session(client, session_id, interactions, &app.quota_noticed) {
+        Ok(opened) => {
+            // A switch made from a picker lands on the Interaction itself,
+            // not back in the navigator it may have been made over.
+            app.interactions.close();
+            session::switch_to(app, live, opened, launch);
+            true
+        }
+        Err(error) => {
+            app.push_log(LogEntry::error(format!(
+                "could not open Session {session_id}: {error:#}"
+            )));
+            false
+        }
+    }
+}
+
+/// The Workspace `--skip-workspace-list` enters from a directory that has none
+/// of its own: that of the live Interaction startup would land on, so it is
+/// joined rather than left behind a blank screen; else the one accessed most
+/// recently, which tops the list being skipped. Only a server with no
+/// Workspaces at all has one created, for the current directory, since there
+/// is nowhere else to go.
+fn workspace_without_list(
+    client: &Client,
+    workspaces: &[WorkspaceSummary],
+    interactions: &[InteractionSummary],
+    current_directory: PathBuf,
+) -> Result<WorkspaceSummary> {
+    let chosen = interactions::first_live(interactions)
+        .and_then(|interaction| {
+            workspaces
+                .iter()
+                .find(|workspace| workspace.id == interaction.workspace_id)
+        })
+        .or_else(|| {
+            workspaces
+                .iter()
+                .max_by_key(|workspace| workspace.last_accessed_at_ms)
+        });
+    match chosen {
+        // Fetched again to record the access, as opening it from the list does.
+        Some(workspace) => Ok(client
+            .workspace(&workspace.id)
+            .unwrap_or_else(|_| workspace.clone())),
+        None => session::workspace_for_host(client, &current_directory),
+    }
+}
+
+fn attach_shell(client: &Client, session: &str) -> Result<()> {
+    let shell = client
+        .shell(session)
+        .with_context(|| format!("opening sandbox shell for session {session}"))?;
+    let error = Command::new(&shell.tmux)
+        .arg("-S")
+        .arg(&shell.socket)
+        .args(["attach-session", "-t", "shell"])
+        .exec();
+    Err(error).with_context(|| {
+        format!(
+            "attaching to session {session} with {}",
+            shell.tmux.display()
+        )
+    })
+}
+
+/// Print every worktree Styra knows of in scope, each followed by the
+/// sessions that work in it.
+///
+/// Scoped the same way as [`clean_worktrees`].
+fn list_worktrees(client: &Client, workspace: Option<&Path>, all: bool) -> Result<()> {
+    let Some(scope) = worktree_scope(client, workspace, all, "list")? else {
+        return Ok(());
+    };
+    let worktrees = client.list_worktrees(scope.as_deref())?;
+    if worktrees.is_empty() {
+        println!("No session has a worktree");
+        return Ok(());
+    }
+    for worktree in &worktrees {
+        let location = match &worktree.worktree {
+            Some(path) if worktree.exists => path.display().to_string(),
+            Some(path) => format!("{} (missing)", path.display()),
+            None => "(no checkout; branch only)".to_owned(),
+        };
+        match &worktree.branch {
+            Some(branch) => println!("{location} [{branch}]"),
+            None => println!("{location}"),
+        }
+        if all {
+            println!("  workspace {}", worktree.workspace_id);
+        }
+        if worktree.sessions.is_empty() {
+            println!("  no session records it");
+        }
+        for session in &worktree.sessions {
+            let state = match (session.live, session.completed) {
+                (true, _) => "live",
+                (false, CompletionState::Active) => "active",
+                (false, CompletionState::Completed) => "completed",
+                (false, CompletionState::Abandoned) => "abandoned",
+                (false, CompletionState::Sealed) => "sealed",
+            };
+            match &session.name {
+                Some(name) => println!("  {name} ({}) {state}", session.id),
+                None => println!("  {} {state}", session.id),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The Workspace a worktree command covers: `Some(None)` for every one, or
+/// `None` when the directory belongs to no Workspace and that has been said.
+///
+/// A directory that belongs to no Workspace has no sessions and is not made
+/// into one: creating a Workspace is what starting a session does, not what
+/// looking after one does.
+fn worktree_scope(
+    client: &Client,
+    workspace: Option<&Path>,
+    all: bool,
+    verb: &str,
+) -> Result<Option<Option<String>>> {
+    if all {
+        return Ok(Some(None));
+    }
+    let directory = session::resolve_workspace(workspace)?;
+    match session::find_workspace_for_host(&client.list_workspaces()?, &directory) {
+        Some(workspace) => Ok(Some(Some(workspace.id))),
+        None => {
+            println!(
+                "{} is not inside a Styra Workspace; pass --all to {verb} every Workspace",
+                directory.display()
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// Delete the worktrees of completed sessions that have nothing uncommitted,
+/// and say what happened to each one.
+///
+/// Scoped to the Workspace covering the working directory — the same one an
+/// ordinary launch would enter — unless `all` widens it to every Workspace the
+/// server knows — see [`worktree_scope`].
+fn clean_worktrees(client: &Client, workspace: Option<&Path>, all: bool) -> Result<()> {
+    let Some(scope) = worktree_scope(client, workspace, all, "clean")? else {
+        return Ok(());
+    };
+    let cleaned = client.clean_worktrees(scope.as_deref())?;
+    if cleaned.is_empty() {
+        println!("No completed session has a worktree to clean up");
+        return Ok(());
+    }
+    let mut removed = 0;
+    for session in &cleaned {
+        let name = session.name.as_deref().unwrap_or(&session.session_id);
+        let outcome = match &session.outcome {
+            WorktreeCleanup::Removed => {
+                removed += 1;
+                format!("removed {}", session.worktree.display())
+            }
+            WorktreeCleanup::AlreadyGone => {
+                removed += 1;
+                format!("{} was already gone", session.worktree.display())
+            }
+            WorktreeCleanup::Uncommitted => {
+                format!(
+                    "kept: uncommitted changes in {}",
+                    session.worktree.display()
+                )
+            }
+            WorktreeCleanup::Live => "kept: an interaction is still live in it".to_owned(),
+            WorktreeCleanup::Shared { session_id } => {
+                format!("kept: session {session_id} is still working in it")
+            }
+            WorktreeCleanup::Failed { message } => format!("failed: {message}"),
+        };
+        println!("{name} [{}] {outcome}", session.branch);
+    }
+    println!(
+        "{removed} of {} worktree(s) cleaned up; every branch was kept",
+        cleaned.len()
+    );
+    Ok(())
+}
+
+/// What startup asks for the listing it shares: what a fresh navigator lists,
+/// with nothing yet on screen to keep. It seeds the first App, so it has to
+/// answer the same question the event loop's poll goes on asking.
+fn fleet_query() -> InteractionQuery {
+    interactions::LiveInteractions::default().query("")
+}
+
+/// Every interaction whose agent still takes messages, which is a small part
+/// of what a long-lived server lists.
+fn live_only() -> InteractionQuery {
+    InteractionQuery {
+        skip_stopped: true,
+        ..InteractionQuery::default()
+    }
+}
+
+#[cfg(feature = "renderer")]
+fn browse_shells(client: &Client) -> Result<()> {
+    // A stopped interaction's sandbox shell has gone with it.
+    let interactions = client.list_interactions(&live_only())?;
+    let live_ids = interactions
+        .iter()
+        .map(|interaction| interaction.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut sessions = session::all_sessions(client)?
+        .into_iter()
+        .filter(|session| live_ids.contains(session.id.as_str()))
+        .collect::<Vec<_>>();
+    if sessions.is_empty() {
+        println!("No live sessions found by the Styra server");
+        return Ok(());
+    }
+
+    let mut terminal = RatatuiUi::new()?;
+    let choice = picker::run_session_picker(
+        &mut terminal,
+        client,
+        "styra",
+        &mut sessions,
+        &interactions,
+        None,
+        false,
+    );
+    terminal.close()?;
+    match choice? {
+        Some(picker::SessionChoice::Open(session)) => attach_shell(client, &session),
+        // There is no interaction to start from a shell browser, so `n` is not
+        // offered there and backing out is the only other answer.
+        Some(picker::SessionChoice::New) | None => Ok(()),
+    }
+}
+
+/// `--daemon`: bring up the background daemon and return.
+fn start_daemon(socket: &Path) -> Result<()> {
+    if Client::new(socket).health().is_ok() {
+        println!("styra daemon already running on {}", socket.display());
+        return Ok(());
+    }
+    styra_server::ensure_server(socket)
+        .with_context(|| format!("starting the Styra daemon on {}", socket.display()))?;
+    println!("started styra daemon on {}", socket.display());
+    Ok(())
+}
+
+/// `--stop`: ask the daemon on `socket` to shut down.
+fn stop_daemon(socket: &Path) -> Result<()> {
+    let client = Client::new(socket);
+    if client.health().is_err() {
+        println!("no styra daemon running on {}", socket.display());
+        return Ok(());
+    }
+    client
+        .shutdown()
+        .with_context(|| format!("stopping the Styra daemon on {}", socket.display()))?;
+    println!("stopped styra daemon on {}", socket.display());
+    Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use styra_protocol::agent::Selection;
+
+    fn workspace(id: &str, host_path: &str) -> WorkspaceSummary {
+        WorkspaceSummary {
+            path: format!("/store/{id}").into(),
+            created_at_ms: 0,
+            last_accessed_at_ms: 0,
+            ..crate::workspace::tests::workspace(id, None, host_path)
+        }
+    }
+
+    #[test]
+    fn shell_subcommand_captures_an_explicit_session() {
+        let cli = Cli::try_parse_from(["styra", "shell", "--session", "styra-123"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Shell { session: Some(session) }) if session == "styra-123"
+        ));
+    }
+
+    #[test]
+    fn shell_subcommand_without_a_session_opens_the_browser() {
+        let cli = Cli::try_parse_from(["styra", "shell"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Shell { session: None })
+        ));
+    }
+
+    #[test]
+    fn trailing_prompt_launch_parses_without_a_subcommand() {
+        let cli = Cli::try_parse_from(["styra", "hello"]).unwrap();
+        assert!(cli.command.is_none());
+        assert_eq!(cli.prompt, vec!["hello"]);
+    }
+
+    #[test]
+    fn skipping_the_workspace_list_does_not_combine_with_an_explicit_target() {
+        let cli = Cli::try_parse_from(["styra", "--skip-workspace-list"]).unwrap();
+        assert!(cli.skip_workspace_list);
+        assert!(
+            Cli::try_parse_from(["styra", "--skip-workspace-list", "--workspace", "/tmp"]).is_err()
+        );
+        assert!(Cli::try_parse_from(["styra", "--skip-workspace-list", "--view"]).is_err());
+    }
+
+    #[test]
+    fn profile_is_not_a_command_line_option() {
+        assert!(Cli::try_parse_from(["styra", "--profile", "codex"]).is_err());
+    }
+
+    #[test]
+    fn quitting_and_switching_detach_but_reset_stops_the_running_interaction() {
+        let live = Attachment::Attached { cursor: 7 };
+
+        assert!(!event_loop::stops_current_interaction(
+            &RunOutcome::Quit,
+            &live
+        ));
+        assert!(!event_loop::stops_current_interaction(
+            &RunOutcome::OpenSession("styra-other".into()),
+            &live,
+        ));
+        assert!(event_loop::stops_current_interaction(
+            &RunOutcome::Reset,
+            &live
+        ));
+        assert!(!event_loop::stops_current_interaction(
+            &RunOutcome::NewSession,
+            &live
+        ));
+    }
+
+    #[test]
+    fn new_session_uses_the_workspace_of_the_interaction_being_viewed() {
+        let active = workspace("first", "/work/first");
+        let viewed = workspace("viewed", "/work/viewed");
+        let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+        let mut app = App::pending(selection.clone());
+        app.workspace.id = Some(viewed.id.clone());
+        app.session_id = "source-session".into();
+
+        let inherited = workspace_for_new_session(&app, &active, &[active.clone(), viewed.clone()]);
+        let pending = pending_app_from_session(&app, &inherited);
+
+        assert_eq!(inherited, viewed);
+        assert_eq!(pending.workspace.id.as_deref(), Some("viewed"));
+        assert_eq!(pending.workspace.root(), Some(Path::new("/work/viewed")));
+        assert_eq!(pending.selection, selection);
+        assert_eq!(pending.checkout_from.as_deref(), Some("source-session"));
+    }
+
+    /// `n` in a Session working in a linked worktree opens a blank screen
+    /// standing in that worktree, not at the Workspace root: the checkout it
+    /// asks to share is where the next launch will actually work, and the
+    /// footer has to say so before the first message is sent. Pressing `n`
+    /// again on that blank screen returns to the Workspace root, since it
+    /// has no Session of its own to lend a checkout.
+    #[test]
+    fn new_sessions_share_the_checkout_then_return_to_the_root_from_a_blank_screen() {
+        let viewed = workspace("viewed", "/work/viewed");
+        let checkout = Path::new("/state/worktrees/viewed/rename-the-picker-styra-7");
+        let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+        let mut app = App::pending(selection);
+        app.workspace.id = Some(viewed.id.clone());
+        app.session_id = "styra-7".into();
+        app.workspace.enter(checkout.to_path_buf());
+
+        let pending = pending_app_from_session(&app, &viewed);
+
+        assert_eq!(pending.checkout_from.as_deref(), Some("styra-7"));
+        assert_eq!(pending.workspace.root(), Some(checkout));
+        assert_eq!(
+            pending.workspace.working_directory_or_current(),
+            Some(checkout.to_path_buf())
+        );
+
+        let second = pending_app_from_session(&pending, &viewed);
+        assert_eq!(second.checkout_from, None);
+        assert_eq!(second.workspace.root(), Some(Path::new("/work/viewed")));
+    }
+
+    /// The Workspace being viewed can be gone by the time `n` is pressed, in
+    /// which case the blank screen lands somewhere else. It starts there
+    /// plainly — at that Workspace's own root, and without asking to share a
+    /// checkout across Workspaces, which the server refuses.
+    #[test]
+    fn a_new_session_landing_in_another_workspace_does_not_inherit_the_checkout() {
+        let active = workspace("first", "/work/first");
+        let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+        let mut app = App::pending(selection);
+        app.workspace.id = Some("since-removed".into());
+        app.session_id = "source-session".into();
+        app.workspace
+            .enter(PathBuf::from("/state/worktrees/since-removed/styra-3"));
+
+        let landed_in = workspace_for_new_session(&app, &active, std::slice::from_ref(&active));
+        let pending = pending_app_from_session(&app, &landed_in);
+
+        assert_eq!(landed_in, active);
+        assert_eq!(pending.checkout_from, None);
+        assert_eq!(pending.workspace.root(), Some(Path::new("/work/first")));
+    }
+
+    /// A new session started from a Workspace begins on that Workspace's own
+    /// standing policy, while the operator's own inputs travel with them.
+    #[test]
+    fn a_new_session_starts_from_the_policy_of_the_workspace_it_lands_in() {
+        let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+        let mut landed_in = workspace("second", "/work/second");
+        landed_in.launch = styra_protocol::LaunchPolicy {
+            templates: vec!["rust".into()],
+            ..styra_protocol::LaunchPolicy::default()
+        };
+        let carried = styra_protocol::LaunchPolicy {
+            templates: vec!["browser".into()],
+            ..styra_protocol::LaunchPolicy::default()
+        };
+
+        let pending = pending_app(selection, carried.clone(), &landed_in);
+
+        assert_eq!(pending.launch.workspace, landed_in.launch);
+        assert_eq!(pending.launch.interaction, carried);
+        assert_eq!(
+            pending.launch.effective().templates,
+            vec!["rust".to_owned(), "browser".to_owned()]
+        );
+    }
+
+    fn launcher_fixture(selection: &str) -> (tempfile::TempDir, App, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("defaults.json");
+        let mut app = App::pending(Selection::parse(selection).expect("valid test selection"));
+        app.open_launcher();
+        (directory, app, path)
+    }
+
+    fn press_launcher(app: &mut App, path: &Path, code: KeyCode, modifiers: KeyModifiers) {
+        launcher::handle_key(app, KeyEvent::new(code, modifiers), path);
+    }
+
+    fn type_launcher(app: &mut App, path: &Path, text: &str) {
+        for character in text.chars() {
+            press_launcher(app, path, KeyCode::Char(character), KeyModifiers::NONE);
+        }
+    }
+
+    #[test]
+    fn confirming_the_launcher_selects_for_this_workspace_without_saving_a_default() {
+        let (_directory, mut app, path) = launcher_fixture("claude:claude-sonnet-5/max");
+        let selection = app.selection.clone();
+
+        press_launcher(&mut app, &path, KeyCode::Enter, KeyModifiers::NONE);
+
+        assert_eq!(app.selection, selection);
+        assert!(!path.exists());
+    }
+
+    /// The arrows move the picker and confirming remembers the model, so the
+    /// next picker lists it first — without touching the saved defaults, which
+    /// only ctrl-D writes.
+    #[test]
+    fn the_arrows_move_the_launcher_and_confirming_remembers_the_model() {
+        let (_directory, mut app, path) = launcher_fixture("claude");
+        let opened_on = app.launcher.as_ref().unwrap().selection();
+
+        // Two rows down and one back up.
+        for code in [KeyCode::Down, KeyCode::Down, KeyCode::Up] {
+            launcher::handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &path);
+        }
+        let moved_to = app.launcher.as_ref().unwrap().selection();
+        assert_ne!(moved_to, opened_on, "the cursor moved");
+
+        press_launcher(&mut app, &path, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.selection, moved_to);
+        assert!(!path.exists(), "Enter does not save a default selection");
+        assert_eq!(
+            preferences::load_recent_models(&path),
+            vec![moved_to.model.clone()]
+        );
+
+        // A picker opened with that ordering puts the model at the top.
+        app.recent_models = preferences::load_recent_models(&path);
+        app.open_launcher();
+        let launcher = app.launcher.as_ref().unwrap();
+        assert!(
+            launcher
+                .labels()
+                .first()
+                .is_some_and(|label| label.contains(&moved_to.model)),
+            "the model just used leads the list"
+        );
+    }
+
+    /// The list is typed at directly — no key opens a query first, because
+    /// every printable key is already a letter of one. Enter then launches on
+    /// what the query found.
+    #[test]
+    fn typing_at_the_launcher_narrows_it_and_enter_launches_on_the_row() {
+        let (_directory, mut app, path) = launcher_fixture("claude");
+
+        type_launcher(&mut app, &path, "haiku");
+        let narrowed = app.launcher.as_ref().unwrap().selection().model;
+        assert!(narrowed.contains("haiku"), "{narrowed}");
+
+        press_launcher(&mut app, &path, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.launcher.is_none());
+        assert_eq!(app.selection.model, narrowed);
+    }
+
+    /// Typing a triple is typing an identifier, so ctrl-W takes back one part
+    /// of one — and an unbound chord is not mistaken for a letter of a name.
+    #[test]
+    fn ctrl_w_deletes_a_word_of_the_launcher_query() {
+        let (_directory, mut app, path) = launcher_fixture("claude");
+        type_launcher(&mut app, &path, "claude-opus-5-5/mox");
+
+        press_launcher(&mut app, &path, KeyCode::Char('w'), KeyModifiers::CONTROL);
+        let launcher = app.launcher.as_ref().expect("still open");
+        assert_eq!(launcher.list.query, "claude-opus-5-5/");
+        assert_eq!(launcher.selection().model, "claude-opus-5-5");
+
+        // A chord the picker has no command for types nothing.
+        press_launcher(&mut app, &path, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.launcher.as_ref().unwrap().list.query,
+            "claude-opus-5-5/",
+            "an unbound chord is not a letter of the query"
+        );
+    }
+
+    /// Esc widens an over-narrowed list before it abandons the picker: the
+    /// first press is the one the operator meant, the second closes.
+    #[test]
+    fn esc_clears_the_query_before_it_closes_the_launcher() {
+        let (_directory, mut app, path) = launcher_fixture("claude");
+        type_launcher(&mut app, &path, "haiku");
+
+        press_launcher(&mut app, &path, KeyCode::Esc, KeyModifiers::NONE);
+        let launcher = app.launcher.as_ref().expect("still open");
+        assert!(!launcher.is_filtering(), "the query is gone");
+        assert!(
+            launcher.selection().model.contains("haiku"),
+            "and the row it found is still selected"
+        );
+
+        press_launcher(&mut app, &path, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.launcher.is_none(), "the second press closes it");
+    }
+
+    #[test]
+    fn the_launcher_can_explicitly_save_the_selection_as_the_default() {
+        let (_directory, mut app, path) = launcher_fixture("claude:claude-sonnet-5/max");
+        let selection = app.selection.clone();
+
+        press_launcher(&mut app, &path, KeyCode::Char('d'), KeyModifiers::CONTROL);
+
+        assert_eq!(
+            preferences::load_or_default(&path).unwrap().selection,
+            selection
+        );
+    }
+}
+
+#[cfg(test)]
+mod test_ui;

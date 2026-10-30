@@ -1,0 +1,1282 @@
+use super::*;
+use crate::text_prompt::{self, TextPrompt};
+use crate::theme;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::Frame;
+use std::path::Path;
+
+fn session_tree_depths(sessions: &[SessionSummary]) -> Vec<usize> {
+    use std::collections::HashMap;
+    let positions = sessions
+        .iter()
+        .enumerate()
+        .map(|(index, session)| (session.id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    sessions
+        .iter()
+        .enumerate()
+        .map(|(index, session)| {
+            let mut depth = 0;
+            let mut seen = vec![index];
+            let mut parent = session
+                .origin
+                .as_ref()
+                .and_then(|origin| positions.get(origin.session_id.as_str()).copied());
+            while let Some(parent_index) = parent {
+                if seen.contains(&parent_index) {
+                    return 0;
+                }
+                seen.push(parent_index);
+                depth += 1;
+                parent = sessions[parent_index]
+                    .origin
+                    .as_ref()
+                    .and_then(|origin| positions.get(origin.session_id.as_str()).copied());
+            }
+            depth
+        })
+        .collect()
+}
+
+fn render_placeholder(frame: &mut Frame, block: Block<'static>, area: Rect, text: &str) {
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            text.to_owned(),
+            Style::default().fg(theme::MUTED_TEXT),
+        )))
+        .block(block),
+        area,
+    );
+}
+
+fn tag_color(tag: &str) -> ratatui::style::Color {
+    match tag {
+        "agent" => theme::AGENT_TAG,
+        "user" => theme::USER_TAG,
+        "shell" => theme::SHELL_TAG,
+        "tool" => theme::SPECIAL,
+        "plan" | "files" => theme::INFO,
+        "branch" => theme::ACCENT,
+        "error" | "malformed" => theme::ERROR,
+        _ => theme::ADDITIONAL_INFO,
+    }
+}
+
+fn message_text_color(tag: &str) -> ratatui::style::Color {
+    match tag {
+        "agent" => theme::AGENT_TEXT,
+        "user" => theme::USER_TEXT,
+        "error" | "malformed" => theme::ERROR,
+        _ => theme::TEXT,
+    }
+}
+
+fn workspace_display_name(workspace: &WorkspaceSummary) -> String {
+    workspace.name.clone().unwrap_or_else(|| {
+        workspace
+            .host_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("workspace")
+            .to_owned()
+    })
+}
+use styra_protocol::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
+
+/// Render the session picker screen: every stored session in `order`, newest
+/// first, with `selected` highlighted. Each row shows the age `order` sorts
+/// on, so the list never looks unsorted. Standalone from [`crate::app::App`] — the
+/// picker runs before any session is loaded, so it has no state of its own
+/// to render.
+// Picker rendering keeps its borrowed display state explicit, like render_workspace_picker.
+#[allow(clippy::too_many_arguments)]
+pub fn render_picker(
+    frame: &mut Frame,
+    scope: &str,
+    sessions: &[SessionSummary],
+    selected: usize,
+    order: SessionOrder,
+    preview: Preview<'_>,
+    filter: Option<&str>,
+    searching: bool,
+    show_completed: bool,
+) {
+    let area = frame.area();
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(session_picker_title(
+            scope,
+            order,
+            filter,
+            searching,
+            show_completed,
+        ));
+
+    if sessions.is_empty() {
+        render_placeholder(frame, block, panes[0], "  no sessions found");
+        render_session_preview(frame, None, preview, panes[1]);
+        return;
+    }
+
+    let selected = selected.min(sessions.len() - 1);
+    let depths = session_tree_depths(sessions);
+    let items: Vec<ListItem> = sessions
+        .iter()
+        .zip(depths)
+        .enumerate()
+        .map(|(index, (session, depth))| session_item(session, depth, index == selected, order))
+        .collect();
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(theme::SELECTION_BACKGROUND)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut state = ListState::default();
+    state.select(Some(selected));
+    frame.render_stateful_widget(list, panes[0], &mut state);
+    let session = sessions.get(selected);
+    render_session_preview(frame, session, preview, panes[1]);
+}
+
+fn session_picker_title(
+    scope: &str,
+    order: SessionOrder,
+    filter: Option<&str>,
+    searching: bool,
+    show_completed: bool,
+) -> String {
+    let filter = filter
+        .filter(|filter| !filter.is_empty())
+        .map(|filter| format!(" · filter: {filter}"))
+        .unwrap_or_default();
+    let searching = if searching { " · searching" } else { "" };
+    let completed = if show_completed {
+        "completed shown"
+    } else {
+        "completed hidden"
+    };
+    // The shortcuts live behind `?` rather than along this line: only a few
+    // ever fit, and the ones that did crowded out the state — the filter,
+    // which way the list is sorted, and whether completed sessions are shown
+    // — that the operator cannot get anywhere else.
+    format!(
+        " {scope} · sessions{filter}{searching} · sort: {} · {completed} · ? keys ",
+        order.label(),
+    )
+}
+
+fn render_session_preview(
+    frame: &mut Frame,
+    session: Option<&SessionSummary>,
+    preview: Preview<'_>,
+    area: Rect,
+) {
+    render_session_log_preview(
+        frame,
+        session.map(|item| item.id.as_str()),
+        session.map(|item| item.selection.provider.protocol()),
+        preview,
+        area,
+    );
+}
+
+/// Render the conversation preview retained by the stored-Session picker.
+/// Live-interaction navigation uses the main event list directly instead.
+fn render_session_log_preview(
+    frame: &mut Frame,
+    id: Option<&str>,
+    protocol: Option<styra_protocol::event::Protocol>,
+    preview: Preview<'_>,
+    area: Rect,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::INACTIVE))
+        .title(
+            id.map(|id| format!(" conversation · {id} "))
+                .unwrap_or_else(|| " conversation ".into()),
+        );
+    let updates = match preview {
+        Preview::Loading => {
+            render_placeholder(frame, block, area, "  loading…");
+            return;
+        }
+        Preview::Ready(updates) => updates,
+    };
+    let viewport = area.height.saturating_sub(2) as usize;
+    let entries = updates
+        .iter()
+        .rev()
+        .filter_map(|update| match update {
+            InteractionUpdate::Event(
+                event @ (styra_protocol::event::AgentEvent::UserMessage { .. }
+                | styra_protocol::event::AgentEvent::AgentMessage { .. }),
+            ) => Some(event),
+            _ => None,
+        })
+        .take(viewport)
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        render_placeholder(frame, block, area, "  no messages yet");
+        return;
+    }
+    let lines = entries
+        .into_iter()
+        .rev()
+        .filter_map(|event| conversation_line(event, protocol))
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// The last `count` messages of a conversation, oldest first, one line each,
+/// or a line saying there are none yet.
+pub fn latest_conversation<'e>(
+    events: impl DoubleEndedIterator<Item = &'e styra_protocol::event::AgentEvent>,
+    protocol: styra_protocol::event::Protocol,
+    count: usize,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<_> = events
+        .rev()
+        .filter_map(|event| conversation_line(event, Some(protocol)))
+        .take(count)
+        .collect();
+    if lines.is_empty() {
+        return vec![Line::from(Span::styled(
+            "  no messages yet",
+            Style::default().fg(theme::MUTED_TEXT),
+        ))];
+    }
+    lines.reverse();
+    lines
+}
+
+/// One message of another Session's conversation, as a single line: who
+/// spoke, and the gist of what they said. `None` for anything that is not a
+/// message — a conversation previewed from outside is read by its exchange.
+pub(crate) fn conversation_line(
+    event: &styra_protocol::event::AgentEvent,
+    protocol: Option<styra_protocol::event::Protocol>,
+) -> Option<Line<'static>> {
+    let marker = match event {
+        styra_protocol::event::AgentEvent::UserMessage { .. } => "»",
+        styra_protocol::event::AgentEvent::AgentMessage { .. } => "«",
+        _ => return None,
+    };
+    let tag = event.tag();
+    Some(Line::from(vec![
+        Span::styled(
+            format!("{marker:<8} "),
+            Style::default()
+                .fg(tag_color(tag))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            protocol
+                .map(|protocol| {
+                    protocol
+                        .presented_summary(event, styra_protocol::event::PresentationMode::Pretty)
+                })
+                .unwrap_or_else(|| event.summary()),
+            Style::default().fg(message_text_color(tag)),
+        ),
+    ]))
+}
+
+/// A dismissable one-line notice (e.g. a conversion failure), overlaid on top
+/// of the session picker it interrupted.
+pub fn render_message_popup(frame: &mut Frame, title: &str, message: &str) {
+    let area = frame.area();
+    let width = area.width.saturating_sub(8).min(72);
+    let popup = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + area.height.saturating_sub(3) / 2,
+        width,
+        3,
+    );
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(message.to_owned())
+            .style(Style::default().fg(theme::ERROR))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme::ERROR))
+                    .title(format!(" {title} · press any key ")),
+            ),
+        popup,
+    );
+}
+
+pub fn render_name_prompt(frame: &mut Frame, value: &str) {
+    let prompt = TextPrompt::new(" Session name · Enter save · Esc cancel ", value);
+    text_prompt::render(frame, &prompt, frame.area());
+}
+
+/// A one-line text field over the Workspace picker: its name, or its directory.
+pub fn render_workspace_prompt(frame: &mut Frame, title: &str, value: &str) {
+    let prompt = TextPrompt::new(format!(" {title} · Enter save · Esc cancel "), value);
+    text_prompt::render(frame, &prompt, frame.area());
+}
+
+/// Render the top-level Workspace picker. Entering a Workspace leads to its
+/// separate Session picker, so the right-hand pane previews that next screen
+/// for the row under the cursor: the Workspace's Sessions.
+#[allow(clippy::too_many_arguments)]
+pub fn render_workspace_picker(
+    frame: &mut Frame,
+    workspaces: &[WorkspaceSummary],
+    selected: usize,
+    interactions: &[InteractionSummary],
+    preview: SessionsPreview<'_>,
+    filter: Option<&str>,
+    show_deleted: bool,
+) {
+    let panes = workspace_picker_panes(frame.area());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(workspace_picker_title(filter, show_deleted));
+    if workspaces.is_empty() {
+        let empty = if filter.is_some_and(|filter| !filter.is_empty()) {
+            "  no Workspaces match the filter \u{b7} Esc clears it"
+        } else if show_deleted {
+            "  no deleted Workspaces · Ctrl+T returns to active Workspaces"
+        } else {
+            "  no Workspaces found \u{b7} press Ctrl+C to create one in the current directory"
+        };
+        render_placeholder(frame, block, panes[0], empty);
+        render_sessions_preview(frame, None, preview, interactions, panes[1]);
+        return;
+    }
+    let selected = selected.min(workspaces.len() - 1);
+    let items: Vec<ListItem> = workspaces
+        .iter()
+        .enumerate()
+        .map(|(index, workspace)| workspace_item(workspace, index == selected, interactions))
+        .collect();
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(theme::SELECTION_BACKGROUND)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut state = ListState::default();
+    state.select(Some(selected));
+    frame.render_stateful_widget(list, panes[0], &mut state);
+    let workspace = workspaces.get(selected);
+    if show_deleted {
+        render_placeholder(
+            frame,
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Preserved Sessions "),
+            panes[1],
+            "  Restore this Workspace with Ctrl+U to access its Sessions.",
+        );
+    } else {
+        render_sessions_preview(frame, workspace, preview, interactions, panes[1]);
+    }
+}
+
+/// The Workspace picker's two panes: the list on the left, the selected
+/// Workspace's Sessions on the right.
+fn workspace_picker_panes(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area)
+}
+
+/// The question Styra asks when started in a directory no Workspace covers,
+/// overlaid on the Workspace list it falls back to if the answer is no. The
+/// screen beneath is washed down as it is behind the message box, so the
+/// question is plainly what has the keys.
+pub fn render_workspace_offer(frame: &mut Frame, directory: &Path) {
+    frame.render_widget(
+        Block::default().style(
+            Style::default()
+                .fg(theme::MODAL_BACKDROP)
+                .add_modifier(Modifier::DIM),
+        ),
+        frame.area(),
+    );
+    let area = workspace_picker_panes(frame.area())[0];
+    let width = area.width.saturating_sub(4).min(72);
+    let popup = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        // Pinned near the top, where the eye starts, however tall the screen:
+        // clear of the list's title, with a row of air above it.
+        area.y + 2.min(area.height.saturating_sub(5)),
+        width,
+        5.min(area.height),
+    );
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "Create a Workspace for this directory?",
+                Style::default().fg(theme::TEXT),
+            )),
+            Line::from(Span::styled(
+                directory.display().to_string(),
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "Enter/y create \u{b7} Esc/n pick an existing one",
+                Style::default().fg(theme::MUTED_TEXT),
+            )),
+        ])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::ACCENT))
+                .title(" No Workspace here "),
+        ),
+        popup,
+    );
+}
+
+/// The Workspace picker's title says what the list cannot be read without:
+/// the filter narrowing it. Every letter typed is part of that filter, so the
+/// rest of the keys live behind `?`, as they do for the session picker.
+fn workspace_picker_title(filter: Option<&str>, show_deleted: bool) -> String {
+    let filter = filter
+        .filter(|filter| !filter.is_empty())
+        .map(|filter| format!(" \u{b7} filter: {filter}"))
+        .unwrap_or_default();
+    let scope = if show_deleted {
+        "Deleted Workspaces"
+    } else {
+        "Workspaces"
+    };
+    let action = if show_deleted {
+        "Ctrl+U restore"
+    } else {
+        "Ctrl+X delete"
+    };
+    format!(" styra \u{b7} {scope}{filter} \u{b7} type to filter \u{b7} Ctrl+T deleted \u{b7} {action} \u{b7} ? keys ")
+}
+
+/// One Workspace row. A Workspace holding an Interaction the server still
+/// accepts input for is marked and counted: that is where the operator has
+/// work in flight, and it is why the row sorts where it does.
+fn workspace_item(
+    workspace: &WorkspaceSummary,
+    selected: bool,
+    interactions: &[InteractionSummary],
+) -> ListItem<'static> {
+    let name = workspace_display_name(workspace);
+    let live = live_interactions(&workspace.id, interactions);
+    ListItem::new(Line::from(vec![
+        Span::styled(
+            if selected { "\u{2022} " } else { "  " },
+            Style::default().fg(if selected {
+                theme::SELECTION_MARKER
+            } else {
+                theme::ACCENT
+            }),
+        ),
+        Span::styled(
+            format!("{name:<19} "),
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:>3} sessions  ", workspace.session_count),
+            Style::default().fg(theme::MUTED_TEXT),
+        ),
+        Span::styled(
+            format!("{:<9}", live_label(live)),
+            Style::default()
+                .fg(theme::LIVE_MARKER)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:<10} ", workspace.age),
+            Style::default().fg(theme::MUTED_TEXT),
+        ),
+        Span::styled(
+            workspace.host_path.display().to_string(),
+            Style::default().fg(theme::TEXT),
+        ),
+    ]))
+}
+
+/// The liveness column: a dot and a count, or nothing at all. Dot and count
+/// share one column so a Workspace with no work in flight costs the row only
+/// the blank width, leaving the host path room to be read.
+fn live_label(live: usize) -> String {
+    match live {
+        0 => String::new(),
+        n => format!("\u{25cf} {n} live"),
+    }
+}
+
+/// Interactions in a Workspace the server still accepts input for, whether
+/// idle and waiting on the operator or busy with a turn.
+fn live_interactions(workspace_id: &str, interactions: &[InteractionSummary]) -> usize {
+    interactions
+        .iter()
+        .filter(|interaction| {
+            interaction.activity.accepting() && interaction.workspace_id == workspace_id
+        })
+        .count()
+}
+
+/// The Session-picker preview: the Sessions `Enter` would open this Workspace
+/// on, in the same order that screen shows them, with the live ones marked.
+fn render_sessions_preview(
+    frame: &mut Frame,
+    workspace: Option<&WorkspaceSummary>,
+    preview: SessionsPreview<'_>,
+    interactions: &[InteractionSummary],
+    area: Rect,
+) {
+    let title = match workspace {
+        Some(workspace) => format!(" sessions \u{b7} {} ", workspace_display_name(workspace)),
+        None => " sessions ".to_owned(),
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::INACTIVE))
+        .title(title);
+    let sessions = match preview {
+        SessionsPreview::Loading => {
+            render_placeholder(frame, block, area, "  loading\u{2026}");
+            return;
+        }
+        SessionsPreview::Ready(sessions) => sessions,
+    };
+    if sessions.is_empty() {
+        render_placeholder(frame, block, area, "  no sessions yet");
+        return;
+    }
+    let items: Vec<ListItem> = sessions
+        .iter()
+        .map(|session| {
+            let live = interactions.iter().any(|interaction| {
+                interaction.activity.accepting() && interaction.id == session.id
+            });
+            preview_session_item(session, live)
+        })
+        .collect();
+    frame.render_widget(List::new(items).block(block), area);
+}
+
+/// A Session as the preview shows it: one line, matching the compact tree in
+/// the full Session picker.
+fn preview_session_item(session: &SessionSummary, live: bool) -> ListItem<'static> {
+    let display_name = session
+        .name
+        .as_deref()
+        .unwrap_or_else(|| short_id(&session.id));
+    ListItem::new(Line::from(vec![
+        Span::styled(
+            if live { "\u{25cf} " } else { "  " },
+            Style::default().fg(theme::LIVE_MARKER),
+        ),
+        Span::styled(
+            format!("{:<8} ", session.selection.provider.as_str()),
+            Style::default().fg(theme::ACCENT),
+        ),
+        Span::styled(
+            format!("{display_name:<20} "),
+            Style::default().fg(theme::TEXT),
+        ),
+        Span::styled(session.age.clone(), Style::default().fg(theme::MUTED_TEXT)),
+    ]))
+}
+
+/// Render the Driva template picker: every template the Workspace could name,
+/// with the chosen ones marked by the position they hold in the layering.
+///
+/// The number, rather than a plain check, is the point: templates are applied
+/// in order and a later one wins on conflict, so which template is third
+/// changes the resulting policy.
+pub fn render_template_picker(
+    frame: &mut Frame,
+    templates: &[styra_protocol::TemplateSummary],
+    chosen: &[String],
+    cursor: usize,
+) {
+    let area = frame.area();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(" styra · Driva templates · ? keys ")
+        .title_bottom(Line::from(Span::styled(
+            " layered in the order chosen; a later template wins on conflict ",
+            Style::default().fg(theme::MUTED_TEXT),
+        )));
+    if templates.is_empty() {
+        render_placeholder(frame, block, area, "  no Driva templates are available");
+        return;
+    }
+    let cursor = cursor.min(templates.len() - 1);
+    let items: Vec<ListItem> = templates
+        .iter()
+        .enumerate()
+        .map(|(index, template)| {
+            let position = chosen.iter().position(|name| name == &template.name);
+            let marker = match position {
+                Some(order) => format!("{:>2} ", order + 1),
+                None => "   ".to_owned(),
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    if index == cursor { "• " } else { "  " },
+                    Style::default().fg(if index == cursor {
+                        theme::SELECTION_MARKER
+                    } else {
+                        theme::ACCENT
+                    }),
+                ),
+                Span::styled(
+                    marker,
+                    Style::default()
+                        .fg(if position.is_some() {
+                            theme::WARNING
+                        } else {
+                            theme::INACTIVE
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<16} ", template.name),
+                    Style::default()
+                        .fg(if position.is_some() {
+                            theme::ACCENT
+                        } else {
+                            theme::MUTED_TEXT
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    template.description.clone(),
+                    Style::default().fg(theme::TEXT),
+                ),
+            ]))
+        })
+        .collect();
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(theme::SELECTION_BACKGROUND)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut state = ListState::default();
+    state.select(Some(cursor));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Keep the root frame visibly alive while template discovery runs on the
+/// launch-effect worker. The picker replaces this screen in place when the
+/// response arrives.
+pub fn render_template_picker_loading(frame: &mut Frame) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(" styra · Driva templates · Esc cancel ");
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "  loading Driva templates…",
+            Style::default().fg(theme::MUTED_TEXT),
+        )))
+        .block(block),
+        frame.area(),
+    );
+}
+
+fn session_item(
+    session: &SessionSummary,
+    depth: usize,
+    selected: bool,
+    order: SessionOrder,
+) -> ListItem<'static> {
+    let provider = session.selection.provider.as_str();
+    let display_name = session.name.as_deref().unwrap_or(&session.id);
+    let age = match order {
+        SessionOrder::LastActivity if !session.last_event_age.is_empty() => {
+            session.last_event_age.clone()
+        }
+        _ => session.age.clone(),
+    };
+    let mut spans = vec![
+        Span::styled(
+            tree_marker(depth, selected),
+            Style::default().fg(if selected {
+                theme::SELECTION_MARKER
+            } else {
+                theme::TEXT
+            }),
+        ),
+        Span::styled(
+            display_name.to_owned(),
+            Style::default()
+                .fg(theme::TEXT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" · {provider}"), Style::default().fg(theme::ACCENT)),
+        Span::styled(
+            format!(" · {age}"),
+            Style::default().fg(theme::ADDITIONAL_INFO),
+        ),
+    ];
+    if session.completed == styra_protocol::CompletionState::Sealed {
+        spans.push(Span::styled(
+            " · SEALED",
+            Style::default()
+                .fg(theme::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else if session.completed == styra_protocol::CompletionState::Completed {
+        spans.push(Span::styled(
+            " · COMPLETED",
+            Style::default()
+                .fg(theme::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else if session.completed == styra_protocol::CompletionState::Abandoned {
+        spans.push(Span::styled(
+            " · ABANDONED",
+            Style::default()
+                .fg(theme::STOP_ABANDONED)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    ListItem::new(Line::from(spans))
+}
+
+fn tree_marker(depth: usize, selected: bool) -> String {
+    let cursor = if selected { "• " } else { "  " };
+    if depth == 0 {
+        cursor.to_owned()
+    } else {
+        // A child starts beneath its parent's content, not at the same left
+        // edge as the root marker. Each further branch carries that indent
+        // forward, so the hierarchy reads as a tree instead of a gutter.
+        format!("{}└─ {cursor}", "  ".repeat(depth))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use std::path::PathBuf;
+    use styra_protocol::event::AgentEvent;
+
+    fn picker_summary(id: &str, selection: &str, age: &str) -> SessionSummary {
+        SessionSummary {
+            id: id.into(),
+            name: None,
+            first_prompt: None,
+            tags: Vec::new(),
+            workspace_id: "w-1".into(),
+            path: std::path::PathBuf::from(id),
+            selection: styra_protocol::agent::Selection::parse(selection).unwrap(),
+            age: age.into(),
+            created_at_ms: None,
+            last_event_at_ms: None,
+            last_event_age: String::new(),
+            origin: None,
+            branched_from: None,
+            completed: styra_protocol::CompletionState::Active,
+            integration: None,
+        }
+    }
+
+    fn rendered_picker(sessions: &[SessionSummary], selected: usize) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_picker(
+                    frame,
+                    "payments",
+                    sessions,
+                    selected,
+                    SessionOrder::LastActivity,
+                    Preview::Ready(&[]),
+                    None,
+                    false,
+                    false,
+                )
+            })
+            .unwrap();
+        screen_text(terminal.backend().buffer())
+    }
+
+    /// Split a flattened screen back into rows, so an assertion can say which
+    /// row a marker landed on rather than only that it is somewhere on screen.
+    fn screen_lines(screen: &str, width: usize) -> Vec<String> {
+        screen
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(width)
+            .map(|row| row.iter().collect())
+            .collect()
+    }
+
+    fn screen_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn picker_lists_sessions_with_provider_and_age() {
+        let sessions = vec![
+            picker_summary("s-1", "codex", "2m ago"),
+            picker_summary("s-2", "claude", "3h ago"),
+        ];
+        let screen = rendered_picker(&sessions, 0);
+        assert!(screen.contains("payments · sessions"), "{screen}");
+        assert!(screen.contains("codex"));
+        assert!(screen.contains("2m ago"));
+        assert!(screen.contains("s-1"));
+        assert!(screen.contains("claude"));
+        assert!(screen.contains("3h ago"));
+        assert!(screen.contains("s-2"));
+    }
+
+    #[test]
+    fn a_branched_session_stays_on_one_compact_row() {
+        let mut session = picker_summary("s-2", "claude", "2m ago");
+        session.origin = Some(styra_protocol::SessionOrigin {
+            session_id: "s-1".into(),
+            provider: styra_protocol::agent::Provider::Codex,
+            at_ms: None,
+            history: styra_protocol::BranchHistory::ThroughSelected,
+        });
+        let screen = rendered_picker(&[session], 0);
+        assert!(screen.contains("claude"), "{screen}");
+        assert!(!screen.contains("converted from"), "{screen}");
+    }
+
+    #[test]
+    fn session_picker_indents_branched_sessions_as_a_tree() {
+        let root = picker_summary("root", "codex", "3m ago");
+        let mut branch = picker_summary("branch", "codex", "2m ago");
+        branch.origin = Some(styra_protocol::SessionOrigin {
+            session_id: "root".into(),
+            provider: styra_protocol::agent::Provider::Codex,
+            at_ms: Some(1000),
+            history: styra_protocol::BranchHistory::ThroughSelected,
+        });
+        let sessions = vec![root, branch];
+
+        let screen = rendered_picker(&sessions, 0);
+        let branch_row = screen_lines(&screen, 80)
+            .into_iter()
+            .find(|line| line.contains("branch · codex"))
+            .expect("branched session row");
+        assert!(branch_row.starts_with("│  └─"), "{screen}");
+    }
+
+    #[test]
+    fn picker_prefers_a_session_name_without_repeating_its_identity() {
+        let mut session = picker_summary("0000000123456-42-7", "codex", "2m ago");
+        session.name = Some("Fix session picker".into());
+        let screen = rendered_picker(&[session], 0);
+        assert!(screen.contains("Fix session picker"), "{screen}");
+        let list_pane = screen_lines(&screen, 80)
+            .into_iter()
+            .map(|line| line.chars().take(80 * 42 / 100).collect::<String>())
+            .collect::<String>();
+        assert!(!list_pane.contains("123456-42-7"), "{screen}");
+    }
+
+    #[test]
+    fn picker_shows_a_placeholder_when_there_are_no_sessions() {
+        let screen = rendered_picker(&[], 0);
+        assert!(screen.contains("no sessions found"));
+    }
+
+    #[test]
+    fn session_picker_previews_the_selected_sessions_log() {
+        let sessions = vec![picker_summary("s-1", "codex", "2m ago")];
+        let updates = vec![
+            InteractionUpdate::Event(AgentEvent::CommandStarted {
+                command: "cargo test".into(),
+            }),
+            InteractionUpdate::Event(AgentEvent::AgentMessage {
+                text: "Tests pass.".into(),
+            }),
+        ];
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_picker(
+                    frame,
+                    "styra",
+                    &sessions,
+                    0,
+                    SessionOrder::LastActivity,
+                    Preview::Ready(&updates),
+                    None,
+                    false,
+                    false,
+                )
+            })
+            .unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(screen.contains("conversation · s-1"), "{screen}");
+        assert!(screen.contains("Tests pass."), "{screen}");
+        // Tool activity is not part of the conversation.
+        assert!(!screen.contains("cargo test"), "{screen}");
+    }
+
+    fn workspace_summary(id: &str, name: &str, session_count: usize) -> WorkspaceSummary {
+        WorkspaceSummary {
+            id: id.into(),
+            name: Some(name.into()),
+            host_path: PathBuf::from(format!("/home/op/{id}")),
+            git_repository: None,
+            path: PathBuf::from(format!("/state/workspaces/{id}")),
+            session_count,
+            age: "2h ago".into(),
+            created_at_ms: 1,
+            last_accessed_at_ms: 1,
+            launch: Default::default(),
+        }
+    }
+
+    /// Wide enough that the left pane holds a whole row — name, counts,
+    /// liveness, age, host path — so an assertion about the row is not really
+    /// an assertion about where it was truncated.
+    const WORKSPACE_PICKER_WIDTH: usize = 160;
+
+    /// The Workspace list occupies the left half of the picker. The preview on
+    /// the right carries the selected Workspace's name in its own border title,
+    /// so a row has to be matched against this pane alone to be the list's.
+    fn workspace_rows(screen: &str) -> Vec<String> {
+        let width = WORKSPACE_PICKER_WIDTH / 2;
+        screen_lines(screen, WORKSPACE_PICKER_WIDTH)
+            .into_iter()
+            .map(|line| line.chars().take(width).collect())
+            .collect()
+    }
+
+    fn rendered_workspace_picker(
+        workspaces: &[WorkspaceSummary],
+        selected: usize,
+        interactions: &[InteractionSummary],
+        preview: SessionsPreview<'_>,
+    ) -> String {
+        rendered_filtered_workspace_picker(workspaces, selected, interactions, preview, None)
+    }
+
+    fn rendered_filtered_workspace_picker(
+        workspaces: &[WorkspaceSummary],
+        selected: usize,
+        interactions: &[InteractionSummary],
+        preview: SessionsPreview<'_>,
+        filter: Option<&str>,
+    ) -> String {
+        let mut terminal =
+            Terminal::new(TestBackend::new(WORKSPACE_PICKER_WIDTH as u16, 14)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_workspace_picker(
+                    frame,
+                    workspaces,
+                    selected,
+                    interactions,
+                    preview,
+                    filter,
+                    false,
+                )
+            })
+            .unwrap();
+        screen_text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn deleted_workspace_picker_explains_restoration_and_handles_an_empty_list() {
+        let workspaces = vec![workspace_summary("deleted", "archived work", 2)];
+        let mut terminal = Terminal::new(TestBackend::new(180, 14)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_workspace_picker(
+                    frame,
+                    &workspaces,
+                    0,
+                    &[],
+                    SessionsPreview::Ready(&[]),
+                    None,
+                    true,
+                )
+            })
+            .unwrap();
+        let screen = screen_text(terminal.backend().buffer());
+        assert!(screen.contains("Deleted Workspaces"), "{screen}");
+        assert!(screen.contains("Ctrl+U restore"), "{screen}");
+        assert!(screen.contains("archived work"), "{screen}");
+        assert!(screen.contains("Restore this Workspace"), "{screen}");
+        terminal
+            .draw(|frame| {
+                render_workspace_picker(frame, &[], 0, &[], SessionsPreview::Ready(&[]), None, true)
+            })
+            .unwrap();
+        let screen = screen_text(terminal.backend().buffer());
+        assert!(screen.contains("no deleted Workspaces"), "{screen}");
+        assert!(screen.contains("Ctrl+T returns to active"), "{screen}");
+    }
+
+    #[test]
+    fn workspace_picker_lists_workspaces_before_sessions() {
+        let mut workspace = workspace_summary("retry", "retry work", 3);
+        workspace.host_path = PathBuf::from("/home/op/retry");
+        let screen = rendered_workspace_picker(&[workspace], 0, &[], SessionsPreview::Ready(&[]));
+        assert!(screen.contains("styra \u{b7} Workspaces"), "{screen}");
+        assert!(screen.contains("retry work"), "{screen}");
+        assert!(screen.contains("3 sessions"), "{screen}");
+        assert!(screen.contains("/home/op/retry"), "{screen}");
+    }
+
+    #[test]
+    fn workspace_picker_says_when_the_filter_is_what_emptied_the_list() {
+        let screen = rendered_filtered_workspace_picker(
+            &[],
+            0,
+            &[],
+            SessionsPreview::Ready(&[]),
+            Some("nothing"),
+        );
+
+        assert!(screen.contains("filter: nothing"), "{screen}");
+        assert!(screen.contains("no Workspaces match"), "{screen}");
+    }
+
+    #[test]
+    fn workspace_picker_marks_workspaces_holding_a_live_interaction() {
+        let workspaces = vec![
+            workspace_summary("w-1", "payments", 2),
+            workspace_summary("w-2", "quiet", 1),
+        ];
+        let interactions = vec![
+            interaction_summary("s-1", "codex", styra_protocol::InteractionActivity::Pending),
+            interaction_summary(
+                "s-2",
+                "claude",
+                styra_protocol::InteractionActivity::Pending,
+            ),
+            // Stopped: the server no longer accepts input, so it is not work
+            // in flight and must not mark the Workspace.
+            InteractionSummary {
+                workspace_id: "w-2".into(),
+                ..interaction_summary("s-3", "codex", styra_protocol::InteractionActivity::Stopped)
+            },
+        ];
+
+        let screen =
+            rendered_workspace_picker(&workspaces, 0, &interactions, SessionsPreview::Ready(&[]));
+
+        let payments = workspace_rows(&screen)
+            .into_iter()
+            .find(|line| line.contains("payments"))
+            .unwrap();
+        let quiet = workspace_rows(&screen)
+            .into_iter()
+            .find(|line| line.contains("quiet"))
+            .unwrap();
+        assert!(payments.contains('\u{25cf}'), "{payments}");
+        assert!(payments.contains("2 live"), "{payments}");
+        assert!(!quiet.contains('\u{25cf}'), "{quiet}");
+        assert!(!quiet.contains("live"), "{quiet}");
+    }
+
+    #[test]
+    fn workspace_picker_previews_the_selected_workspaces_sessions() {
+        let workspaces = vec![
+            workspace_summary("w-1", "payments", 2),
+            workspace_summary("w-2", "quiet", 0),
+        ];
+        let mut named = picker_summary("s-1", "codex", "2m ago");
+        named.name = Some("retry backoff".into());
+        let sessions = vec![named, picker_summary("s-9", "claude", "1h ago")];
+
+        let screen = rendered_workspace_picker(
+            &workspaces,
+            0,
+            &[interaction_summary(
+                "s-1",
+                "codex",
+                styra_protocol::InteractionActivity::Pending,
+            )],
+            SessionsPreview::Ready(&sessions),
+        );
+
+        assert!(screen.contains("sessions \u{b7} payments"), "{screen}");
+        assert!(screen.contains("retry backoff"), "{screen}");
+        assert!(screen.contains("2m ago"), "{screen}");
+        assert!(screen.contains("1h ago"), "{screen}");
+        // The live Session carries the same dot its Workspace row does.
+        let live_row = screen_lines(&screen, WORKSPACE_PICKER_WIDTH)
+            .into_iter()
+            .find(|line| line.contains("retry backoff"))
+            .unwrap();
+        assert!(live_row.contains('\u{25cf}'), "{live_row}");
+    }
+
+    #[test]
+    fn an_unloaded_workspace_preview_reads_as_loading_rather_than_as_empty() {
+        let workspaces = vec![workspace_summary("w-1", "payments", 2)];
+
+        let loading = rendered_workspace_picker(&workspaces, 0, &[], SessionsPreview::Loading);
+        assert!(loading.contains("loading"), "{loading}");
+
+        let empty = rendered_workspace_picker(&workspaces, 0, &[], SessionsPreview::Ready(&[]));
+        assert!(empty.contains("no sessions yet"), "{empty}");
+    }
+
+    /// Started in a directory no Workspace covers, Styra asks whether to
+    /// create one there in a popup over the list, rather than as a list row.
+    #[test]
+    fn the_workspace_offer_is_asked_over_the_list() {
+        let workspaces = vec![workspace_summary("w-1", "payments", 2)];
+        let mut terminal =
+            Terminal::new(TestBackend::new(WORKSPACE_PICKER_WIDTH as u16, 14)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_workspace_picker(
+                    frame,
+                    &workspaces,
+                    0,
+                    &[],
+                    SessionsPreview::Ready(&[]),
+                    None,
+                    false,
+                );
+                render_workspace_offer(frame, Path::new("/home/op/fresh"));
+            })
+            .unwrap();
+        let screen = screen_text(terminal.backend().buffer());
+
+        assert!(screen.contains("No Workspace here"), "{screen}");
+        assert!(screen.contains("Create a Workspace"), "{screen}");
+        assert!(screen.contains("/home/op/fresh"), "{screen}");
+        assert!(!screen.contains("+ new Workspace"), "{screen}");
+        // It sits over the list, not across the Sessions pane beside it.
+        for line in screen_lines(&screen, WORKSPACE_PICKER_WIDTH) {
+            if let Some(column) = line.find("Create a Workspace") {
+                assert!(column < WORKSPACE_PICKER_WIDTH / 2, "{screen}");
+            }
+        }
+        // It opens near the top of the screen, whatever the terminal's height.
+        assert!(
+            screen_lines(&screen, WORKSPACE_PICKER_WIDTH)[2].contains("No Workspace here"),
+            "{screen}"
+        );
+        // What is beneath it recedes, as it does behind the message box.
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer[(WORKSPACE_PICKER_WIDTH as u16 - 2, 0)].fg,
+            theme::MODAL_BACKDROP
+        );
+    }
+
+    fn interaction_summary(
+        id: &str,
+        selection: &str,
+        activity: styra_protocol::InteractionActivity,
+    ) -> InteractionSummary {
+        InteractionSummary {
+            auto_retry: false,
+            auto_commit: false,
+            id: id.into(),
+            name: None,
+            tags: Vec::new(),
+            workspace_id: "w-1".into(),
+            selection: styra_protocol::agent::Selection::parse(selection).unwrap(),
+            workspace: std::path::PathBuf::from("/home/op/project"),
+            activity,
+            activity_reason: None,
+            activity_since_ms: 0,
+            idle_unseen: false,
+            interacted_at_ms: 0,
+            last_user_message_at_ms: 0,
+            uncommitted_changes: false,
+            expected_branch: None,
+            checkout: None,
+            branched_from: None,
+            last_message: None,
+            recent_messages: Vec::new(),
+            events: 0,
+            completed: styra_protocol::CompletionState::Active,
+            focus_requested: false,
+            origin: None,
+            integration: None,
+            restored: false,
+        }
+    }
+
+    #[test]
+    fn picker_highlights_the_selected_session() {
+        let sessions = vec![
+            picker_summary("s-1", "codex", "2m ago"),
+            picker_summary("s-2", "codex", "3h ago"),
+        ];
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_picker(
+                    frame,
+                    "styra",
+                    &sessions,
+                    1,
+                    SessionOrder::LastActivity,
+                    Preview::Ready(&[]),
+                    None,
+                    false,
+                    false,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        // Scan only the session pane: the log-preview pane's title spells out
+        // the selected session's id too, so searching the full row width would
+        // match that border row instead of the list row it is describing.
+        let session_pane_width = buffer.area.width * 42 / 100;
+        let row_containing = |text: &str| -> u16 {
+            (0..buffer.area.height)
+                .find(|&y| {
+                    let row: String = (0..session_pane_width)
+                        .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                        .collect();
+                    row.contains(text)
+                })
+                .unwrap_or_else(|| panic!("no row contains {text:?}"))
+        };
+        let row_has_selection_backdrop = |y: u16| {
+            (0..buffer.area.width).any(|x| {
+                buffer.cell((x, y)).unwrap().style().bg == Some(theme::SELECTION_BACKGROUND)
+            })
+        };
+
+        assert!(!row_has_selection_backdrop(row_containing("s-1")));
+        assert!(row_has_selection_backdrop(row_containing("s-2")));
+    }
+}

@@ -1,0 +1,2176 @@
+use super::*;
+impl DrivaView<'_> {
+    fn can_edit_launch(&self) -> bool {
+        self.editable
+    }
+}
+
+impl DrivaLaunch<'_> {
+    fn policy(&self, scope: LaunchScope) -> &LaunchPolicy {
+        match scope {
+            LaunchScope::Workspace => self.workspace,
+            LaunchScope::Interaction => self.interaction,
+        }
+    }
+    fn effective(&self) -> LaunchPolicy {
+        LaunchPolicy::merge(self.workspace, self.interaction)
+    }
+    fn cursor(&self, scope: LaunchScope) -> usize {
+        match scope {
+            LaunchScope::Workspace => self.workspace_cursor,
+            LaunchScope::Interaction => self.interaction_cursor,
+        }
+    }
+}
+
+impl DrivaWorkspace {
+    fn working_directory_or_current(&self) -> Option<PathBuf> {
+        self.working_directory.clone()
+    }
+    /// The path [`placeholders::WORKSPACE`] stands for: the Workspace's own
+    /// directory, or the live root before the server has named one. Not the
+    /// root first: an interaction in a linked worktree has that as its root,
+    /// and it is the worktree's name that should show.
+    fn placeholder_path(&self) -> Option<&Path> {
+        self.host_path.as_deref().or(self.root.as_deref())
+    }
+    fn placeholders(&self) -> Placeholders {
+        Placeholders::default()
+            .with(self.placeholder_path(), placeholders::WORKSPACE)
+            .with(self.worktrees.as_deref(), placeholders::WORKTREES)
+    }
+    /// `lines` with the workspace and worktrees directories, and the paths
+    /// under them, written as their placeholders.
+    fn abbreviate(&self, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+        self.placeholders().lines(lines)
+    }
+}
+
+impl DrivaStatus {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Pending => "not started",
+            Self::Running => "running",
+            Self::Idle => "idle",
+            Self::Background => "idle · background work running",
+            Self::Stopped => "stopped",
+            Self::Ended => "ended",
+        }
+    }
+}
+
+impl LaunchScope {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Workspace => "Workspace",
+            Self::Interaction => "this interaction",
+        }
+    }
+    fn phrase(self) -> &'static str {
+        match self {
+            Self::Workspace => "the Workspace",
+            Self::Interaction => "this interaction",
+        }
+    }
+    fn other(self) -> Self {
+        match self {
+            Self::Workspace => Self::Interaction,
+            Self::Interaction => Self::Workspace,
+        }
+    }
+}
+
+use crate::chrome::panel_block;
+use crate::placeholders::{self, Placeholders};
+use crate::text_prompt::{self, TextPrompt};
+use crate::theme;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::Frame;
+use std::path::{Path, PathBuf};
+use styra_protocol::{
+    AttributedMount, BranchPoint, CheckoutState, DrivaOptions, FloorKind, LaunchMount,
+    LaunchPolicy, Mount, MountAccess, MountOrigin, ProjectAction, VariableOrigin,
+    WritableMountMode,
+};
+
+/// Rows the effective-policy summary keeps for itself before either settings
+/// pane is given any height. Enough for the banner and the fields that say what
+/// is about to run; the mounts below them are what a short terminal loses.
+const SUMMARY_MIN_HEIGHT: u16 = 5;
+
+/// Width of the label column inside a settings pane. Wide enough for
+/// `templates`, and identical in both panes so the two read as one form.
+const SETTING_LABEL: usize = 10;
+
+pub fn render(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
+    let block = panel_block(&app.chrome);
+    let options = app.launch.driva;
+    let mut inner = block.inner(area);
+    frame.render_widget(block, area);
+    let tabs = Rect {
+        height: inner.height.min(1),
+        ..inner
+    };
+    render_tabs(frame, app.tab, tabs);
+    inner.y = inner.y.saturating_add(tabs.height);
+    inner.height = inner.height.saturating_sub(tabs.height);
+
+    // Keep the commands visible even when metadata scrolls or the sandbox tab
+    // is selected. These actions run independently of the agent's lifecycle.
+    let commands = Rect {
+        height: inner.height.min(2),
+        ..inner
+    };
+    frame.render_widget(Paragraph::new(project_action_lines(app)), commands);
+    inner.y = inner.y.saturating_add(commands.height);
+    inner.height = inner.height.saturating_sub(commands.height);
+
+    if app.tab == DetailsTab::Sandbox {
+        return render_sandbox(frame, app, options, inner);
+    }
+
+    // A working interaction's policy is a record: there is nothing to choose,
+    // so the panes and their keys are not drawn over it at all. An idle one
+    // keeps them, for the mounts it can still be restarted to take.
+    if !app.can_edit_launch() && !app.mounts_editable {
+        let feedback = render_overview(frame, app, inner);
+        render_prompt(frame, app, area);
+        render_command_prompt(frame, app, area);
+        render_git_repository_prompt(frame, app, area);
+        return feedback;
+    }
+
+    let mut rest = inner;
+
+    // Carved from the bottom: the panes and the keys for them are the point of
+    // this screen while it is editable, and each is given only what is left
+    // above the summary's own floor, so a short terminal drops the ends of the
+    // mount list rather than the settings being edited.
+    let hints = hint_lines(app);
+    let workspace = pane_rows(app, LaunchScope::Workspace);
+    let interaction = pane_rows(app, LaunchScope::Interaction);
+    let hint_area = take_bottom(&mut rest, hints.len() as u16, 1);
+    let interaction_area = take_bottom(&mut rest, interaction.len() as u16 + 2, SUMMARY_MIN_HEIGHT);
+    let workspace_area = take_bottom(&mut rest, workspace.len() as u16 + 2, SUMMARY_MIN_HEIGHT);
+
+    let feedback = render_overview(frame, app, rest);
+    render_pane(
+        frame,
+        app,
+        LaunchScope::Workspace,
+        workspace,
+        workspace_area,
+    );
+    render_pane(
+        frame,
+        app,
+        LaunchScope::Interaction,
+        interaction,
+        interaction_area,
+    );
+    frame.render_widget(Paragraph::new(hints), hint_area);
+    render_prompt(frame, app, area);
+    render_command_prompt(frame, app, area);
+    render_git_repository_prompt(frame, app, area);
+    feedback
+}
+
+/// The page switcher remains inside the details panel so changing pages does
+/// not look like opening another view. `Tab` is the page-switching key; the
+/// up/down arrows still move between the editable policy panes.
+fn render_tabs(frame: &mut Frame, selected: DetailsTab, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    let active = Style::default()
+        .fg(theme::ACCENT)
+        .add_modifier(Modifier::BOLD);
+    let inactive = Style::default().fg(theme::ADDITIONAL_INFO);
+    let tab = |name, current| {
+        Span::styled(
+            format!(" {} ", name),
+            if current { active } else { inactive },
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            tab("Details", selected == DetailsTab::Details),
+            Span::styled(" ", inactive),
+            tab("Sandbox", selected == DetailsTab::Sandbox),
+            Span::styled("   Tab switch tabs", inactive),
+        ])),
+        area,
+    );
+}
+
+/// Take `wanted` rows off the bottom of `area`, leaving at least `floor` there,
+/// and shrink `area` by what was taken. A zero-height result is a pane there was
+/// no room for; rendering it draws nothing.
+fn take_bottom(area: &mut Rect, wanted: u16, floor: u16) -> Rect {
+    let height = wanted.min(area.height.saturating_sub(floor));
+    area.height -= height;
+    Rect {
+        x: area.x,
+        y: area.y + area.height,
+        width: area.width,
+        height,
+    }
+}
+
+/// The Workspace and current-interaction metadata shown on the Details tab.
+fn render_overview(frame: &mut Frame, app: &DrivaView, area: Rect) -> DrivaFeedback {
+    if area.height == 0 {
+        return DrivaFeedback::default();
+    }
+    let workspace = workspace_lines(app);
+    let interaction = interaction_lines(app);
+    let sandbox = app.workspace.abbreviate(sandbox_summary_lines(app));
+
+    // A single-column form is also the scrollable fallback: it retains the
+    // three section headings and their order when the two-column overview no
+    // longer fits on screen.
+    let mut document = workspace.clone();
+    document.push(Line::from(""));
+    document.extend(interaction.clone());
+    document.push(Line::from(""));
+    document.extend(sandbox.clone());
+
+    // The two objects are peers in this overview. Columns keep their complete
+    // metadata together; narrow terminals fall back to a readable vertical
+    // sequence. The sandbox summary follows their natural height — it is a
+    // third section of the document, not a footer pinned to the panel edge.
+    let metadata_height = if area.width >= 72 {
+        let left_width = area.width / 2;
+        let right_width = area.width.saturating_sub(left_width);
+        let workspace = Paragraph::new(workspace).wrap(Wrap { trim: false });
+        let interaction = Paragraph::new(interaction).wrap(Wrap { trim: false });
+        let height = workspace
+            .line_count(left_width.max(1))
+            .max(interaction.line_count(right_width.max(1))) as u16;
+        let sandbox_height = Paragraph::new(sandbox.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(area.width.max(1)) as u16;
+        if usize::from(height) + usize::from(sandbox_height) > usize::from(area.height) {
+            return render_scrolled_overview(frame, app, document, area);
+        }
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(Rect { height, ..area });
+        frame.render_widget(workspace, columns[0]);
+        frame.render_widget(interaction, columns[1]);
+        height
+    } else {
+        let mut overview = workspace;
+        overview.push(Line::from(""));
+        overview.extend(interaction);
+        let overview = Paragraph::new(overview).wrap(Wrap { trim: false });
+        let height = overview.line_count(area.width.max(1)) as u16;
+        if usize::from(height) > usize::from(area.height) {
+            return render_scrolled_overview(frame, app, document, area);
+        }
+        frame.render_widget(overview, Rect { height, ..area });
+        height
+    };
+    let sandbox_area = Rect {
+        y: area.y + metadata_height,
+        height: area.height.saturating_sub(metadata_height),
+        ..area
+    };
+    frame.render_widget(
+        Paragraph::new(sandbox).wrap(Wrap { trim: false }),
+        sandbox_area,
+    );
+    DrivaFeedback::default()
+}
+
+/// Render the Details document in its natural, one-column order when it does
+/// not fit. The Sandbox summary heading carries the paging hint because it is
+/// the final section rather than a panel footer.
+fn render_scrolled_overview(
+    frame: &mut Frame,
+    app: &DrivaView,
+    document: Vec<Line<'static>>,
+    area: Rect,
+) -> DrivaFeedback {
+    // Keep a dedicated final row for the paging cue. It must remain on screen
+    // as the document moves, rather than travelling with the sandbox heading.
+    let content_height = area.height.saturating_sub(1);
+    let total = Paragraph::new(document.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(area.width.max(1));
+    let limit = total.saturating_sub(usize::from(content_height));
+    let limit = limit.min(usize::from(u16::MAX)) as u16;
+    let offset = app.details_requested_scroll.min(limit);
+    frame.render_widget(
+        Paragraph::new(document)
+            .wrap(Wrap { trim: false })
+            .scroll((offset, 0)),
+        Rect {
+            height: content_height,
+            ..area
+        },
+    );
+    let remaining = limit.saturating_sub(offset);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            if remaining > 0 {
+                format!("  ↓ {remaining} more line(s) · PgDn/PgUp")
+            } else {
+                format!("  ↑ {offset} line(s) above · PgUp")
+            },
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ))),
+        Rect {
+            y: area.y + content_height,
+            height: area.height.saturating_sub(content_height),
+            ..area
+        },
+    );
+    DrivaFeedback {
+        scroll_limit: limit,
+        effective_scroll: offset,
+    }
+}
+
+/// The sandbox account, in whichever of three shapes fits what there is room
+/// for.
+///
+/// Everything here is worth reading and none of it can be edited, so the
+/// question is only how much of it is on screen at once. It is laid out in one
+/// column when that fits; the private root flows into a second column when
+/// that is what makes it fit; and when neither does, the whole account becomes
+/// one scrolling column, because an account of what an agent can reach that
+/// quietly stops halfway is worse than no account at all.
+fn render_sandbox(
+    frame: &mut Frame,
+    app: &DrivaView,
+    options: Option<&DrivaOptions>,
+    area: Rect,
+) -> DrivaFeedback {
+    if area.height == 0 {
+        return DrivaFeedback::default();
+    }
+    let width = area.width.max(1);
+    let lines = sandbox_lines(app, options);
+    let height = |lines: &Vec<Line<'static>>| {
+        Paragraph::new(lines.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+    };
+    let total = height(&lines);
+    if total <= usize::from(area.height) {
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+        return DrivaFeedback::default();
+    }
+
+    // Two columns for the private root, which is the longest part and the one
+    // part that is a list of independent groups.
+    let private_root = options.filter(|options| !options.base.is_empty());
+    if let Some(root) = private_root.filter(|_| area.width >= 72) {
+        let prefix = sandbox_prefix_lines(app, options);
+        let prefix_height = height(&prefix);
+        let columns = private_root_column_height(root, width / 2);
+        if prefix_height + columns <= usize::from(area.height) {
+            let prefix_height = prefix_height as u16;
+            frame.render_widget(
+                Paragraph::new(prefix).wrap(Wrap { trim: false }),
+                Rect {
+                    height: prefix_height,
+                    ..area
+                },
+            );
+            render_private_root(
+                frame,
+                root,
+                Rect {
+                    y: area.y + prefix_height,
+                    height: area.height - prefix_height,
+                    ..area
+                },
+            );
+            return DrivaFeedback::default();
+        }
+    }
+
+    // One scrolling column. What is off screen is said in the section's own
+    // heading rather than on a line of its own: a view that is cut off without
+    // admitting it reads as the whole policy, and spending a row on saying so
+    // would cut it off one line sooner.
+    let mut lines = lines;
+    let limit = total.saturating_sub(usize::from(area.height));
+    let limit = limit.min(usize::from(u16::MAX)) as u16;
+    let offset = app.launch.requested_scroll.min(limit);
+    if let Some(heading) = lines.iter_mut().find(|line| line.to_string() == "sandbox") {
+        heading.push_span(Span::styled(
+            format!(
+                "  ▾ {} more line(s) · PgDn/PgUp",
+                usize::from(limit.saturating_sub(offset))
+            ),
+            Style::default().fg(theme::ADDITIONAL_INFO),
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((offset, 0)),
+        area,
+    );
+    DrivaFeedback {
+        scroll_limit: limit,
+        effective_scroll: offset,
+    }
+}
+
+/// How tall the private-root listing is once its capability groups are dealt
+/// into two columns of `width`, which is what [`render_private_root`] does.
+fn private_root_column_height(options: &DrivaOptions, width: u16) -> usize {
+    let width = width.max(1);
+    let groups = private_root_groups(options);
+    let heights: Vec<usize> = groups
+        .iter()
+        .map(|group| Paragraph::new(group.clone()).line_count(width))
+        .collect();
+    let total: usize = heights.iter().sum();
+    let target = total.div_ceil(2);
+    let mut first = 0;
+    for height in &heights {
+        if first > 0 && first + height > target {
+            break;
+        }
+        first += height;
+    }
+    // Two rows for the heading the listing keeps above its columns.
+    2 + first.max(total - first)
+}
+
+fn sandbox_lines(app: &DrivaView, options: Option<&DrivaOptions>) -> Vec<Line<'static>> {
+    let mut lines = sandbox_prefix_lines(app, options);
+    if let Some(options) = options {
+        lines.extend(private_root_lines(options));
+    }
+    lines
+}
+
+/// What the sandbox holds that no mount accounts for, and that no layer of the
+/// policy can take away.
+///
+/// The mount list answers "what of the host can this agent reach"; it does not
+/// answer "what can this agent write", because the backend lays down a
+/// filesystem of its own underneath every mount — a root, a `/tmp`, the
+/// working directory — and most of it is writable. An agent whose `HOME` is a
+/// directory under `/tmp` therefore has a complete, writable home that appears
+/// in no mount row anywhere, which is exactly the kind of grant this view
+/// exists to make impossible to miss.
+fn floor_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
+    if options.floor.is_empty() {
+        return Vec::new();
+    }
+    // Only the innermost entry the home sits under is the one that holds it:
+    // `/` is an ancestor of everything, and saying so of `/` would be noise.
+    let home = home_directory(options);
+    let home_entry = home.as_deref().and_then(|home| {
+        options
+            .floor
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| home.starts_with(&entry.path))
+            .max_by_key(|(_, entry)| entry.path.components().count())
+            .map(|(index, _)| index)
+    });
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "sandbox floor — the backend's own, under every mount",
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+    lines.extend(options.floor.iter().enumerate().map(|(index, entry)| {
+        let (label, colour) = match entry.kind {
+            FloorKind::Tmpfs => ("tmp ", theme::INFO),
+            FloorKind::Directory => ("dir ", theme::INFO),
+            FloorKind::PrivateRoot | FloorKind::RootFs => ("ro  ", theme::MUTED_TEXT),
+            FloorKind::Proc | FloorKind::Devices => ("sys ", theme::MUTED_TEXT),
+        };
+        let mut detail = match &entry.source {
+            Some(source) => format!("{} — {}", source.display(), entry.kind.description()),
+            None => entry.kind.description().to_owned(),
+        };
+        // The one part of the floor an operator is most likely to have
+        // assumed is a mount: the agent's home, when the profile pins `HOME`
+        // to a path that lands here.
+        if home_entry == Some(index) {
+            detail.push_str(match home.as_deref() {
+                Some(home) if home == entry.path => " · is the agent's HOME",
+                _ => " · holds the agent's HOME",
+            });
+        }
+        Line::from(vec![
+            Span::styled(
+                format!("    {label}"),
+                Style::default().fg(colour).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{:<20} {detail}", entry.path.display().to_string()),
+                Style::default().fg(theme::TEXT),
+            ),
+        ])
+    }));
+    lines
+}
+
+/// Where the agent's home lands inside the sandbox, as its own environment
+/// states it. Read back from the captured policy rather than assumed, because
+/// a profile is free to pin it anywhere.
+fn home_directory(options: &DrivaOptions) -> Option<PathBuf> {
+    options
+        .environment
+        .iter()
+        .find(|variable| variable.name == "HOME")
+        .map(|variable| PathBuf::from(&variable.value))
+}
+
+/// Every environment variable the agent will run with, under the layer that
+/// set it.
+///
+/// A sandbox's environment is cleared before anything is set in it, so this is
+/// the whole of what the agent sees and not a difference against the operator's
+/// own shell. It belongs next to the mounts for the same reason the mounts are
+/// grouped: a value crosses into the sandbox as surely as a path does, and
+/// "why is that set" has the same three or four answers.
+fn environment_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
+    if options.environment.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "environment — all of it; the sandbox starts with none",
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+    // A fixed order rather than the order Driva sets them in: the request's
+    // own variables are one alphabetical run of mixed layers, and grouping
+    // them by that run would repeat every heading.
+    for origin in [
+        VariableOrigin::Profile,
+        VariableOrigin::User,
+        VariableOrigin::Template,
+        VariableOrigin::Broker,
+        VariableOrigin::Base,
+        VariableOrigin::Sandbox,
+    ] {
+        let mut variables = options
+            .environment
+            .iter()
+            .filter(|variable| variable.origin == origin)
+            .peekable();
+        if variables.peek().is_none() {
+            continue;
+        }
+        lines.push(Line::from(Span::styled(
+            format!("  {}", origin.label()),
+            Style::default().fg(theme::ADDITIONAL_INFO),
+        )));
+        lines.extend(variables.map(|variable| {
+            Line::from(vec![
+                Span::styled(
+                    format!("    {} ", variable.name),
+                    Style::default().fg(theme::MUTED_TEXT),
+                ),
+                Span::styled(variable.value.clone(), Style::default().fg(theme::TEXT)),
+            ])
+        }));
+    }
+    lines
+}
+
+/// The sandbox facts that precede the private-root capability listing.
+fn sandbox_prefix_lines(app: &DrivaView, options: Option<&DrivaOptions>) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(""), section_line("sandbox")];
+
+    let Some(options) = options else {
+        lines.push(detail_field_line(
+            "state",
+            "unavailable — the server has not resolved a launch policy",
+        ));
+        return lines;
+    };
+    // Before launch this is a plan, not a record: say so, so an operator does
+    // not read it as the sandbox some agent is already running in.
+    if app.launch.planned {
+        lines.push(Line::from(Span::styled(
+            "  planned — applied when the next interaction starts",
+            Style::default().fg(theme::WARNING),
+        )));
+        lines.push(Line::from(""));
+    }
+    lines.extend([
+        driva_field_line("backend", &options.isolation_backend),
+        driva_field_line("command", &options.command.join(" ")),
+        driva_field_line("workdir", &options.working_directory.display().to_string()),
+        driva_field_line("network", &network_label(app, options.network)),
+    ]);
+    // Only meaningful for a launch that has not happened: on a live
+    // interaction these are the *client's* inputs for the next one, while
+    // everything else on screen is a record of the running sandbox. The
+    // templates a live interaction did launch with are already visible in its
+    // mounts below.
+    if app.can_edit_launch() {
+        lines.push(driva_field_line("templates", &templates_label(app)));
+    }
+    lines.extend([
+        Line::from(""),
+        Line::from(Span::styled(
+            if app.can_edit_launch() {
+                "effective mounts"
+            } else {
+                "mounts"
+            },
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ]);
+    lines.extend(grouped_mount_lines(&options.mounts));
+    // The rest of what the request states, in one line because none of it is
+    // editable and none of it is as pressing as the grants above — but each
+    // part is something an operator would otherwise have to know Driva's
+    // defaults to answer.
+    lines.push(Line::from(""));
+    lines.push(driva_field_line(
+        "run as",
+        &[
+            if options.interactive {
+                "a terminal of its own"
+            } else {
+                "no terminal — the protocol runs over pipes"
+            },
+            if options.new_session {
+                "its own session, so it cannot type into yours"
+            } else {
+                "this terminal's session"
+            },
+            match options.writable_mounts {
+                WritableMountMode::Direct => "writable mounts write through to the host",
+                WritableMountMode::Overlay => "writes go to an overlay and are discarded",
+            },
+        ]
+        .join(" · "),
+    ));
+    lines.extend(floor_lines(options));
+    lines.extend(environment_lines(options));
+    app.workspace.abbreviate(lines)
+}
+
+/// Paint the private-root listing.  Its heading remains full width, while an
+/// editable view may put capability groups in two columns if one column would
+/// run below the settings panes.
+fn render_private_root(frame: &mut Frame, options: &DrivaOptions, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    let lines = private_root_lines(options);
+    let heading = Paragraph::new(lines[..2].to_vec()).wrap(Wrap { trim: false });
+    let heading_height = heading
+        .line_count(area.width.max(1))
+        .min(usize::from(area.height)) as u16;
+    frame.render_widget(
+        heading,
+        Rect {
+            height: heading_height,
+            ..area
+        },
+    );
+    let content_area = Rect {
+        y: area.y + heading_height,
+        height: area.height.saturating_sub(heading_height),
+        ..area
+    };
+    if content_area.height == 0 {
+        return;
+    }
+
+    let groups = private_root_groups(options);
+    let one_column = Paragraph::new(groups.concat()).wrap(Wrap { trim: false });
+    if one_column.line_count(content_area.width.max(1)) <= usize::from(content_area.height) {
+        frame.render_widget(one_column, content_area);
+        return;
+    }
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(content_area);
+    let left_width = columns[0].width.max(1);
+    let total_height: usize = groups
+        .iter()
+        .map(|group| Paragraph::new(group.clone()).line_count(left_width))
+        .sum();
+    let target = total_height.div_ceil(2);
+    let mut split = 0;
+    let mut used = 0;
+    for group in &groups {
+        let height = Paragraph::new(group.clone()).line_count(left_width);
+        if split > 0 && used + height > target {
+            break;
+        }
+        used += height;
+        split += 1;
+    }
+    frame.render_widget(
+        Paragraph::new(groups[..split].concat()).wrap(Wrap { trim: false }),
+        columns[0],
+    );
+    frame.render_widget(
+        Paragraph::new(groups[split..].concat()).wrap(Wrap { trim: false }),
+        columns[1],
+    );
+}
+
+/// What the sandbox holds before any mount: the base its private root is
+/// built from, under the capability that asked for each part.
+///
+/// The mounts above are the whole of what this launch *asked* for, but not the
+/// whole of what the agent can reach — a sandbox still needs the host's `sh`,
+/// its libraries, and its certificates. Naming them keeps the answer to "what
+/// can this agent touch" complete, and makes the absence of the operator's
+/// home from that list something an operator can see rather than assume.
+///
+/// Grouping by capability answers the next question with it: a path here is
+/// not an arbitrary grant but the local meaning of something the sandbox
+/// needs, and a host that keeps that thing elsewhere says so in one place.
+fn private_root_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
+    if options.base.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "private root — read-only, no host home or data paths",
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+    lines.extend(private_root_groups(options).into_iter().flatten());
+    lines
+}
+
+/// A capability is indivisible when the private root flows into a second
+/// column: its name, paths, and forwarded environment remain together.
+fn private_root_groups(options: &DrivaOptions) -> Vec<Vec<Line<'static>>> {
+    options
+        .base
+        .iter()
+        .map(|capability| {
+            let mut group = vec![Line::from(Span::styled(
+                format!("  {} — {}", capability.name, capability.description),
+                Style::default().fg(theme::ADDITIONAL_INFO),
+            ))];
+            for entry in &capability.entries {
+                group.push(Line::from(vec![
+                    Span::styled(
+                        "    ro  ",
+                        Style::default()
+                            .fg(theme::MUTED_TEXT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        match &entry.source {
+                            Some(source) => {
+                                format!("{} → {}", entry.path.display(), source.display())
+                            }
+                            None => entry.path.display().to_string(),
+                        },
+                        Style::default().fg(theme::TEXT),
+                    ),
+                ]));
+            }
+            if !capability.environment.is_empty() {
+                group.push(Line::from(vec![
+                    Span::styled(
+                        "    env ",
+                        Style::default()
+                            .fg(theme::MUTED_TEXT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        capability.environment.join(" "),
+                        Style::default().fg(theme::TEXT),
+                    ),
+                ]));
+            }
+            group
+        })
+        .collect()
+}
+
+/// The complete durable Workspace snapshot retained by the client. These are
+/// all fields the server's `WorkspaceSummary` reports, rather than only the
+/// name and first-prompt worktree choice that happen to be used elsewhere in
+/// the UI.
+fn workspace_lines(app: &DrivaView) -> Vec<Line<'static>> {
+    let mut lines = vec![section_line("Workspace")];
+    lines.push(detail_field_line(
+        "identity",
+        &format!(
+            "{} · {}",
+            match (&app.workspace.given_name, &app.workspace.name) {
+                (Some(name), _) => name.clone(),
+                (None, Some(display)) => format!("unnamed (shown as {display})"),
+                (None, None) => "unknown".into(),
+            },
+            app.workspace.id.as_deref().unwrap_or("unknown")
+        ),
+    ));
+    lines.push(detail_field_line(
+        "host path",
+        &app.workspace
+            .host_path
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "unknown".into()),
+    ));
+    lines.push(detail_field_line(
+        "git repo",
+        &app.workspace
+            .git_repository
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".into()),
+    ));
+    lines.push(detail_field_line(
+        "server path",
+        &app.workspace
+            .server_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "unknown".into()),
+    ));
+    let mut lines = app.workspace.abbreviate(lines);
+    if let Some(worktrees) = &app.workspace.worktrees {
+        lines.push(defining_line(
+            "worktrees",
+            worktrees,
+            placeholders::WORKTREES,
+        ));
+    }
+    let sessions = app
+        .workspace
+        .session_count
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    lines.push(detail_field_line(
+        "created",
+        &match (&app.workspace.age, app.workspace.created_at_ms) {
+            (Some(age), Some(at)) => format!("{age} · {at} ms"),
+            (Some(age), None) => age.clone(),
+            (None, Some(at)) => format!("{at} ms"),
+            (None, None) => "unknown".into(),
+        },
+    ));
+    lines.push(detail_field_line(
+        "tracked",
+        &format!(
+            "{sessions} session(s) · accessed {} ms",
+            app.workspace
+                .last_accessed_at_ms
+                .map(|at| at.to_string())
+                .unwrap_or_else(|| "unknown".into())
+        ),
+    ));
+    let standing = &app.launch.workspace;
+    lines.push(detail_field_line(
+        "capabilities",
+        &format!(
+            "network {} · {} template(s) · {} mount(s)",
+            if standing.grants_network() {
+                "on"
+            } else {
+                "off"
+            },
+            standing.templates.len(),
+            standing.mounts.len()
+        ),
+    ));
+    lines
+}
+
+/// A standalone, compact account of the policy that shapes the sandbox. The
+/// full Sandbox tab keeps its exhaustive account separate from this overview.
+fn sandbox_summary_lines(app: &DrivaView) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        section_line("sandbox summary"),
+        detail_field_line("templates", &templates_label(app)),
+    ];
+    let Some(options) = app.launch.driva else {
+        let requested = app.launch.effective();
+        lines.push(detail_field_line(
+            "mounts",
+            &format!(
+                "{} requested — awaiting sandbox plan",
+                requested.mounts.len()
+            ),
+        ));
+        return lines;
+    };
+    lines.push(detail_field_line(
+        "mounts",
+        &format!("{} resolved", options.mounts.len()),
+    ));
+    lines.extend(options.mounts.iter().map(|attributed| {
+        detail_field_line(
+            attributed.origin.label(),
+            &details_resolved_mount_label(&attributed.mount),
+        )
+    }));
+    lines
+}
+
+/// One resolved mount in the compact Details-tab summary. The Sandbox tab has
+/// the full, aligned source-to-target account; here an identical source and
+/// target is deliberately only named once.
+fn details_resolved_mount_label(mount: &Mount) -> String {
+    match mount {
+        Mount::Bind {
+            source,
+            destination,
+            access,
+        } => format!(
+            "{} ({})",
+            details_mount_path_label(source, destination),
+            match access {
+                MountAccess::ReadWrite => "rw",
+                MountAccess::ReadOnly => "ro",
+            }
+        ),
+        Mount::Temporary { destination } => format!("{} (tmp)", destination.display()),
+        Mount::Overlay {
+            source,
+            destination,
+        } => format!(
+            "{} (overlay)",
+            details_mount_path_label(source, destination)
+        ),
+    }
+}
+
+/// The current server Interaction projected through the state the client keeps
+/// synchronized from its summary and update stream.
+fn interaction_lines(app: &DrivaView) -> Vec<Line<'static>> {
+    let mut lines = vec![section_line("current interaction")];
+    if app.session_id.is_empty() {
+        lines.push(detail_field_line("state", "none — not started"));
+        lines.push(detail_field_line("profile", &app.selection_name));
+        if app.workspace.placeholder_path().is_some() {
+            lines.push(workspace_path_line(app));
+        }
+        return lines;
+    }
+    lines.extend([
+        detail_field_line(
+            "identity",
+            &format!(
+                "{} · {}",
+                app.session_name.unwrap_or("unnamed"),
+                app.session_id
+            ),
+        ),
+        detail_field_line(
+            "Workspace id",
+            app.workspace.id.as_deref().unwrap_or("unknown"),
+        ),
+        detail_field_line("profile", &app.selection_name),
+        detail_field_line("status", app.activity.status.label()),
+        detail_field_line(
+            "accepting",
+            if matches!(
+                app.activity.status,
+                DrivaStatus::Running | DrivaStatus::Idle | DrivaStatus::Background
+            ) {
+                "yes"
+            } else {
+                "no"
+            },
+        ),
+    ]);
+    lines.push(workspace_path_line(app));
+    let mut rest = vec![
+        detail_field_line(
+            "working dir",
+            &app.workspace
+                .working_directory_or_current()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unknown".into()),
+        ),
+        detail_field_line("queued", &app.queued_count.to_string()),
+    ];
+    rest.extend(checkout_lines(app.checkout.as_ref()));
+    rest.extend(app.branched_from.as_ref().map(branched_from_line));
+    if let Some(message) = &app.last_message {
+        rest.push(detail_field_line("last message", message));
+    }
+    lines.extend(app.workspace.abbreviate(rest));
+    lines
+}
+
+/// The one row that spells the workspace path out, saying what it is written
+/// as everywhere else in the view.
+fn workspace_path_line(app: &DrivaView) -> Line<'static> {
+    let Some(path) = app.workspace.placeholder_path() else {
+        return detail_field_line("workspace", "unknown");
+    };
+    let mut line = defining_line("workspace", path, placeholders::WORKSPACE);
+    // An interaction in a linked worktree is rooted there instead, which is
+    // the one thing about it this row would otherwise leave out.
+    if let Some(root) = app.workspace.root.as_deref().filter(|root| *root != path) {
+        line.push_span(Span::styled(
+            format!(
+                " · rooted at {}",
+                app.workspace
+                    .placeholders()
+                    .apply(&root.display().to_string())
+            ),
+            Style::default().fg(theme::TEXT),
+        ));
+    }
+    line
+}
+
+/// A row giving `path` in full, as the definition of `placeholder`, which the
+/// rest of the view writes it as.
+fn defining_line(label: &str, path: &Path, placeholder: &str) -> Line<'static> {
+    let mut line = detail_field_line(label, &path.display().to_string());
+    line.push_span(Span::styled(
+        format!(" ({placeholder})"),
+        Style::default().fg(theme::ADDITIONAL_INFO),
+    ));
+    line
+}
+
+/// Where the agent was working, in Git's terms: the branch it was on and the
+/// worktree it was in.
+///
+/// Two rows rather than one because they are two things the operator does
+/// something different with — a branch is what they would merge, a worktree is
+/// where they would `cd` — and a linked worktree names the repository it
+/// belongs to beside it, since the worktree path alone does not say which
+/// repository the branch will turn up in.
+///
+/// Never absent. A workspace outside a repository is a fact worth one row:
+/// without it, the operator cannot tell "no repository here" from "the server
+/// has not looked yet".
+fn checkout_lines(checkout: Option<&CheckoutState>) -> Vec<Line<'static>> {
+    let Some(checkout) = checkout else {
+        return vec![detail_field_line("git", "not a Git checkout")];
+    };
+    let worktree = checkout.worktree.display().to_string();
+    vec![
+        detail_field_line(
+            "branch",
+            checkout.branch.as_deref().unwrap_or("detached head"),
+        ),
+        detail_field_line(
+            "worktree",
+            &if checkout.linked() {
+                format!("{worktree} · linked from {}", checkout.repository.display())
+            } else {
+                worktree
+            },
+        ),
+    ]
+}
+
+/// Where the Session's branch started: the branch it was made from and the
+/// commit it was made at, abbreviated the way `git log --oneline` would.
+///
+/// The commit is the one recorded when the branch was made, not where that
+/// branch is now, so it is the base to compare the Session's work against.
+fn branched_from_line(point: &BranchPoint) -> Line<'static> {
+    let commit = point.commit.get(..10).unwrap_or(&point.commit);
+    let value = match &point.branch {
+        Some(branch) => format!("{branch} @ {commit}"),
+        None => format!("detached head @ {commit}"),
+    };
+    detail_field_line("branched from", &value)
+}
+
+fn section_line(title: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        title.to_owned(),
+        Style::default()
+            .fg(theme::ACCENT)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn detail_field_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {label:<13} "),
+            Style::default().fg(theme::ADDITIONAL_INFO),
+        ),
+        Span::styled(value.to_owned(), Style::default().fg(theme::TEXT)),
+    ])
+}
+
+/// The effective mounts under a heading per layer that contributed them.
+///
+/// Flat, the list answers "what can the agent touch" but not "why", and the two
+/// questions are asked together: a grant an operator does not recognize is
+/// either the profile's doing, a template's, or their own, and only the last of
+/// those is theirs to take back with `x`. Groups appear in the order the mounts
+/// themselves do, so this only ever inserts headings — the sequence Driva was
+/// handed is still readable down the column.
+fn grouped_mount_lines(mounts: &[AttributedMount]) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut current: Option<MountOrigin> = None;
+    for attributed in mounts {
+        if current != Some(attributed.origin) {
+            current = Some(attributed.origin);
+            lines.push(Line::from(Span::styled(
+                format!("  {}", attributed.origin.label()),
+                Style::default().fg(theme::ADDITIONAL_INFO),
+            )));
+        }
+        lines.push(mount_line(&attributed.mount));
+    }
+    lines
+}
+
+/// How the effective network policy reads, together with where it comes from
+/// when that is not the operator's own doing.
+///
+/// `w` cannot force networking off — every agent profile Styra can launch
+/// already permits it, and a template may too, so the resolved policy can read
+/// "on" whatever the operator's input says. Showing only the resolved value made
+/// `w` look like a key that did nothing: the message said "network off for the
+/// next interaction" while the field kept reading `on`. Name the source instead,
+/// so the key is visible and its limit is stated — and, when the answer is
+/// inherited, say which layer it is inherited from.
+fn network_label(app: &DrivaView, effective: bool) -> String {
+    let on = if effective { "on" } else { "off" };
+    if !app.can_edit_launch() {
+        return on.to_owned();
+    }
+    let asked = app.launch.effective().grants_network();
+    if effective != asked {
+        return format!("{on} — from the agent profile; your setting: off (w cannot revoke it)");
+    }
+    match (app.launch.interaction.network, app.launch.workspace.network) {
+        // Stated by this launch, against what it would otherwise inherit.
+        (Some(_), Some(_)) => format!("{on} — this interaction, over the Workspace policy"),
+        (Some(_), None) => on.to_owned(),
+        (None, Some(_)) => format!("{on} — from the Workspace policy"),
+        (None, None) => on.to_owned(),
+    }
+}
+
+/// The templates the next launch would layer, in the order they apply, saying
+/// which of them the Workspace contributes: those live in the other pane.
+fn templates_label(app: &DrivaView) -> String {
+    let effective = app.launch.effective().templates;
+    if effective.is_empty() {
+        return "none".to_owned();
+    }
+    let from_workspace = if app.launch.interaction.ignore_workspace {
+        &[][..]
+    } else {
+        &app.launch.workspace.templates
+    };
+    effective
+        .iter()
+        .map(|name| {
+            if from_workspace.contains(name) {
+                format!("{name} (Workspace)")
+            } else {
+                name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// How one settings pane's rows are painted. The pane the keys act on is bright
+/// and carries the mount cursor; the other is muted, so which layer an edit
+/// would land in is never in question. A Workspace policy this interaction has
+/// opted out of is struck through as well as muted: it is still worth reading
+/// and still editable here, but it is not part of this launch.
+#[derive(Clone, Copy)]
+struct PaneStyle {
+    label: Style,
+    value: Style,
+    marker: Style,
+    cursor: bool,
+}
+
+fn pane_style(app: &DrivaView, scope: LaunchScope) -> PaneStyle {
+    let focused = app.launch.scope == scope;
+    let ignored = scope == LaunchScope::Workspace && app.launch.interaction.ignore_workspace;
+    let mut value = if focused {
+        Style::default().fg(theme::TEXT)
+    } else {
+        Style::default().fg(theme::MUTED_TEXT)
+    };
+    if ignored {
+        value = Style::default()
+            .fg(theme::INACTIVE)
+            .add_modifier(Modifier::CROSSED_OUT);
+    }
+    PaneStyle {
+        label: if focused {
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::INACTIVE)
+        },
+        value,
+        marker: Style::default().fg(theme::WARNING),
+        cursor: focused,
+    }
+}
+
+/// One row of a settings pane: a marker column, a fixed label column, a value.
+fn setting_line(style: PaneStyle, marked: bool, label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            if marked && style.cursor {
+                " • "
+            } else {
+                "   "
+            },
+            style.marker,
+        ),
+        Span::styled(
+            format!("{label:<width$}", width = SETTING_LABEL),
+            style.label,
+        ),
+        Span::styled(value.to_owned(), style.value),
+    ])
+}
+
+/// `style` for a row that cannot be changed right now: dimmed throughout,
+/// with whatever else it said (a crossed-out ignored layer) kept.
+fn disabled_style(style: PaneStyle) -> PaneStyle {
+    let dim = |style: Style| style.fg(theme::INACTIVE).add_modifier(Modifier::DIM);
+    PaneStyle {
+        label: dim(style.label),
+        value: dim(style.value),
+        ..style
+    }
+}
+
+/// The settings one layer holds, in the same rows for both layers.
+fn pane_rows(app: &DrivaView, scope: LaunchScope) -> Vec<Line<'static>> {
+    let mounts_style = pane_style(app, scope);
+    // Everything above the mounts is out of reach on a live interaction, so it
+    // is drawn as disabled, matching its dimmed keys in the hints below.
+    let style = if app.can_edit_launch() {
+        mounts_style
+    } else {
+        disabled_style(mounts_style)
+    };
+    let policy = app.launch.policy(scope);
+    let mut rows = Vec::new();
+
+    // Whether this interaction starts from the Workspace's policy at all is the
+    // interaction's own answer, so it is a row of its pane rather than a key
+    // hint — `I` was invisible as anything but a hint before.
+    if scope == LaunchScope::Interaction {
+        rows.push(setting_line(
+            style,
+            false,
+            "inherits",
+            if policy.ignore_workspace {
+                "nothing — the Workspace policy is ignored"
+            } else {
+                "the Workspace policy above"
+            },
+        ));
+    }
+
+    rows.push(setting_line(
+        style,
+        false,
+        "network",
+        &scope_network_label(app, scope),
+    ));
+    rows.push(setting_line(
+        style,
+        false,
+        "workspace",
+        &scope_workspace_label(app, scope),
+    ));
+    rows.push(setting_line(
+        style,
+        false,
+        "templates",
+        &if policy.templates.is_empty() {
+            "none".to_owned()
+        } else {
+            policy.templates.join(", ")
+        },
+    ));
+    // Commands never touch the sandbox, so like the mounts they stay editable
+    // on a live interaction.
+    for action in ProjectAction::ALL {
+        rows.push(setting_line(
+            mounts_style,
+            false,
+            action.name(),
+            &scope_command_label(app, scope, action),
+        ));
+    }
+
+    if policy.mounts.is_empty() {
+        rows.push(setting_line(
+            mounts_style,
+            false,
+            "mounts",
+            "none — m adds one",
+        ));
+        return app.workspace.abbreviate(rows);
+    }
+    let selected = app.launch.cursor(scope);
+    for (index, mount) in policy.mounts.iter().enumerate() {
+        rows.push(setting_line(
+            mounts_style,
+            index == selected,
+            if index == 0 { "mounts" } else { "" },
+            &launch_mount_label(mount),
+        ));
+    }
+    app.workspace.abbreviate(rows)
+}
+
+/// The current commands and the keys which launch them from the interaction view.
+fn project_action_lines(app: &DrivaView) -> Vec<Line<'static>> {
+    ProjectAction::ALL
+        .into_iter()
+        .map(|action| {
+            let (name, index) = match action {
+                ProjectAction::Run => ("run", 0),
+                ProjectAction::Test => ("test", 1),
+            };
+            let label = format!("{name} ({})", app.project_action_keys[index]);
+            detail_field_line(&label, &effective_command_label(app, action))
+        })
+        .collect()
+}
+
+fn effective_command_label(app: &DrivaView, action: ProjectAction) -> String {
+    let index = match action {
+        ProjectAction::Run => 0,
+        ProjectAction::Test => 1,
+    };
+    app.project_commands[index].clone()
+}
+
+/// What one layer says about a project action's command, as that layer alone,
+/// with what an unstated answer falls through to.
+fn scope_command_label(app: &DrivaView, scope: LaunchScope, action: ProjectAction) -> String {
+    if let Some(command) = app.launch.policy(scope).command(action) {
+        return command.to_owned();
+    }
+    let below = match scope {
+        LaunchScope::Workspace => None,
+        LaunchScope::Interaction if app.launch.interaction.ignore_workspace => None,
+        LaunchScope::Interaction => app.launch.workspace.command(action),
+    };
+    let template = app
+        .launch
+        .driva
+        .and_then(|options| options.template_command(action));
+    match (below, template) {
+        (Some(command), _) => format!("not stated — inherits {command}"),
+        (None, Some(command)) => format!("not stated — templates run {command}"),
+        (None, None) => format!("none — {} sets one", command_key(action)),
+    }
+}
+
+/// The details view's key for editing `action`'s command.
+fn command_key(action: ProjectAction) -> &'static str {
+    match action {
+        ProjectAction::Run => "c",
+        ProjectAction::Test => "C",
+    }
+}
+
+/// What one layer says about networking, as that layer alone.
+///
+/// The Workspace's is a plain on/off: nothing sits under it to inherit from.
+/// This interaction's has a third answer — saying nothing — and what that
+/// resolves to is worth printing next to it, since it is the reason `w` can look
+/// like it changed nothing.
+fn scope_network_label(app: &DrivaView, scope: LaunchScope) -> String {
+    match scope {
+        LaunchScope::Workspace => match app.launch.workspace.network {
+            Some(true) => "on".to_owned(),
+            Some(false) => "off".to_owned(),
+            None => "off — not stated".to_owned(),
+        },
+        LaunchScope::Interaction => match app.launch.interaction.network {
+            Some(true) => "on".to_owned(),
+            Some(false) => "off — withdrawn here".to_owned(),
+            None => {
+                let inherited = !app.launch.interaction.ignore_workspace
+                    && app.launch.workspace.grants_network();
+                format!(
+                    "not stated — inherits {}",
+                    if inherited { "on" } else { "off" }
+                )
+            }
+        },
+    }
+}
+
+/// What one layer says about the workspace mount — the directory the agent is
+/// launched in, which `m` and `x` cannot reach.
+///
+/// The Workspace's is a plain read-write/read-only, with the default named as
+/// such: nothing sits under it to inherit from, and an unstated answer there
+/// still means writable. This interaction's has the third answer, saying
+/// nothing, and what that resolves to is printed next to it for the same reason
+/// the network row does it.
+fn scope_workspace_label(app: &DrivaView, scope: LaunchScope) -> String {
+    match scope {
+        LaunchScope::Workspace => match app.launch.workspace.writable_workspace {
+            Some(true) => "read-write".to_owned(),
+            Some(false) => "read-only".to_owned(),
+            None => "read-write — not stated".to_owned(),
+        },
+        LaunchScope::Interaction => match app.launch.interaction.writable_workspace {
+            Some(true) => "read-write".to_owned(),
+            Some(false) => "read-only — withdrawn here".to_owned(),
+            None => {
+                let inherited = app.launch.interaction.ignore_workspace
+                    || app.launch.workspace.grants_writable_workspace();
+                format!(
+                    "not stated — inherits {}",
+                    if inherited { "read-write" } else { "read-only" }
+                )
+            }
+        },
+    }
+}
+
+/// One settings pane: a titled box saying which layer it is, what that layer
+/// reaches, and — for the Workspace's — whether the server has it.
+fn render_pane(
+    frame: &mut Frame,
+    app: &DrivaView,
+    scope: LaunchScope,
+    rows: Vec<Line<'static>>,
+    area: Rect,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let focused = app.launch.scope == scope;
+    let title = Style::default().fg(if focused {
+        theme::ACCENT
+    } else {
+        theme::INACTIVE
+    });
+    let spans = vec![
+        Span::styled(if focused { " ▸ " } else { "   " }, title),
+        Span::styled(
+            scope.title(),
+            if focused {
+                title.add_modifier(Modifier::BOLD)
+            } else {
+                title
+            },
+        ),
+        Span::styled(
+            match scope {
+                LaunchScope::Workspace => " · every launch here ",
+                LaunchScope::Interaction => " · over the Workspace policy ",
+            },
+            Style::default().fg(theme::ADDITIONAL_INFO),
+        ),
+    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(if focused {
+            theme::ACCENT
+        } else {
+            theme::INACTIVE
+        }))
+        .title(Line::from(spans));
+    frame.render_widget(Paragraph::new(rows).block(block), area);
+}
+
+/// The keys, named against the pane they would act on. Two lines: what every
+/// pane answers to, then what is particular to the focused one.
+fn hint_lines(app: &DrivaView) -> Vec<Line<'static>> {
+    // On an idle interaction only the mount keys still act. The rest are shown
+    // anyway, dimmed, so the screen keeps one shape and says what is out of
+    // reach and why, rather than the keys silently disappearing.
+    let fixed = !app.can_edit_launch();
+    let enabled = Style::default().fg(theme::ADDITIONAL_INFO);
+    let disabled = Style::default()
+        .fg(theme::INACTIVE)
+        .add_modifier(Modifier::DIM);
+    let key =
+        |text: String, usable: bool| Span::styled(text, if usable { enabled } else { disabled });
+    let sep = || Span::styled(" · ", enabled);
+
+    let mut first = vec![
+        key(format!("  ↑/↓ {}", app.launch.scope.other().phrase()), true),
+        sep(),
+        key("m mount".into(), true),
+        sep(),
+        key("x remove".into(), true),
+        sep(),
+        key("c run".into(), true),
+        sep(),
+        key("C test".into(), true),
+        sep(),
+        key("T templates".into(), !fixed),
+        sep(),
+        key("w network".into(), !fixed),
+        sep(),
+        key("R workspace ro/rw".into(), !fixed),
+    ];
+    if fixed {
+        first.push(Span::styled(
+            " — changing a mount restarts the interaction",
+            Style::default().fg(theme::WARNING),
+        ));
+    }
+
+    let second = if app.workspace_launch_pending > 0 {
+        vec![Span::styled("  saving Workspace launch policy…", enabled)]
+    } else {
+        let mut spans = match app.launch.scope {
+            LaunchScope::Workspace => vec![key(
+                "  changes are stored by the server and shared by every client".into(),
+                true,
+            )],
+            LaunchScope::Interaction => vec![
+                key(
+                    format!(
+                        "  I {}",
+                        if app.launch.interaction.ignore_workspace {
+                            "inherit the Workspace"
+                        } else {
+                            "ignore the Workspace"
+                        }
+                    ),
+                    !fixed,
+                ),
+                sep(),
+                key("U move up into it".into(), !fixed),
+                sep(),
+                key("D save as default".into(), !fixed),
+            ],
+        };
+        if fixed {
+            spans.push(Span::styled(
+                " — dimmed: fixed while the interaction is live; S stops it",
+                disabled,
+            ));
+        }
+        spans
+    };
+    vec![Line::from(first), Line::from(second)]
+}
+
+/// The "add a mount" prompt, floating over the view it edits.
+fn render_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
+    let Some(text) = &app.launch.prompt else {
+        return;
+    };
+    // Which layer the mount lands in is the prompt's own business too: it is
+    // opened from either pane and the path being typed says nothing about that.
+    // On the bottom border rather than beside the syntax, which is already as
+    // wide as the box. So is the warning that an idle interaction is restarted
+    // to take the mount: it has to be read before Enter, not after.
+    let mut bottom = vec![Span::styled(
+        format!(" for {} ", app.launch.scope.phrase()),
+        Style::default().fg(theme::ACCENT),
+    )];
+    if !app.can_edit_launch() {
+        bottom.push(Span::styled(
+            "· adding restarts the interaction ",
+            Style::default().fg(theme::WARNING),
+        ));
+    }
+    let prompt = TextPrompt::new(
+        " mount · source[:destination][:ro|rw] · Ctrl-W parent · Enter add · Esc cancel ",
+        text,
+    )
+    .bottom(bottom);
+    let rect = text_prompt::render(frame, &prompt, area);
+    if let Some((rows, list)) = app.launch.paths {
+        text_prompt::render_choices(frame, rect, area, rows, list);
+    }
+}
+
+/// The prompt editing a project action's command, for the focused layer.
+fn render_command_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
+    let Some((action, text)) = app.launch.command_prompt else {
+        return;
+    };
+    let prompt = TextPrompt::new(
+        format!(
+            " {} command · run by sh in the Workspace directory · Enter save · empty inherits · Esc cancel ",
+            action.name()
+        ),
+        text,
+    )
+    .bottom(Span::styled(
+        format!(" for {} ", app.launch.scope.phrase()),
+        Style::default().fg(theme::ACCENT),
+    ));
+    text_prompt::render(frame, &prompt, area);
+}
+
+/// The durable Workspace Git checkout, which is intentionally not an extra
+/// mount and therefore has its own prompt.
+fn render_git_repository_prompt(frame: &mut Frame, app: &DrivaView, area: Rect) {
+    let Some(text) = &app.git_repository_prompt else {
+        return;
+    };
+    let prompt = TextPrompt::new(
+        " Git checkout · path in repository · Enter save · empty clears · Esc cancel ",
+        text,
+    );
+    text_prompt::render(frame, &prompt, area);
+}
+
+fn driva_field_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {label:<8} "),
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(value.to_owned(), Style::default().fg(theme::TEXT)),
+    ])
+}
+
+fn mount_line(mount: &Mount) -> Line<'static> {
+    match mount {
+        Mount::Bind {
+            source,
+            destination,
+            access,
+        } => {
+            let (label, color) = match access {
+                MountAccess::ReadWrite => ("rw", theme::WARNING),
+                MountAccess::ReadOnly => ("ro", theme::MUTED_TEXT),
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!("    {label} "),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{} → {}", source.display(), destination.display()),
+                    Style::default().fg(theme::TEXT),
+                ),
+            ])
+        }
+        Mount::Temporary { destination } => Line::from(vec![
+            Span::styled(
+                "    tmp ",
+                Style::default()
+                    .fg(theme::INFO)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                destination.display().to_string(),
+                Style::default().fg(theme::TEXT),
+            ),
+        ]),
+        Mount::Overlay {
+            source,
+            destination,
+        } => Line::from(vec![
+            Span::styled(
+                "    ovl ",
+                Style::default()
+                    .fg(theme::SPECIAL)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{} → {}", source.display(), destination.display()),
+                Style::default().fg(theme::TEXT),
+            ),
+        ]),
+    }
+}
+
+/// A requested mount at the same path inside and outside the sandbox is common
+/// for the Workspace. Repeating it as `path → path` adds no information to the
+/// compact label on the Details tab.
+fn details_mount_path_label(source: &std::path::Path, destination: &std::path::Path) -> String {
+    if source == destination {
+        source.display().to_string()
+    } else {
+        format!("{} → {}", source.display(), destination.display())
+    }
+}
+
+fn launch_mount_label(mount: &LaunchMount) -> String {
+    let access = if mount.writable { "rw" } else { "ro" };
+    match &mount.destination {
+        Some(destination) => format!(
+            "{} ({access})",
+            details_mount_path_label(&mount.source, destination)
+        ),
+        None => format!("{} ({access})", mount.source.display()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view<'a>(
+        editable: bool,
+        workspace: &'a LaunchPolicy,
+        interaction: &'a LaunchPolicy,
+    ) -> DrivaView<'a> {
+        DrivaView {
+            chrome: PanelChrome {
+                focused: true,
+                workspace: None,
+                worktree: None,
+                source_branch: None,
+                agent: "codex".into(),
+                model: "gpt".into(),
+                model_reported: false,
+                effort: None,
+                effort_reported: false,
+                status: "idle".into(),
+                status_tone: crate::chrome::StatusTone::Idle,
+                elapsed: None,
+                suffix: None,
+                session: None,
+            },
+            editable,
+            mounts_editable: true,
+            tab: DetailsTab::Details,
+            details_requested_scroll: 0,
+            launch: DrivaLaunch {
+                workspace,
+                interaction,
+                scope: LaunchScope::Interaction,
+                workspace_cursor: 0,
+                interaction_cursor: 0,
+                prompt: None,
+                paths: None,
+                command_prompt: None,
+                driva: None,
+                planned: false,
+                requested_scroll: 0,
+            },
+            workspace: DrivaWorkspace {
+                id: None,
+                name: None,
+                given_name: None,
+                git_repository: None,
+                host_path: None,
+                server_path: None,
+                session_count: None,
+                age: None,
+                created_at_ms: None,
+                last_accessed_at_ms: None,
+                root: None,
+                working_directory: None,
+                worktrees: None,
+            },
+            activity: DrivaActivity {
+                status: if editable {
+                    DrivaStatus::Stopped
+                } else {
+                    DrivaStatus::Idle
+                },
+            },
+            project_commands: ProjectAction::ALL.map(|action| {
+                LaunchPolicy::merge(workspace, interaction)
+                    .command(action)
+                    .unwrap_or("not configured")
+                    .to_owned()
+            }),
+            project_action_keys: ["r".into(), "R".into()],
+            selection_name: "codex".into(),
+            session_id: "s1",
+            session_name: None,
+            queued_count: 0,
+            last_message: None,
+            workspace_launch_pending: 0,
+            git_repository_prompt: None,
+            checkout: None,
+            branched_from: None,
+        }
+    }
+
+    fn dimmed(span: &Span<'_>) -> bool {
+        span.style.add_modifier.contains(Modifier::DIM)
+    }
+
+    /// The span of `lines` whose text contains `needle`.
+    fn span<'l>(lines: &'l [Line<'static>], needle: &str) -> &'l Span<'static> {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains(needle))
+            .unwrap_or_else(|| panic!("no span reads {needle:?} in {lines:?}"))
+    }
+
+    #[test]
+    fn current_commands_stay_visible_on_both_options_tabs_without_a_sandbox() {
+        let policy = LaunchPolicy::default();
+        let mut app = view(false, &policy, &policy);
+        app.mounts_editable = false;
+        app.project_commands = [
+            "cargo run --release".into(),
+            "cargo test --workspace".into(),
+        ];
+        for tab in [DetailsTab::Details, DetailsTab::Sandbox] {
+            app.tab = tab;
+            let backend = ratatui::backend::TestBackend::new(90, 24);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| {
+                    render(frame, &app, frame.area());
+                })
+                .unwrap();
+            let screen: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(screen.contains("cargo run --release"));
+            assert!(screen.contains("cargo test --workspace"));
+        }
+    }
+
+    /// Each layer says what it states, or what an unstated command falls
+    /// through to; the summary names the layer the effective one comes from.
+    #[test]
+    fn a_project_command_names_the_layer_it_comes_from() {
+        let workspace = LaunchPolicy {
+            test: Some("cargo nextest run".into()),
+            ..LaunchPolicy::default()
+        };
+        let interaction = LaunchPolicy {
+            run: Some("cargo run --release".into()),
+            ..LaunchPolicy::default()
+        };
+        let options = DrivaOptions {
+            template_run: Some("cargo run".into()),
+            template_test: Some("cargo test".into()),
+            ..DrivaOptions::default()
+        };
+        let mut app = view(true, &workspace, &interaction);
+        app.launch.driva = Some(&options);
+
+        assert_eq!(
+            effective_command_label(&app, ProjectAction::Run),
+            "cargo run --release"
+        );
+        assert_eq!(
+            effective_command_label(&app, ProjectAction::Test),
+            "cargo nextest run"
+        );
+        assert_eq!(
+            scope_command_label(&app, LaunchScope::Interaction, ProjectAction::Test),
+            "not stated — inherits cargo nextest run"
+        );
+        assert_eq!(
+            scope_command_label(&app, LaunchScope::Workspace, ProjectAction::Run),
+            "not stated — templates run cargo run"
+        );
+
+        app.launch.driva = None;
+        assert_eq!(
+            scope_command_label(&app, LaunchScope::Workspace, ProjectAction::Run),
+            "none — c sets one"
+        );
+    }
+
+    /// On an idle interaction the keys that cannot act are still shown —
+    /// dimmed, with the reason — rather than dropped from the hints.
+    #[test]
+    fn an_idle_interactions_fixed_keys_are_shown_disabled() {
+        let policy = LaunchPolicy::default();
+        let lines = hint_lines(&view(false, &policy, &policy));
+
+        for usable in ["m mount", "x remove"] {
+            assert!(!dimmed(span(&lines, usable)), "{usable} should be usable");
+        }
+        for fixed in [
+            "T templates",
+            "w network",
+            "R workspace",
+            "I ignore",
+            "U move up",
+            "D save",
+        ] {
+            assert!(dimmed(span(&lines, fixed)), "{fixed} should be disabled");
+        }
+        assert!(dimmed(span(&lines, "fixed while the interaction is live")));
+        span(&lines, "changing a mount restarts the interaction");
+    }
+
+    #[test]
+    fn nothing_is_disabled_while_the_whole_policy_is_editable() {
+        let policy = LaunchPolicy::default();
+        let lines = hint_lines(&view(true, &policy, &policy));
+
+        assert!(lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .all(|s| !dimmed(s)));
+        assert!(!text(lines).concat().contains("fixed while"));
+    }
+
+    /// The pane matches its hints: the settings above the mounts are dimmed,
+    /// the mounts the keys still reach are not.
+    #[test]
+    fn an_idle_interactions_pane_dims_all_but_its_mounts() {
+        let workspace = LaunchPolicy::default();
+        let interaction = LaunchPolicy {
+            mounts: vec![styra_protocol::LaunchMount {
+                source: PathBuf::from("/srv/data"),
+                destination: None,
+                writable: false,
+            }],
+            ..LaunchPolicy::default()
+        };
+        let idle = view(false, &workspace, &interaction);
+        let rows = pane_rows(&idle, LaunchScope::Interaction);
+
+        assert!(dimmed(span(&rows, "network")));
+        assert!(dimmed(span(&rows, "templates")));
+        assert!(!dimmed(span(&rows, "mounts")));
+        assert!(!dimmed(span(&rows, "/srv/data")));
+    }
+
+    fn text(lines: Vec<Line<'static>>) -> Vec<String> {
+        lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn state(worktree: &str, repository: &str, branch: Option<&str>) -> CheckoutState {
+        CheckoutState {
+            worktree: PathBuf::from(worktree),
+            repository: PathBuf::from(repository),
+            branch: branch.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn checkout_rows_name_the_branch_location_and_repository_state() {
+        for (name, checkout, present, absent) in [
+            (
+                "plain",
+                Some(state("/work/project", "/work/project", Some("main"))),
+                vec![(0, "branch"), (0, "main"), (1, "/work/project")],
+                vec![(1, "linked")],
+            ),
+            // A linked checkout also names the repository it belongs to.
+            (
+                "linked",
+                Some(state(
+                    "/styra/worktrees/session",
+                    "/work/project",
+                    Some("styra/session"),
+                )),
+                vec![
+                    (0, "styra/session"),
+                    (1, "/styra/worktrees/session"),
+                    (1, "linked from /work/project"),
+                ],
+                vec![],
+            ),
+            (
+                "detached",
+                Some(state("/work", "/work", None)),
+                vec![(0, "detached head")],
+                vec![],
+            ),
+            (
+                "outside repository",
+                None,
+                vec![(0, "not a Git checkout")],
+                vec![],
+            ),
+        ] {
+            let lines = text(checkout_lines(checkout.as_ref()));
+            if checkout.is_none() {
+                assert_eq!(lines.len(), 1, "{name}");
+            }
+            for (index, needle) in present {
+                assert!(
+                    lines[index].contains(needle),
+                    "{name}: missing {needle}: {lines:?}"
+                );
+            }
+            for (index, needle) in absent {
+                assert!(
+                    !lines[index].contains(needle),
+                    "{name}: unexpected {needle}: {lines:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn branch_points_name_the_branch_or_detached_head_and_shorten_the_commit() {
+        for (branch, expected) in [
+            (Some("main"), "main @ 3f2a1b4c9d"),
+            (None, "detached head @ 3f2a1b4c9d"),
+        ] {
+            let line = text(vec![branched_from_line(&BranchPoint {
+                branch: branch.map(ToOwned::to_owned),
+                commit: "3f2a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a".to_owned(),
+            })]);
+            assert!(line[0].contains("branched from"), "{branch:?}: {line:?}");
+            assert!(line[0].contains(expected), "{branch:?}: {line:?}");
+            assert!(!line[0].contains("3f2a1b4c9d8"), "{branch:?}: {line:?}");
+        }
+    }
+
+    fn row(lines: &[String], label: &str) -> String {
+        lines
+            .iter()
+            .find(|line| line.trim_start().starts_with(label))
+            .unwrap_or_else(|| panic!("no {label} row in {lines:?}"))
+            .clone()
+    }
+
+    #[test]
+    fn the_workspace_row_spells_out_the_path_the_placeholder_stands_for() {
+        let policy = LaunchPolicy::default();
+        let mut view = view(true, &policy, &policy);
+        view.workspace.root = Some(PathBuf::from("/home/me/proj"));
+        view.workspace.working_directory = Some(PathBuf::from("/home/me/proj/src"));
+        let lines = text(interaction_lines(&view));
+
+        assert!(
+            row(&lines, "workspace")
+                .trim_end()
+                .ends_with(" /home/me/proj (<ws>)"),
+            "{lines:?}"
+        );
+        assert!(row(&lines, "working dir").contains("<ws>/src"), "{lines:?}");
+    }
+
+    /// An interaction in a linked worktree reads by the worktree's name, with
+    /// the directory all worktrees share spelled out once in the Workspace.
+    #[test]
+    fn a_linked_worktree_is_named_under_the_worktrees_placeholder() {
+        let policy = LaunchPolicy::default();
+        let mut view = view(true, &policy, &policy);
+        view.workspace.host_path = Some(PathBuf::from("/home/me/proj"));
+        view.workspace.worktrees = Some(PathBuf::from("/store/w1/worktrees"));
+        view.workspace.root = Some(PathBuf::from("/store/w1/worktrees/fix-retries"));
+        view.workspace.working_directory =
+            Some(PathBuf::from("/store/w1/worktrees/fix-retries/src"));
+        view.checkout = Some(state(
+            "/store/w1/worktrees/fix-retries",
+            "/home/me/proj",
+            Some("styra/fix-retries"),
+        ));
+        let interaction = text(interaction_lines(&view));
+        let workspace = text(workspace_lines(&view));
+
+        assert!(
+            row(&interaction, "workspace")
+                .contains("/home/me/proj (<ws>) · rooted at <wt>/fix-retries"),
+            "{interaction:?}"
+        );
+        assert!(row(&interaction, "working dir").contains("<wt>/fix-retries/src"));
+        assert!(row(&interaction, "worktree").contains("<wt>/fix-retries · linked from <ws>"));
+        assert!(row(&workspace, "worktrees").contains("/store/w1/worktrees (<wt>)"));
+        assert!(row(&workspace, "host path").contains("<ws>"));
+    }
+
+    #[test]
+    fn mount_rows_name_the_workspace_by_its_placeholder() {
+        let workspace = LaunchPolicy::default();
+        let interaction = LaunchPolicy {
+            mounts: vec![LaunchMount {
+                source: PathBuf::from("/home/me/proj/data"),
+                destination: None,
+                writable: false,
+            }],
+            ..LaunchPolicy::default()
+        };
+        let mut view = view(true, &workspace, &interaction);
+        view.workspace.host_path = Some(PathBuf::from("/home/me/proj"));
+        let rows = text(pane_rows(&view, LaunchScope::Interaction));
+
+        assert!(
+            rows.iter().any(|row| row.contains("<ws>/data (ro)")),
+            "{rows:?}"
+        );
+        assert!(!rows.iter().any(|row| row.contains("/home/me")), "{rows:?}");
+    }
+
+    #[test]
+    fn sandbox_summary_mounts_are_compact_without_losing_their_target() {
+        assert_eq!(
+            details_resolved_mount_label(&Mount::Bind {
+                source: PathBuf::from("/workspace"),
+                destination: PathBuf::from("/workspace"),
+                access: MountAccess::ReadWrite,
+            }),
+            "/workspace (rw)"
+        );
+        assert_eq!(
+            details_resolved_mount_label(&Mount::Bind {
+                source: PathBuf::from("/host/cache"),
+                destination: PathBuf::from("/cache"),
+                access: MountAccess::ReadOnly,
+            }),
+            "/host/cache → /cache (ro)"
+        );
+    }
+
+    #[test]
+    fn main_details_mount_labels_do_not_repeat_a_same_path_destination() {
+        let path = PathBuf::from("/workspace");
+        let line = mount_line(&Mount::Bind {
+            source: path.clone(),
+            destination: path.clone(),
+            access: MountAccess::ReadWrite,
+        });
+        assert_eq!(text(vec![line]), ["    rw /workspace → /workspace"]);
+        assert_eq!(
+            launch_mount_label(&LaunchMount {
+                source: path.clone(),
+                destination: Some(path),
+                writable: true,
+            }),
+            "/workspace (rw)"
+        );
+    }
+}

@@ -67,8 +67,8 @@ nota = { path = "nota" }
 server = { path = "styra/server" }
 transcription = { path = "styra/transcription" }
 protocol = { path = "styra/protocol" }
-styra-diff = { path = "styra/diff" }
-styra-ui = { path = "styra/ui" }
+styra-diff = { path = "styra/diff", default-features = false }
+styra-ui = { path = "styra/ui", default-features = false }
 
 # Whisper inference is the only compute-bound work in the workspace. Keep its
 # Rust wrapper optimized in a debug Styra build without obscuring the debug

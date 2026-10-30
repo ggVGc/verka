@@ -7,7 +7,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+#[cfg(feature = "renderer")]
 use ratatui::style::Color;
+#[cfg(feature = "renderer")]
 use styra_ui::theme;
 
 use crate::files::file_diffs;
@@ -52,6 +54,7 @@ pub struct Layers {
 
 /// How far, in tenths, a removed line's tint is darkened from an added
 /// line's, so the two still read apart where they meet.
+#[cfg(feature = "renderer")]
 const REMOVED_DARKEN: u16 = 4;
 
 impl Layers {
@@ -226,6 +229,7 @@ fn states(worktree: &Path, base: &str) -> Result<(Vec<Commit>, String), String> 
 /// layer's colour, with each later one laid half over what is below it, so
 /// the newest shows strongest and the older ones still show through. A
 /// removed line is darker. `None` for a line no layer touched.
+#[cfg(feature = "renderer")]
 pub(crate) fn background(layers: &[u16], removed: bool) -> Option<Color> {
     let (first, rest) = layers.split_first()?;
     let mut colour = rest.iter().fold(layer_colour(*first), |below, &layer| {
@@ -239,11 +243,13 @@ pub(crate) fn background(layers: &[u16], removed: bool) -> Option<Color> {
 
 /// Layer `layer`'s own colour: hues a golden angle apart, so neighbouring
 /// layers differ the most, dark enough for code to read over.
+#[cfg(feature = "renderer")]
 pub(crate) fn layer_colour(layer: u16) -> (u8, u8, u8) {
     let hue = (210.0 + f32::from(layer) * 137.508) % 360.0;
     hsv(hue, 0.5, 0.38)
 }
 
+#[cfg(feature = "renderer")]
 fn hsv(hue: f32, saturation: f32, value: f32) -> (u8, u8, u8) {
     let chroma = value * saturation;
     let sector = hue / 60.0;
@@ -262,6 +268,7 @@ fn hsv(hue: f32, saturation: f32, value: f32) -> (u8, u8, u8) {
 }
 
 /// `from` moved `tenths` tenths of the way toward `to`.
+#[cfg(feature = "renderer")]
 fn mix(from: (u8, u8, u8), to: (u8, u8, u8), tenths: u16) -> (u8, u8, u8) {
     let channel =
         |from: u8, to: u8| ((u16::from(from) * (10 - tenths) + u16::from(to) * tenths) / 10) as u8;
@@ -272,6 +279,7 @@ fn mix(from: (u8, u8, u8), to: (u8, u8, u8), tenths: u16) -> (u8, u8, u8) {
     )
 }
 
+#[cfg(feature = "renderer")]
 fn rgb(colour: Color) -> (u8, u8, u8) {
     match colour {
         Color::Rgb(r, g, b) => (r, g, b),
@@ -614,6 +622,7 @@ mod tests {
         assert_eq!(layers.marks(combined).last().unwrap(), &[1]);
     }
 
+    #[cfg(feature = "renderer")]
     #[test]
     fn later_layers_show_strongest_and_removals_darker() {
         assert_eq!(background(&[], false), None);

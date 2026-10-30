@@ -8,8 +8,11 @@
 //! without regard to case unless it has a capital in it, as Vim's
 //! `smartcase` has it.
 
+#[cfg(feature = "renderer")]
 use ratatui::style::{Modifier, Style};
+#[cfg(feature = "renderer")]
 use ratatui::text::{Line, Span};
+#[cfg(feature = "renderer")]
 use styra_ui::theme;
 
 use crate::split::{aligned, SplitRow};
@@ -75,6 +78,7 @@ pub(crate) fn matches(code: &str, term: &str) -> Vec<(usize, usize)> {
 /// Mark `term` in the code of each of `lines`, `text` drawn a line for each
 /// of its own. The marks are cut into the spans they fall across, so each
 /// part keeps the style it was drawn with beneath the mark.
+#[cfg(feature = "renderer")]
 pub(crate) fn highlight(text: &str, lines: &mut [Line<'static>], term: &str) {
     for (line, code) in lines.iter_mut().zip(code_lines(text)) {
         let Some(code) = code else { continue };
@@ -128,6 +132,7 @@ pub(crate) fn highlight(text: &str, lines: &mut [Line<'static>], term: &str) {
 
 /// The mark over found text: the colours Styra's other `/` searches mark
 /// what they find with.
+#[cfg(feature = "renderer")]
 pub(crate) fn style() -> Style {
     Style::new().fg(theme::CODE_BACKGROUND).bg(theme::ACCENT)
 }
@@ -135,6 +140,7 @@ pub(crate) fn style() -> Style {
 /// The mark over found text on the line cursor's line, which `n` and `N`
 /// step from, set apart from the rest as Vim's `CurSearch` sets it apart:
 /// inverted, its colour on the code's dark background.
+#[cfg(feature = "renderer")]
 pub(crate) fn current_style() -> Style {
     Style::new()
         .fg(theme::LIGHT_ACCENT)
@@ -193,6 +199,7 @@ pub(crate) fn match_rows(
 mod tests {
     use super::*;
 
+    #[cfg(feature = "renderer")]
     fn marked(line: &Line<'_>) -> Vec<String> {
         line.spans
             .iter()
@@ -229,6 +236,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "renderer")]
     #[test]
     fn the_matched_text_alone_is_marked_and_the_number_left_alone() {
         let text = "diff --git a/f b/f\n@@ -1 +1 @@\n-one one\n+none\n";

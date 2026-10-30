@@ -29,7 +29,9 @@ mod sync;
 mod tags;
 mod workers;
 
+#[cfg(feature = "renderer")]
 pub use navigation::open_interaction_navigator;
+#[cfg(feature = "renderer")]
 pub use sync::refresh_quota;
 
 use workers::{InteractionsPoll, LaunchEffects};

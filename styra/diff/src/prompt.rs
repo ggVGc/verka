@@ -64,6 +64,7 @@ mod tests {
 
 /// Raw patch rows with annotations. Scan once so drawing a large patch does
 /// not repeatedly resolve every row's file and hunk position.
+#[cfg(any(test, feature = "renderer"))]
 pub(crate) fn marked_rows(text: &str, prompts: &[Prompt], per_file: bool) -> Vec<usize> {
     let mut marked = Vec::new();
     if prompts.is_empty() {

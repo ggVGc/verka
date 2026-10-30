@@ -5,13 +5,20 @@ edition.workspace = true
 description = "A terminal interface for interactive, isolated agent sessions"
 
 [features]
-default = []
+default = ["renderer"]
+renderer = ["styra-ui/renderer", "styra-diff/renderer"]
 vulkan = ["server/vulkan"]
 rocm = ["server/rocm"]
+
+[lib]
+name = "styra_tui"
+path = "src/lib.rs"
 
 [[bin]]
 name = "styra"
 path = "src/main.rs"
+required-features = ["renderer"]
+test = false
 
 [dependencies]
 anyhow.workspace = true

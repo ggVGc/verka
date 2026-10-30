@@ -5,6 +5,7 @@
 //! the worktree's own name, the file under the workspace. Each prefix is
 //! written as a placeholder instead, and spelled out once where it is defined.
 
+#[cfg(feature = "renderer")]
 use ratatui::text::Line;
 use std::path::Path;
 
@@ -48,6 +49,7 @@ impl Placeholders {
     }
 
     /// [`Self::apply`] over every span of `lines`.
+    #[cfg(feature = "renderer")]
     pub fn lines(&self, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
         if self.prefixes.is_empty() {
             return lines;

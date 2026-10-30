@@ -255,6 +255,7 @@ mod tests {
     use super::*;
     use crate::test_support::{git, repository};
 
+    #[cfg(feature = "renderer")]
     #[test]
     fn commit_browser_previews_each_patch_and_restores_all_changes() {
         use crate::{CheckoutDiff, Outcome};

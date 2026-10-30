@@ -52,6 +52,7 @@ pub struct ReportPage {
 
 /// What the view says about one file of the diff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "renderer"))]
 pub(crate) enum Described<'a> {
     /// Its description, and whether the patch has changed since it was
     /// written.
@@ -61,6 +62,7 @@ pub(crate) enum Described<'a> {
     Missing { failure: Option<&'a str> },
 }
 
+#[cfg(any(test, feature = "renderer"))]
 impl ReportState {
     /// Whether the view has anything of a report to show.
     pub(crate) fn shown(&self) -> bool {

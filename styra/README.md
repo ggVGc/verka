@@ -253,6 +253,30 @@ The server and its client interface are the `server` crate in `styra/server`
 separate `styra-ui` crate. The application passes presentation models through
 an object-safe `Ui` trait whose methods expose each rendering operation
 directly; the Ratatui implementation also supports an in-memory test backend.
+Application tests inspect the data passed to `Ui`; renderer tests draw independent
+view fixtures. The `renderer` feature in `tui`, `styra-ui`, and `styra-diff` is
+on by default for normal builds. With it disabled, view models, navigation, and
+application logic compile without Ratatui or the Markdown/syntax renderers.
+Run the enforced application test build from the repository root:
+
+```sh
+./styra/test-tui-without-renderer.sh
+```
+
+The script checks the dependency graph and runs
+`cargo test -p tui --lib --no-default-features`. Run renderer tests in a separate
+Cargo invocation, since features enabled by another workspace package are additive:
+
+```sh
+cargo test -p styra-ui -p styra-diff
+cargo check -p tui -p styra-diff --bins
+```
+
+`styra/tui/src/main.rs` is a thin binary entry point; application tests live in
+its library. UI model modules remain available without the feature, while widget
+implementations in `styra/ui/src/render/` and terminal ownership in
+`styra/ui/src/terminal.rs` require it.
+
 The checkout diff view (`d` in the preview pane, `D` fullscreen) is its own crate, `styra-diff` in `styra/diff`,
 built on `styra-ui`; its `styra-diff` binary opens the same view over any
 repository: `styra-diff [-C DIR] [BASE]` shows the working tree against where

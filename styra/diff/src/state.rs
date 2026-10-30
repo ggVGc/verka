@@ -3,6 +3,7 @@
 //! [`Action`]s, so what each one does is decided here once.
 
 use crossterm::event::{KeyCode, KeyEvent};
+#[cfg(feature = "renderer")]
 use ratatui::widgets::Block;
 use std::path::{Path, PathBuf};
 use styra_ui::query::Edit;
@@ -428,14 +429,32 @@ impl CheckoutDiff {
     }
 
     /// The view to draw this diff as, inside `block`.
+    #[cfg(feature = "renderer")]
     pub fn view<'a>(&'a self, block: Block<'a>) -> CheckoutDiffView<'a> {
+        let mut view = self.view_data();
+        view.block = block;
+        view
+    }
+
+    /// Map state to presentation data without constructing terminal widgets.
+    pub fn view_model(&self, chrome: styra_ui::chrome::PanelChrome) -> CheckoutDiffView<'_> {
+        let mut view = self.view_data();
+        view.chrome = Some(chrome);
+        view
+    }
+
+    fn view_data(&self) -> CheckoutDiffView<'_> {
         let target = self.target();
         let supplied = match &self.source {
             Source::Supplied(supplied) => Some(supplied),
             Source::Checkout(_) => None,
         };
         CheckoutDiffView {
-            block,
+            #[cfg(feature = "renderer")]
+            block: ratatui::widgets::Block::bordered(),
+            chrome: None,
+            intro_message: None,
+            conversation_data: None,
             commits: Some(&self.commits),
             worktree: self.root().unwrap_or(Path::new("")),
             branch: target.and_then(|target| target.branch.as_deref()),
@@ -477,7 +496,9 @@ impl CheckoutDiff {
             search: self.search.view(),
             report: (self.commits.selected == 0).then_some(&self.report),
             report_page: self.report_page,
+            #[cfg(feature = "renderer")]
             conversation: None,
+            #[cfg(feature = "renderer")]
             intro: None,
             line_cursor: self.line_cursor,
             find: match self.line_cursor {
@@ -1091,6 +1112,7 @@ fn line_at(rows: &[Row], top: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "renderer")]
     use crate::test_support::{draw as draw_frame, rows as buffer_rows};
     use crate::test_support::{git, repository};
     use crate::view::removed_rows;
@@ -1113,6 +1135,7 @@ mod tests {
         diff
     }
 
+    #[cfg(feature = "renderer")]
     #[test]
     fn involved_filter_pins_commits_and_keeps_navigation_and_counts_in_sync() {
         use crate::layers::Layer;
@@ -1199,6 +1222,7 @@ mod tests {
         assert!(diff.involved_layers.is_none());
     }
 
+    #[cfg(feature = "renderer")]
     #[test]
     fn prompts_mark_files_and_lines_and_preview_in_both_layouts() {
         let mut diff = two_files();
@@ -1235,6 +1259,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "renderer")]
     #[test]
     fn layout_changes_and_resizing_preserve_source_locations() {
         let mut diff = two_files();
@@ -1745,6 +1770,7 @@ mod tests {
     /// Found text is marked where it is drawn — on the line cursor's line as
     /// the current match — and the prompt counts which of its lines the
     /// cursor is on.
+    #[cfg(feature = "renderer")]
     #[test]
     fn found_text_is_marked_and_counted() {
         let mut diff = two_files();

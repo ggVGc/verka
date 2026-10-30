@@ -1,12 +1,14 @@
 //! Renderer regressions use presentation fixtures, with no application state.
 use super::*;
 use crate::event_list::*;
+use crate::RenderFeedback;
 use crate::{
     chrome::{PanelChrome, StatusTone},
     markdown::LinkDisplay,
     search::SearchView,
     TestUi,
 };
+use ratatui::{layout::Rect, Frame};
 use styra_protocol::event::{AgentEvent, Protocol};
 
 fn version() -> EntryVersion {

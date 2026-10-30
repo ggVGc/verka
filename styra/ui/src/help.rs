@@ -1,10 +1,3 @@
-use crate::theme;
-use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use ratatui::Frame;
-
 pub enum HelpRow<'a> {
     Section(&'a str),
     /// `keys` is owned where the caller builds it from a binding's own keys,
@@ -16,52 +9,9 @@ pub enum HelpRow<'a> {
     Blank,
 }
 
-/// Render the reference for one window. `window` names the screen the rows
-/// belong to: `?` answers for what is on display, so the frame has to say
-/// which display that is.
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    window: &str,
-    rows: &[HelpRow<'_>],
-    close_key: &str,
-    scroll: u16,
-) -> u16 {
-    let heading = Style::default()
-        .fg(theme::ACCENT)
-        .add_modifier(Modifier::BOLD);
-    let key = Style::default()
-        .fg(theme::WARNING)
-        .add_modifier(Modifier::BOLD);
-    let muted = Style::default().fg(theme::MUTED_TEXT);
-    let mut lines = rows
-        .iter()
-        .map(|row| match row {
-            HelpRow::Section(name) => Line::from(Span::styled((*name).to_owned(), heading)),
-            HelpRow::Binding { keys, action } => Line::from(vec![
-                Span::styled(format!("  {keys:<20}"), key),
-                Span::raw((*action).to_owned()),
-            ]),
-            HelpRow::Blank => Line::default(),
-        })
-        .collect::<Vec<_>>();
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        format!(" j/k to scroll · {close_key} to close "),
-        muted,
-    )));
-    let visible = area.height.saturating_sub(2);
-    let limit = (rows.len() as u16 + 2).saturating_sub(visible);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::ACCENT))
-        .title(format!(" styra · {window} · keybinds "));
-    frame.render_widget(
-        Paragraph::new(Text::from(lines))
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll.min(limit), 0)),
-        area,
-    );
-    limit
-}
+#[cfg(feature = "renderer")]
+pub use rendering::*;
+
+#[cfg(feature = "renderer")]
+#[path = "render/help.rs"]
+mod rendering;

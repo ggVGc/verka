@@ -150,11 +150,10 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
     };
     let mut chrome = panel_chrome(app, Some("diff"));
     chrome.suffix = Some(title.to_owned());
-    let block = styra_ui::chrome::focused_panel_block(&chrome);
     let mut view = match app.shown_diff() {
-        Some(diff) => diff.view(block),
+        Some(diff) => diff.view_model(chrome),
         None if turn || app.view == View::CheckoutDiff => {
-            styra_diff::CheckoutDiffView::unread(block)
+            styra_diff::CheckoutDiffView::from_chrome(chrome)
         }
         None => return None,
     };
@@ -178,13 +177,13 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
     view.prompts = app.diff_prompts();
     if turn {
         view.report = None;
-        view.intro = app.turn_message().map(|message| {
-            styra_ui::preview::message_lines(
-                message,
-                app.selection.provider.protocol(),
-                list::ui_link_display(app.link_display),
-            )
-        });
+        view.intro_message = app
+            .turn_message()
+            .map(|event| styra_ui::preview::MessageView {
+                event,
+                protocol: app.selection.provider.protocol(),
+                links: list::ui_link_display(app.link_display),
+            });
     }
     Some(view)
 }
@@ -557,7 +556,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
             let mut diff = shown_diff(app).expect("fullscreen always draws a diff");
             diff.thumbnail = true;
             if app.diff_conversation {
-                diff.conversation = Some(styra_ui::picker::latest_conversation(
+                diff.conversation_data = Some(styra_ui::picker::conversation(
                     app.timeline.entries.iter().map(|entry| entry.event()),
                     app.selection.provider.protocol(),
                     DIFF_MESSAGES,
@@ -922,6 +921,33 @@ mod tests {
     use styra_protocol::event::{AgentEvent, TurnOutcome, TurnUsage};
     use styra_protocol::{CheckoutState, InteractionSummary};
     use styra_ui::application::MainView;
+
+    #[test]
+    fn turn_diff_mapping_passes_semantic_chrome_and_the_original_message() {
+        let mut app = test_support::app("s1");
+        app.push_event(AgentEvent::UserMessage {
+            text: "fix the retry backoff".into(),
+        });
+        app.push_event(AgentEvent::FileChanged {
+            id: String::new(),
+            paths: vec!["a.rs".into()],
+            diff: Some("@@ -1 +1 @@\n-old\n+new".into()),
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.diff_preview = true;
+        app.diff_turn = true;
+        app.sync_turn_diff();
+        let view = shown_diff(&app).unwrap();
+        let message = view.intro_message.unwrap();
+        assert!(
+            matches!(message.event, AgentEvent::UserMessage { text } if text == "fix the retry backoff")
+        );
+        assert_eq!(message.protocol, app.selection.provider.protocol());
+        let chrome = view.chrome.unwrap();
+        assert!(chrome.focused);
+        assert!(chrome.suffix.unwrap().starts_with("turn diff"));
+    }
 
     #[test]
     fn ui_receives_requested_anchor_and_feedback_is_applied_explicitly() {

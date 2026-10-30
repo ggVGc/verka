@@ -1,0 +1,183 @@
+use super::*;
+use crate::theme;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
+use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
+
+pub fn render(frame: &mut Frame, view: &FooterView<'_>, area: Rect) {
+    let quota_width = view
+        .quota
+        .iter()
+        .map(|segment| segment.text.width())
+        .sum::<usize>()
+        .min(area.width as usize) as u16;
+    let retry = view.auto_retry.then_some(" R rate-limit retry: on ");
+    let retry_width = retry
+        .map(UnicodeWidthStr::width)
+        .unwrap_or_default()
+        .min(area.width.saturating_sub(quota_width) as usize) as u16;
+    let commit = view.auto_commit.then_some(" ^G auto-commit ");
+    let commit_width = commit
+        .map(UnicodeWidthStr::width)
+        .unwrap_or_default()
+        .min(area.width.saturating_sub(quota_width + retry_width) as usize)
+        as u16;
+    let background = view.background.map(|work| format!(" ⟳ {work} "));
+    let background_width = background
+        .as_deref()
+        .map(UnicodeWidthStr::width)
+        .unwrap_or_default()
+        .min(
+            area.width
+                .saturating_sub(quota_width + retry_width + commit_width) as usize,
+        ) as u16;
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(background_width),
+            Constraint::Length(quota_width),
+            Constraint::Length(retry_width),
+            Constraint::Length(commit_width),
+        ])
+        .split(area);
+    let mut context = Vec::new();
+    if BUILD_BRANCH != "main" {
+        context.push(Span::styled(
+            format!("[build: {BUILD_BRANCH}] "),
+            Style::default().fg(theme::ACCENT),
+        ));
+    }
+    context.push(Span::styled(
+        view.working_directory.to_owned(),
+        Style::default().fg(theme::ADDITIONAL_INFO),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(context)), chunks[0]);
+    if !view.quota.is_empty() {
+        let spans = view
+            .quota
+            .iter()
+            .map(|segment| {
+                let color = match segment.tone {
+                    Tone::Muted => theme::MUTED_TEXT,
+                    Tone::Warning => theme::QUOTA_WARNING,
+                    Tone::Error => theme::ERROR,
+                };
+                let style = if segment.bold {
+                    Style::default().fg(color).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(color)
+                };
+                Span::styled(segment.text.clone(), style)
+            })
+            .collect::<Vec<_>>();
+        frame.render_widget(Paragraph::new(Line::from(spans)).right_aligned(), chunks[2]);
+    }
+    if let Some(background) = background {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                background,
+                Style::default().fg(theme::MUTED_WARNING),
+            )))
+            .right_aligned(),
+            chunks[1],
+        );
+    }
+    if let Some(retry) = retry {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                retry,
+                Style::default().fg(theme::SUCCESS),
+            )))
+            .right_aligned(),
+            chunks[3],
+        );
+    }
+    if let Some(commit) = commit {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                commit,
+                Style::default().fg(theme::SUCCESS),
+            )))
+            .right_aligned(),
+            chunks[4],
+        );
+    }
+}
+
+pub fn tag_color(tag: &str) -> Color {
+    match tag {
+        "agent" => theme::AGENT_TAG,
+        "user" => theme::USER_TAG,
+        "shell" => theme::SHELL_TAG,
+        "tool" => theme::SPECIAL,
+        "plan" | "files" => theme::INFO,
+        "branch" | "provider" | "model" => theme::CONVERSATION_CHANGE,
+        "error" | "malformed" => theme::ERROR,
+        _ => theme::ADDITIONAL_INFO,
+    }
+}
+
+pub fn message_text_color(tag: &str) -> Color {
+    match tag {
+        "agent" => theme::AGENT_TEXT,
+        "user" => theme::USER_TEXT,
+        "error" | "malformed" => theme::ERROR,
+        _ => theme::TEXT,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn screen(width: u16, view: &FooterView<'_>) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+        terminal
+            .draw(|frame| render(frame, view, frame.area()))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+    #[test]
+    fn shows_context_and_standing_state() {
+        let quota = vec![Segment {
+            text: " codex: 80%".into(),
+            tone: Tone::Warning,
+            bold: true,
+        }];
+        let output = screen(
+            120 + BUILD_BRANCH.width() as u16,
+            &FooterView {
+                working_directory: "/workspace",
+                quota: &quota,
+                auto_retry: true,
+                auto_commit: true,
+                background: Some("describing edits"),
+            },
+        );
+        for expected in [
+            "codex: 80%",
+            "rate-limit retry: on",
+            "^G auto-commit",
+            "⟳ describing edits",
+            "/workspace",
+        ] {
+            assert!(output.contains(expected), "missing {expected}: {output}");
+        }
+        if BUILD_BRANCH == "main" {
+            assert!(!output.contains("[build:"));
+        } else {
+            assert!(output.contains(&format!("[build: {BUILD_BRANCH}]")));
+        }
+    }
+}

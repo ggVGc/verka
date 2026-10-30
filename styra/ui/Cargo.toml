@@ -8,18 +8,22 @@ description = "Terminal UI boundary and Ratatui implementation for Styra"
 name = "styra_ui"
 path = "src/lib.rs"
 
+[features]
+default = ["renderer"]
+renderer = ["dep:ratatui", "dep:tui-markdown", "dep:two-face"]
+
 [dependencies]
 anyhow.workspace = true
 crossterm.workspace = true
 libc.workspace = true
-ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
+ratatui = { workspace = true, optional = true, features = ["unstable-rendered-line-info"] }
 pulldown-cmark.workspace = true
-tui-markdown.workspace = true
+tui-markdown = { workspace = true, optional = true }
 unicode-width.workspace = true
 unicode-segmentation.workspace = true
 protocol.workspace = true
 serde_json.workspace = true
-two-face = { version = "0.5", default-features = false, features = ["syntect-onig"] }
+two-face = { optional = true, version = "0.5", default-features = false, features = ["syntect-onig"] }
 
 # Plain `cargo bench`, no harness: this measures one whole frame, which is
 # milliseconds of work, so the sampling a benchmark framework adds would buy
@@ -27,3 +31,4 @@ two-face = { version = "0.5", default-features = false, features = ["syntect-oni
 [[bench]]
 name = "event_list"
 harness = false
+required-features = ["renderer"]

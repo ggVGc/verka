@@ -1,10 +1,13 @@
+#[cfg(feature = "renderer")]
 use ratatui::{backend::TestBackend, buffer::Buffer, Frame, Terminal};
 
+#[cfg(feature = "renderer")]
 pub(crate) fn draw(width: u16, height: u16, render: impl FnOnce(&mut Frame)) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(render).unwrap().buffer.clone()
 }
 
+#[cfg(feature = "renderer")]
 pub(crate) fn rows(buffer: &Buffer) -> Vec<String> {
     (buffer.area.top()..buffer.area.bottom())
         .map(|y| {

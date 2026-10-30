@@ -12,6 +12,7 @@
 pub mod files;
 mod find;
 pub mod git;
+#[cfg(feature = "renderer")]
 mod highlight;
 pub mod keys;
 pub mod layers;
@@ -28,4 +29,6 @@ mod test_support;
 pub use keys::Outcome;
 pub use report::{FileReport, Report, ReportPage, ReportState};
 pub use state::{CheckoutDiff, Commits, DiffTarget, Source, Supplied};
-pub use view::{render, CheckoutDiffFeedback, CheckoutDiffView, Tint};
+#[cfg(feature = "renderer")]
+pub use view::render;
+pub use view::{CheckoutDiffFeedback, CheckoutDiffView, Tint};
