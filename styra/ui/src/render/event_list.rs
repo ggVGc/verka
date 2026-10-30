@@ -1170,8 +1170,15 @@ fn build_entry_content_rows(
     // is actually on rather than half-marked on both. The mark is a span
     // style and the selection below is the row's own, so they coexist.
     let mut wrapped = search::highlight_lines(wrapped, search);
-    if let Some(first) = wrapped.first_mut() {
-        *first = with_entry_backdrop(std::mem::take(first), entry);
+    // A branch marker is at most its summary and the one line the other side
+    // last said, so it is banded whole: the band is what sets it apart.
+    let banded = if branch_background(entry.event).is_some() {
+        wrapped.len()
+    } else {
+        1
+    };
+    for row in wrapped.iter_mut().take(banded) {
+        *row = with_entry_backdrop(std::mem::take(row), entry);
     }
     wrapped
 }
@@ -1187,6 +1194,8 @@ fn with_entry_backdrop(line: Line<'static>, entry: &EventEntry<'_>) -> Line<'sta
         Some(theme::SELECTION_BACKGROUND)
     } else if matches!(entry.event, AgentEvent::UserMessage { .. }) {
         Some(theme::USER_MESSAGE_BACKGROUND)
+    } else if let Some(background) = branch_background(entry.event) {
+        Some(background)
     } else if is_conversation_change(entry.event) {
         Some(theme::CONVERSATION_CHANGE_BACKGROUND)
     } else {
@@ -1198,6 +1207,17 @@ fn with_entry_backdrop(line: Line<'static>, entry: &EventEntry<'_>) -> Line<'sta
             line.style(style)
         }
         None => line,
+    }
+}
+
+/// The band behind a branch marker, in its direction's tint.
+fn branch_background(event: &AgentEvent) -> Option<Color> {
+    match event {
+        AgentEvent::Branched { direction, .. } => Some(match direction {
+            styra_protocol::event::BranchDirection::To => theme::BRANCH_TO_BACKGROUND,
+            styra_protocol::event::BranchDirection::From => theme::BRANCH_FROM_BACKGROUND,
+        }),
+        _ => None,
     }
 }
 
@@ -1526,8 +1546,12 @@ pub fn summary_line(
         entry.event,
         AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
     );
+    // A branch marker leads with a bar down its band's edge rather than the
+    // diamond the other conversation changes share.
     let row_lead = if is_conversation {
         ""
+    } else if branch_appearance.is_some() {
+        "▌ "
     } else if conversation_change {
         "◆ "
     } else {
@@ -2304,6 +2328,48 @@ mod tests {
         });
         let running = rows(&entry);
         assert!(!running[0].contains("paused"), "{running:#?}");
+    }
+
+    #[test]
+    fn a_branch_marker_is_banded_apart_from_other_conversation_changes() {
+        use styra_protocol::event::BranchDirection;
+        let marker = |direction| AgentEvent::Branched {
+            direction,
+            session: "4f1c-session-id".into(),
+            name: None,
+        };
+        let render = render_of();
+        let backgrounds = |event: &AgentEvent, message| {
+            let entry = EventEntry {
+                branch: BranchLink {
+                    message,
+                    ..Default::default()
+                },
+                ..entry_of(event, version())
+            };
+            entry_rows_with_max_rows(&entry, 80, 20, render)
+                .into_iter()
+                .filter(|row| !row.to_string().starts_with('─'))
+                .map(|row| row.style.bg)
+                .collect::<Vec<_>>()
+        };
+        // Every row of the marker, the other side's last word included.
+        assert_eq!(
+            backgrounds(&marker(BranchDirection::To), Some("Done.")),
+            [Some(theme::BRANCH_TO_BACKGROUND); 2]
+        );
+        assert_eq!(
+            backgrounds(&marker(BranchDirection::From), None),
+            [Some(theme::BRANCH_FROM_BACKGROUND)]
+        );
+        let model = AgentEvent::ModelChanged {
+            model: Some("opus".into()),
+            effort: None,
+        };
+        assert_eq!(
+            backgrounds(&model, None)[0],
+            Some(theme::CONVERSATION_CHANGE_BACKGROUND)
+        );
     }
 
     #[test]
