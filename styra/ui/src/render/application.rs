@@ -384,6 +384,11 @@ fn note_preview_scroll(
 }
 
 fn render_reading_overlays(frame: &mut Frame, view: &ApplicationOverlays<'_>) {
+    if let Some(name) = view.rename_prompt {
+        let prompt = crate::text_prompt::TextPrompt::new(" rename interaction ", name)
+            .bottom(" Enter save · Ctrl-U clear · Esc cancel ");
+        crate::text_prompt::render(frame, &prompt, frame.area());
+    }
     if let Some((branch, restore)) = view.retarget_prompt {
         overlays::render_retarget(frame, branch, restore);
     }

@@ -45,6 +45,7 @@ pub(super) fn message_paste_active(app: &App) -> bool {
         && app.rebase_status.is_none()
         && app.launcher.is_none()
         && app.template_picker.is_none()
+        && app.rename_prompt.is_none()
         && app.retarget_prompt.is_none()
         && app.integration_prompt.is_none()
         && app.branch_prompt.is_none()
@@ -67,6 +68,7 @@ fn action_menu_available(app: &App) -> bool {
     app.focus == Focus::List
         && app.launcher.is_none()
         && app.template_picker.is_none()
+        && app.rename_prompt.is_none()
         && app.retarget_prompt.is_none()
         && app.integration_prompt.is_none()
         && app.branch_prompt.is_none()
@@ -91,6 +93,7 @@ fn action_menu_available(app: &App) -> bool {
 fn reference_available(app: &App) -> bool {
     app.insert.is_none()
         && app.git_repository_prompt.is_none()
+        && app.rename_prompt.is_none()
         && app.retarget_prompt.is_none()
         && app.integration_prompt.is_none()
         && app.launch.prompt.is_none()
@@ -194,6 +197,10 @@ impl Loop<'_> {
         // edit produced by Enter until some unrelated future keypress.
         if app.template_picker.is_some() {
             self.template_picker_key(key, workspace_id);
+            return Ok(Handled::Done);
+        }
+        if app.rename_prompt.is_some() {
+            input::handle_rename_prompt_key(app, client, key);
             return Ok(Handled::Done);
         }
         // The branching choice is modal and can replace the current Session
@@ -770,6 +777,10 @@ mod tests {
         assert!(!message_paste_active(&app));
         app.focus = Focus::Input;
         assert!(message_paste_active(&app));
+        app.rename_prompt = Some(String::new());
+        assert!(!message_paste_active(&app));
+        assert!(!reference_available(&app));
+        app.rename_prompt = None;
         app.retarget_prompt = Some((String::new(), Vec::new()));
         assert!(!message_paste_active(&app));
         app.retarget_prompt = None;

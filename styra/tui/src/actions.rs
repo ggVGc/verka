@@ -22,6 +22,7 @@ pub(crate) enum Action {
     GlobalLauncher,
     GlobalShell,
     GlobalDirectory,
+    EventsRename,
     EventsRun,
     EventsTest,
     GlobalDiff,
@@ -334,6 +335,7 @@ impl Action {
             Self::GlobalLauncher => "choose agent, model and effort for an idle agent turn",
             Self::GlobalShell => "open session shell in a new terminal",
             Self::GlobalDirectory => "open a terminal in the interaction's working directory",
+            Self::EventsRename => "rename the current interaction",
             Self::EventsRun => "run the project from the Workspace directory in a new terminal",
             Self::EventsTest => "test the project from the Workspace directory in a new terminal",
             Self::GlobalDiff => {

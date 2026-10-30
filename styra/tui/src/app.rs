@@ -237,6 +237,8 @@ pub struct App {
     /// The Git checkout path being entered for the current Workspace from the
     /// details view. An empty value deliberately clears the association.
     pub git_repository_prompt: Option<String>,
+    /// The current interaction's display name being edited.
+    pub rename_prompt: Option<String>,
     pub integration_prompt: Option<String>,
     /// Commit-message drafts kept in this client, keyed by interaction.
     integration_drafts: std::collections::HashMap<String, String>,
@@ -614,6 +616,7 @@ impl App {
             recent_models: Vec::new(),
             workspace: Location::default(),
             git_repository_prompt: None,
+            rename_prompt: None,
             integration_prompt: None,
             integration_drafts: std::collections::HashMap::new(),
             retarget_prompt: None,

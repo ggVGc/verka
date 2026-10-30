@@ -98,6 +98,7 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_LINKS: [Key::ch('f')]
         => Action::EventsLinks;
     EVENTS_COPY: [Key::ch('y')] => Action::EventsCopy;
+    EVENTS_RENAME: [Key::alt_code(KeyCode::Char('r'))] => Action::EventsRename;
     EVENTS_RUN: [Key::ch('r')] => Action::EventsRun;
     EVENTS_TEST: [Key::ch('R')] => Action::EventsTest;
 }

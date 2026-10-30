@@ -81,6 +81,7 @@ pub struct PanelFeedback {
 pub struct ApplicationOverlays<'a> {
     pub rebase_status: Option<&'a styra_protocol::RebaseStatus>,
     pub retarget_prompt: Option<(&'a str, bool)>,
+    pub rename_prompt: Option<&'a str>,
     pub integration_message: Option<&'a str>,
     /// The branch the integration commit will land on, named in the
     /// message prompt's corner.

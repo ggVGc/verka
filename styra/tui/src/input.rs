@@ -40,6 +40,32 @@ pub fn handle_search_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+pub fn handle_rename_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
+    let Some(text) = app.rename_prompt.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc => app.rename_prompt = None,
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
+        KeyCode::Enter => {
+            let name = (!text.trim().is_empty()).then_some(text.as_str());
+            match client.rename_session(&app.session_id, name) {
+                Ok(session) => {
+                    app.interactions.note_name(session.id, session.name);
+                    app.branch_needs_prompt_name = false;
+                    app.rename_prompt = None;
+                }
+                Err(error) => app.show_error(format!("could not rename interaction: {error:#}")),
+            }
+        }
+        _ => match Edit::from_key(key) {
+            Some(Edit::Push(_)) if text.chars().count() >= 80 => {}
+            Some(edit) => edit.apply(text),
+            None => {}
+        },
+    }
+}
+
 pub fn handle_retarget_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
     let Some((text, history)) = app.retarget_prompt.as_mut() else {
         return;
@@ -551,6 +577,14 @@ pub fn handle_list_key(
     }
     match app.view {
         View::Events => match key {
+            k if EVENTS_RENAME.matches(k) && !app.session_id.is_empty() => {
+                app.rename_prompt = Some(
+                    app.interactions
+                        .name(&app.session_id)
+                        .unwrap_or_default()
+                        .to_owned(),
+                );
+            }
             k if EVENTS_RUN.matches(k) => app.ask(Request::ProjectAction(ProjectAction::Run)),
             k if EVENTS_TEST.matches(k) => app.ask(Request::ProjectAction(ProjectAction::Test)),
             k if EVENTS_LINKS.matches(k) => app.highlight_first_link(),
@@ -1331,6 +1365,94 @@ mod tests {
     use styra_protocol::{
         AttributedMount, DrivaOptions, LaunchMount, Mount, MountAccess, MountOrigin,
     };
+
+    #[test]
+    fn rename_from_events_prefills_edits_and_cancels_without_changing_the_name() {
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
+            "session-1",
+        );
+        app.interactions
+            .note_name("session-1", Some("Original".into()));
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        let mut live = Attachment::Detached;
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT),
+            &mut false,
+            Path::new("/missing-preferences"),
+        );
+        assert_eq!(app.rename_prompt.as_deref(), Some("Original"));
+        handle_rename_prompt_key(
+            &mut app,
+            &client,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        handle_rename_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Char('新')));
+        assert_eq!(app.rename_prompt.as_deref(), Some("新"));
+        handle_rename_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(
+            app.rename_prompt.as_deref(),
+            Some("新"),
+            "a failed save retains the draft"
+        );
+        handle_rename_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
+        assert!(app.rename_prompt.is_none());
+        assert_eq!(app.interactions.name("session-1"), Some("Original"));
+    }
+
+    #[test]
+    fn rename_saves_and_clears_the_current_interactions_name() {
+        struct RenameServer;
+        impl styra_server::InProcessServer for RenameServer {
+            fn handle(
+                &self,
+                request: styra_protocol::Request,
+            ) -> anyhow::Result<styra_protocol::Response> {
+                let styra_protocol::Request::RenameSession(request) = request else {
+                    anyhow::bail!("unexpected request");
+                };
+                assert_eq!(request.id, "session-1");
+                Ok(styra_protocol::Response::SessionRenamed(
+                    styra_protocol::SessionSummary {
+                        id: request.id,
+                        name: request.name,
+                        first_prompt: None,
+                        tags: Vec::new(),
+                        workspace_id: "workspace-1".into(),
+                        path: "/sessions/session-1".into(),
+                        selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
+                        age: String::new(),
+                        created_at_ms: None,
+                        last_event_at_ms: None,
+                        last_event_age: String::new(),
+                        origin: None,
+                        branched_from: None,
+                        completed: Default::default(),
+                        integration: None,
+                    },
+                ))
+            }
+            fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+        let client = Client::in_process(std::sync::Arc::new(RenameServer));
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
+            "session-1",
+        );
+        app.branch_needs_prompt_name = true;
+        for (draft, expected) in [("New name", Some("New name")), ("   ", None)] {
+            app.rename_prompt = Some(draft.into());
+            handle_rename_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
+            assert!(app.rename_prompt.is_none());
+            assert_eq!(app.interactions.name("session-1"), expected);
+            assert!(!app.branch_needs_prompt_name);
+        }
+    }
 
     #[test]
     fn retarget_prompt_cycles_saved_branches_and_submits_a_new_target() {

@@ -778,6 +778,7 @@ fn draw_main(
                     history.iter().any(|saved| saved.branch == text.trim()),
                 )
             }),
+            rename_prompt: app.rename_prompt.as_deref(),
             integration_message: app.integration_prompt.as_deref(),
             integration_target: app
                 .interactions

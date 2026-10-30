@@ -472,5 +472,8 @@ returns an error and the message is not lost, ready to retry.
 
 Sessions receive a display name from their first prompt (normalized and
 truncated locally; no extra model call is made). In a Session picker, press
-`r` to edit that name; saving an empty value clears it. Names need not be
-unique and never replace the immutable Session id used by the API and store.
+`r` to edit that name, or press `Alt+R` from the main interaction event view.
+The prompt starts with the current name; `Enter` saves, `Esc` cancels, and
+`Ctrl+U` clears the field. Saving an empty value clears the name. Names need
+not be unique and never replace the immutable Session id used by the API and
+store.
