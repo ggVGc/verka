@@ -906,6 +906,20 @@ fn ensure_branchable(id: &str, activity: InteractionActivity) -> Result<()> {
     )
 }
 
+/// Refuse to give a working interaction a new checkout. Moving it there means
+/// restarting it, which would throw away the turn or background work under
+/// way; every client is held to this, not only those that check first.
+fn ensure_movable(id: &str, activity: InteractionActivity) -> Result<()> {
+    let working = match activity {
+        InteractionActivity::Running => "a turn is running",
+        InteractionActivity::Background => "background work is running",
+        InteractionActivity::Pending | InteractionActivity::Stopped => return Ok(()),
+    };
+    anyhow::bail!(
+        "session {id:?} is still working ({working}); wait for it to finish before moving it to a new Git workspace"
+    )
+}
+
 fn ensure_provider_switchable(activity: InteractionActivity) -> Result<()> {
     anyhow::ensure!(
         activity == InteractionActivity::Stopped,
@@ -1846,6 +1860,9 @@ impl ServerState {
     /// so name the branch with the same errand used when that prompt initially
     /// asked for a worktree rather than leaving an opaque id-only branch.
     fn create_session_worktree(&self, id: &str) -> Result<()> {
+        if let Ok(interaction) = self.interaction(id) {
+            ensure_movable(id, interaction.activity.activity())?;
+        }
         let session = self.stored_summary(id)?;
         let workspace = crate::workspace::get(&self.inner.store_root, &session.workspace_id)?;
         if self
@@ -5622,6 +5639,21 @@ mod tests {
         }
         assert!(ensure_branchable("source", InteractionActivity::Pending).is_ok());
         assert!(ensure_branchable("source", InteractionActivity::Stopped).is_ok());
+    }
+
+    /// A new checkout is refused to an interaction still working, whichever
+    /// client asks: moving it there restarts it and loses the work under way.
+    #[test]
+    fn only_an_interaction_at_rest_can_be_moved_to_a_new_worktree() {
+        for working in [
+            InteractionActivity::Running,
+            InteractionActivity::Background,
+        ] {
+            let error = ensure_movable("source", working).unwrap_err();
+            assert!(error.to_string().contains("still working"), "{error:#}");
+        }
+        assert!(ensure_movable("source", InteractionActivity::Pending).is_ok());
+        assert!(ensure_movable("source", InteractionActivity::Stopped).is_ok());
     }
 
     /// A background set reported empty answers for the state it was asked

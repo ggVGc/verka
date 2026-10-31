@@ -9,7 +9,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use std::path::Path;
 
-use crate::activity::Status;
 use crate::app::{App, Request, View};
 use crate::insert;
 use crate::launch;
@@ -1274,17 +1273,9 @@ pub fn handle_input_key(
         k if EDITOR_CONTRACT.matches(k) => app.outbox.cycle_contract(),
         k if EDITOR_NEWLINE.matches(k) => app.composer.newline(),
         k if EDITOR_SEND.matches(k) || EDITOR_SEND_IN_BRANCH.matches(k) => {
+            // A mid-turn move is refused by the server, which puts the
+            // message back in the box with its reason.
             let create_worktree = creates_worktree(app, k);
-            // Moving the interaction means stopping it, which would throw
-            // away the turn under way; the message stays in the box instead.
-            if create_worktree
-                && matches!(live, Attachment::Attached { .. })
-                && app.activity.status == Status::Running
-            {
-                return app.show_warning(
-                    "the agent is mid-turn — wait for it to finish before moving it to a new Git workspace",
-                );
-            }
             if app.branch_needs_prompt_name {
                 if let Some(name) =
                     styra_server::journal::name_from_message(Some(&app.composer.message()))
@@ -1361,6 +1352,7 @@ fn handle_choosing_key(app: &mut App, key: KeyEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity::Status;
     use std::path::PathBuf;
     use styra_diff::DiffTarget;
     use styra_protocol::{
@@ -2436,15 +2428,16 @@ mod tests {
     }
 
     #[test]
-    fn control_enter_carries_the_prompt_only_when_the_worktree_can_move() {
-        for (name, session_id, status, attachment, message, allowed) in [
+    fn control_enter_carries_the_prompt_into_the_worktree() {
+        // Mid-turn included: whether the interaction can move is the
+        // server's to say, and its refusal puts the message back.
+        for (name, session_id, status, attachment, message) in [
             (
                 "first-prompt",
                 "",
                 Status::Pending,
                 Attachment::Detached,
                 "start here",
-                true,
             ),
             (
                 "later-message",
@@ -2452,7 +2445,6 @@ mod tests {
                 Status::Idle(crate::activity::IdleReason::TurnComplete),
                 Attachment::Attached { cursor: 0 },
                 "carry on in a branch",
-                true,
             ),
             (
                 "mid-turn",
@@ -2460,7 +2452,6 @@ mod tests {
                 Status::Running,
                 Attachment::Attached { cursor: 0 },
                 "carry on in a branch",
-                false,
             ),
         ] {
             let (_root_directory, root) = tree(name);
@@ -2481,15 +2472,14 @@ mod tests {
                 &mut live,
                 KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
             );
-            let expected = allowed.then(|| Request::CreateWorktree {
-                message: Some(message.into()),
-            });
-            assert_eq!(app.take_request(), expected, "{name}");
             assert_eq!(
-                app.composer.text(),
-                if allowed { "" } else { message },
+                app.take_request(),
+                Some(Request::CreateWorktree {
+                    message: Some(message.into()),
+                }),
                 "{name}"
             );
+            assert_eq!(app.composer.text(), "", "{name}");
             assert_eq!(live, attachment, "{name}: nothing launches from the box");
         }
     }
