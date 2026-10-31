@@ -334,10 +334,12 @@ const LEAD_COLUMN_WIDTH: usize = 40;
 /// branch, the tags, the state labels, and the model each
 /// start at the same place down the list. The first column starts at
 /// [`LEAD_COLUMN_WIDTH`] and grows into unused space for longer names. The
-/// branch and tags columns fit their widest entries; the others grow no wider
-/// than their share of the remaining pane. Every cell is held to its column's
-/// width — see [`fit_cell`] — so a longer entry is cut short rather than
-/// moving the rest of its row.
+/// branch and tags columns fit their widest entries, though the branch gives
+/// way to the first column and the state labels in a narrow pane; the others
+/// grow no wider than their share of the remaining pane. Every cell is held
+/// to its column's width — see [`fit_cell`] — so a longer entry is cut short
+/// rather than moving the rest of its row. A branch is cut in the middle, keeping both its start and its
+/// end in view.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ColumnWidths {
     /// Whether any row is flagged as leaving work uncommitted, so every row
@@ -378,9 +380,14 @@ fn column_widths(
             widths.labels = widths.labels.max(spans_width(&cells.labels));
         }
     }
-    // Keep worktree names and tags whole, letting the lead shrink in a
-    // narrow pane. Fit the model and state labels in the remaining room.
-    let branch = widths.branch.min(width);
+    // Keep tags whole. The branch gets what is left once the lead has its
+    // initial width, or as much of it as the names need, and the state
+    // labels their room, so a long branch is cut before the names are.
+    // Fit the model and state labels in the remaining room.
+    let reserved = LEAD_COLUMN_WIDTH.min(widths.lead) + LABEL_ROOM.min(widths.labels);
+    let branch = widths
+        .branch
+        .min(width.saturating_sub(widths.tags + reserved));
     let tags = widths.tags;
     let lead = LEAD_COLUMN_WIDTH
         .min(width / 2)
@@ -422,8 +429,20 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 /// nothing in one cell can move the cells after it, and every column stays
 /// lined up whatever is in it.
 fn fit_cell(spans: &mut Vec<Span<'static>>, start: usize, width: usize) {
+    fit_cell_with(spans, start, width, |line, width| {
+        crate::text::truncate(line, width, None)
+    });
+}
+
+/// [`fit_cell`], cutting a wider cell short with `cut`.
+fn fit_cell_with(
+    spans: &mut Vec<Span<'static>>,
+    start: usize,
+    width: usize,
+    cut: fn(Line<'static>, usize) -> Line<'static>,
+) {
     let cell = spans.split_off(start);
-    let cell = crate::text::truncate(Line::from(cell), width, None);
+    let cell = cut(Line::from(cell), width);
     let padding = width.saturating_sub(cell.width());
     spans.extend(cell.spans);
     if padding > 0 {
@@ -530,8 +549,17 @@ fn row_item(
     } = cells;
     // The name ends the lead, so it is what a long lead loses.
     fit_cell(&mut main, 0, widths.lead);
+    // A branch's start and end tell branches apart more often than its
+    // middle does, so it loses its middle.
+    let start = main.len();
+    main.extend(branch);
+    fit_cell_with(
+        &mut main,
+        start,
+        widths.branch,
+        crate::text::truncate_middle,
+    );
     for (cell, width) in [
-        (branch, widths.branch),
         (tags, widths.tags),
         (labels, widths.labels),
         (model, widths.model),
@@ -706,7 +734,7 @@ fn interaction_cells(
     }
     let mut branch_cell = Vec::new();
     // A switch away from the assigned branch is a warning in the branch
-    // column, which keeps its widest entry whole, naming the branch checked
+    // column, naming the branch checked
     // out and the one assigned. Worktree rows otherwise leave the branch to
     // their heading, but still show a switch beneath it.
     if let Some(expected) = expected_branch {
@@ -984,6 +1012,24 @@ mod tests {
                 "{screen}"
             );
         }
+    }
+
+    /// A branch too long for a narrow pane loses its middle, keeping the
+    /// start and end that tell it apart, before the name is cut at all.
+    #[test]
+    fn a_long_branch_is_cut_in_the_middle() {
+        let title = "a title that fits its column";
+        let mut long = row(title, 0, None);
+        if let InteractionRow::Interaction { branch, .. } = &mut long {
+            *branch = Some("feature/start-of-a-very-long-branch-name-end");
+        }
+        let view = InteractionNavigator {
+            rows: vec![long],
+            ..many_rows(0)
+        };
+        let screen = squeezed(&rendered_at(&view, 70));
+        assert!(screen.contains(title), "{screen}");
+        assert!(screen.contains("feature/start-of…g-branch-name-end"), "{screen}");
     }
 
     /// A branch hangs beneath its source with the Session picker's tree edge,

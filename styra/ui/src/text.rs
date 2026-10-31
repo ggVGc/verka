@@ -22,6 +22,18 @@ pub fn prefix(text: &str, columns: usize) -> &str {
     text
 }
 
+/// The longest suffix that fits, without splitting a displayed grapheme.
+pub fn suffix(text: &str, columns: usize) -> &str {
+    let mut used = 0;
+    for (index, grapheme) in text.grapheme_indices(true).rev() {
+        used += width(grapheme);
+        if used > columns {
+            return &text[index + grapheme.len()..];
+        }
+    }
+    text
+}
+
 #[cfg(feature = "renderer")]
 pub use rendering::*;
 

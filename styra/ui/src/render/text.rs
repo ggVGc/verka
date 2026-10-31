@@ -53,6 +53,47 @@ pub fn truncate(
     kept
 }
 
+/// Cut out of the middle with an ellipsis, keeping both the start and the
+/// end in view. The ellipsis inherits the style at the cut.
+pub fn truncate_middle(line: Line<'static>, columns: usize) -> Line<'static> {
+    if line.width() <= columns {
+        return line;
+    }
+    if columns == 0 {
+        return clip(line, 0);
+    }
+    let budget = columns - width("…");
+    let tail_budget = budget / 2;
+    // The end, taken span by span from the back.
+    let mut tail = Vec::new();
+    let mut used = 0;
+    for span in line.spans.iter().rev() {
+        let span_width = span.width();
+        if used + span_width <= tail_budget {
+            used += span_width;
+            tail.push(span.clone());
+        } else {
+            let content = suffix(&span.content, tail_budget - used);
+            used += width(content);
+            if !content.is_empty() {
+                tail.push(Span::styled(content.to_owned(), span.style));
+            }
+            break;
+        }
+    }
+    tail.reverse();
+    let mut kept = clip(line, budget - used);
+    let cut_style = kept
+        .spans
+        .last()
+        .or(tail.first())
+        .map(|span| span.style)
+        .unwrap_or_default();
+    kept.spans.push(Span::styled("…", cut_style));
+    kept.spans.extend(tail);
+    kept
+}
+
 /// Word-wrap with a hanging indent, preserving styles. Zero width means
 /// unbounded, as used by callers laying out a pane before its size is known.
 pub fn wrap_line(line: Line<'static>, columns: usize, indent: usize) -> Vec<Line<'static>> {
@@ -177,6 +218,25 @@ mod tests {
         let clipped = truncate(line, 7, None);
         assert_eq!(clipped.to_string(), "a界e\u{301}👩‍💻…");
         assert_eq!(clipped.spans.last().unwrap().style, style);
+    }
+
+    #[test]
+    fn middle_truncation_keeps_both_ends() {
+        let style = Style::default().fg(Color::Green);
+        let line = Line::from(vec![Span::raw("ab"), Span::styled("cd界fgh", style)]);
+        for columns in 0..12 {
+            assert!(truncate_middle(line.clone(), columns).width() <= columns);
+        }
+        assert_eq!(truncate_middle(line.clone(), 9).to_string(), "abcd界fgh");
+        assert_eq!(truncate_middle(line.clone(), 7).to_string(), "abc…fgh");
+        assert_eq!(truncate_middle(line.clone(), 6).to_string(), "abc…gh");
+        // A wide grapheme that does not fit the end's share leaves its
+        // column to the start.
+        let wide = Line::from("abcdef界g");
+        assert_eq!(truncate_middle(wide, 6).to_string(), "abcd…g");
+        let cut = truncate_middle(line, 5);
+        assert_eq!(cut.to_string(), "ab…gh");
+        assert_eq!(cut.spans.last().unwrap().style, style);
     }
 
     #[test]
