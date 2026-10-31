@@ -44,6 +44,8 @@ pub const YELLOW_WHITE: Color = Color::Rgb(255, 245, 205);
 pub const GREEN_WHITE: Color = Color::Rgb(225, 250, 225);
 /// A soft, light cyan: [`WHITE`] leaning well toward blue-green.
 pub const SOFT_CYAN: Color = Color::Rgb(175, 225, 230);
+/// A brighter cyan with a little more green, for headings near the focus.
+pub const PALE_CYAN: Color = Color::Rgb(205, 245, 235);
 /// 211, `Special`.
 pub const PINK: Color = Color::Rgb(255, 135, 175);
 /// The warning hue a step down, kept bright enough to read.

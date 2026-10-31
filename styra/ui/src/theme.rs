@@ -44,6 +44,8 @@ pub const WORKSPACE_NAME: Color = palette::GOLD;
 /// so it stands apart from the warm workspace headings and branch names
 /// around it.
 pub const DIRECTORY_NAME: Color = palette::SOFT_CYAN;
+/// Worktree headings in the focused subtree or on its ancestor path.
+pub const FOCUSED_DIRECTORY_NAME: Color = palette::PALE_CYAN;
 /// An interaction's `#tags`: apart from the status flags that share their
 /// row.
 pub const INTERACTION_TAG: Color = palette::PEACH;

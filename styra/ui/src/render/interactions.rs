@@ -43,11 +43,14 @@ pub(crate) fn running_indicator(events: usize) -> &'static str {
 /// before it scrolls, where the list has rows there to show.
 const SCROLL_MARGIN: usize = 2;
 
-/// How far, in tenths, every interaction but the cursor's is faded toward
-/// the background, including its name, status marker and message line.
+/// How far, in tenths, interactions outside the cursor's worktree group fade
+/// toward the background, including names, status markers and message lines.
 const UNSELECTED_ROW_FADE: u16 = 2;
 
-/// Additional fading for the supporting text after an unselected row's name.
+/// How far, in tenths, other worktree headers fade toward the background.
+const UNSELECTED_DIRECTORY_FADE: u16 = 2;
+
+/// Additional fading for supporting text outside the cursor's worktree group.
 const UNSELECTED_FADE: u16 = 2;
 
 /// How far, in tenths, the cursor's row has the text after its name lifted
@@ -118,6 +121,35 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
         .map(|index| tree_columns(&view.rows, index))
         .collect::<Vec<_>>();
     let widths = column_widths(view, &tree, inner.width.into());
+    let selected = view
+        .rows
+        .iter()
+        .position(|row| matches!(row, InteractionRow::Interaction { selected: true, .. }));
+    // Walk back up the tree, keeping every header on the path to the cursor.
+    // Successively shallower levels exclude preceding sibling worktrees.
+    let mut selected_directories = Vec::new();
+    if let Some(index) = selected {
+        let (mut level, _) = row_level(&view.rows[index]).unwrap();
+        for (index, row) in view.rows[..index].iter().enumerate().rev() {
+            match row {
+                InteractionRow::Workspace(_) => break,
+                InteractionRow::Directory { level: parent, .. } if *parent < level => {
+                    selected_directories.push(index);
+                    level = *parent;
+                }
+                _ => {}
+            }
+        }
+    }
+    let selected_directory = selected_directories.first().copied();
+    let selected_group = selected_directory.map(|start| {
+        let (level, _) = row_level(&view.rows[start]).unwrap();
+        let end = (start + 1..view.rows.len())
+            .find(|&index| row_level(&view.rows[index]).is_none_or(|(other, _)| other <= level))
+            .unwrap_or(view.rows.len());
+        // Include the entire subtree, so child worktrees stay untinted too.
+        start..end
+    });
     // Every other interaction under a heading is drawn on a faint stripe, so
     // the eye can follow a row across the pane and down to its message line.
     // The cursor's row is drawn on a slightly lighter tint in its place.
@@ -126,16 +158,42 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
         .rows
         .iter()
         .zip(&tree)
-        .map(|(row, columns)| {
+        .enumerate()
+        .map(|(index, (row, columns))| {
+            let in_selected_group = selected_group
+                .as_ref()
+                .is_some_and(|range| range.contains(&index));
             let mut item = row_item(
                 row,
                 view.all_workspaces,
                 columns,
                 inner.width.into(),
                 &widths,
+                in_selected_group,
             );
             match row {
-                InteractionRow::Workspace(_) | InteractionRow::Directory { .. } => striped = false,
+                InteractionRow::Workspace(_) => striped = false,
+                InteractionRow::Directory { .. } => {
+                    striped = false;
+                    if selected_directory.is_some()
+                        && !in_selected_group
+                        && !selected_directories.contains(&index)
+                    {
+                        for line in &mut item {
+                            // Keep the tree lines bright so membership stays
+                            // readable even where another header is tinted.
+                            for span in line.spans.iter_mut().skip(1) {
+                                span.style = faded_style(span.style, UNSELECTED_DIRECTORY_FADE);
+                            }
+                        }
+                    } else if selected_directory.is_some() {
+                        for line in &mut item {
+                            if let Some(name) = line.spans.get_mut(1) {
+                                name.style = name.style.fg(theme::FOCUSED_DIRECTORY_NAME);
+                            }
+                        }
+                    }
+                }
                 InteractionRow::Interaction {
                     selected, flashing, ..
                 } => {
@@ -151,7 +209,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
                             line.style = line.style.bg(background);
                         }
                     }
-                    if !*selected {
+                    if !*selected && !in_selected_group {
                         for line in &mut item {
                             line.style = faded_style(line.style, UNSELECTED_ROW_FADE);
                             for span in &mut line.spans {
@@ -175,10 +233,6 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
             ))]);
         }
     }
-    let selected = view
-        .rows
-        .iter()
-        .position(|row| matches!(row, InteractionRow::Interaction { selected: true, .. }));
     // The list is laid out by line rather than by row, so a row with a message
     // line that does not fit is drawn as far as it goes instead of leaving the
     // foot of the pane empty, as `List` would.
@@ -474,6 +528,7 @@ fn row_item(
     columns: &[bool],
     width: usize,
     widths: &ColumnWidths,
+    in_selected_group: bool,
 ) -> Vec<Line<'static>> {
     // Bright, undimmed tree lines make membership readable independently of
     // heading colors, including when the heading has scrolled out of view.
@@ -577,13 +632,15 @@ fn row_item(
         main.pop();
     }
     // Everything after the name is lifted toward white and bolded on the
-    // cursor's row, and faded on every other, so the cursor's row stands out.
+    // cursor's row, and faded outside its worktree group.
     // The tree edges, status marker and name keep their base styles here;
-    // render applies the whole-row fade to unselected interactions afterward.
+    // render applies the whole-row fade outside the worktree group afterward.
     let message_style = Style::default().fg(LAST_MESSAGE_COLOR);
     let adjust = |style: Style| {
         if *selected {
             blended_style(style, theme::TEXT, SELECTED_BRIGHTEN).add_modifier(Modifier::BOLD)
+        } else if in_selected_group {
+            style
         } else {
             faded_style(style, UNSELECTED_FADE)
         }
@@ -1373,7 +1430,7 @@ mod tests {
             assert!(screen.contains(branch_name), "{screen}");
             for (row, columns) in view.rows.iter().zip(&tree) {
                 if matches!(row, InteractionRow::Interaction { .. }) {
-                    let item = row_item(row, false, columns, width, &widths);
+                    let item = row_item(row, false, columns, width, &widths, false);
                     let line = item[0].to_string();
                     let branch = line
                         .chars()
