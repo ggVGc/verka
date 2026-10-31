@@ -65,6 +65,21 @@ fn grid(area: Rect, tiles: usize) -> Grid {
     }
 }
 
+fn layout_grid(area: Rect, tiles: usize, layout: OverviewLayout) -> Grid {
+    if layout == OverviewLayout::Auto {
+        return grid(area, tiles);
+    }
+    let tiles = tiles.max(1);
+    let columns = 2.min((area.width / MIN_TILE_WIDTH).max(1) as usize);
+    let rows = tiles.div_ceil(columns);
+    Grid {
+        rows: (0..rows)
+            .map(|row| columns.min(tiles - row * columns))
+            .collect(),
+        visible_rows: rows.min((area.height / MIN_TILE_HEIGHT).max(1) as usize),
+    }
+}
+
 /// `total` cells cut into `parts` runs as even as they divide, the first ones
 /// a cell longer to take up the remainder, as `(offset, length)` pairs. The
 /// runs always add up to `total`, so the tiles meet the border with no gap.
@@ -94,9 +109,10 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
         })
         .count();
     let counts = format!(
-        " · {running} running · {} idle · r running only: {} · ? keys ",
+        " · {running} running · {} idle · r running only: {} · c layout: {} · ? keys ",
         view.tiles.len() - running,
-        if view.running_only { "on" } else { "off" }
+        if view.running_only { "on" } else { "off" },
+        view.layout.label()
     );
     // A narrowed grid names its Workspace up front, on a band of the
     // Workspace hue, and takes that hue for its whole frame.
@@ -151,7 +167,7 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
         );
         return OverviewFeedback { rows: Vec::new() };
     }
-    let grid = grid(inner, view.tiles.len());
+    let grid = layout_grid(inner, view.tiles.len(), view.layout);
     let selected = view.selected.min(view.tiles.len() - 1);
     // Scrolled by whole rows of tiles, just far enough to keep the cursor's
     // row on screen.
@@ -162,9 +178,18 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
         let Some(&length) = grid.rows.get(first_row + screen_row) else {
             break;
         };
-        // A shorter row shares the whole width between its tiles rather than
-        // leaving the cells of the missing ones empty.
-        for (offset, (x, width)) in split(inner.width, length).into_iter().enumerate() {
+        // Automatic rows share the whole width. Two-column mode keeps the
+        // columns aligned even when the last row holds only one tile.
+        let columns = if view.layout == OverviewLayout::TwoColumns {
+            2.min((inner.width / MIN_TILE_WIDTH).max(1) as usize)
+        } else {
+            length
+        };
+        for (offset, (x, width)) in split(inner.width, columns)
+            .into_iter()
+            .take(length)
+            .enumerate()
+        {
             let index = start + offset;
             let tile_area = Rect {
                 x: inner.x + x,
@@ -448,6 +473,7 @@ mod tests {
     fn overview<'a>() -> OverviewView<'a> {
         OverviewView {
             tiles: Vec::new(),
+            layout: OverviewLayout::Auto,
             running_only: false,
             workspace_scope: None,
             selected: 0,
@@ -788,6 +814,30 @@ mod tests {
         // Only two tiles fit across, so seven take four rows of two.
         let narrow = Rect::new(0, 0, 2 * MIN_TILE_WIDTH, 100);
         assert_eq!(grid(narrow, 7).rows, [2, 2, 2, 1]);
+    }
+
+    #[test]
+    fn two_columns_stay_aligned_and_scroll_to_the_selected_tile() {
+        let view = OverviewView {
+            tiles: [
+                "window-1", "window-2", "window-3", "window-4", "window-5", "window-6", "window-7",
+            ]
+            .into_iter()
+            .map(|name| tile(name, InteractionStatus::Idle))
+            .collect(),
+            layout: OverviewLayout::TwoColumns,
+            selected: 6,
+            ..overview()
+        };
+        let (screen, feedback) = draw(&view, 100, 23);
+        assert_eq!(feedback.rows, [2, 2, 2, 1]);
+        assert!(!screen.contains("window-1"), "{screen}");
+        assert!(screen.contains("window-7"), "{screen}");
+        let column = |name: &str| screen.lines().find_map(|line| line.find(name)).unwrap();
+        assert_eq!(column("window-3"), column("window-7"));
+        assert!(column("window-4") > column("window-7"));
+        let (_, feedback) = draw(&view, 50, 23);
+        assert_eq!(feedback.rows, [1; 7]);
     }
 
     /// Seven tiles are drawn three over two over two, the second and third

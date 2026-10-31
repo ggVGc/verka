@@ -18,6 +18,7 @@ pub(crate) fn view(app: &App) -> OverviewView<'_> {
         .collect();
     OverviewView {
         tiles,
+        layout: app.overview.layout,
         running_only: app.overview.running_only,
         workspace_scope: app
             .interactions

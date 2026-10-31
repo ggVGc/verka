@@ -1030,6 +1030,7 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
             app.overview.open();
         }
         k if OVERVIEW_RUNNING_ONLY.matches(k) => app.overview.toggle_running_only(),
+        k if OVERVIEW_LAYOUT.matches(k) => app.overview.toggle_layout(),
         k if OVERVIEW_SEARCH.matches(k) => app.search.open(),
         // As in the event list, Esc clears a standing search before it
         // leaves the grid.

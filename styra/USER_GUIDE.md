@@ -232,8 +232,12 @@ Each tile names the
 interaction, its Workspace and branch, its agent and model, and what it is
 doing (with how long a turn has been running), carries the same `NEWLY IDLE`,
 `RATE LIMITED` and uncommitted marks as the list, and ends with the last thing
-the agent said. The grid takes as many columns as the terminal's width allows
-and scrolls by rows when there are more tiles than fit. `h`/`j`/`k`/`l` or the
+the agent said. The overview defaults to two columns with tiles stacked
+vertically in each. `c` toggles between two columns and the automatic grid.
+Two-column mode keeps the columns aligned,
+falls back to one column on narrow terminals, and stays selected when the
+overview is reopened. Both layouts scroll by rows when there are more tiles
+than fit. `h`/`j`/`k`/`l` or the
 arrows move between tiles (in the overview `l` moves rather than opening the
 launcher), `Tab`/`Shift-Tab` step to the next and previous tile, wrapping at
 the ends, `g`/`G` jump to the first and last, `1`–`9` jump to the tile at that

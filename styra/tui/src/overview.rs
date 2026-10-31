@@ -12,6 +12,7 @@ pub struct Overview {
     /// means the one on screen, or the first tile when that is not one.
     cursor: Option<String>,
     pub running_only: bool,
+    pub layout: styra_ui::overview::OverviewLayout,
     /// How many tiles each row of the grid held when it was last drawn, top
     /// to bottom, which is what moving up or down steps between. The renderer
     /// decides it from the terminal's size, so it is learned from the draw.
@@ -31,6 +32,15 @@ impl Overview {
 
     pub fn toggle_running_only(&mut self) {
         self.running_only = !self.running_only;
+        self.rows.clear();
+    }
+
+    pub fn toggle_layout(&mut self) {
+        use styra_ui::overview::OverviewLayout;
+        self.layout = match self.layout {
+            OverviewLayout::Auto => OverviewLayout::TwoColumns,
+            OverviewLayout::TwoColumns => OverviewLayout::Auto,
+        };
         self.rows.clear();
     }
 
@@ -179,8 +189,11 @@ impl Overview {
         // The middle of this tile, as a fraction of the width, is
         // (column + ½) / length; the tile below it is that times the target
         // row's length, rounded down.
-        let target_column =
-            ((2 * column + 1) * target_length / (2 * length)).min(target_length - 1);
+        let target_column = if self.layout == styra_ui::overview::OverviewLayout::TwoColumns {
+            column.min(target_length - 1)
+        } else {
+            ((2 * column + 1) * target_length / (2 * length)).min(target_length - 1)
+        };
         Some(target_start + target_column)
     }
 
@@ -491,6 +504,7 @@ mod tests {
     fn the_cursor_moves_across_and_down_the_grid() {
         let interactions = fleet(&[InteractionActivity::Pending; 5]);
         let mut overview = Overview::default();
+        overview.toggle_layout();
         overview.note_rows(&[3, 2]);
         let current = "100-tile";
 
@@ -569,5 +583,24 @@ mod tests {
         );
         overview.prev(&interactions, current, None);
         assert_eq!(overview.selected(&interactions, current, None), 1);
+    }
+
+    #[test]
+    fn two_column_navigation_keeps_the_column_above_an_odd_last_tile() {
+        let interactions = fleet(&[InteractionActivity::Pending; 5]);
+        let mut overview = Overview::default();
+        overview.note_rows(&[2, 2, 1]);
+        overview.last(&interactions, None);
+        overview.up(&interactions, "100-tile", None);
+        assert_eq!(overview.selected(&interactions, "100-tile", None), 2);
+        overview.down(&interactions, "100-tile", None);
+        assert_eq!(overview.selected(&interactions, "100-tile", None), 4);
+        overview.open();
+        assert_eq!(
+            overview.layout,
+            styra_ui::overview::OverviewLayout::TwoColumns
+        );
+        overview.toggle_layout();
+        assert_eq!(overview.layout, styra_ui::overview::OverviewLayout::Auto);
     }
 }

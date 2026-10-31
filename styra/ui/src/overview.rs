@@ -50,8 +50,25 @@ pub struct OverviewMessage<'a> {
     pub branch: BranchLink<'a>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OverviewLayout {
+    Auto,
+    #[default]
+    TwoColumns,
+}
+
+impl OverviewLayout {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::TwoColumns => "two columns",
+        }
+    }
+}
+
 pub struct OverviewView<'a> {
     pub tiles: Vec<OverviewTile<'a>>,
+    pub layout: OverviewLayout,
     pub running_only: bool,
     /// The name of the one Workspace the grid is narrowed to, or `None` when
     /// it shows every Workspace.
