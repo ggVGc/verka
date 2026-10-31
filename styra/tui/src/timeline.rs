@@ -378,8 +378,14 @@ impl Timeline {
         moved
     }
 
+    /// Stop at this interaction's branch point before entering inherited
+    /// history. From the marker or above it, go to the actual first entry.
     pub fn select_first(&mut self) -> bool {
-        let moved = match self.seek_forward(0, Step::Line) {
+        let start = self
+            .branch_point()
+            .filter(|&point| self.selected > point)
+            .unwrap_or(0);
+        let moved = match self.seek_forward(start, Step::Line) {
             Some(first) => {
                 self.selected = first;
                 true
@@ -633,6 +639,46 @@ mod tests {
         ]);
         assert_eq!(list.branch_point(), Some(5));
         assert_eq!(timeline(vec![message("fresh")]).branch_point(), None);
+    }
+
+    #[test]
+    fn first_stops_at_the_branch_point_then_goes_to_the_top() {
+        let from = |session: &str| AgentEvent::Branched {
+            direction: BranchDirection::From,
+            session: session.into(),
+            name: None,
+        };
+        let mut list = timeline(vec![
+            from("parent"),
+            from("grandparent"),
+            message("inherited work"),
+            from("parent"),
+            message("own work"),
+            AgentEvent::Branched {
+                direction: BranchDirection::To,
+                session: "child".into(),
+                name: None,
+            },
+        ]);
+        list.select_last();
+        assert!(list.select_first());
+        assert_eq!(list.selected, 3);
+        assert!(!list.follow);
+        assert!(list.select_first());
+        assert_eq!(list.selected, 0);
+
+        list.selected = 2;
+        list.select_first();
+        assert_eq!(
+            list.selected, 0,
+            "inherited history goes straight to the top"
+        );
+
+        let mut list = timeline(vec![message("first"), message("last")]);
+        list.select_last();
+        list.select_first();
+        assert_eq!(list.selected, 0);
+        assert!(!list.follow);
     }
 
     /// The caller resets the preview scroll on a move, so a key that could not
