@@ -1283,6 +1283,7 @@ impl App {
     /// a viewport that navigation left alone.
     pub(crate) fn select_tail(&mut self) {
         self.timeline.select_tail();
+        self.timeline.max_lines_above_selection = None;
         self.timeline.keep_viewport = false;
         self.preview.scroll.reset();
         self.entry_log_follow_selection();
@@ -2243,6 +2244,21 @@ mod tests {
         assert!(app.timeline.is_visible(app.timeline.selected));
         assert!(app.timeline.entries[0].expanded);
         assert!(!app.timeline.entries[1].expanded);
+    }
+
+    #[test]
+    fn a_new_message_clears_the_interaction_opening_anchor() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
+        app.select_last_on_interaction_open();
+        assert_eq!(app.timeline.max_lines_above_selection, Some(5));
+
+        app.push_event(AgentEvent::UserMessage {
+            text: "next".into(),
+        });
+
+        assert_eq!(app.timeline.max_lines_above_selection, None);
+        assert!(!app.timeline.keep_viewport);
     }
 
     #[test]

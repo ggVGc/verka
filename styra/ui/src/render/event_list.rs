@@ -231,7 +231,28 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     } else {
         None
     };
-    let (offset, row_offset) = if let Some(maximum) = view.max_lines_above_selection {
+    let tail_in_view = view.anchor_selection
+        && !view.keep_viewport
+        && position.is_some_and(|selected| selected + 1 == view.entries.len());
+    let response_space = tail_in_view
+        && matches!(
+            view.entries[position.unwrap()].event,
+            AgentEvent::UserMessage { .. }
+        );
+    let (offset, row_offset) = if response_space
+        || (tail_in_view
+            && view.requested_row_offset > 0
+            && view.max_lines_above_selection.is_none())
+    {
+        tail_space_anchor(
+            view.requested_offset,
+            view.requested_row_offset,
+            position.unwrap(),
+            &mut items,
+            viewport_height,
+            if response_space { 3 } else { 0 },
+        )
+    } else if let Some(maximum) = view.max_lines_above_selection {
         selection_top_anchor(position, &mut items, maximum)
     } else if let Some(kept) = view
         .keep_viewport
@@ -361,6 +382,30 @@ fn selection_top_anchor(
         entry = previous;
     }
     (0, 0)
+}
+
+/// Leave a few rows below a newly submitted message for the response. Move
+/// only as far as needed, including partway through a wrapped history entry.
+/// If the message already fits with that space, preserve the current anchor.
+/// Subsequent output retains that partial anchor without reserving extra rows.
+fn tail_space_anchor(
+    offset: usize,
+    row_offset: usize,
+    selected: usize,
+    heights: &mut impl Heights,
+    viewport_height: usize,
+    response_rows: usize,
+) -> (usize, usize) {
+    let message_rows = viewport_height.saturating_sub(response_rows).max(1);
+    let required = selection_top_anchor(Some(selected + 1), heights, message_rows);
+    if offset > selected {
+        return required;
+    }
+    let current = (
+        offset,
+        row_offset.min(heights.height(offset).saturating_sub(1)),
+    );
+    current.max(required)
 }
 
 /// Ratatui's `List` only renders complete items. If the next expanded entry is
@@ -2666,6 +2711,43 @@ mod tests {
         // A short interaction never loses its beginning merely to create the
         // preferred position for its tail.
         assert_eq!(selection_top_anchor(Some(1), &mut &[3, 1][..], 5), (0, 0));
+    }
+
+    #[test]
+    fn submitting_preserves_space_or_reveals_only_the_missing_rows() {
+        for (heights, current, selected, viewport, expected) in [
+            (vec![3, 2, 1], (0, 0), 1, 12, (0, 0)),
+            // Exactly three response rows already fit.
+            (vec![5, 2, 1], (0, 0), 1, 10, (0, 0)),
+            // Free just two rows, without dropping the whole history entry.
+            (vec![7, 2, 1], (0, 0), 1, 10, (0, 2)),
+            // Preserve an existing partial-entry anchor when enough room remains.
+            (vec![7, 2, 1], (0, 4), 1, 10, (0, 4)),
+            // Bring the end back into view when reading older history.
+            (vec![20, 8, 2, 1], (0, 0), 2, 10, (1, 3)),
+            // A tall prompt can be clipped so its ending and the reply fit.
+            (vec![4, 15, 1], (0, 0), 1, 10, (1, 8)),
+            // Tiny viewports still show at least the end of the prompt.
+            (vec![4, 5, 1], (0, 0), 1, 2, (1, 4)),
+        ] {
+            assert_eq!(
+                tail_space_anchor(
+                    current.0,
+                    current.1,
+                    selected,
+                    &mut &heights[..],
+                    viewport,
+                    3
+                ),
+                expected,
+                "heights={heights:?}, current={current:?}, viewport={viewport}"
+            );
+        }
+        assert_eq!(
+            tail_space_anchor(0, 2, 2, &mut &[7, 2, 1, 1][..], 10, 0),
+            (0, 2),
+            "the first response keeps the partial history anchor"
+        );
     }
 
     /// Counts which items the offset math asked about, so laziness can be
