@@ -84,7 +84,7 @@ pub(super) static SPEC: ProviderSpec = ProviderSpec {
     protocol: Protocol::CodexAppServer,
     models: MODELS,
     efforts: EFFORTS,
-    default_model: "gpt-5.6-terra",
+    default_model: "gpt-6.1-sol",
     default_effort: Effort::Medium,
     cheapest_model: CHEAPEST_MODEL,
     ops: &OPS,
