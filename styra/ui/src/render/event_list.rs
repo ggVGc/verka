@@ -1125,13 +1125,10 @@ fn build_entry_rows(
             ..
         }
     ) {
-        rows.insert(
-            0,
-            Line::from(Span::styled(
-                "─".repeat(width),
-                Style::default().fg(theme::BRANCH_FROM),
-            )),
-        );
+        rows.push(Line::from(Span::styled(
+            "─".repeat(width),
+            Style::default().fg(theme::BRANCH_FROM),
+        )));
     }
     rows
 }
