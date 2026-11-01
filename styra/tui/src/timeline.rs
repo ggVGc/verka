@@ -239,6 +239,7 @@ impl Timeline {
     /// Scroll the rendered interaction by ten text rows without changing
     /// which entry is selected.
     pub fn scroll_view_down(&mut self) {
+        self.max_lines_above_selection = None;
         self.list_scroll_delta = self.list_scroll_delta.saturating_add(10);
         self.anchor_selection = false;
     }
@@ -246,6 +247,7 @@ impl Timeline {
     /// Scroll the rendered interaction toward its beginning without changing
     /// which entry is selected.
     pub fn scroll_view_up(&mut self) {
+        self.max_lines_above_selection = None;
         self.list_scroll_delta = self.list_scroll_delta.saturating_sub(10);
         self.anchor_selection = false;
     }

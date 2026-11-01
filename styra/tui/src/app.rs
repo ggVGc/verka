@@ -2314,6 +2314,29 @@ mod tests {
     }
 
     #[test]
+    fn scrolling_a_freshly_opened_interaction_releases_its_initial_anchor() {
+        for (scroll, delta) in [
+            (App::scroll_interaction_down as fn(&mut App), 10),
+            (App::scroll_interaction_up as fn(&mut App), -10),
+        ] {
+            let mut app = app();
+            app.push_event(AgentEvent::AgentMessage {
+                text: "latest response".into(),
+            });
+            app.select_last_on_interaction_open();
+            assert!(app.timeline.max_lines_above_selection.is_some());
+            let selected = app.timeline.selected;
+
+            scroll(&mut app);
+
+            assert_eq!(app.timeline.max_lines_above_selection, None);
+            assert!(!app.timeline.anchor_selection);
+            assert_eq!(app.timeline.list_scroll_delta, delta);
+            assert_eq!(app.timeline.selected, selected);
+        }
+    }
+
+    #[test]
     fn scrolling_the_interaction_does_not_move_its_selection() {
         let mut app = app();
         for n in 0..3 {
