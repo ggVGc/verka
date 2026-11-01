@@ -934,14 +934,11 @@ mod tests {
         };
         let (screen, _) = draw(&view, 60, 14);
         assert!(screen.contains("« Split the retry work off."), "{screen}");
-        assert!(
-            screen.contains("Branch to:  ■  Retry backoff  paused"),
-            "{screen}"
-        );
+        assert!(screen.contains("▌  ■  Retry backoff  paused"), "{screen}");
         assert!(screen.contains("« Backoff now doubles."), "{screen}");
         assert!(!screen.contains("stale snapshot"), "{screen}");
         let row = |text: &str| screen.lines().position(|line| line.contains(text));
-        assert!(row("Split the retry") < row("Branch to:"), "{screen}");
+        assert!(row("Split the retry") < row("Retry backoff"), "{screen}");
     }
 
     /// A search marks matching words across every tile — names, places and

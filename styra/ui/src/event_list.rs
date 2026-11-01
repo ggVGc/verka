@@ -29,6 +29,7 @@ pub struct EntryVersion {
     pub revision: u32,
 }
 
+#[derive(Clone)]
 pub struct EventEntry<'a> {
     pub event: &'a AgentEvent,
     /// Which row, and which state of it. See [`EntryVersion`].
@@ -50,6 +51,8 @@ pub struct EventEntry<'a> {
     /// The entry precedes a branched Session's branch point: history copied
     /// from its source rather than its own, drawn faded so the two read apart.
     pub inherited: bool,
+    /// The previous visible entry is another branch marker; share its lower border.
+    pub branch_follows_marker: bool,
 }
 
 /// The session an [`AgentEvent::Branched`] marker leads to, as the host's

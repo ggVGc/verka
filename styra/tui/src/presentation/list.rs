@@ -128,6 +128,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
                 branch,
                 branch_provider_switch: branch_provider_switch(app, entry.event()),
                 inherited: branch_point.is_some_and(|point| index < point),
+                branch_follows_marker: false,
             }
         })
         .collect();

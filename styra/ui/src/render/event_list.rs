@@ -94,10 +94,14 @@ pub fn render_entry_log(
         links: view.links,
         search: None,
     };
-    let items = view
-        .entries
-        .iter()
-        .map(|entry| entry_item(entry, width, viewport, entry_render));
+    let items = (0..view.entries.len()).map(|index| {
+        entry_item(
+            &entry_at(&view.entries, index),
+            width,
+            viewport,
+            entry_render,
+        )
+    });
     let limit = view
         .entries
         .len()
@@ -295,7 +299,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     let mut items = items.into_window(offset, anchored_position, row_offset);
     if row_offset > 0 && offset < view.entries.len() {
         items[0] = entry_item_slice(
-            &view.entries[offset],
+            &entry_at(&view.entries, offset),
             width,
             viewport_height,
             row_offset,
@@ -441,7 +445,7 @@ fn clip_boundary_entry(
             return;
         }
 
-        let entry = &entries[item_index];
+        let entry = &entry_at(entries, item_index);
         let is_last_entry = item_index + 1 == entries.len();
         let max_rows = if is_last_entry && remaining > 1 {
             remaining - 1
@@ -481,10 +485,23 @@ struct LazyItems<'a> {
     render: EntryRender<'a>,
 }
 
+fn entry_at<'a>(entries: &[EventEntry<'a>], index: usize) -> EventEntry<'a> {
+    let mut entry = entries[index].clone();
+    entry.branch_follows_marker = index > 0
+        && branch_border(entries[index - 1].event).is_some()
+        && branch_border(entry.event).is_some();
+    entry
+}
+
 impl LazyItems<'_> {
     fn item(&mut self, index: usize) -> &ListItem<'static> {
         self.built[index].get_or_insert_with(|| match self.entries.get(index) {
-            Some(entry) => entry_item(entry, self.width, self.viewport_height, self.render),
+            Some(_) => entry_item(
+                &entry_at(self.entries, index),
+                self.width,
+                self.viewport_height,
+                self.render,
+            ),
             None => self.tail.clone(),
         })
     }
@@ -938,6 +955,7 @@ struct RowKey {
     links: LinkDisplay,
     link_highlight: Option<EntryIndex>,
     inherited: bool,
+    branch_follows_marker: bool,
     search: Option<String>,
     branch_name: Option<String>,
     branch_state: Option<crate::interactions::InteractionState>,
@@ -995,6 +1013,7 @@ fn entry_rows_with_max_rows(
         links: render.links,
         link_highlight: entry.link_highlight,
         inherited: entry.inherited,
+        branch_follows_marker: entry.branch_follows_marker,
         search: render.search.map(str::to_owned),
         branch_name: entry.branch.name.map(str::to_owned),
         branch_state: entry.branch.state.clone(),
@@ -1100,6 +1119,7 @@ pub fn message_rows(
         branch,
         branch_provider_switch: None,
         inherited: false,
+        branch_follows_marker: false,
     };
     let render = EntryRender {
         protocol,
@@ -1117,19 +1137,21 @@ fn build_entry_rows(
     max_rows: usize,
     render: EntryRender<'_>,
 ) -> Vec<Line<'static>> {
-    let mut rows = build_entry_content_rows(entry, width, max_rows, render);
-    if matches!(
-        entry.event,
-        AgentEvent::Branched {
-            direction: styra_protocol::event::BranchDirection::From,
-            ..
-        }
-    ) {
-        rows.push(Line::from(Span::styled(
-            "─".repeat(width),
-            Style::default().fg(theme::BRANCH_FROM),
-        )));
+    let Some(color) = branch_border(entry.event) else {
+        return build_entry_content_rows(entry, width, max_rows, render);
+    };
+    let border_rows = if entry.branch_follows_marker { 1 } else { 2 };
+    if width == 0 || max_rows <= border_rows {
+        return build_entry_content_rows(entry, width, max_rows, render);
     }
+    let content = build_entry_content_rows(entry, width, max_rows - border_rows, render);
+    let divider = Line::from(Span::styled("─".repeat(width), Style::default().fg(color)));
+    let mut rows = Vec::with_capacity(content.len() + border_rows);
+    if !entry.branch_follows_marker {
+        rows.push(divider.clone());
+    }
+    rows.extend(content);
+    rows.push(divider);
     rows
 }
 
@@ -1212,14 +1234,7 @@ fn build_entry_content_rows(
     // is actually on rather than half-marked on both. The mark is a span
     // style and the selection below is the row's own, so they coexist.
     let mut wrapped = search::highlight_lines(wrapped, search);
-    // A branch marker is at most its summary and the one line the other side
-    // last said, so it is banded whole: the band is what sets it apart.
-    let banded = if branch_background(entry.event).is_some() {
-        wrapped.len()
-    } else {
-        1
-    };
-    for row in wrapped.iter_mut().take(banded) {
+    if let Some(row) = wrapped.first_mut() {
         *row = with_entry_backdrop(std::mem::take(row), entry);
     }
     wrapped
@@ -1236,9 +1251,7 @@ fn with_entry_backdrop(line: Line<'static>, entry: &EventEntry<'_>) -> Line<'sta
         Some(theme::SELECTION_BACKGROUND)
     } else if matches!(entry.event, AgentEvent::UserMessage { .. }) {
         Some(theme::USER_MESSAGE_BACKGROUND)
-    } else if let Some(background) = branch_background(entry.event) {
-        Some(background)
-    } else if is_conversation_change(entry.event) {
+    } else if is_conversation_change(entry.event) && branch_border(entry.event).is_none() {
         Some(theme::CONVERSATION_CHANGE_BACKGROUND)
     } else {
         None
@@ -1252,12 +1265,12 @@ fn with_entry_backdrop(line: Line<'static>, entry: &EventEntry<'_>) -> Line<'sta
     }
 }
 
-/// The band behind a branch marker, in its direction's tint.
-fn branch_background(event: &AgentEvent) -> Option<Color> {
+/// The thin border around a branch marker, in its direction's color.
+fn branch_border(event: &AgentEvent) -> Option<Color> {
     match event {
         AgentEvent::Branched { direction, .. } => Some(match direction {
-            styra_protocol::event::BranchDirection::To => theme::BRANCH_TO_BACKGROUND,
-            styra_protocol::event::BranchDirection::From => theme::BRANCH_FROM_BACKGROUND,
+            styra_protocol::event::BranchDirection::To => theme::BRANCH_TO,
+            styra_protocol::event::BranchDirection::From => theme::BRANCH_FROM,
         }),
         _ => None,
     }
@@ -1576,14 +1589,12 @@ pub fn summary_line(
     let conversation_change = is_conversation_change(entry.event);
     let branch_appearance = match entry.event {
         AgentEvent::Branched { direction, .. } => Some(match direction {
-            styra_protocol::event::BranchDirection::To => ("branch →", theme::BRANCH_TO),
-            styra_protocol::event::BranchDirection::From => ("branch ←", theme::BRANCH_FROM),
+            styra_protocol::event::BranchDirection::To => theme::BRANCH_TO,
+            styra_protocol::event::BranchDirection::From => theme::BRANCH_FROM,
         }),
         _ => None,
     };
-    let change_color = branch_appearance
-        .map(|(_, color)| color)
-        .unwrap_or(theme::CONVERSATION_CHANGE);
+    let change_color = branch_appearance.unwrap_or(theme::CONVERSATION_CHANGE);
     let is_conversation = matches!(
         entry.event,
         AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
@@ -1600,7 +1611,6 @@ pub fn summary_line(
         "  "
     };
     let display_tag = match entry.event {
-        AgentEvent::Branched { .. } => branch_appearance.unwrap().0,
         AgentEvent::UserMessage { .. } => "»",
         AgentEvent::AgentMessage { .. } => "«",
         AgentEvent::CommandStarted { .. } | AgentEvent::CommandCompleted { .. } => "Shell",
@@ -1689,21 +1699,31 @@ pub fn summary_line(
     } else {
         summary_style
     };
-    let mut spans = vec![
-        Span::styled(row_lead, Style::default().fg(change_color)),
-        Span::styled(
+    let mut spans = vec![Span::styled(row_lead, Style::default().fg(change_color))];
+    if branch_appearance.is_some() {
+        if matches!(
+            entry.event,
+            AgentEvent::Branched {
+                direction: styra_protocol::event::BranchDirection::To,
+                ..
+            }
+        ) {
+            if let Some(state) = &entry.branch.state {
+                spans.extend([state.block(), Span::raw(" ")]);
+            }
+        }
+    } else {
+        spans.push(Span::styled(
             if is_conversation {
                 format!("{display_tag} ")
             } else {
                 format!("{display_tag:<8}")
             },
             Style::default()
-                .fg(branch_appearance
-                    .map(|(_, color)| color)
-                    .unwrap_or_else(|| tag_color(tag)))
+                .fg(tag_color(tag))
                 .add_modifier(Modifier::BOLD),
-        ),
-    ];
+        ));
+    }
     if context == SummaryContext::EventList {
         if !prefix.is_empty() {
             spans.push(Span::styled(prefix, prefix_style));
@@ -1733,14 +1753,12 @@ pub fn summary_line(
         // status block, the name, then how it came to be in that state.
         let mut branch_tail = Vec::new();
         if let AgentEvent::Branched { direction, .. } = entry.event {
-            let way = match direction {
-                styra_protocol::event::BranchDirection::To => "to",
-                styra_protocol::event::BranchDirection::From => "from",
+            summary = match direction {
+                styra_protocol::event::BranchDirection::To => String::new(),
+                styra_protocol::event::BranchDirection::From => "from:".to_owned(),
             };
-            summary = format!("Branch {way}:");
-            branch_tail.push(Span::raw(" "));
-            if let Some(state) = &entry.branch.state {
-                branch_tail.extend([state.block(), Span::raw(" ")]);
+            if !summary.is_empty() {
+                branch_tail.push(Span::raw(" "));
             }
             branch_tail.push(Span::styled(
                 entry.branch.name.unwrap_or("untitled").to_owned(),
@@ -2280,6 +2298,27 @@ mod tests {
     }
 
     #[test]
+    fn consecutive_branch_markers_share_one_thin_divider() {
+        use styra_protocol::event::BranchDirection;
+        let marker = AgentEvent::Branched {
+            direction: BranchDirection::From,
+            session: "parent".into(),
+            name: None,
+        };
+        let entries = vec![entry_of(&marker, version()), entry_of(&marker, version())];
+        let first = entry_at(&entries, 0);
+        let second = entry_at(&entries, 1);
+        let normal = entry_rows_with_max_rows(&entries[1], 40, 20, render_of());
+        let shared = entry_rows_with_max_rows(&second, 40, 20, render_of());
+        assert_eq!(normal.len(), shared.len() + 1);
+        assert_eq!(normal[0].to_string(), "─".repeat(40));
+        assert_eq!(shared[0].to_string(), normal[1].to_string());
+        let first_rows = entry_rows_with_max_rows(&first, 40, 20, render_of());
+        assert_eq!(first_rows.last().unwrap().to_string(), "─".repeat(40));
+        assert_eq!(shared.last().unwrap().to_string(), "─".repeat(40));
+    }
+
+    #[test]
     fn a_branch_marker_reads_by_the_name_of_where_it_leads() {
         use styra_protocol::event::BranchDirection;
         let marker = |direction| AgentEvent::Branched {
@@ -2303,12 +2342,12 @@ mod tests {
                 .collect::<String>()
         };
         let to = summary(&marker(BranchDirection::To), Some("Retry backoff"));
-        assert!(to.contains("Branch to: Retry backoff"), "{to}");
+        assert!(to.contains("▌ Retry backoff"), "{to}");
         assert!(!to.contains("4f1c-session-id"), "{to}");
         let from = summary(&marker(BranchDirection::From), Some("Payments"));
-        assert!(from.contains("Branch from: Payments"), "{from}");
+        assert!(from.contains("▌ from: Payments"), "{from}");
         let unnamed = summary(&marker(BranchDirection::To), None);
-        assert!(unnamed.contains("Branch to: untitled"), "{unnamed}");
+        assert!(unnamed.contains("▌ untitled"), "{unnamed}");
         assert!(!unnamed.contains("stale snapshot"), "{unnamed}");
     }
 
@@ -2343,7 +2382,8 @@ mod tests {
         let rows = |entry: &EventEntry<'_>| {
             entry_rows_with_max_rows(entry, 80, 20, render)
                 .into_iter()
-                .map(|line| line.spans.into_iter().map(|span| span.content).collect())
+                .filter(|line| line.to_string() != "─".repeat(80))
+                .map(|line| line.to_string())
                 .collect::<Vec<String>>()
         };
         let shown = rows(&entry);
@@ -2351,7 +2391,7 @@ mod tests {
         // and the name said once.
         assert_eq!(shown.len(), 2, "{shown:#?}");
         assert!(
-            shown[0].contains("Branch to:  ■  Retry backoff  paused"),
+            shown[0].contains("▌  ■  Retry backoff  paused"),
             "{shown:#?}"
         );
         assert!(shown[1].contains("« Backoff now doubles up to 30s."));
@@ -2360,6 +2400,24 @@ mod tests {
         assert!(!all.contains("name:"), "{all}");
         assert!(!all.contains("stale snapshot"), "{all}");
         assert!(!all.contains("4f1c-session-id"), "{all}");
+
+        let from = AgentEvent::Branched {
+            direction: BranchDirection::From,
+            session: "parent".into(),
+            name: None,
+        };
+        let from_entry = EventEntry {
+            event: &from,
+            ..entry.clone()
+        };
+        let from_rows = vec![
+            summary_line(&from_entry, SummaryContext::EventList, Protocol::default()).to_string(),
+        ];
+        assert!(
+            from_rows[0].contains("▌ from: Retry backoff"),
+            "{from_rows:#?}"
+        );
+        assert!(!from_rows[0].contains('■'), "{from_rows:#?}");
 
         // A change of state on the other side is a different row, though the
         // marker itself has not changed.
@@ -2373,7 +2431,7 @@ mod tests {
     }
 
     #[test]
-    fn a_branch_marker_is_banded_apart_from_other_conversation_changes() {
+    fn a_branch_marker_has_horizontal_dividers_without_a_background() {
         use styra_protocol::event::BranchDirection;
         let marker = |direction| AgentEvent::Branched {
             direction,
@@ -2389,21 +2447,24 @@ mod tests {
                 },
                 ..entry_of(event, version())
             };
-            entry_rows_with_max_rows(&entry, 80, 20, render)
-                .into_iter()
-                .filter(|row| !row.to_string().starts_with('─'))
-                .map(|row| row.style.bg)
-                .collect::<Vec<_>>()
+            let rows = entry_rows_with_max_rows(&entry, 80, 20, render);
+            if let Some(color) = branch_border(event) {
+                assert_eq!(rows.first().unwrap().to_string(), "─".repeat(80));
+                assert_eq!(rows.last().unwrap().to_string(), "─".repeat(80));
+                assert_eq!(rows[0].spans[0].style.fg, Some(color));
+                for row in &rows[1..rows.len() - 1] {
+                    assert!(!row.to_string().contains('│'));
+                    assert!(row.width() <= 80);
+                }
+            }
+            rows.into_iter().map(|row| row.style.bg).collect::<Vec<_>>()
         };
-        // Every row of the marker, the other side's last word included.
+        // The border and content keep the terminal background.
         assert_eq!(
             backgrounds(&marker(BranchDirection::To), Some("Done.")),
-            [Some(theme::BRANCH_TO_BACKGROUND); 2]
+            [None; 4]
         );
-        assert_eq!(
-            backgrounds(&marker(BranchDirection::From), None),
-            [Some(theme::BRANCH_FROM_BACKGROUND)]
-        );
+        assert_eq!(backgrounds(&marker(BranchDirection::From), None), [None; 3]);
         let model = AgentEvent::ModelChanged {
             model: Some("opus".into()),
             effort: None,
@@ -2846,6 +2907,7 @@ mod tests {
             branch: Default::default(),
             branch_provider_switch: None,
             inherited: false,
+            branch_follows_marker: false,
         }
     }
 

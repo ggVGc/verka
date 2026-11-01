@@ -11,11 +11,6 @@ use ratatui::style::Color;
 /// Outgoing branch links point to a child session; incoming links name its source.
 pub const BRANCH_TO: Color = palette::SOFT_CYAN;
 pub const BRANCH_FROM: Color = palette::PEACH;
-/// The band behind a branch marker in the log, in a tint of its direction's
-/// hue, so a marker stands apart from the mauve of the other conversation
-/// changes and the two directions apart from each other.
-pub const BRANCH_TO_BACKGROUND: Color = palette::DARK_CYAN_TINT;
-pub const BRANCH_FROM_BACKGROUND: Color = palette::DARK_PEACH_TINT;
 
 /// `Normal`.
 pub const TEXT: Color = palette::WHITE;
