@@ -1137,6 +1137,25 @@ fn build_entry_rows(
     max_rows: usize,
     render: EntryRender<'_>,
 ) -> Vec<Line<'static>> {
+    let mut rows = build_branch_entry_rows(entry, width, max_rows, render);
+    if finished_branch(entry) && !entry.selected {
+        let fade = 3;
+        for row in &mut rows {
+            row.style = faded_style(row.style, fade);
+            for span in &mut row.spans {
+                span.style = faded_style(span.style, fade);
+            }
+        }
+    }
+    rows
+}
+
+fn build_branch_entry_rows(
+    entry: &EventEntry<'_>,
+    width: usize,
+    max_rows: usize,
+    render: EntryRender<'_>,
+) -> Vec<Line<'static>> {
     let Some(color) = branch_border(entry.event) else {
         return build_entry_content_rows(entry, width, max_rows, render);
     };
@@ -1274,6 +1293,15 @@ fn branch_border(event: &AgentEvent) -> Option<Color> {
         }),
         _ => None,
     }
+}
+
+fn finished_branch(entry: &EventEntry<'_>) -> bool {
+    matches!(entry.event, AgentEvent::Branched { .. })
+        && entry.branch.state.as_ref().is_some_and(|state| {
+            state.completion.is_done()
+                || state.status
+                    == crate::interactions::InteractionStatus::Stopped(StopTone::Integrated)
+        })
 }
 
 /// A conversation already starts with a direction glyph, so tint that glyph
@@ -2473,6 +2501,69 @@ mod tests {
             backgrounds(&model, None)[0],
             Some(theme::CONVERSATION_CHANGE_BACKGROUND)
         );
+    }
+
+    #[test]
+    fn finished_branch_markers_darken_and_refresh_when_their_state_changes() {
+        use crate::interactions::{InteractionState, InteractionStatus};
+        use styra_protocol::{event::BranchDirection, CompletionState};
+
+        for direction in [BranchDirection::To, BranchDirection::From] {
+            let event = AgentEvent::Branched {
+                direction,
+                session: "finished-branch".into(),
+                name: None,
+            };
+            let mut entry = EventEntry {
+                branch: BranchLink {
+                    name: Some("Branch name"),
+                    state: Some(InteractionState {
+                        status: InteractionStatus::Idle,
+                        stop_reason: None,
+                        rate_limited: None,
+                        newly_idle: false,
+                        completion: CompletionState::Active,
+                    }),
+                    message: Some("Latest message"),
+                },
+                ..entry_of(&event, version())
+            };
+            let active = entry_rows_with_max_rows(&entry, 80, 20, render_of());
+            for (completion, status) in [
+                (CompletionState::Completed, InteractionStatus::Idle),
+                (CompletionState::Abandoned, InteractionStatus::Idle),
+                (CompletionState::Sealed, InteractionStatus::Idle),
+                (
+                    CompletionState::Active,
+                    InteractionStatus::Stopped(StopTone::Integrated),
+                ),
+            ] {
+                let state = entry.branch.state.as_mut().unwrap();
+                state.completion = completion;
+                state.status = status;
+                let finished = entry_rows_with_max_rows(&entry, 80, 20, render_of());
+                assert_eq!(finished[0].style.bg, active[0].style.bg);
+                // Both dividers, the marker, and the latest message all dim.
+                for (finished, active) in finished.iter().zip(&active) {
+                    assert_eq!(
+                        finished.spans[0].style,
+                        faded_style(active.spans[0].style, 3)
+                    );
+                }
+                entry.selected = true;
+                let selected = entry_rows_with_max_rows(&entry, 80, 20, render_of());
+                assert_eq!(selected[1].style.bg, Some(theme::SELECTION_BACKGROUND));
+                assert_eq!(selected[0].spans[0].style, active[0].spans[0].style);
+                entry.selected = false;
+            }
+            let state = entry.branch.state.as_mut().unwrap();
+            state.completion = CompletionState::Active;
+            state.status = InteractionStatus::Idle;
+            assert_eq!(
+                entry_rows_with_max_rows(&entry, 80, 20, render_of()),
+                active
+            );
+        }
     }
 
     #[test]
