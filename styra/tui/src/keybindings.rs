@@ -125,6 +125,8 @@ bindings! { CHECKOUT_DIFF = "Diff";
         => Action::DiffConversation;
     DIFF_BRANCH: [Key::ch('b')] => Action::DiffBranch;
     DIFF_TURN: [Key::ch('u')] => Action::DiffTurn;
+    DIFF_NEXT_TURN: [Key::ch(']')] ("turn diff") => Action::DiffNextTurn;
+    DIFF_PREV_TURN: [Key::ch('[')] ("turn diff") => Action::DiffPrevTurn;
     DIFF_TURN_HIGHLIGHT: [Key::ch('H')] => Action::DiffTurnHighlight;
 }
 

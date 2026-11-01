@@ -1349,6 +1349,37 @@ impl App {
         self.entry_log.follow_list(cursor);
     }
 
+    /// Move between operator turns, keeping the chosen turn pinned as events arrive.
+    pub(crate) fn select_diff_turn(&mut self, next: bool) {
+        let is_message = |entry: &Entry| {
+            matches!(
+                entry.event(),
+                styra_protocol::event::AgentEvent::UserMessage { .. }
+            )
+        };
+        let entries = self.timeline.entries.iter().enumerate();
+        let after_selection = self.timeline.selected.saturating_add(1);
+        let target = if next {
+            entries
+                .skip(after_selection)
+                .find(|(_, entry)| is_message(entry))
+        } else {
+            // The first message at or before the selection starts the current turn.
+            entries
+                .take(after_selection)
+                .rev()
+                .filter(|(_, entry)| is_message(entry))
+                .nth(1)
+        }
+        .map(|(index, _)| index);
+        if let Some(target) = target {
+            self.timeline.selected = target;
+            self.timeline.follow = false;
+            self.moved(true);
+            self.sync_turn_diff();
+        }
+    }
+
     /// Move to the next entry with an arrow (something beyond its bare
     /// summary), skipping over ones with nothing else to show. See
     /// [`Self::select_next_line`] to instead step one entry at a time.

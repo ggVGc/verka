@@ -142,7 +142,7 @@ pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrom
 fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
     let turn = app.turn_diff_shown();
     let title = if turn {
-        "turn diff · u: full diff · b: branch"
+        "turn diff · [/]: prev/next turn · u: full diff · b: branch"
     } else if app.diff_turn_highlight {
         "diff · H: turn highlight on · u: turn diff · b: branch"
     } else {
@@ -159,6 +159,7 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
     };
     view.host_shortcuts = &[
         ("u", "toggle selected turn / full checkout diff"),
+        ("[ / ] (turn diff)", "previous / next turn"),
         (
             "H",
             "toggle highlighting the selected turn in the full diff",

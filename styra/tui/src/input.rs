@@ -178,6 +178,13 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
         app.sync_turn_diff();
         return;
     }
+    if app.turn_diff_shown()
+        && !typing_filter
+        && (DIFF_NEXT_TURN.matches(key) || DIFF_PREV_TURN.matches(key))
+    {
+        app.select_diff_turn(DIFF_NEXT_TURN.matches(key));
+        return;
+    }
     if GLOBAL_QUIT.matches(key) && !typing_filter {
         app.ask(Request::Quit);
         return;
@@ -2917,6 +2924,70 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert_ne!(app.view, View::CheckoutDiff);
         assert!(!app.diff_turn);
+    }
+
+    #[test]
+    fn turn_diff_shortcuts_move_between_operator_turns() {
+        use styra_protocol::event::AgentEvent;
+
+        let (_root_directory, root) = tree("diff-turn-navigation");
+        let mut app = app_with_diffable_interaction(&root);
+        for turn in 1..=3 {
+            app.push_event(AgentEvent::UserMessage {
+                text: format!("turn {turn}"),
+            });
+            app.push_event(AgentEvent::FileChanged {
+                id: String::new(),
+                paths: vec!["a.txt".into()],
+                diff: Some(format!("@@ -1 +1 @@\n-old\n+turn {turn}")),
+                checkpoint: None,
+                checkpoint_error: None,
+            });
+        }
+        app.select_first();
+        app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
+        app.diff_preview = true;
+        let press = |app: &mut App, code| press_list_key(app, &root, KeyEvent::from(code));
+
+        press(&mut app, KeyCode::Char(']'));
+        assert_eq!(app.selected_turn(), Some(1), "full diff keeps its keys");
+        press(&mut app, KeyCode::Char('u'));
+        for (key, expected) in [('[', 1), (']', 2), (']', 3), (']', 3), ('[', 2)] {
+            press(&mut app, KeyCode::Char(key));
+            assert_eq!(app.selected_turn(), Some(expected));
+            assert!(app
+                .shown_diff()
+                .unwrap()
+                .diff
+                .as_deref()
+                .unwrap()
+                .contains(&format!("+turn {expected}")));
+        }
+        assert!(
+            !app.timeline.follow,
+            "new events must not move the chosen turn"
+        );
+
+        // From work inside a turn, previous skips to the previous operator message.
+        app.timeline.selected += 1;
+        assert_eq!(app.selected_turn(), Some(2));
+        press(&mut app, KeyCode::Char('['));
+        assert_eq!(app.selected_turn(), Some(1));
+
+        // The file filter retains printable shortcut characters while typing.
+        press(&mut app, KeyCode::Char('l'));
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.shown_diff().unwrap().typing());
+        press(&mut app, KeyCode::Char(']'));
+        assert_eq!(app.selected_turn(), Some(1));
+        press(&mut app, KeyCode::Esc);
+
+        press(&mut app, KeyCode::Char('D'));
+        assert_eq!(app.view, View::CheckoutDiff);
+        press(&mut app, KeyCode::Char(']'));
+        assert_eq!(app.selected_turn(), Some(2));
+        press(&mut app, KeyCode::Char('['));
+        assert_eq!(app.selected_turn(), Some(1));
     }
 
     #[test]
