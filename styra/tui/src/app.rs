@@ -396,8 +396,8 @@ pub enum Request {
     /// skipping the picker — e.g. right after branching one, to look at the
     /// result rather than having to find it again in the list.
     OpenSession(String),
-    /// Open a newly created branch with the message box focused.
-    OpenBranch(String),
+    /// Open a newly created branch and submit its first message and contract.
+    OpenBranch(String, String, Option<styra_protocol::Contract>),
     /// Move backward through explicitly entered interactions.
     JumpBack,
     /// Move forward through explicitly entered interactions.
@@ -831,13 +831,13 @@ impl App {
     /// Open the launch picker on the current selection, if anything can still
     /// be chosen.
     pub fn open_launcher(&mut self) {
-        if self.can_configure_launch() {
+        if self.branch_prompt.is_some() || self.can_configure_launch() {
             // While a process is live the agent is fixed, so the picker shows
             // it without ever letting the cursor onto it.
             self.launcher = Some(Launcher::from_selection(
-                &self.selection,
+                self.editor_selection(),
                 &self.recent_models,
-                self.agent_is_live(),
+                self.branch_prompt.is_none() && self.agent_is_live(),
             ));
         }
     }
@@ -859,14 +859,14 @@ impl App {
 
     /// Open a provider picker without changing the current selection.
     pub fn open_provider_picker(&mut self) {
-        if self.agent_is_live() {
+        if self.branch_prompt.is_none() && self.agent_is_live() {
             return self.show_warning("stop the interaction before switching provider");
         }
         self.open_choice_picker(Choice::Provider);
     }
 
     pub fn open_model_picker(&mut self) {
-        if !self.can_configure_launch() {
+        if self.branch_prompt.is_none() && !self.can_configure_launch() {
             return self.show_warning("wait for the turn to finish before changing model");
         }
         self.open_choice_picker(Choice::ModelEffort);
@@ -874,13 +874,18 @@ impl App {
 
     fn open_choice_picker(&mut self, choice: Choice) {
         self.launcher = Some(Launcher::for_choice(
-            &self.selection,
+            self.editor_selection(),
             choice,
-            self.agent_is_live(),
+            self.branch_prompt.is_none() && self.agent_is_live(),
         ));
     }
 
     fn confirm_selection(&mut self, mut selection: Selection) {
+        if self.branch_prompt.is_some() {
+            self.note_recent_model(&selection.model);
+            self.branch_prompt.as_mut().unwrap().selection = selection;
+            return;
+        }
         let live = self.agent_is_live();
         if selection.provider != self.selection.provider {
             // The picker never gives a live session's agent column the keys, so
@@ -948,6 +953,20 @@ impl App {
             effort,
             model_reported: self.model_reported,
             effort_reported: self.effort_reported,
+        }
+    }
+
+    pub fn editor_selection(&self) -> &Selection {
+        self.branch_prompt
+            .as_ref()
+            .map(|prompt| &prompt.selection)
+            .unwrap_or(&self.selection)
+    }
+
+    pub fn editor_composer_mut(&mut self) -> &mut Composer {
+        match self.branch_prompt.as_mut() {
+            Some(prompt) => &mut prompt.composer,
+            None => &mut self.composer,
         }
     }
 
@@ -2036,7 +2055,7 @@ impl App {
     pub fn take_open_session_request(&mut self) -> Option<Request> {
         matches!(
             self.requests.front(),
-            Some(Request::OpenSession(_) | Request::OpenBranch(_))
+            Some(Request::OpenSession(_) | Request::OpenBranch(_, _, _))
         )
         .then(|| self.requests.pop_front())
         .flatten()

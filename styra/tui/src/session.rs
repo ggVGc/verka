@@ -1052,11 +1052,12 @@ pub fn open_branch_prompt(app: &mut App) {
     let Some(at_ms) = at_ms else {
         return app.show_warning("the selected entry has no branchable history point");
     };
-    let has_checkout = app
-        .interactions
-        .current(&app.session_id)
-        .is_some_and(|interaction| interaction.expected_branch.is_some());
-    app.branch_prompt = Some(crate::branch::BranchPrompt::new(at_ms, has_checkout));
+    let mut prompt = crate::branch::BranchPrompt::new(at_ms, app.selection.clone());
+    prompt.composer = crate::composer::Composer::restore(styra_protocol::ComposerState {
+        history: app.composer.state().history,
+        ..Default::default()
+    });
+    app.branch_prompt = Some(prompt);
 }
 
 /// Follow the branch marker under the cursor, opening the Session on the
@@ -1090,13 +1091,18 @@ pub fn branch_session(
     at_ms: u64,
     history: styra_protocol::BranchHistory,
     checkout: styra_protocol::BranchCheckout,
+    message: String,
 ) {
     match client.branch_session_with_checkout(
         &app.session_id,
         Some(at_ms),
         history,
-        None,
-        None,
+        app.branch_prompt
+            .as_ref()
+            .map(|prompt| prompt.selection.provider),
+        app.branch_prompt
+            .as_ref()
+            .map(|prompt| prompt.selection.clone()),
         Some(checkout),
     ) {
         Ok(branched) => {
@@ -1104,7 +1110,16 @@ pub fn branch_session(
                 "branched to session {}",
                 branched.name.as_deref().unwrap_or(&branched.id)
             )));
-            app.ask(crate::app::Request::OpenBranch(branched.id));
+            let contract = app
+                .branch_prompt
+                .as_ref()
+                .and_then(|prompt| prompt.contract);
+            app.branch_prompt = None;
+            app.ask(crate::app::Request::OpenBranch(
+                branched.id,
+                message,
+                contract,
+            ));
         }
         Err(error) => app.push_log(LogEntry::error(format!("branch failed: {error:#}"))),
     }
@@ -1251,6 +1266,74 @@ mod tests {
         assert_eq!(app.outbox.contract(), Some(Contract::Lines));
         assert_eq!(app.recent_models, vec!["gpt-5.6-sol".to_owned()]);
         assert_eq!(app.launch.interaction, standing);
+    }
+
+    #[test]
+    fn branch_dialog_sends_its_message_selection_history_and_checkout_together() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use styra_protocol::{BranchCheckout, BranchHistory};
+
+        struct BranchServer(BranchCheckout);
+        impl styra_server::InProcessServer for BranchServer {
+            fn handle(
+                &self,
+                request: styra_protocol::Request,
+            ) -> anyhow::Result<styra_protocol::Response> {
+                let styra_protocol::Request::BranchSession {
+                    id,
+                    at_ms,
+                    history,
+                    provider,
+                    selection,
+                    checkout,
+                } = request
+                else {
+                    anyhow::bail!("unexpected request");
+                };
+                assert_eq!(id, "source");
+                assert_eq!(at_ms, Some(42));
+                assert_eq!(history, BranchHistory::SelectedOnly);
+                assert_eq!(checkout, Some(self.0));
+                let selection = selection.unwrap();
+                assert_eq!(provider, Some(selection.provider));
+                assert_eq!(selection.provider, Provider::Claude);
+                Ok(styra_protocol::Response::SessionBranched(summary(
+                    "branched", 1, None,
+                )))
+            }
+            fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        for (modifiers, checkout) in [
+            (KeyModifiers::NONE, BranchCheckout::ShareSource),
+            (KeyModifiers::CONTROL, BranchCheckout::NewWorktree),
+        ] {
+            let client = Client::in_process(std::sync::Arc::new(BranchServer(checkout)));
+            let mut app = App::new(Selection::new(Provider::Codex), "source");
+            app.composer.set("source draft".into());
+            let mut prompt = crate::branch::BranchPrompt::new(42, Selection::new(Provider::Claude));
+            prompt.composer.set("branch instruction".into());
+            prompt.contract = Some(Contract::Lines);
+            app.branch_prompt = Some(prompt);
+            crate::input::handle_branch_prompt_key(
+                &mut app,
+                &client,
+                KeyEvent::from(KeyCode::Left),
+            );
+            crate::input::handle_branch_prompt_key(
+                &mut app,
+                &client,
+                KeyEvent::new(KeyCode::Enter, modifiers),
+            );
+            assert!(app.branch_prompt.is_none());
+            assert_eq!(app.composer.message(), "source draft");
+            assert_eq!(app.selection.provider, Provider::Codex);
+            assert!(matches!(app.take_open_session_request(),
+                Some(crate::app::Request::OpenBranch(id, message, Some(Contract::Lines)))
+                    if id == "branched" && message == "branch instruction"));
+        }
     }
 
     #[test]

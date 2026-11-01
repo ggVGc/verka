@@ -1,13 +1,6 @@
 use crate::fuzzy_list::FuzzyList;
 
 #[derive(Clone, Copy)]
-pub struct BranchPromptView {
-    pub selected: usize,
-    pub history: styra_protocol::BranchHistory,
-    pub checkout: styra_protocol::BranchCheckout,
-}
-
-#[derive(Clone, Copy)]
 pub struct LinkMenuView<'a> {
     /// The link the actions apply to, as the reply wrote it.
     pub destination: &'a str,

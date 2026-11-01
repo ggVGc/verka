@@ -94,7 +94,6 @@ pub struct ApplicationOverlays<'a> {
     pub recording: Option<&'a recording::RecordingView>,
     pub references: Option<overlays::ReferencesView<'a>>,
     pub insert: Option<overlays::InsertPromptView<'a>>,
-    pub branch: Option<overlays::BranchPromptView>,
     pub link_menu: Option<overlays::LinkMenuView<'a>>,
     /// The current window's actions, searchable, opened with Space.
     pub action_menu: Option<overlays::ActionMenuView<'a>>,

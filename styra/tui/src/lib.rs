@@ -591,13 +591,22 @@ pub fn run() -> Result<()> {
                     history.record(&session_id);
                 }
             }
-            RunOutcome::OpenBranch(session_id) => {
+            RunOutcome::OpenBranch(session_id, message, contract) => {
                 let left = app.session_id.clone();
                 if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id) {
                     history.record(&left);
                     history.record(&session_id);
                     app.branch_needs_prompt_name = true;
                     app.enter_input();
+                    app.set_input(message);
+                    app.outbox.set_contract(contract);
+                    input::handle_input_key(
+                        &mut app,
+                        &client,
+                        &active_workspace.id,
+                        &mut live,
+                        crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Enter),
+                    );
                 }
             }
             RunOutcome::JumpTo(index) => {

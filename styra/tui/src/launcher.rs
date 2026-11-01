@@ -89,7 +89,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
         k if keys::LAUNCHER_SELECT.matches(k) => confirm(app, preferences_path),
         k if keys::LAUNCHER_DEFAULT.matches(k) && launcher.choice == Choice::Launch => {
             confirm(app, preferences_path);
-            if let Err(error) = preferences::save_selection(preferences_path, &app.selection) {
+            if let Err(error) =
+                preferences::save_selection(preferences_path, app.editor_selection())
+            {
                 app.push_log(LogEntry::error(format!(
                     "could not save launch defaults: {error:#}"
                 )));

@@ -296,12 +296,7 @@ bindings! { OVERVIEW = "Overview";
 }
 
 bindings! { BRANCH = "Branch from selected entry";
-    BRANCH_NEXT: [Key::ch('j'), Key::ch('J'), Key::code(KeyCode::Down)]
-        => Action::BranchNext;
-    BRANCH_PREV: [Key::ch('k'), Key::ch('K'), Key::code(KeyCode::Up)] => Action::BranchPrev;
-    BRANCH_CHANGE: [Key::code(KeyCode::Left), Key::code(KeyCode::Right), Key::ch('h'), Key::ch('l'), Key::ch(' '), Key::code(KeyCode::Tab)] => Action::BranchChange;
-    BRANCH_CONFIRM: [Key::code(KeyCode::Enter)] => Action::BranchConfirm;
-    BRANCH_CANCEL: [Key::code(KeyCode::Esc), Key::ch('q')] => Action::BranchCancel;
+    BRANCH_CHANGE: [Key::code(KeyCode::Left), Key::code(KeyCode::Right)] => Action::BranchChange;
 }
 
 bindings! { LINK_MENU = "Actions on the highlighted link";
@@ -542,7 +537,7 @@ impl Window {
             Self::Answer => &[ANSWER, GLOBAL],
             Self::Overview => &[OVERVIEW, GLOBAL],
             Self::Interactions => &[INTERACTIONS, GLOBAL],
-            Self::Branch => &[BRANCH, GLOBAL],
+            Self::Branch => &[BRANCH, MESSAGE_EDITOR, GLOBAL],
             Self::LinkMenu => &[LINK_MENU, GLOBAL],
             Self::Tags => &[TAGS, GLOBAL],
             Self::SessionPicker => &[SESSION_PICKER],

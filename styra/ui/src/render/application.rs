@@ -167,9 +167,6 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     if let Some(insert) = &view.overlays.insert {
         overlays::render_insert(frame, Some(insert.clone()), frame.area());
     }
-    if let Some(branch) = view.overlays.branch {
-        overlays::render_branch(frame, branch, frame.area());
-    }
     if let Some(menu) = view.overlays.link_menu {
         overlays::render_link_menu(frame, menu, frame.area());
     }

@@ -376,7 +376,13 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
     } else {
         " message (resumes on send) ".to_owned()
     };
-    let composer = &app.composer;
+    let branch = app.branch_prompt.as_ref();
+    let composer = branch
+        .map(|prompt| &prompt.composer)
+        .unwrap_or(&app.composer);
+    if branch.is_some() {
+        title = " branch from selected entry ".into();
+    }
     if composer.choosing() {
         title.push_str("· j/k choose · Enter edit · d delete ");
     } else if composer.parts().len() > 1 {
@@ -386,7 +392,7 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
             composer.parts().len()
         ));
     }
-    let preceding = app
+    let mut preceding: Vec<String> = app
         .outbox
         .queued()
         .iter()
@@ -398,29 +404,52 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
             format!("{prefix}{}", message.text)
         })
         .collect();
-    let label = app.launch_label();
+    if let Some(prompt) = branch {
+        let history = match prompt.history() {
+            styra_protocol::BranchHistory::ThroughSelected => "All through this entry",
+            styra_protocol::BranchHistory::SelectedOnly => "This entry only",
+        };
+        preceding = vec![format!("◂ {history} ▸  · ←/→ change history")];
+    }
+    let mut label = app.launch_label();
+    if let Some(prompt) = branch {
+        label.model = Some(prompt.selection.model.clone());
+        label.effort = prompt
+            .selection
+            .provider
+            .supports_effort(&prompt.selection.model)
+            .then(|| prompt.selection.effort.as_str().to_owned());
+        label.model_reported = false;
+        label.effort_reported = false;
+    }
     styra_ui::modal_input::ModalInput {
         title,
         model: Some(label.model.unwrap_or_else(|| "default model".into())),
         model_reported: label.model_reported,
         effort: label.effort,
         effort_reported: label.effort_reported,
-        note: app
-            .outbox
-            .contract()
+        note: branch
+            .map(|prompt| prompt.contract)
+            .unwrap_or_else(|| app.outbox.contract())
             .map(|contract| format!(" asking for {} ", contract.as_str())),
         preceding,
-        notice: None,
+        notice: branch.map(|_| "Enter: same worktree · Ctrl+Enter: new worktree".into()),
         parts: composer.parts(),
         focused: composer.focused(),
         choosing: composer.choosing(),
-        source: app.message_source.clone(),
+        source: if branch.is_some() {
+            None
+        } else {
+            app.message_source.clone()
+        },
         placeholder: if app.session_id.is_empty() {
             "Enter to send · Ctrl+Enter to send in a new Git workspace"
         } else {
             "type a message, Enter to send"
         },
-        cursor: app.focus == Focus::Input,
+        cursor: (app.focus == Focus::Input || branch.is_some())
+            && app.launcher.is_none()
+            && app.insert.is_none(),
     }
 }
 
@@ -729,7 +758,8 @@ fn draw_main(
     };
     let launcher = app.launcher.as_ref().map(launcher_view);
     let capture = app.recording.as_ref().map(recording);
-    let input = (app.focus == Focus::Input && capture.is_none()).then(|| modal_input(app));
+    let input = ((app.focus == Focus::Input || app.branch_prompt.is_some()) && capture.is_none())
+        .then(|| modal_input(app));
     let insert = app.insert.as_ref().map(|prompt| match prompt.state() {
         Insert::Typing(text) => styra_ui::overlays::InsertPromptView::Typing(text),
         Insert::Grant(host) => styra_ui::overlays::InsertPromptView::Grant {
@@ -737,14 +767,6 @@ fn draw_main(
             restarts: app.mount_change_restarts(),
         },
     });
-    let branch = app
-        .branch_prompt
-        .as_ref()
-        .map(|prompt| styra_ui::overlays::BranchPromptView {
-            selected: prompt.selected_index(),
-            history: prompt.history(),
-            checkout: prompt.checkout(),
-        });
     let link_labels = app.link_menu.as_ref().map(|menu| menu.labels());
     let link_menu = app
         .link_menu
@@ -790,7 +812,6 @@ fn draw_main(
             recording: capture.as_ref(),
             references: None,
             insert,
-            branch,
             link_menu,
             diff_branches: app.diff_branch_picker.as_ref().map(|picker| {
                 styra_ui::fuzzy_list::FuzzyListView {
@@ -928,6 +949,25 @@ mod tests {
     use styra_protocol::event::{AgentEvent, TurnOutcome, TurnUsage};
     use styra_protocol::{CheckoutState, InteractionSummary};
     use styra_ui::application::MainView;
+
+    #[test]
+    fn branch_uses_the_message_box_with_its_own_draft_and_history_selector() {
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
+            "source",
+        );
+        app.composer.set("source draft".into());
+        let mut prompt = crate::branch::BranchPrompt::new(42, app.selection.clone());
+        prompt.composer.set("branch draft".into());
+        app.branch_prompt = Some(prompt);
+        let input = modal_input(&app);
+        assert_eq!(input.parts, ["branch draft"]);
+        assert!(input.cursor);
+        assert!(input.preceding[0].contains("All through this entry"));
+        assert!(input.notice.as_ref().unwrap().contains("Ctrl+Enter"));
+        app.branch_prompt.as_mut().unwrap().change();
+        assert!(modal_input(&app).preceding[0].contains("This entry only"));
+    }
 
     #[test]
     fn turn_diff_mapping_passes_semantic_chrome_and_the_original_message() {

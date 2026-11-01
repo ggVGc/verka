@@ -40,7 +40,7 @@ enum Handled {
 
 /// The message box owns paste only when no inner prompt or chooser owns input.
 pub(super) fn message_paste_active(app: &App) -> bool {
-    app.focus == Focus::Input
+    (app.focus == Focus::Input || app.branch_prompt.is_some())
         && !app.help.is_open()
         && app.rebase_status.is_none()
         && app.launcher.is_none()
@@ -48,7 +48,6 @@ pub(super) fn message_paste_active(app: &App) -> bool {
         && app.rename_prompt.is_none()
         && app.retarget_prompt.is_none()
         && app.integration_prompt.is_none()
-        && app.branch_prompt.is_none()
         && app.link_menu.is_none()
         && app.action_menu.is_none()
         && app.workspace_jump.is_none()
@@ -96,6 +95,7 @@ fn reference_available(app: &App) -> bool {
         && app.rename_prompt.is_none()
         && app.retarget_prompt.is_none()
         && app.integration_prompt.is_none()
+        && (app.branch_prompt.is_none() || app.launcher.is_some())
         && app.launch.prompt.is_none()
         && app.launch.command_prompt.is_none()
         && !app.search.typing()
@@ -124,6 +124,35 @@ pub(super) fn interaction_navigator_passthrough(key: KeyEvent) -> bool {
         // navigator stays open under it.
         || keys::GLOBAL_WORKSPACE_JUMP.matches(key)
         || keys::GLOBAL_WORKSPACE_JUMP_LISTED.matches(key)
+}
+
+/// Recording shortcuts belong to both message composers.
+fn handle_audio_key(
+    audio: &mut crate::audio::AudioInput,
+    app: &mut App,
+    client: &styra_server::Client,
+    key: KeyEvent,
+) -> bool {
+    // A running capture owns the message box and its keys: there is no
+    // text being typed for them to mean anything else to, and the
+    // operator is speaking rather than looking for a modifier.
+    if audio.is_recording() {
+        match key {
+            k if keys::EDITOR_RECORD_FINISH.matches(k) || keys::EDITOR_RECORD.matches(k) => {
+                audio.finish(app, client.clone())
+            }
+            k if keys::EDITOR_RECORD_CANCEL.matches(k) => audio.cancel(app, client.clone()),
+            k if keys::EDITOR_RECORD_LOUDER.matches(k) => audio.boost(app),
+            k if keys::EDITOR_RECORD_QUIETER.matches(k) => audio.quieten(app),
+            _ => {}
+        }
+        return true;
+    }
+    if keys::EDITOR_RECORD.matches(key) {
+        audio.toggle(app, client.clone());
+        return true;
+    }
+    false
 }
 
 impl Loop<'_> {
@@ -213,13 +242,25 @@ impl Loop<'_> {
             self.integration_prompt_key(key)?;
             return Ok(Handled::Done);
         }
+        if app.branch_prompt.is_some() && app.launcher.is_some() {
+            launcher::handle_key(app, key, self.preferences_path);
+            return Ok(Handled::Done);
+        }
+        if app.branch_prompt.is_some() && app.insert.is_some() {
+            input::handle_insert_key(app, key);
+            return Ok(Handled::Done);
+        }
         if app.branch_prompt.is_some() {
-            input::handle_branch_prompt_key(app, client, key);
+            if !handle_audio_key(&mut self.audio, app, client, key) {
+                input::handle_branch_prompt_key(app, client, key);
+            }
             // Confirming has already branched; open the result on this key
             // rather than leaving the switch queued behind the next one.
             return Ok(match app.take_open_session_request() {
                 Some(Request::OpenSession(id)) => Handled::Exit(RunOutcome::OpenSession(id)),
-                Some(Request::OpenBranch(id)) => Handled::Exit(RunOutcome::OpenBranch(id)),
+                Some(Request::OpenBranch(id, message, contract)) => {
+                    Handled::Exit(RunOutcome::OpenBranch(id, message, contract))
+                }
                 _ => Handled::Done,
             });
         }
@@ -316,25 +357,7 @@ impl Loop<'_> {
     fn message_key(&mut self, key: KeyEvent, workspace_id: &str) {
         let app = &mut *self.app;
         let client = self.client;
-        // A running capture owns the message box and its keys: there is no
-        // text being typed for them to mean anything else to, and the
-        // operator is speaking rather than looking for a modifier.
-        if self.audio.is_recording() {
-            match key {
-                k if keys::EDITOR_RECORD_FINISH.matches(k) || keys::EDITOR_RECORD.matches(k) => {
-                    self.audio.finish(app, client.clone())
-                }
-                k if keys::EDITOR_RECORD_CANCEL.matches(k) => {
-                    self.audio.cancel(app, client.clone())
-                }
-                k if keys::EDITOR_RECORD_LOUDER.matches(k) => self.audio.boost(app),
-                k if keys::EDITOR_RECORD_QUIETER.matches(k) => self.audio.quieten(app),
-                _ => {}
-            }
-            return;
-        }
-        if keys::EDITOR_RECORD.matches(key) {
-            self.audio.toggle(app, client.clone());
+        if handle_audio_key(&mut self.audio, app, client, key) {
             return;
         }
         input::handle_input_key(app, client, workspace_id, self.live, key)

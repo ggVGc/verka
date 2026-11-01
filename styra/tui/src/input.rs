@@ -350,25 +350,31 @@ pub fn handle_git_repository_prompt_key(app: &mut App, client: &Client, key: Key
     }
 }
 
-/// Keys for the history and checkout choices. Confirming closes the modal before the
-/// server call, so success can replace the screen and failure returns to it.
+/// The branch composer shares editing and launch controls with normal input.
 pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
     let Some(prompt) = app.branch_prompt.as_mut() else {
         return;
     };
-    match key {
-        k if BRANCH_NEXT.matches(k) => prompt.select_next(),
-        k if BRANCH_PREV.matches(k) => prompt.select_previous(),
-        k if BRANCH_CHANGE.matches(k) => prompt.change(),
-        k if BRANCH_CONFIRM.matches(k) => {
-            let at_ms = prompt.at_ms();
-            let history = prompt.history();
-            let checkout = prompt.checkout();
-            app.branch_prompt = None;
-            session::branch_session(app, client, at_ms, history, checkout);
+    if BRANCH_CHANGE.matches(key) {
+        prompt.change();
+    } else if handle_composer_key(&mut prompt.composer, key) {
+    } else if GLOBAL_LEAVE_MESSAGE.matches(key) {
+        app.branch_prompt = None;
+    } else if EDITOR_SEND.matches(key) || EDITOR_SEND_IN_BRANCH.matches(key) {
+        let message = prompt.composer.message();
+        if message.is_empty() {
+            return;
         }
-        k if BRANCH_CANCEL.matches(k) => app.branch_prompt = None,
-        _ => {}
+        let at_ms = prompt.at_ms();
+        let history = prompt.history();
+        let checkout = if EDITOR_SEND_IN_BRANCH.matches(key) {
+            styra_protocol::BranchCheckout::NewWorktree
+        } else {
+            styra_protocol::BranchCheckout::ShareSource
+        };
+        session::branch_session(app, client, at_ms, history, checkout, message);
+    } else {
+        handle_editor_controls(app, key);
     }
 }
 
@@ -1158,7 +1164,8 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
         insert::Outcome::Notice(notice) => app.show_warning(notice),
         insert::Outcome::Insert { path, notice } => {
             app.insert = None;
-            app.composer.insert(&path.display().to_string());
+            app.editor_composer_mut()
+                .insert(&path.display().to_string());
             if let Some(notice) = notice {
                 app.show_warning(notice);
             }
@@ -1170,7 +1177,8 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
             // message goes out; otherwise it waits for the launch. The path
             // goes in either way — the operator asked for it.
             crate::launch::grant_interaction_mount(app, mount);
-            app.composer.insert(&path.display().to_string());
+            app.editor_composer_mut()
+                .insert(&path.display().to_string());
         }
     }
 }
@@ -1259,19 +1267,15 @@ pub fn handle_input_key(
     live: &mut Attachment,
     key: KeyEvent,
 ) {
-    if app.composer.choosing() {
-        return handle_choosing_key(app, key);
+    if handle_composer_key(&mut app.composer, key) {
+        return;
     }
     match key {
         // With several boxes, Esc steps back to choosing between them; a
         // second Esc, from there, leaves as it does with one.
-        k if EDITOR_CHOOSE_BOX.matches(k) && app.composer.start_choosing() => {}
         k if GLOBAL_LEAVE_MESSAGE.matches(k) => leave_message(app),
-        k if EDITOR_ADD_BOX.matches(k) => app.composer.add_part(),
         // Choosing a shape is part of writing the message, so it lives in the
         // box rather than being a mode entered from outside it.
-        k if EDITOR_CONTRACT.matches(k) => app.outbox.cycle_contract(),
-        k if EDITOR_NEWLINE.matches(k) => app.composer.newline(),
         k if EDITOR_SEND.matches(k) || EDITOR_SEND_IN_BRANCH.matches(k) => {
             // A mid-turn move is refused by the server, which puts the
             // message back in the box with its reason.
@@ -1297,7 +1301,56 @@ pub fn handle_input_key(
                 }
             }
         }
-        k if EDITOR_DELETE_WORD.matches(k) => app.composer.delete_word(),
+        _ => handle_editor_controls(app, key),
+    }
+}
+
+/// Editing is identical in the normal and branch message boxes.
+fn handle_composer_key(composer: &mut crate::composer::Composer, key: KeyEvent) -> bool {
+    if composer.choosing() {
+        match key {
+            k if EDITOR_BOX_LEAVE.matches(k) => return false,
+            k if EDITOR_BOX_NEXT.matches(k) => composer.choose_next(),
+            k if EDITOR_BOX_PREV.matches(k) => composer.choose_previous(),
+            k if EDITOR_BOX_EDIT.matches(k) => composer.stop_choosing(),
+            k if EDITOR_BOX_DELETE.matches(k) => composer.remove_chosen(),
+            k if EDITOR_ADD_BOX.matches(k) => composer.add_part(),
+            _ => {}
+        }
+        return true;
+    }
+    match key {
+        k if EDITOR_CHOOSE_BOX.matches(k) && composer.start_choosing() => {}
+        k if EDITOR_ADD_BOX.matches(k) => composer.add_part(),
+        k if EDITOR_NEWLINE.matches(k) => composer.newline(),
+        k if EDITOR_DELETE_WORD.matches(k) => composer.delete_word(),
+        k if EDITOR_HISTORY_OLDER.matches(k) => composer.history_previous(),
+        k if EDITOR_HISTORY_NEWER.matches(k) => composer.history_next(),
+        k if k.code == KeyCode::Backspace => composer.backspace(),
+        k if !k
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            if let KeyCode::Char(ch) = k.code {
+                composer.char(ch);
+            } else {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+fn handle_editor_controls(app: &mut App, key: KeyEvent) {
+    match key {
+        k if EDITOR_CONTRACT.matches(k) => {
+            if let Some(prompt) = app.branch_prompt.as_mut() {
+                prompt.contract = session::next_contract(prompt.contract);
+            } else {
+                app.outbox.cycle_contract();
+            }
+        }
         k if EDITOR_LAUNCHER.matches(k) => app.open_launcher(),
         k if EDITOR_CYCLE_PROVIDER.matches(k) => app.open_provider_picker(),
         k if EDITOR_CYCLE_MODEL.matches(k) => app.open_model_picker(),
@@ -1307,25 +1360,8 @@ pub fn handle_input_key(
                 picker.active = crate::launcher::Field::Effort;
             }
         }
-        // Naming a file is part of writing the message, so it opens from the
-        // box rather than from the driva view that the grant it may ask for
-        // would otherwise have to be made in.
         k if EDITOR_INSERT_PATH.matches(k) => open_insert(app),
-        // Also from the box, so the turn about to be sent can be kept out of
-        // the history without leaving the message half-written.
         k if EDITOR_AUTO_COMMIT.matches(k) => toggle_auto_commit(app),
-        k if EDITOR_HISTORY_OLDER.matches(k) => app.composer.history_previous(),
-        k if EDITOR_HISTORY_NEWER.matches(k) => app.composer.history_next(),
-        k if k.code == KeyCode::Backspace => app.composer.backspace(),
-        // Everything else printable is the message itself, once the modified
-        // keys above have had their turn.
-        k if !k.modifiers.contains(KeyModifiers::CONTROL)
-            && !k.modifiers.contains(KeyModifiers::ALT) =>
-        {
-            if let KeyCode::Char(ch) = k.code {
-                app.composer.char(ch)
-            }
-        }
         _ => {}
     }
 }
@@ -1333,20 +1369,6 @@ pub fn handle_input_key(
 fn leave_message(app: &mut App) {
     app.branch_needs_prompt_name = false;
     app.enter_list();
-}
-
-/// Keys while choosing between the message's boxes: nothing is typed, so
-/// plain letters move, edit, and delete instead.
-fn handle_choosing_key(app: &mut App, key: KeyEvent) {
-    match key {
-        k if EDITOR_BOX_LEAVE.matches(k) => leave_message(app),
-        k if EDITOR_BOX_NEXT.matches(k) => app.composer.choose_next(),
-        k if EDITOR_BOX_PREV.matches(k) => app.composer.choose_previous(),
-        k if EDITOR_BOX_EDIT.matches(k) => app.composer.stop_choosing(),
-        k if EDITOR_BOX_DELETE.matches(k) => app.composer.remove_chosen(),
-        k if EDITOR_ADD_BOX.matches(k) => app.composer.add_part(),
-        _ => {}
-    }
 }
 
 #[cfg(test)]
@@ -1358,6 +1380,86 @@ mod tests {
     use styra_protocol::{
         AttributedMount, DrivaOptions, LaunchMount, Mount, MountAccess, MountOrigin,
     };
+
+    #[test]
+    fn branch_input_shares_editing_and_keeps_cancellation_and_model_changes_local() {
+        let selection = styra_protocol::agent::Selection::parse("codex").unwrap();
+        let mut app = App::new(selection.clone(), "source");
+        app.activity.status = Status::Running;
+        app.composer.set("source draft".into());
+        app.branch_prompt = Some(crate::branch::BranchPrompt::new(42, selection.clone()));
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        // Empty sends do not create or dismiss the branch.
+        handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
+        assert!(app.branch_prompt.is_some());
+        for ch in "q j k h l ?".chars() {
+            handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Char(ch)));
+        }
+        assert_eq!(
+            app.branch_prompt.as_ref().unwrap().composer.message(),
+            "q j k h l ?"
+        );
+        handle_branch_prompt_key(
+            &mut app,
+            &client,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT),
+        );
+        handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Char('x')));
+        handle_branch_prompt_key(
+            &mut app,
+            &client,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        );
+        app.editor_composer_mut().paste("second box");
+        assert_eq!(
+            app.branch_prompt.as_ref().unwrap().composer.parts(),
+            ["q j k h l ?\nx", "", "second box", ""]
+        );
+        for shortcut in ['l', 'p', 'o', 'e'] {
+            handle_branch_prompt_key(
+                &mut app,
+                &client,
+                KeyEvent::new(KeyCode::Char(shortcut), KeyModifiers::CONTROL),
+            );
+            assert!(app.launcher.is_some());
+            app.cancel_launcher();
+        }
+        app.launcher = Some(crate::launcher::Launcher::from_selection(
+            &styra_protocol::agent::Selection::parse("claude").unwrap(),
+            &[],
+            false,
+        ));
+        app.confirm_launcher();
+        assert_eq!(
+            app.branch_prompt.as_ref().unwrap().selection.provider,
+            styra_protocol::agent::Provider::Claude
+        );
+        assert_eq!(app.selection, selection);
+        assert!(app.take_request().is_none());
+        handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
+        assert!(app.branch_prompt.as_ref().unwrap().composer.choosing());
+        handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
+        assert!(app.branch_prompt.is_none());
+        assert_eq!(app.composer.message(), "source draft");
+    }
+
+    #[test]
+    fn failed_branch_creation_preserves_the_instruction() {
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
+            "source",
+        );
+        let mut prompt = crate::branch::BranchPrompt::new(42, app.selection.clone());
+        prompt.composer.set("keep this instruction".into());
+        app.branch_prompt = Some(prompt);
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(
+            app.branch_prompt.as_ref().unwrap().composer.message(),
+            "keep this instruction"
+        );
+        assert!(app.take_request().is_none());
+    }
 
     #[test]
     fn rename_from_events_prefills_edits_and_cancels_without_changing_the_name() {

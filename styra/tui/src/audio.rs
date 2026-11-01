@@ -576,7 +576,7 @@ impl AudioInput {
             applied = true;
             match result {
                 Completed::Transcript(transcript) => {
-                    app.composer.insert(transcript.trim());
+                    app.editor_composer_mut().insert(transcript.trim());
                     app.show_action_message("audio transcript inserted");
                 }
                 Completed::Failed(error) => {

@@ -138,7 +138,7 @@ impl Loop<'_> {
             }
             Some(Event::Paste(text)) => {
                 if paste_active {
-                    self.app.composer.paste(&text);
+                    self.app.editor_composer_mut().paste(&text);
                     self.dirty = true;
                 }
                 None
