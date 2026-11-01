@@ -265,13 +265,14 @@ fn render_tile(
         }
     };
     // The frame keeps its status color under the cursor: its heavier border
-    // marks selection, and the attached interaction has the navigator's `•`.
+    // marks selection, other tiles are dashed, and the attached interaction
+    // has the navigator's `•`.
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(if selected {
             BorderType::Thick
         } else {
-            BorderType::Rounded
+            BorderType::LightDoubleDashed
         })
         .border_style(Style::default().fg(border_color))
         .title(search::highlight_lines(vec![Line::from(title)], search).remove(0));
@@ -565,7 +566,7 @@ mod tests {
                     expected.fg,
                     "{status:?}, selected={selected}"
                 );
-                assert_eq!(corner.symbol(), if selected { "┏" } else { "╭" });
+                assert_eq!(corner.symbol(), if selected { "┏" } else { "┌" });
             }
         }
     }
@@ -776,11 +777,11 @@ mod tests {
         // two above one. Its inner area runs from (1, 1) to (149, 29).
         assert_eq!(
             cell(149, 1),
-            '╮',
+            '┐',
             "second tile meets the right border\n{screen}"
         );
-        assert_eq!(cell(1, 29), '╰', "third tile meets the bottom\n{screen}");
-        assert_eq!(cell(149, 29), '╯', "third tile spans the width\n{screen}");
+        assert_eq!(cell(1, 29), '└', "third tile meets the bottom\n{screen}");
+        assert_eq!(cell(149, 29), '┘', "third tile spans the width\n{screen}");
 
         view.tiles.push(tile("fourth", InteractionStatus::Idle));
         let (screen, feedback) = draw(&view, 201, 31);
