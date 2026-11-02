@@ -110,6 +110,26 @@ pub struct ActivityCounts {
     pub stopped: usize,
 }
 
+/// How the event list places its viewport around the selected entry. Each
+/// way of moving the list picks one, replacing whatever came before.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ListAnchor {
+    /// Keep the selected entry on screen with scrolloff. With the newest
+    /// entry selected, the list follows it as it grows.
+    #[default]
+    Selection,
+    /// Leave the viewport at the requested anchor while the selected entry's
+    /// summary line is on screen, instead of re-applying scrolloff: moving
+    /// between entries does not scroll.
+    Kept,
+    /// Place the selected entry in the middle of the viewport, so its
+    /// immediate history remains readable above it.
+    Centered,
+    /// Explicit viewport scrolling: the view moves by the scroll delta,
+    /// independently of the selection.
+    Free,
+}
+
 pub struct EventListView<'a> {
     pub chrome: PanelChrome,
     pub entries: Vec<EventEntry<'a>>,
@@ -131,22 +151,12 @@ pub struct EventListView<'a> {
     pub requested_row_offset: usize,
     /// Signed rendered-row movement to apply to the requested anchor.
     pub scroll_delta: i32,
-    /// Keep the selected entry on screen. Explicit viewport scrolling turns
-    /// this off so the view can move independently of the selection.
-    pub anchor_selection: bool,
-    /// With `anchor_selection`, leave the viewport at the requested anchor
-    /// while the selected entry's summary line is on screen, instead of
-    /// re-applying scrolloff: moving between entries does not scroll.
-    pub keep_viewport: bool,
+    /// Where the viewport sits relative to the selected entry.
+    pub anchor: ListAnchor,
     /// Whether an explicit move toward older entries permits scrolloff to
     /// reveal rows above the current viewport anchor. Live content updates do
     /// not set this: a row changing height must not look like navigation.
     pub moved_backward: bool,
-    /// On entering an interaction, place its selected newest entry close to
-    /// the top so its immediate history remains readable below it. This is a
-    /// rendered-line count, not an item count: wrapped entries count as the
-    /// lines they occupy.
-    pub max_lines_above_selection: Option<usize>,
     pub protocol: Protocol,
     pub links: LinkDisplay,
     /// The `/` search: what has been typed, and whether the prompt still has

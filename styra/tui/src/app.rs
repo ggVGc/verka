@@ -21,6 +21,7 @@ use styra_protocol::agent::{Provider, Selection};
 use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode};
 use styra_protocol::Contract;
 use styra_protocol::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
+use styra_ui::event_list::ListAnchor;
 use styra_ui::scroll::Scroll;
 use styra_ui::search::Search;
 
@@ -1304,8 +1305,9 @@ impl App {
     /// a viewport that navigation left alone.
     pub(crate) fn select_tail(&mut self) {
         self.timeline.select_tail();
-        self.timeline.max_lines_above_selection = None;
-        self.timeline.keep_viewport = false;
+        if self.timeline.list_anchor != ListAnchor::Free {
+            self.timeline.list_anchor = ListAnchor::Selection;
+        }
         self.preview.scroll.reset();
         self.entry_log_follow_selection();
     }
@@ -1318,9 +1320,7 @@ impl App {
     // [`Timeline::select_forward`] for what "moved" means.
 
     fn moved(&mut self, moved: bool) {
-        self.timeline.max_lines_above_selection = None;
-        self.timeline.anchor_selection = true;
-        self.timeline.keep_viewport = true;
+        self.timeline.list_anchor = ListAnchor::Kept;
         self.timeline.list_scroll_delta = 0;
         if moved {
             self.preview.scroll.reset();
@@ -1332,7 +1332,7 @@ impl App {
     /// rendered last no longer means anything; anchor afresh on the selection.
     fn refiltered(&mut self, moved: bool) {
         self.moved(moved);
-        self.timeline.keep_viewport = false;
+        self.timeline.list_anchor = ListAnchor::Selection;
         self.timeline.list_row_offset = 0;
     }
 
@@ -1421,10 +1421,10 @@ impl App {
     }
 
     /// Select the newest entry of an interaction just opened from the live
-    /// roster, keeping at most five rendered lines of history above it.
+    /// roster, centered in the viewport.
     pub(crate) fn select_last_on_interaction_open(&mut self) {
         self.select_last();
-        self.timeline.max_lines_above_selection = Some(5);
+        self.timeline.list_anchor = ListAnchor::Centered;
     }
 
     /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
@@ -2303,14 +2303,13 @@ mod tests {
         let mut app = app();
         app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
         app.select_last_on_interaction_open();
-        assert_eq!(app.timeline.max_lines_above_selection, Some(5));
+        assert_eq!(app.timeline.list_anchor, ListAnchor::Centered);
 
         app.push_event(AgentEvent::UserMessage {
             text: "next".into(),
         });
 
-        assert_eq!(app.timeline.max_lines_above_selection, None);
-        assert!(!app.timeline.keep_viewport);
+        assert_eq!(app.timeline.list_anchor, ListAnchor::Selection);
     }
 
     #[test]
@@ -2357,13 +2356,12 @@ mod tests {
                 text: "latest response".into(),
             });
             app.select_last_on_interaction_open();
-            assert!(app.timeline.max_lines_above_selection.is_some());
+            assert_eq!(app.timeline.list_anchor, ListAnchor::Centered);
             let selected = app.timeline.selected;
 
             scroll(&mut app);
 
-            assert_eq!(app.timeline.max_lines_above_selection, None);
-            assert!(!app.timeline.anchor_selection);
+            assert_eq!(app.timeline.list_anchor, ListAnchor::Free);
             assert_eq!(app.timeline.list_scroll_delta, delta);
             assert_eq!(app.timeline.selected, selected);
         }
@@ -2381,7 +2379,7 @@ mod tests {
 
         app.scroll_interaction_up();
         assert_eq!(app.timeline.selected, selected);
-        assert!(!app.timeline.anchor_selection);
+        assert_eq!(app.timeline.list_anchor, ListAnchor::Free);
         assert_eq!(app.timeline.list_scroll_delta, -10);
 
         app.timeline.list_offset = 1;
@@ -2391,8 +2389,9 @@ mod tests {
         assert_eq!(app.timeline.selected, selected);
 
         app.select_prev_line();
-        assert!(
-            app.timeline.anchor_selection,
+        assert_ne!(
+            app.timeline.list_anchor,
+            ListAnchor::Free,
             "selection navigation reanchors"
         );
     }

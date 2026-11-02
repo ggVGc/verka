@@ -1390,6 +1390,7 @@ mod tests {
     use styra_protocol::{
         AttributedMount, DrivaOptions, LaunchMount, Mount, MountAccess, MountOrigin,
     };
+    use styra_ui::event_list::ListAnchor;
 
     #[test]
     fn branch_input_shares_editing_and_keeps_cancellation_and_model_changes_local() {
@@ -3048,7 +3049,7 @@ mod tests {
         assert_eq!(app.view, View::Events);
         assert_eq!(app.timeline.selected, expected);
         assert!(!app.timeline.follow);
-        assert!(app.timeline.anchor_selection);
+        assert_ne!(app.timeline.list_anchor, ListAnchor::Free);
         assert!(app.timeline.entries[expected].expanded);
 
         app.view = View::CheckoutDiff;

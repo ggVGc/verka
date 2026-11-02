@@ -230,23 +230,19 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     // the selection reads as a single line rather than as a block.
     let mut state = ListState::default();
     let position = view.entries.iter().position(|entry| entry.selected);
-    let anchored_position = if view.anchor_selection {
-        position
-    } else {
+    let anchored_position = if view.anchor == ListAnchor::Free {
         None
+    } else {
+        position
     };
-    let tail_in_view = view.anchor_selection
-        && !view.keep_viewport
+    let tail_in_view = view.anchor == ListAnchor::Selection
         && position.is_some_and(|selected| selected + 1 == view.entries.len());
     let response_space = tail_in_view
         && matches!(
             view.entries[position.unwrap()].event,
             AgentEvent::UserMessage { .. }
         );
-    let (offset, row_offset) = if response_space
-        || (tail_in_view
-            && view.requested_row_offset > 0
-            && view.max_lines_above_selection.is_none())
+    let (offset, row_offset) = if response_space || (tail_in_view && view.requested_row_offset > 0)
     {
         tail_space_anchor(
             view.requested_offset,
@@ -256,10 +252,9 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
             viewport_height,
             if response_space { 3 } else { 0 },
         )
-    } else if let Some(maximum) = view.max_lines_above_selection {
-        selection_top_anchor(position, &mut items, maximum)
-    } else if let Some(kept) = view
-        .keep_viewport
+    } else if view.anchor == ListAnchor::Centered {
+        selection_center_anchor(position, &mut items, viewport_height)
+    } else if let Some(kept) = (view.anchor == ListAnchor::Kept)
         .then_some(anchored_position)
         .flatten()
         .and_then(|selected| {
@@ -273,7 +268,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         })
     {
         kept
-    } else if view.anchor_selection {
+    } else if view.anchor != ListAnchor::Free {
         (
             list_offset_with_scrolloff(
                 view.requested_offset,
@@ -316,10 +311,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         entry_render,
         row_offset,
     );
-    let visible_selection = view
-        .anchor_selection
-        .then_some(position)
-        .flatten()
+    let visible_selection = anchored_position
         .filter(|position| *position >= offset && *position < offset + items.len())
         .map(|position| position - offset);
     let list = List::new(items).block(block);
@@ -386,6 +378,23 @@ fn selection_top_anchor(
         entry = previous;
     }
     (0, 0)
+}
+
+/// Place the selected entry in the middle of the viewport, with as much
+/// history above it as below. An entry too tall to be centered starts at the
+/// top instead.
+fn selection_center_anchor(
+    selected: Option<usize>,
+    heights: &mut impl Heights,
+    viewport_height: usize,
+) -> (usize, usize) {
+    let Some(selected) = selected else {
+        return (0, 0);
+    };
+    match viewport_height.saturating_sub(heights.height(selected)) / 2 {
+        0 => (selected, 0),
+        above => selection_top_anchor(Some(selected), heights, above),
+    }
 }
 
 /// Leave a few rows below a newly submitted message for the response. Move
@@ -2094,10 +2103,8 @@ mod tests {
             requested_offset: 0,
             requested_row_offset: 0,
             scroll_delta: 0,
-            anchor_selection: true,
-            keep_viewport: false,
+            anchor: ListAnchor::Selection,
             moved_backward: false,
-            max_lines_above_selection: None,
             protocol: Protocol::default(),
             links: LinkDisplay::Compact,
             search: SearchView {
@@ -2145,7 +2152,11 @@ mod tests {
         let view = EventListView {
             requested_offset,
             scroll_delta,
-            anchor_selection,
+            anchor: if anchor_selection {
+                ListAnchor::Selection
+            } else {
+                ListAnchor::Free
+            },
             ..list_view(entries)
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
@@ -2438,9 +2449,11 @@ mod tests {
             event: &from,
             ..entry.clone()
         };
-        let from_rows = vec![
-            summary_line(&from_entry, SummaryContext::EventList, Protocol::default()).to_string(),
-        ];
+        let from_rows =
+            vec![
+                summary_line(&from_entry, SummaryContext::EventList, Protocol::default())
+                    .to_string(),
+            ];
         assert!(
             from_rows[0].contains("▌ from: Retry backoff"),
             "{from_rows:#?}"
@@ -2851,15 +2864,33 @@ mod tests {
     }
 
     #[test]
-    fn opening_an_interaction_leaves_at_most_five_rendered_lines_above_its_tail() {
-        // The eight-line entry immediately before the selected tail is clipped
-        // by three rows, leaving exactly its last five lines above the tail.
+    fn opening_an_interaction_centers_its_tail_in_the_viewport() {
+        // A one-line tail in a ten-row viewport gets four lines above it: the
+        // eight-line entry before it is clipped to its last four.
         let heights = [3, 8, 1];
-        assert_eq!(selection_top_anchor(Some(2), &mut &heights[..], 5), (1, 3));
+        assert_eq!(
+            selection_center_anchor(Some(2), &mut &heights[..], 10),
+            (1, 4)
+        );
+
+        // The selected entry's own height is centered, not just its first row.
+        assert_eq!(
+            selection_center_anchor(Some(2), &mut &[3, 8, 4][..], 10),
+            (1, 5)
+        );
+
+        // A tail taller than the viewport starts at the top.
+        assert_eq!(
+            selection_center_anchor(Some(1), &mut &[3, 12][..], 10),
+            (1, 0)
+        );
 
         // A short interaction never loses its beginning merely to create the
         // preferred position for its tail.
-        assert_eq!(selection_top_anchor(Some(1), &mut &[3, 1][..], 5), (0, 0));
+        assert_eq!(
+            selection_center_anchor(Some(1), &mut &[3, 1][..], 20),
+            (0, 0)
+        );
     }
 
     #[test]

@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use styra_protocol::event::{AgentEvent, BranchDirection, DetailBlock};
 use styra_protocol::Contract;
+use styra_ui::event_list::ListAnchor;
 
 /// A stable handle to one row of the list.
 ///
@@ -198,21 +199,16 @@ pub struct Timeline {
     /// Signed rendered-row movement waiting for the renderer, which alone
     /// knows the wrapped heights needed to resolve it.
     pub list_scroll_delta: i32,
-    /// Whether rendering should bring the selection back into view. Explicit
-    /// viewport scrolling clears this until selection navigation resumes.
-    pub anchor_selection: bool,
-    /// Whether a selection move should leave the viewport where it is,
-    /// scrolling only when the selected entry would otherwise be out of sight.
-    /// Navigating sets this; new entries arriving while the newest entry is
-    /// selected clear it, so following the tail scrolls as before.
-    pub keep_viewport: bool,
+    /// Where rendering places the viewport around the selection. Navigating
+    /// keeps the viewport where it is, scrolling only when the selected entry
+    /// would otherwise be out of sight; new entries arriving while the newest
+    /// entry is selected return to following it; explicit viewport scrolling
+    /// frees the view until selection navigation resumes.
+    pub list_anchor: ListAnchor,
     /// Selection index used for the last rendered frame. Comparing it with
     /// `selected` distinguishes deliberate upward navigation from a live row
     /// merely changing height between frames.
     pub rendered_selection: Option<usize>,
-    /// A freshly opened interaction puts its newest selected entry near the
-    /// top of the viewport, leaving a small amount of immediate history above.
-    pub max_lines_above_selection: Option<usize>,
 }
 
 impl Default for Timeline {
@@ -227,10 +223,8 @@ impl Default for Timeline {
             list_offset: 0,
             list_row_offset: 0,
             list_scroll_delta: 0,
-            anchor_selection: true,
-            keep_viewport: false,
+            list_anchor: ListAnchor::Selection,
             rendered_selection: None,
-            max_lines_above_selection: None,
         }
     }
 }
@@ -239,17 +233,15 @@ impl Timeline {
     /// Scroll the rendered interaction by ten text rows without changing
     /// which entry is selected.
     pub fn scroll_view_down(&mut self) {
-        self.max_lines_above_selection = None;
         self.list_scroll_delta = self.list_scroll_delta.saturating_add(10);
-        self.anchor_selection = false;
+        self.list_anchor = ListAnchor::Free;
     }
 
     /// Scroll the rendered interaction toward its beginning without changing
     /// which entry is selected.
     pub fn scroll_view_up(&mut self) {
-        self.max_lines_above_selection = None;
         self.list_scroll_delta = self.list_scroll_delta.saturating_sub(10);
-        self.anchor_selection = false;
+        self.list_anchor = ListAnchor::Free;
     }
 
     /// Append a row, giving it an identity no other row has or will have.

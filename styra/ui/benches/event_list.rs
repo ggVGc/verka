@@ -13,7 +13,7 @@ use styra_protocol::event::{AgentEvent, Protocol};
 use styra_ui::chrome::{PanelChrome, StatusTone};
 use styra_ui::event_list::{
     entry_item, render, ActivityCounts, EntryRender, EntryVersion, EventEntry, EventListStatus,
-    EventListView,
+    EventListView, ListAnchor,
 };
 use styra_ui::markdown::LinkDisplay;
 use styra_ui::search::SearchView;
@@ -134,10 +134,8 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
         requested_offset: selected,
         requested_row_offset: 0,
         scroll_delta: 0,
-        anchor_selection: true,
-        keep_viewport: false,
+        anchor: ListAnchor::Selection,
         moved_backward: false,
-        max_lines_above_selection: None,
         protocol: Protocol::default(),
         links: LinkDisplay::Compact,
         search: SearchView {

@@ -160,13 +160,11 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         requested_offset: app.timeline.list_offset,
         requested_row_offset: app.timeline.list_row_offset,
         scroll_delta: app.timeline.list_scroll_delta,
-        anchor_selection: app.timeline.anchor_selection,
-        keep_viewport: app.timeline.keep_viewport,
+        anchor: app.timeline.list_anchor,
         moved_backward: app
             .timeline
             .rendered_selection
             .is_some_and(|rendered| app.timeline.selected < rendered),
-        max_lines_above_selection: app.timeline.max_lines_above_selection,
         protocol: app.selection.provider.protocol(),
         links: ui_link_display(app.link_display),
         search: app.search.view(),
@@ -378,7 +376,7 @@ mod tests {
             text: "step 12: the newest".into(),
         });
         let view = view(&app);
-        assert!(view.anchor_selection);
+        assert_eq!(view.anchor, styra_ui::event_list::ListAnchor::Selection);
         assert!(view.entries.last().unwrap().selected);
         assert!(
             matches!(view.entries.last().unwrap().event, AgentEvent::AgentMessage { text } if text == "step 12: the newest")

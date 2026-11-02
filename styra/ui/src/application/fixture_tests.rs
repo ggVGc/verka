@@ -22,7 +22,6 @@ fn version() -> EntryVersion {
 fn list(events: &[AgentEvent]) -> EventListView<'_> {
     let selected = 0;
     let requested_offset = 0;
-    let anchor_selection = true;
     let scroll_delta = 0;
     let entries = events
         .iter()
@@ -70,10 +69,8 @@ fn list(events: &[AgentEvent]) -> EventListView<'_> {
         requested_offset,
         requested_row_offset: 0,
         scroll_delta,
-        anchor_selection,
-        keep_viewport: false,
+        anchor: ListAnchor::Selection,
         moved_backward: false,
-        max_lines_above_selection: None,
         protocol: Protocol::default(),
         links: LinkDisplay::Compact,
         search: SearchView {
