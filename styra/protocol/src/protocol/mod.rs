@@ -525,6 +525,11 @@ pub enum Request {
         selection: Option<Selection>,
     },
     RenameSession(RenameSession),
+    /// Ask an errand for an editable Session name, read from its first
+    /// prompt. The Session keeps its name until a rename saves one.
+    GenerateSessionName {
+        id: String,
+    },
     /// Replace a Session's tags. Tags live with the durable Session, so they
     /// remain available after its live interaction stops or resumes.
     SetSessionTags(SetSessionTags),
@@ -862,6 +867,7 @@ pub enum Response {
     SessionConverted(SessionSummary),
     SessionBranched(SessionSummary),
     SessionRenamed(SessionSummary),
+    SessionName(String),
     SessionTagsUpdated(SessionSummary),
     Tags(Vec<String>),
     SessionComposer(ComposerState),

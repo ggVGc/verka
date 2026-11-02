@@ -382,6 +382,8 @@ pub enum Request {
     Retarget(String),
     Integrate(String),
     GenerateIntegrationMessage,
+    /// Fill the rename prompt with a name an errand suggests.
+    GenerateSessionName,
     /// Have each file of the checkout diff on screen described, in an edit
     /// report (see [`crate::edit_report`]), or only the file at this path,
     /// keeping the report's other descriptions.

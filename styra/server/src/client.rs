@@ -220,6 +220,13 @@ impl Client {
         }
     }
 
+    pub fn generate_session_name(&self, id: &str) -> Result<String> {
+        match self.request(Request::GenerateSessionName { id: id.into() })? {
+            Response::SessionName(name) => Ok(name),
+            other => unexpected("session_name", other),
+        }
+    }
+
     /// Describe each of `files` — what changed and why — and keep the report
     /// with the Session, with the earlier report's other files when
     /// `keep_others`. Takes as long as the errands it runs: call it off any
@@ -984,6 +991,7 @@ fn request_operation(request: &Request) -> &'static str {
         Request::SessionRebaseStatus { .. } => "session_rebase_status",
         Request::IntegrateSession { .. } => "integrate_session",
         Request::GenerateIntegrationMessage { .. } => "generate_integration_message",
+        Request::GenerateSessionName { .. } => "generate_session_name",
         Request::GenerateEditReport { .. } => "generate_edit_report",
         Request::EditReport { .. } => "edit_report",
         Request::SessionIntegrationResult { .. } => "session_integration_result",

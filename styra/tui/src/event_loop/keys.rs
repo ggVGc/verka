@@ -229,7 +229,7 @@ impl Loop<'_> {
             return Ok(Handled::Done);
         }
         if app.rename_prompt.is_some() {
-            input::handle_rename_prompt_key(app, client, key);
+            self.rename_prompt_key(key)?;
             return Ok(Handled::Done);
         }
         // The branching choice is modal and can replace the current Session
@@ -498,6 +498,26 @@ impl Loop<'_> {
         }
         // An Apply can have queued a Workspace effect.
         self.submit_workspace_launch_now(workspace_id);
+    }
+
+    fn rename_prompt_key(&mut self, key: KeyEvent) -> Result<()> {
+        let client = self.client;
+        input::handle_rename_prompt_key(self.app, client, key);
+        if self.app.requests.front() != Some(&Request::GenerateSessionName) {
+            return Ok(());
+        }
+        self.app.take_request();
+        let id = self.app.session_id.clone();
+        let generated = blocked_on(self.terminal, self.app, "generating name…", |_| {
+            client.generate_session_name(&id)
+        })?;
+        match generated {
+            Ok(name) => self.app.rename_prompt = Some(name),
+            Err(error) => self
+                .app
+                .show_error(format!("could not generate name: {error:#}")),
+        }
+        Ok(())
     }
 
     fn integration_prompt_key(&mut self, key: KeyEvent) -> Result<()> {

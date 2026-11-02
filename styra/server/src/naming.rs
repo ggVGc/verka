@@ -73,6 +73,23 @@ pub fn topic_for_prompt(selection: &Selection, prompt: Option<&str>) -> Option<T
     }
 }
 
+/// A fresh name for the interaction whose first prompt is `prompt`, asked for
+/// by an operator renaming it.
+///
+/// Unlike [`topic_for_prompt`] this one fails: the operator is waiting on the
+/// answer, and a fallback cut from the prompt would read as if the model had
+/// written it.
+pub fn name_for_prompt(selection: &Selection, prompt: Option<&str>) -> anyhow::Result<String> {
+    use anyhow::Context;
+    let prompt = prompt
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .context("this interaction has no first prompt to name it after")?;
+    let answer = Errand::new(selection.provider, instruction(prompt)).answer()?;
+    let fragment = branch_fragment(&answer).context("the model's answer had no usable words")?;
+    Ok(title(&fragment))
+}
+
 /// Ask the operator's provider for a topic, or `None` if anything at all goes
 /// wrong on the way. Nothing here is worth an error to the caller: the
 /// fallback is as good a topic, only blunter.
@@ -184,6 +201,15 @@ mod tests {
         let selection = Selection::new(Provider::Claude);
         assert!(topic_for_prompt(&selection, None).is_none());
         assert!(topic_for_prompt(&selection, Some("   \n ")).is_none());
+    }
+
+    /// An operator asking for a name is told why there is none, rather than
+    /// handed a fallback, and no errand runs to find out.
+    #[test]
+    fn a_requested_name_needs_a_prompt() {
+        let selection = Selection::new(Provider::Claude);
+        assert!(name_for_prompt(&selection, None).is_err());
+        assert!(name_for_prompt(&selection, Some("  ")).is_err());
     }
 
     /// The prompt is shown to the model as text under a heading, bounded, and

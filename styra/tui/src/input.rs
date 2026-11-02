@@ -46,6 +46,9 @@ pub fn handle_rename_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => app.rename_prompt = None,
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.ask(Request::GenerateSessionName)
+        }
         KeyCode::Enter => {
             let name = (!text.trim().is_empty()).then_some(text.as_str());
             match client.rename_session(&app.session_id, name) {
@@ -1503,6 +1506,23 @@ mod tests {
         handle_rename_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
         assert!(app.rename_prompt.is_none());
         assert_eq!(app.interactions.name("session-1"), Some("Original"));
+    }
+
+    #[test]
+    fn rename_ctrl_g_asks_for_a_generated_name_and_keeps_the_draft() {
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
+            "session-1",
+        );
+        app.rename_prompt = Some("Draft".into());
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        handle_rename_prompt_key(
+            &mut app,
+            &client,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.take_request(), Some(Request::GenerateSessionName));
+        assert_eq!(app.rename_prompt.as_deref(), Some("Draft"));
     }
 
     #[test]

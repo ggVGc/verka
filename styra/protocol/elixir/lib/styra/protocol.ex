@@ -242,6 +242,13 @@ defmodule Styra.Protocol do
           ]
         }},
         %{name: "rename_session", payload: %{kind: :newtype, type: %{kind: :ref, name: "RenameSession"}}},
+        %{name: "generate_session_name", payload: %{
+          kind: :struct,
+          deny_unknown_fields: true,
+          fields: [
+            %{name: "id", required: true, type: %{kind: :string}}
+          ]
+        }},
         %{name: "set_session_tags", payload: %{kind: :newtype, type: %{kind: :ref, name: "SetSessionTags"}}},
         %{name: "list_tags", payload: %{kind: :unit}},
         %{name: "session_composer", payload: %{
@@ -527,6 +534,7 @@ defmodule Styra.Protocol do
         %{name: "session_converted", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_branched", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_renamed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
+        %{name: "session_name", payload: %{kind: :newtype, type: %{kind: :string}}},
         %{name: "session_tags_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "tags", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :string}}}},
         %{name: "session_composer", payload: %{kind: :newtype, type: %{kind: :ref, name: "ComposerState"}}},
@@ -2152,6 +2160,7 @@ defmodule Styra.Protocol do
     "convert_session_provider",
     "branch_session",
     "rename_session",
+    "generate_session_name",
     "set_session_tags",
     "list_tags",
     "session_composer",
@@ -3116,6 +3125,19 @@ defmodule Styra.Protocol do
     def rename_session!(data), do: Styra.Protocol.build!("rename_session", data)
 
     @doc ~S"""
+    Ask an errand for an editable Session name, read from its first
+    prompt. The Session keeps its name until a rename saves one.
+
+    Fields of `data`:
+
+      * `id`  string
+    """
+    def generate_session_name(data), do: Styra.Protocol.build("generate_session_name", data)
+
+    @doc "`generate_session_name/1`, raising on a request the server would refuse."
+    def generate_session_name!(data), do: Styra.Protocol.build!("generate_session_name", data)
+
+    @doc ~S"""
     Replace a Session's tags. Tags live with the durable Session, so they
     remain available after its live interaction stops or resumes.
 
@@ -3692,6 +3714,7 @@ defmodule Styra.Protocol.Response do
     {:session_converted, "session_converted"},
     {:session_branched, "session_branched"},
     {:session_renamed, "session_renamed"},
+    {:session_name, "session_name"},
     {:session_tags_updated, "session_tags_updated"},
     {:tags, "tags"},
     {:session_composer, "session_composer"},
@@ -3800,6 +3823,8 @@ defmodule Styra.Protocol.Response do
   def session_branched, do: "session_branched"
 
   def session_renamed, do: "session_renamed"
+
+  def session_name, do: "session_name"
 
   def session_tags_updated, do: "session_tags_updated"
 

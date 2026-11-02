@@ -46,6 +46,7 @@ pub(crate) fn scope(request: &Request) -> Scope<'_> {
         | Request::TurnAnswer { .. }
         | Request::QuotaLog
         | Request::GenerateIntegrationMessage { .. }
+        | Request::GenerateSessionName { .. }
         // A description of the checkout kept beside the Session, regenerable
         // at will, rather than a change to it; and its payload is the whole
         // diff, which the ledger would otherwise copy.

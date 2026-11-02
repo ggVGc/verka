@@ -52,7 +52,9 @@ impl Loop<'_> {
             Request::Rebase => start_rebase(app, client, None),
             Request::Retarget(target) => start_rebase(app, client, Some(&target)),
             Request::Quit => return Ok(Some(RunOutcome::Quit)),
-            Request::Integrate(_) | Request::GenerateIntegrationMessage => {}
+            Request::Integrate(_)
+            | Request::GenerateIntegrationMessage
+            | Request::GenerateSessionName => {}
             Request::Workspace => return self.pick_workspace(workspace_id),
             Request::OpenSession(id) => return Ok(Some(RunOutcome::OpenSession(id))),
             Request::OpenBranch(id, message, contract) => {

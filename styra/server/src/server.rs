@@ -4247,6 +4247,7 @@ impl ServerState {
             | Request::TurnAnswer { id, .. }
             | Request::SessionComposer { id }
             | Request::GenerateIntegrationMessage { id }
+            | Request::GenerateSessionName { id }
             | Request::GenerateEditReport { id, .. }
             | Request::EditReport { id }
             | Request::SessionBranchHistory { id }
@@ -4523,6 +4524,13 @@ impl ServerState {
             Request::GenerateIntegrationMessage { id } => Ok(Response::IntegrationMessage(
                 self.generate_integration_message(&id)?,
             )),
+            Request::GenerateSessionName { id } => {
+                let session = self.stored_summary(&id)?;
+                Ok(Response::SessionName(crate::naming::name_for_prompt(
+                    &session.selection,
+                    session.first_prompt.as_deref(),
+                )?))
+            }
             Request::GenerateEditReport {
                 id,
                 base,

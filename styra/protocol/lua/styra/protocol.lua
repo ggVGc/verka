@@ -232,6 +232,13 @@ M.types.Request = {
       },
     } },
     { name = "rename_session", payload = { kind = "newtype", type = { kind = "ref", name = "RenameSession" } } },
+    { name = "generate_session_name", payload = {
+      kind = "struct",
+      deny_unknown_fields = true,
+      fields = {
+        { name = "id", required = true, type = { kind = "string" } },
+      },
+    } },
     { name = "set_session_tags", payload = { kind = "newtype", type = { kind = "ref", name = "SetSessionTags" } } },
     { name = "list_tags", payload = { kind = "unit" } },
     { name = "session_composer", payload = {
@@ -517,6 +524,7 @@ M.types.Response = {
     { name = "session_converted", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "session_branched", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "session_renamed", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
+    { name = "session_name", payload = { kind = "newtype", type = { kind = "string" } } },
     { name = "session_tags_updated", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "tags", payload = { kind = "newtype", type = { kind = "list", item = { kind = "string" } } } },
     { name = "session_composer", payload = { kind = "newtype", type = { kind = "ref", name = "ComposerState" } } },
@@ -2098,7 +2106,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "integrate_session", "generate_integration_message", "generate_edit_report", "edit_report", "session_integration_result", "rebase_session", "retarget_session", "session_branch_history", "restore_session_branch", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "start_project_action", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "diff_branches", "set_diff_branch", "diff_base", "snapshot_turn_diff", "shutdown" }
+M.enums.Request = { "integrate_session", "generate_integration_message", "generate_edit_report", "edit_report", "session_integration_result", "rebase_session", "retarget_session", "session_branch_history", "restore_session_branch", "session_rebase_status", "health", "create_workspace", "list_workspaces", "list_deleted_workspaces", "delete_workspace", "restore_workspace", "workspace", "workspace_for_path", "rename_workspace", "set_workspace_git_repository", "set_workspace_host_path", "workspace_launch", "create_session", "plan_session", "list_templates", "list_models", "remember_model", "resume_session", "create_session_worktree", "clean_worktrees", "list_worktrees", "convert_session_provider", "branch_session", "rename_session", "generate_session_name", "set_session_tags", "list_tags", "session_composer", "set_session_composer", "transcribe_audio", "audio_recording_started", "audio_recording_stopped", "audio_transcription_error", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "set_interaction_auto_commit", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "set_session_completed", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "start_project_action", "turn_answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "diff_branches", "set_diff_branch", "diff_base", "snapshot_turn_diff", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   INTEGRATE_SESSION = "integrate_session",
@@ -2135,6 +2143,7 @@ M.Request = {
   CONVERT_SESSION_PROVIDER = "convert_session_provider",
   BRANCH_SESSION = "branch_session",
   RENAME_SESSION = "rename_session",
+  GENERATE_SESSION_NAME = "generate_session_name",
   SET_SESSION_TAGS = "set_session_tags",
   LIST_TAGS = "list_tags",
   SESSION_COMPOSER = "session_composer",
@@ -2176,7 +2185,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "rebase_started", "session_branch_history", "session_rebase_status", "integration_started", "integration_message", "edit_report", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "project_action_started", "answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff", "diff_base", "diff_branches" }
+M.enums.Response = { "rebase_started", "session_branch_history", "session_rebase_status", "integration_started", "integration_message", "edit_report", "session_integration_result", "health", "workspace_created", "workspaces", "workspace", "workspace_for_path", "workspace_renamed", "workspace_git_repository_updated", "workspace_host_path_updated", "workspace_launch", "session_created", "session_plan", "templates", "models", "model_remembered", "session_resumed", "session_worktree_created", "worktrees_cleaned", "worktrees", "session_converted", "session_branched", "session_renamed", "session_name", "session_tags_updated", "tags", "session_composer", "session_composer_stored", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "audio_transcript", "shell", "project_action_started", "answer", "quota_log", "interaction_actions", "interaction_processes", "interaction_driva", "snapshot_turn_diff", "diff_base", "diff_branches" }
 --- Wire spellings of `Response`.
 M.Response = {
   REBASE_STARTED = "rebase_started",
@@ -2207,6 +2216,7 @@ M.Response = {
   SESSION_CONVERTED = "session_converted",
   SESSION_BRANCHED = "session_branched",
   SESSION_RENAMED = "session_renamed",
+  SESSION_NAME = "session_name",
   SESSION_TAGS_UPDATED = "session_tags_updated",
   TAGS = "tags",
   SESSION_COMPOSER = "session_composer",
@@ -3202,6 +3212,15 @@ end
 ---   name  string|null
 function M.request.rename_session(data)
   return M.build("rename_session", data)
+end
+
+--- Ask an errand for an editable Session name, read from its first
+--- prompt. The Session keeps its name until a rename saves one.
+---
+--- Fields of `data`:
+---   id  string
+function M.request.generate_session_name(data)
+  return M.build("generate_session_name", data)
 end
 
 --- Replace a Session's tags. Tags live with the durable Session, so they
