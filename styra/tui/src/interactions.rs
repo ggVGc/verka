@@ -79,8 +79,9 @@ pub struct LiveInteractions {
     /// Set while the filter is being typed, when every printable key is part
     /// of the term rather than a command on the list.
     typing_filter: bool,
-    /// While the Workspace jump is open over the navigator, the Workspaces its
-    /// query leaves: only their rows are listed. `None` otherwise.
+    /// While the Workspace jump is open over the navigator, the Workspace it
+    /// highlights (none if its query leaves nothing): only its rows are
+    /// listed. `None` otherwise.
     pub jump_workspaces: Option<Vec<String>>,
     /// Whether a listing has been taken yet. The first one is what was already
     /// running when this client arrived, so nothing in it is newly arrived.

@@ -5,18 +5,18 @@ use anyhow::Result;
 
 use crate::app::{App, Focus, LaunchPolicy, View};
 use crate::session::{self, Attachment};
-use crate::workspace_jump::WorkspaceJump;
 use styra_protocol::{InteractionSummary, LogEntry};
 use styra_server::Client;
 
-/// Narrow an open navigator to the Workspaces the jump's query leaves, or
-/// lift that narrowing once the jump has closed.
+/// Narrow an open navigator to the Workspace highlighted in the jump — none,
+/// when the query leaves nothing to highlight — or lift that narrowing once
+/// the jump has closed.
 pub(super) fn narrow_navigator_to_jump(app: &mut App) {
     app.interactions.jump_workspaces = app
         .workspace_jump
         .as_ref()
         .filter(|_| app.interactions.open)
-        .map(WorkspaceJump::matching);
+        .map(|jump| jump.selected().into_iter().map(str::to_owned).collect());
 }
 
 /// Open the live interactions with the cursor on the first of `target`'s, the
@@ -194,6 +194,7 @@ pub(super) fn ensure_listed(app: &mut App, client: &Client) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace_jump::WorkspaceJump;
     use crossterm::event::KeyCode;
     use styra_protocol::{InteractionActivity, WorkspaceSummary};
 
@@ -210,7 +211,7 @@ mod tests {
     }
 
     /// Opening the jump over the navigator keeps it open, listing only the
-    /// Workspaces the jump's query leaves; closing the jump lists them all.
+    /// Workspace the jump highlights; closing the jump lists them all.
     #[test]
     fn the_workspace_jump_narrows_the_open_navigator() {
         let press = |character| crossterm::event::KeyEvent::from(KeyCode::Char(character));
@@ -237,16 +238,21 @@ mod tests {
         app.interactions.open(interactions, workspaces);
         app.workspace_jump = Some(jump);
         narrow_navigator_to_jump(&mut app);
-        assert_eq!(app.interactions.visible_indices("", None), vec![0, 1]);
+        assert_eq!(app.interactions.visible_indices("", None), vec![0]);
 
-        for character in "oth".chars() {
+        let jump = app.workspace_jump.as_mut().unwrap();
+        jump.handle_key(crossterm::event::KeyEvent::from(KeyCode::Down));
+        narrow_navigator_to_jump(&mut app);
+        assert_eq!(app.interactions.visible_indices("", None), vec![1]);
+
+        for character in "zzz".chars() {
             app.workspace_jump
                 .as_mut()
                 .unwrap()
                 .handle_key(press(character));
         }
         narrow_navigator_to_jump(&mut app);
-        assert_eq!(app.interactions.visible_indices("", None), vec![1]);
+        assert!(app.interactions.visible_indices("", None).is_empty());
 
         app.workspace_jump = None;
         narrow_navigator_to_jump(&mut app);

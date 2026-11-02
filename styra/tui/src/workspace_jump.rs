@@ -101,15 +101,6 @@ impl WorkspaceJump {
         &self.rows
     }
 
-    /// The Workspaces whose rows the query leaves standing.
-    pub fn matching(&self) -> Vec<String> {
-        self.list
-            .matches(&self.rows)
-            .into_iter()
-            .map(|found| self.ids[found.index].clone())
-            .collect()
-    }
-
     /// The Workspace the highlighted row stands for, if the query leaves one.
     pub fn selected(&self) -> Option<&str> {
         self.list
