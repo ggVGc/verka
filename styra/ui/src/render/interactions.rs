@@ -235,9 +235,12 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
         block = block.title_bottom(more_lines("↓", below).right_aligned());
     }
     frame.render_widget(block, area);
+    // A list shorter than the pane sits against its foot, next to the newest
+    // entries, rather than leaving a gap between it and the pane below.
+    let top = inner.y + viewport.saturating_sub(lines.len()) as u16;
     for (row, line) in lines.into_iter().skip(offset).take(viewport).enumerate() {
         let line_area = Rect {
-            y: inner.y + row as u16,
+            y: top + row as u16,
             height: 1,
             ..inner
         };
@@ -252,7 +255,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
             .fg(theme::SELECTED_ROW_EDGE)
             .add_modifier(Modifier::BOLD);
         for line in start.max(offset)..end.min(offset + viewport) {
-            frame.buffer_mut()[(area.x, inner.y + (line - offset) as u16)]
+            frame.buffer_mut()[(area.x, top + (line - offset) as u16)]
                 .set_symbol("┃")
                 .set_style(edge);
         }
@@ -1141,6 +1144,28 @@ mod tests {
         assert!(screen.contains("The checks are green."), "{screen}");
     }
 
+    /// A list shorter than the pane sits against its foot, with the blank
+    /// space above it.
+    #[test]
+    fn a_short_list_is_anchored_to_the_bottom() {
+        let view = InteractionNavigator {
+            rows: vec![placed("older", 0, 0, None), placed("newest", 0, 0, None)],
+            ..many_rows(0)
+        };
+        let screen = rendered(&view)
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(80)
+            .map(|line| line.iter().collect::<String>())
+            .collect::<Vec<_>>();
+        let foot = screen.len() - 2;
+        assert!(screen[foot].contains("newest"), "{screen:#?}");
+        assert!(
+            screen[1].chars().skip(1).take(78).all(|cell| cell == ' '),
+            "{screen:#?}"
+        );
+    }
+
     #[test]
     fn the_dropdown_height_does_not_depend_on_its_rows() {
         assert_eq!(height(40), 20);
@@ -1190,12 +1215,26 @@ mod tests {
     }
 
     fn lines(view: &InteractionNavigator<'_>) -> Vec<String> {
-        rendered(view)
+        lines_at(view, 80)
+    }
+
+    /// The screen's lines, with the blank lines a short list leaves above it
+    /// removed, so a row's index does not depend on the pane's height.
+    fn lines_at(view: &InteractionNavigator<'_>, width: u16) -> Vec<String> {
+        let mut lines = rendered_at(view, width)
             .chars()
             .collect::<Vec<_>>()
-            .chunks(80)
+            .chunks(width.into())
             .map(|line| line.iter().collect::<String>())
-            .collect()
+            .collect::<Vec<_>>();
+        let inner = usize::from(width) - 2;
+        let blank = |line: &String| line.chars().skip(1).take(inner).all(|cell| cell == ' ');
+        let padding = lines[1..lines.len() - 1]
+            .iter()
+            .take_while(|line| blank(line))
+            .count();
+        lines.drain(1..1 + padding);
+        lines
     }
 
     /// Tree lines show workspace and directory membership without color;
@@ -1359,7 +1398,8 @@ mod tests {
                 rows,
                 ..many_rows(0)
             };
-            let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
+            // Exactly as tall as the list, so it starts on line 1.
+            let mut terminal = Terminal::new(TestBackend::new(80, 4)).unwrap();
             terminal
                 .draw(|frame| {
                     render(frame, &view, frame.area());
@@ -1462,12 +1502,7 @@ mod tests {
         };
         let name = "a prompt far too long to fit in the first column of the list";
         for width in [80u16, 120, 200] {
-            let screen = rendered_at(&view, width)
-                .chars()
-                .collect::<Vec<_>>()
-                .chunks(width.into())
-                .map(|line| line.iter().collect::<String>())
-                .collect::<Vec<_>>();
+            let screen = lines_at(&view, width);
             if width >= 120 {
                 assert!(screen[1].contains(name), "{screen:#?}");
             } else {
@@ -1517,12 +1552,7 @@ mod tests {
             assert!(screen.contains(full_tags), "{screen}");
         }
         for width in [140u16, 160] {
-            let screen = rendered_at(&view, width)
-                .chars()
-                .collect::<Vec<_>>()
-                .chunks(width.into())
-                .map(|line| line.iter().collect::<String>())
-                .collect::<Vec<_>>();
+            let screen = lines_at(&view, width);
             let at = |line: &str, needle: &str| {
                 line.find(needle)
                     .map(|byte| line[..byte].chars().count())
