@@ -215,7 +215,7 @@ fn render_events(
         let panes = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(interactions::height(navigator, interaction_area.height)),
+                Constraint::Length(interactions::height(interaction_area.height)),
                 Constraint::Min(1),
             ])
             .split(interaction_area);

@@ -57,24 +57,10 @@ const UNSELECTED_FADE: u16 = 2;
 /// toward [`theme::TEXT`].
 const SELECTED_BRIGHTEN: u16 = 4;
 
-pub fn height(view: &InteractionNavigator<'_>, available: u16) -> u16 {
-    let message_rows = view
-        .rows
-        .iter()
-        .filter(|row| {
-            matches!(
-                row,
-                InteractionRow::Interaction {
-                    last_message: Some(_),
-                    ..
-                }
-            )
-        })
-        .count() as u16;
-    (view.rows.len() as u16 + message_rows + 2)
-        .max(3)
-        .min(available.saturating_div(2).max(3))
-        .min(available)
+/// The dropdown always takes half the available height, so it does not jump in
+/// size as filters, scope or new interactions change how many rows it has.
+pub fn height(available: u16) -> u16 {
+    available.saturating_div(2).max(3).min(available)
 }
 
 pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) -> usize {
@@ -1153,7 +1139,13 @@ mod tests {
         );
         assert!(screen.contains("  NEWLY IDLE"), "{screen}");
         assert!(screen.contains("The checks are green."), "{screen}");
-        assert_eq!(height(&view, 12), 5);
+    }
+
+    #[test]
+    fn the_dropdown_height_does_not_depend_on_its_rows() {
+        assert_eq!(height(40), 20);
+        assert_eq!(height(4), 3);
+        assert_eq!(height(2), 2);
     }
 
     fn placed(
