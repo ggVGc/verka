@@ -477,20 +477,6 @@ fn render_inside(
             }
             None => tree,
         };
-        // Files too few to fill their space sit midway down it, the stat line
-        // with them, and recentre as a search narrows them.
-        let listed = u16::try_from(rows.len() + usize::from(stat.is_some())).unwrap_or(u16::MAX);
-        let tree = if listed < tree.height {
-            let [_, files, _] = Layout::vertical([
-                Constraint::Fill(1),
-                Constraint::Length(listed),
-                Constraint::Fill(1),
-            ])
-            .areas(tree);
-            files
-        } else {
-            tree
-        };
         // How much the diff changes, above the files it changes.
         let tree = match stat {
             Some(stat) => {
@@ -3655,45 +3641,6 @@ index 1111111..2222222 100644
         assert!(!output.contains("new second"), "{output}");
         assert!(!output.contains("fn c()"), "{output}");
         assert_eq!(limit, 0);
-    }
-
-    #[test]
-    fn a_short_file_list_sits_midway_down_its_pane_while_searched_too() {
-        let text =
-            format!("{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old second\n+new second\n");
-        // The blank rows above the stat line and below the last file, in the
-        // left pane, between the header's rule and the frame's bottom edge.
-        let margins = |query: Option<&str>| {
-            let ((output, _), _) = filtered_screen(
-                Ok(&text),
-                None,
-                0,
-                true,
-                1,
-                SearchView {
-                    query,
-                    typing: false,
-                },
-            );
-            let rows: Vec<String> = output
-                .lines()
-                .map(|row| row.chars().skip(1).take(8).collect())
-                .collect();
-            let rule = 1 + rows[1..]
-                .iter()
-                .position(|row| row.starts_with('─'))
-                .unwrap();
-            let bottom = rows.len() - 1;
-            let pane = &rows[rule + 1..bottom];
-            let first = pane.iter().position(|row| !row.trim().is_empty()).unwrap();
-            let last = pane.iter().rposition(|row| !row.trim().is_empty()).unwrap();
-            (first, pane.len() - 1 - last, output)
-        };
-        for query in [None, Some("b.t")] {
-            let (above, below, output) = margins(query);
-            assert!(above > 0, "{output}");
-            assert!(above.abs_diff(below) <= 1, "{above} {below}\n{output}");
-        }
     }
 
     #[test]
