@@ -1075,7 +1075,10 @@ mod tests {
         };
         let screen = squeezed(&rendered_at(&view, 70));
         assert!(screen.contains(title), "{screen}");
-        assert!(screen.contains("feature/start-of…g-branch-name-end"), "{screen}");
+        assert!(
+            screen.contains("feature/start-of…g-branch-name-end"),
+            "{screen}"
+        );
     }
 
     /// A branch hangs beneath its source with the Session picker's tree edge,

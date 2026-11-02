@@ -124,6 +124,4 @@ mod tests {
             assert!(e.list.uncommitted_changes);
         });
     }
-
-
 }

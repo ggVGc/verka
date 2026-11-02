@@ -107,7 +107,7 @@ fn messages<'a>(app: &'a App, interaction: &'a InteractionSummary) -> Vec<Overvi
         .map(|message| {
             let event = message.event();
             OverviewMessage {
-                branch: super::list::branch_link(app, &event),
+                branch: super::list::branch_link(app, &interaction.id, &event),
                 event,
                 contract: message.contract,
             }

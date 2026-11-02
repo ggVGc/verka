@@ -925,6 +925,7 @@ mod tests {
                         completion: CompletionState::Active,
                     }),
                     message: Some("Backoff now doubles."),
+                    worktree: None,
                 },
             },
         ];

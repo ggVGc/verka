@@ -563,7 +563,9 @@ impl Loop<'_> {
     fn diff_key(&mut self, key: KeyEvent) {
         let app = &mut *self.app;
         if keys::DIFF_BRANCH.matches(key)
-            && !app.shown_diff().is_some_and(|diff| diff.typing() || diff.commits.focused)
+            && !app
+                .shown_diff()
+                .is_some_and(|diff| diff.typing() || diff.commits.focused)
         {
             match self.client.diff_branches(&app.session_id) {
                 Ok(branches) => {

@@ -969,6 +969,7 @@ struct RowKey {
     branch_name: Option<String>,
     branch_state: Option<crate::interactions::InteractionState>,
     branch_message: Option<String>,
+    branch_worktree: Option<String>,
     branch_provider_switch: Option<(
         styra_protocol::agent::Provider,
         styra_protocol::agent::Provider,
@@ -1027,6 +1028,7 @@ fn entry_rows_with_max_rows(
         branch_name: entry.branch.name.map(str::to_owned),
         branch_state: entry.branch.state.clone(),
         branch_message: entry.branch.message.map(str::to_owned),
+        branch_worktree: entry.branch.worktree.map(str::to_owned),
         branch_provider_switch: entry.branch_provider_switch,
     };
     ROW_CACHE.with(|cache| {
@@ -1815,6 +1817,14 @@ pub fn summary_line(
                     summary_style,
                 ));
             }
+            // Only a worktree other than this one is named: most branches
+            // share their source's checkout, and saying so on each is noise.
+            if let Some(worktree) = entry.branch.worktree {
+                branch_tail.push(Span::styled(
+                    format!("  ⎇ {worktree}"),
+                    Style::default().fg(theme::ACCENT),
+                ));
+            }
             if let Some(state) = &entry.branch.state {
                 branch_tail.extend(state.labels());
             }
@@ -2391,6 +2401,44 @@ mod tests {
     }
 
     #[test]
+    fn a_branch_marker_names_a_worktree_only_when_it_is_another_one() {
+        use styra_protocol::event::BranchDirection;
+        let summary = |direction, worktree| {
+            let event = AgentEvent::Branched {
+                direction,
+                session: "4f1c-session-id".into(),
+                name: None,
+            };
+            let entry = EventEntry {
+                expanded: false,
+                branch: BranchLink {
+                    name: Some("Retry backoff"),
+                    worktree,
+                    ..Default::default()
+                },
+                ..entry_of(&event, version())
+            };
+            summary_line(&entry, SummaryContext::EventList, Protocol::default())
+                .spans
+                .into_iter()
+                .map(|span| span.content.into_owned())
+                .collect::<String>()
+        };
+        let elsewhere = summary(BranchDirection::To, Some("fix-retries"));
+        assert!(
+            elsewhere.contains("Retry backoff  ⎇ fix-retries"),
+            "{elsewhere}"
+        );
+        let from = summary(BranchDirection::From, Some("main checkout"));
+        assert!(
+            from.contains("from: Retry backoff  ⎇ main checkout"),
+            "{from}"
+        );
+        let shared = summary(BranchDirection::To, None);
+        assert!(!shared.contains('⎇'), "{shared}");
+    }
+
+    #[test]
     fn an_expanded_branch_marker_reads_as_the_navigator_row_of_where_it_leads() {
         use crate::chrome::StopTone;
         use crate::interactions::{InteractionState, InteractionStatus};
@@ -2414,6 +2462,7 @@ mod tests {
                 name: Some("Retry backoff"),
                 state: Some(paused),
                 message: Some(&long),
+                worktree: None,
             },
             ..entry_of(&event, version())
         };
@@ -2538,6 +2587,7 @@ mod tests {
                         completion: CompletionState::Active,
                     }),
                     message: Some("Latest message"),
+                    worktree: None,
                 },
                 ..entry_of(&event, version())
             };

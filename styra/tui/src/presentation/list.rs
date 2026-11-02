@@ -24,13 +24,16 @@ pub(crate) fn ui_link_display(value: crate::app::LinkDisplay) -> LinkDisplay {
     }
 }
 
-/// For a branch marker, the other session's current name, state, and latest
-/// message, resolved live from the roster rather than trusted from the event
-/// itself: the event's own `name` is a snapshot taken when the marker was
-/// written, and a rename since would leave it stale. Empty both for an event
-/// that is not a marker and for one whose target the roster has no row for.
+/// For a branch marker in `owner`'s conversation, the other session's current
+/// name, state, latest message, and worktree when it is not `owner`'s,
+/// resolved live from the roster rather than trusted from the event itself:
+/// the event's own `name` is a snapshot taken when the marker was written,
+/// and a rename since would leave it stale — as would a worktree made for
+/// the branch afterward. Empty both for an event that is not a marker and for
+/// one whose target the roster has no row for.
 pub(crate) fn branch_link<'a>(
     app: &'a App,
+    owner: &str,
     event: &styra_protocol::event::AgentEvent,
 ) -> styra_ui::event_list::BranchLink<'a> {
     let Some(id) = event.branch_target() else {
@@ -41,6 +44,27 @@ pub(crate) fn branch_link<'a>(
         name: app.interactions.name(id),
         state: interaction.map(super::interactions::state),
         message: interaction.and_then(|interaction| interaction.last_message.as_deref()),
+        worktree: interaction.and_then(|interaction| {
+            let here = app.interactions.current(owner)?.checkout.as_ref()?;
+            other_worktree(here, interaction.checkout.as_ref()?)
+        }),
+    }
+}
+
+/// What a branch marker calls `there`'s worktree, seen from `here`: nothing
+/// when they are the same one, a linked worktree by its directory name as the
+/// header names it, and the main checkout as that, since its directory name
+/// is the repository's and would read as just another worktree.
+fn other_worktree<'a>(
+    here: &styra_protocol::CheckoutState,
+    there: &'a styra_protocol::CheckoutState,
+) -> Option<&'a str> {
+    if here.worktree == there.worktree {
+        None
+    } else if there.linked() {
+        there.worktree.file_name()?.to_str()
+    } else {
+        Some("main checkout")
     }
 }
 
@@ -107,7 +131,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         .enumerate()
         .filter(|(index, _)| app.timeline.is_visible(*index))
         .map(|(index, entry)| {
-            let branch = branch_link(app, entry.event());
+            let branch = branch_link(app, &app.session_id, entry.event());
             // A marker's only detail is the message of where it leads, which
             // the roster may not have.
             let has_detail = match entry.event().branch_target() {
@@ -180,6 +204,48 @@ mod tests {
     use crate::app::App;
 
     use styra_protocol::event::AgentEvent;
+
+    /// A marker names the worktree it leads to only when that is not the one
+    /// its own interaction works in, and says nothing it does not know.
+    #[test]
+    fn a_branch_marker_names_the_worktree_only_when_it_differs() {
+        use styra_protocol::event::BranchDirection;
+        use styra_protocol::{CheckoutState, InteractionActivity, InteractionSummary};
+        let checkout = |worktree: &str| CheckoutState {
+            worktree: worktree.into(),
+            repository: "/workspace".into(),
+            branch: None,
+        };
+        let interaction = |id: &str, checkout| InteractionSummary {
+            checkout,
+            ..crate::interactions::tests::interaction(id, InteractionActivity::Running)
+        };
+        let marker = AgentEvent::Branched {
+            direction: BranchDirection::To,
+            session: "child".into(),
+            name: None,
+        };
+        let linked = Some(checkout("/workspace/.worktrees/fix-retries"));
+        let main = Some(checkout("/workspace"));
+        for (here, there, expected) in [
+            (main.clone(), linked.clone(), Some("fix-retries")),
+            (linked.clone(), main.clone(), Some("main checkout")),
+            (linked.clone(), linked.clone(), None),
+            (None, linked.clone(), None),
+            (main.clone(), None, None),
+        ] {
+            let mut app = crate::presentation::test_support::app("parent");
+            app.interactions.items = vec![
+                interaction("parent", here.clone()),
+                interaction("child", there.clone()),
+            ];
+            assert_eq!(
+                super::branch_link(&app, "parent", &marker).worktree,
+                expected,
+                "{here:?} → {there:?}"
+            );
+        }
+    }
 
     /// The `/` prompt is shown along the bottom of the list it is marking, and
     /// holds every printable key while it is open — including the letters that

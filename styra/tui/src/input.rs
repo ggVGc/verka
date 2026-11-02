@@ -243,9 +243,9 @@ pub fn handle_diff_focus_key(app: &mut App, key: KeyEvent) -> bool {
         || !matches!(app.view, View::Events | View::Files)
         || app.search.typing()
         || app.interactions.typing_filter()
-        || app.shown_diff().is_some_and(|diff| {
-            diff.typing() || (diff.commits.open && !app.diff_interaction_focus)
-        })
+        || app
+            .shown_diff()
+            .is_some_and(|diff| diff.typing() || (diff.commits.open && !app.diff_interaction_focus))
     {
         return false;
     }

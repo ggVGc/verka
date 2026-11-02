@@ -72,6 +72,10 @@ pub struct BranchLink<'a> {
     /// The agent's last message, already one line, as the navigator quotes
     /// it beneath the row.
     pub message: Option<&'a str>,
+    /// The worktree it works in, named as the header names one, when that is
+    /// not the worktree of the interaction the marker sits in. `None` when
+    /// the two share one, and when either checkout is unknown.
+    pub worktree: Option<&'a str>,
 }
 
 pub enum EventListStatus {

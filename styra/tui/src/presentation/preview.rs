@@ -37,7 +37,7 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
                 .link_highlight
                 .filter(|highlight| highlight.entry == app.timeline.selected)
                 .map(|highlight| highlight.link),
-            branch: branch_link(app, entry.event()),
+            branch: branch_link(app, &app.session_id, entry.event()),
             branch_provider_switch: branch_provider_switch(app, entry.event()),
             // The preview is for reading the entry in full, wherever it sits.
             inherited: false,
