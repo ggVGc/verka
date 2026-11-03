@@ -1782,6 +1782,13 @@ impl App {
             || (self.diff_preview && matches!(self.view, View::Events | View::Files))
     }
 
+    /// Whether the live interactions navigator is on screen. It stays open
+    /// across views until something closes it, but is only drawn over the
+    /// event list, so it only takes keys there.
+    pub fn navigator_shown(&self) -> bool {
+        self.interactions.open && self.view == View::Events
+    }
+
     /// Whether the diff, rather than the interaction or message box, owns keys.
     pub fn diff_focused(&self) -> bool {
         self.diff_visible()

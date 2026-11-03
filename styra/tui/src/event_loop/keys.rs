@@ -107,24 +107,6 @@ fn reference_available(app: &App) -> bool {
         && (app.focus == Focus::List || app.launcher.is_some() || app.template_picker.is_some())
 }
 
-/// Global actions which operate on the current interaction without dismissing
-/// its navigator. They fall through to the ordinary list-key handler below.
-/// `n` and Ctrl-N are among them: stepping keeps the list open on the
-/// interaction it lands on, while Ctrl-N starts a new interaction.
-pub(super) fn interaction_navigator_passthrough(key: KeyEvent) -> bool {
-    keys::GLOBAL_FOCUS_MESSAGE.matches(key)
-        || keys::GLOBAL_DIFF.matches(key)
-        || keys::GLOBAL_REBASE.matches(key)
-        || keys::GLOBAL_STOP.matches(key)
-        || keys::GLOBAL_NEXT_LIVE.matches(key)
-        || keys::GLOBAL_NEW_SESSION.matches(key)
-        || keys::GLOBAL_INTERACTION_HISTORY.matches(key)
-        // The jump narrows the navigator to the Workspaces it offers, so the
-        // navigator stays open under it.
-        || keys::GLOBAL_WORKSPACE_JUMP.matches(key)
-        || keys::GLOBAL_WORKSPACE_JUMP_LISTED.matches(key)
-}
-
 /// Recording shortcuts belong to both message composers.
 fn handle_audio_key(
     audio: &mut crate::audio::AudioInput,
@@ -309,7 +291,7 @@ impl Loop<'_> {
             input::handle_search_key(app, key);
             return Ok(Handled::Done);
         }
-        if app.interactions.open && app.focus == Focus::List {
+        if app.navigator_shown() && app.focus == Focus::List {
             return self.navigator_key(key);
         }
         Ok(Handled::Pass)
@@ -651,11 +633,9 @@ impl Loop<'_> {
                     Err(error) => app.show_error(format!("could not list tags: {error:#}")),
                 }
             }
-            k if interaction_navigator_passthrough(k) => return Ok(Handled::Pass),
-            _ => {
-                app.interactions.close();
-                return Ok(Handled::Pass);
-            }
+            // Every other action works on the row under the cursor and
+            // leaves the navigator as it is: only the keys above close it.
+            _ => return Ok(Handled::Pass),
         }
         Ok(Handled::Done)
     }
@@ -811,7 +791,6 @@ fn navigator_cursor_key(app: &mut App, key: KeyEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyModifiers;
 
     #[test]
     fn message_paste_follows_editor_focus_and_modal_ownership() {
@@ -889,17 +868,5 @@ mod tests {
             app.focus = Focus::Input;
             assert!(!message_paste_active(&app));
         }
-    }
-
-    #[test]
-    fn global_actions_pass_through_the_navigator() {
-        let press = |character| KeyEvent::from(KeyCode::Char(character));
-        assert!(interaction_navigator_passthrough(press('S')));
-        assert!(interaction_navigator_passthrough(press('i')));
-        assert!(interaction_navigator_passthrough(KeyEvent::new(
-            KeyCode::Char('n'),
-            KeyModifiers::CONTROL,
-        )));
-        assert!(!interaction_navigator_passthrough(press('l')));
     }
 }

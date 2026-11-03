@@ -213,7 +213,7 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         .and_then(|name| name.to_str())
         .map(str::to_owned);
     styra_ui::chrome::PanelChrome {
-        focused: if app.interactions.open {
+        focused: if app.navigator_shown() {
             false
         } else if suffix == Some("diff") {
             // Fullscreen, the diff is the only panel: nothing to tell it from.
@@ -308,7 +308,7 @@ pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
     if app.tag_picker.is_some() {
         return Window::Tags;
     }
-    if app.interactions.open {
+    if app.navigator_shown() {
         return Window::Interactions;
     }
     view_window(app.view)

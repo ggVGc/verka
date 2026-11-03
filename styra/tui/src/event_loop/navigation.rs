@@ -215,13 +215,6 @@ mod tests {
     #[test]
     fn the_workspace_jump_narrows_the_open_navigator() {
         let press = |character| crossterm::event::KeyEvent::from(KeyCode::Char(character));
-        assert!(super::super::keys::interaction_navigator_passthrough(
-            press('v')
-        ));
-        assert!(super::super::keys::interaction_navigator_passthrough(
-            press('V')
-        ));
-
         let mut app = App::new(
             styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
             "one",

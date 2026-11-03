@@ -477,17 +477,26 @@ mod tests {
     }
 
     #[test]
-    fn only_mapped_keys_dismiss_the_interaction_navigator() {
-        for (code, stays_open) in [
-            (KeyCode::Char('b'), true),
-            (KeyCode::F(12), true),
-            (KeyCode::Left, true),
-            (KeyCode::Down, true),
-            (KeyCode::Char('j'), true),
-            (KeyCode::Enter, false),
-            (KeyCode::Esc, false),
-            (KeyCode::Char('a'), false),
+    fn only_the_navigator_close_keys_dismiss_it() {
+        use crossterm::event::KeyModifiers;
+        for (key, stays_open) in [
+            (KeyCode::Char('b').into(), true),
+            (KeyCode::F(12).into(), true),
+            (KeyCode::Left.into(), true),
+            (KeyCode::Down.into(), true),
+            (KeyCode::Char('j').into(), true),
+            // Rename opens its prompt over the navigator rather than
+            // dismissing it.
+            (
+                crossterm::event::KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT),
+                true,
+            ),
+            (KeyCode::Enter.into(), false),
+            (KeyCode::Esc.into(), false),
+            (KeyCode::Char('a').into(), false),
         ] {
+            let key: crossterm::event::KeyEvent = key;
+            let code = key.code;
             let mut app = App::new(
                 styra_protocol::agent::Selection::parse("codex").unwrap(),
                 "s1",
@@ -495,7 +504,7 @@ mod tests {
             app.enter_list();
             app.interactions.show(Vec::new());
             let mut terminal = crate::test_ui::TestUi::default();
-            terminal.script([Event::Key(crossterm::event::KeyEvent::from(code))]);
+            terminal.script([Event::Key(key)]);
             let mut history = InteractionHistory::default();
             history.record("previous");
             let result = run(
