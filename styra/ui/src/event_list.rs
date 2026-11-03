@@ -48,9 +48,6 @@ pub struct EventEntry<'a> {
         styra_protocol::agent::Provider,
         styra_protocol::agent::Provider,
     )>,
-    /// The entry precedes a branched Session's branch point: history copied
-    /// from its source rather than its own, drawn faded so the two read apart.
-    pub inherited: bool,
     /// The previous visible entry is another branch marker; share its lower border.
     pub branch_follows_marker: bool,
 }

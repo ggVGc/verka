@@ -216,7 +216,9 @@ the row's branch column highlights `actual (≠ assigned)`, including beneath a
 worktree heading. Switching back clears the warning.
 A branched interaction is listed beneath the one it was branched from, as in
 the session picker. Branching (`B`) lists the new interaction straight away,
-stopped as `branched, not started`, until a message resumes it.
+stopped as `branched, not started`, until a message resumes it. A branch's
+event list starts at its `branch` marker: the history it copied is not shown
+again, since its source still has it — follow the marker to read it there.
 
 In the branch dialog, use `↑`/`↓` (or `j`/`k`) to select History or
 Working tree, and `←`/`→`, Space, or Tab to change that setting. Enter creates

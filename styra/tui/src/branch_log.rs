@@ -111,7 +111,7 @@ fn events(updates: impl Iterator<Item = InteractionUpdate>) -> Vec<AgentEvent> {
 
 /// The part of the linked Session's log a marker leads to. A branch's own
 /// history begins after its last `branched from` marker (see
-/// [`crate::timeline::Timeline::branch_point`]); what comes before was copied
+/// [`crate::timeline::Timeline::is_visible`]); what comes before was copied
 /// from the source this screen is showing, so following a `branched to`
 /// marker shows only what the branch did. The source's log is shown whole.
 pub fn shown_from(direction: BranchDirection, events: &[AgentEvent]) -> &[AgentEvent] {

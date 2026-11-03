@@ -200,8 +200,8 @@ pub const DIFF_FILE_RULE: Color = palette::RULE_GRAY;
 pub const WORKSPACE_RULE: Color = palette::RULE_GRAY;
 /// `CursorLine`.
 pub const SELECTION_BACKGROUND: Color = palette::DARK_GRAY;
-/// What a branched Session's inherited history fades toward: the code
-/// background, so its text recedes into the pane rather than turning grey.
+/// What faded text fades toward: the code background, so it recedes into
+/// the pane rather than turning grey.
 pub const INHERITED_FADE_TOWARD: Color = palette::NEAR_BLACK;
 /// Text on a continuation line. It is subdued without looking disabled.
 pub const SUBORDINATE_TEXT: Color = MUTED_TEXT;

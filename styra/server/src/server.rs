@@ -3485,7 +3485,7 @@ impl ServerState {
                 // branch's first line, so reading the new Session from the top starts
                 // with where its conversation came from. And once after it, at the
                 // branch point itself, so the log also shows where the inherited
-                // history ends and this Session's own begins — clients mute what
+                // history ends and this Session's own begins — clients hide what
                 // precedes the last such marker.
                 journal.record_branch(crate::event::BranchDirection::From, id)?;
                 let source_protocol = journal::read_session_meta(&summary.path)?.protocol;

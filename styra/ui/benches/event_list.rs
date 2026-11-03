@@ -55,7 +55,6 @@ fn frame(events: &[AgentEvent], versions: &[EntryVersion]) -> usize {
                 link_highlight: None,
                 branch: Default::default(),
                 branch_provider_switch: None,
-                inherited: false,
                 branch_follows_marker: false,
             };
             entry_item(&entry, WIDTH, VIEWPORT, render)
@@ -100,7 +99,6 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
             link_highlight: None,
             branch: Default::default(),
             branch_provider_switch: None,
-            inherited: false,
             branch_follows_marker: false,
         })
         .collect();

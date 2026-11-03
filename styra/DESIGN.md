@@ -1001,7 +1001,10 @@ it arrive in the event stream rather than only on the next replay; a source
 that is merely stored gets the record appended to its journal. Markers are
 copied like any other history when a branch is itself branched, but they are
 never what `selected_only` resolves to — a boundary is not an entry the
-operator could have selected.
+operator could have selected. The event list does not show a branch's
+inherited history at all: it begins at the last `branched from` marker, so the
+first marker and everything copied after it stay hidden, and the operator
+follows the marker to read them in the source.
 
 The branch's Styra journal is seeded with the same chosen history as its native
 provider transcript, so opening the new Session shows its starting context

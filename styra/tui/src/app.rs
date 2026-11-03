@@ -1348,24 +1348,26 @@ impl App {
 
     /// Move between operator turns, keeping the chosen turn pinned as events arrive.
     pub(crate) fn select_diff_turn(&mut self, next: bool) {
-        let is_message = |entry: &Entry| {
-            matches!(
-                entry.event(),
-                styra_protocol::event::AgentEvent::UserMessage { .. }
-            )
+        // Inherited history is hidden, so its turns are not there to visit.
+        let is_message = |(index, entry): &(usize, &Entry)| {
+            self.timeline.is_visible(*index)
+                && matches!(
+                    entry.event(),
+                    styra_protocol::event::AgentEvent::UserMessage { .. }
+                )
         };
         let entries = self.timeline.entries.iter().enumerate();
         let after_selection = self.timeline.selected.saturating_add(1);
         let target = if next {
             entries
                 .skip(after_selection)
-                .find(|(_, entry)| is_message(entry))
+                .find(is_message)
         } else {
             // The first message at or before the selection starts the current turn.
             entries
                 .take(after_selection)
                 .rev()
-                .filter(|(_, entry)| is_message(entry))
+                .filter(is_message)
                 .nth(1)
         }
         .map(|(index, _)| index);

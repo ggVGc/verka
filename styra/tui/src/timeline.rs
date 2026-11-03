@@ -209,6 +209,16 @@ pub struct Timeline {
     /// `selected` distinguishes deliberate upward navigation from a live row
     /// merely changing height between frames.
     pub rendered_selection: Option<usize>,
+    /// Where a branched Session's own history begins: the index of its last
+    /// `branched from` marker. The server writes one at the top of a branch
+    /// and another after the history it copied, so everything before the last
+    /// one — including any marker an earlier branch left in that history — was
+    /// inherited from the source. `None` for a Session that was never branched,
+    /// and in effect for one branched before the second marker was written,
+    /// whose only marker is its first entry.
+    ///
+    /// Kept as entries are pushed, since every visibility test consults it.
+    branch_point: Option<usize>,
 }
 
 impl Default for Timeline {
@@ -225,6 +235,7 @@ impl Default for Timeline {
             list_scroll_delta: 0,
             list_anchor: ListAnchor::Selection,
             rendered_selection: None,
+            branch_point: None,
         }
     }
 }
@@ -255,6 +266,15 @@ impl Timeline {
         raw_index: Option<usize>,
         contract: Option<Contract>,
     ) {
+        if matches!(
+            event,
+            AgentEvent::Branched {
+                direction: BranchDirection::From,
+                ..
+            }
+        ) {
+            self.branch_point = Some(self.entries.len());
+        }
         self.entries.push(Entry {
             id: EventId::mint(),
             revision: 0,
@@ -272,8 +292,11 @@ impl Timeline {
     }
 
     /// Whether an entry is shown in the list under the current filters.
+    /// History a branch inherited from its source is never shown: it is the
+    /// source's to show, and the branch's own log begins at its branch point.
     pub fn is_visible(&self, idx: usize) -> bool {
-        self.event_is_visible(self.entries[idx].event())
+        self.branch_point.is_none_or(|point| idx >= point)
+            && self.event_is_visible(self.entries[idx].event())
     }
 
     /// Whether an entry is one `j`/`k` should land on: visible, and carrying
@@ -372,14 +395,8 @@ impl Timeline {
         moved
     }
 
-    /// Stop at this interaction's branch point before entering inherited
-    /// history. From the marker or above it, go to the actual first entry.
     pub fn select_first(&mut self) -> bool {
-        let start = self
-            .branch_point()
-            .filter(|&point| self.selected > point)
-            .unwrap_or(0);
-        let moved = match self.seek_forward(start, Step::Line) {
+        let moved = match self.seek_forward(0, Step::Line) {
             Some(first) => {
                 self.selected = first;
                 true
@@ -480,25 +497,6 @@ impl Timeline {
             .find(|&idx| self.entries[idx].event().is_conversation())
             .unwrap_or(self.entries.len());
         start..end
-    }
-
-    /// Where a branched Session's own history begins: the index of its last
-    /// `branched from` marker. The server writes one at the top of a branch
-    /// and another after the history it copied, so everything before the last
-    /// one — including any marker an earlier branch left in that history — was
-    /// inherited from the source. `None` for a Session that was never branched,
-    /// and in effect for one branched before the second marker was written,
-    /// whose only marker is its first entry.
-    pub fn branch_point(&self) -> Option<usize> {
-        self.entries.iter().rposition(|entry| {
-            matches!(
-                entry.event(),
-                AgentEvent::Branched {
-                    direction: BranchDirection::From,
-                    ..
-                }
-            )
-        })
     }
 
     /// The file changes made during the selected message's stretch — the
@@ -631,12 +629,14 @@ mod tests {
                 name: None,
             },
         ]);
-        assert_eq!(list.branch_point(), Some(5));
-        assert_eq!(timeline(vec![message("fresh")]).branch_point(), None);
+        assert_eq!(list.branch_point, Some(5));
+        assert_eq!(timeline(vec![message("fresh")]).branch_point, None);
     }
 
+    /// A branch's log starts at its branch point: what it inherited, and the
+    /// `branched from` marker at the very top, are the source's to show.
     #[test]
-    fn first_stops_at_the_branch_point_then_goes_to_the_top() {
+    fn inherited_history_is_hidden_and_first_lands_on_the_branch_point() {
         let from = |session: &str| AgentEvent::Branched {
             direction: BranchDirection::From,
             session: session.into(),
@@ -654,19 +654,20 @@ mod tests {
                 name: None,
             },
         ]);
+        list.all_events = true;
+        list.show_minor = true;
+        assert_eq!(
+            (0..list.entries.len())
+                .filter(|&idx| list.is_visible(idx))
+                .collect::<Vec<_>>(),
+            [3, 4, 5]
+        );
         list.select_last();
         assert!(list.select_first());
         assert_eq!(list.selected, 3);
         assert!(!list.follow);
-        assert!(list.select_first());
-        assert_eq!(list.selected, 0);
-
-        list.selected = 2;
-        list.select_first();
-        assert_eq!(
-            list.selected, 0,
-            "inherited history goes straight to the top"
-        );
+        assert!(!list.select_backward(Step::Line));
+        assert_eq!(list.selected, 3);
 
         let mut list = timeline(vec![message("first"), message("last")]);
         list.select_last();

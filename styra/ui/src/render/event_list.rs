@@ -963,7 +963,6 @@ struct RowKey {
     protocol: Protocol,
     links: LinkDisplay,
     link_highlight: Option<EntryIndex>,
-    inherited: bool,
     branch_follows_marker: bool,
     search: Option<String>,
     branch_name: Option<String>,
@@ -1022,7 +1021,6 @@ fn entry_rows_with_max_rows(
         protocol: render.protocol,
         links: render.links,
         link_highlight: entry.link_highlight,
-        inherited: entry.inherited,
         branch_follows_marker: entry.branch_follows_marker,
         search: render.search.map(str::to_owned),
         branch_name: entry.branch.name.map(str::to_owned),
@@ -1032,29 +1030,10 @@ fn entry_rows_with_max_rows(
         branch_provider_switch: entry.branch_provider_switch,
     };
     ROW_CACHE.with(|cache| {
-        cache.borrow_mut().get_or_insert_with(key, || {
-            let rows = build_entry_rows(entry, width, max_rows, render);
-            // The selected row keeps its own colours: the cursor is where
-            // the operator is reading, inherited or not.
-            if entry.inherited && !entry.selected {
-                rows.into_iter().map(inherited_line).collect()
-            } else {
-                rows
-            }
-        })
+        cache
+            .borrow_mut()
+            .get_or_insert_with(key, || build_entry_rows(entry, width, max_rows, render))
     })
-}
-
-/// Fade a row of inherited history: every foreground a step toward the
-/// background, so the row keeps its hues — a tool still reads as a tool, a
-/// failure as a failure — but sits behind the Session's own work.
-/// Backgrounds are left alone; they carry the selection and message tints.
-fn inherited_line(mut line: Line<'static>) -> Line<'static> {
-    line.style = faded_style(line.style, INHERITED_FADE);
-    for span in &mut line.spans {
-        span.style = faded_style(span.style, INHERITED_FADE);
-    }
-    line
 }
 
 /// Move a style's foreground `tenths` tenths of the way toward
@@ -1078,11 +1057,6 @@ pub(crate) fn blended_style(style: Style, toward: Color, tenths: u16) -> Style {
         _ => style.add_modifier(Modifier::DIM),
     }
 }
-
-/// How far, in tenths, [`inherited_line`] moves a colour toward
-/// [`theme::INHERITED_FADE_TOWARD`]: enough to tell at a glance, not so much
-/// that the history stops being readable.
-const INHERITED_FADE: u16 = 3;
 
 fn entry_item_slice(
     entry: &EventEntry<'_>,
@@ -1129,7 +1103,6 @@ pub fn message_rows(
         link_highlight: None,
         branch,
         branch_provider_switch: None,
-        inherited: false,
         branch_follows_marker: false,
     };
     let render = EntryRender {
@@ -3070,7 +3043,6 @@ mod tests {
             link_highlight: None,
             branch: Default::default(),
             branch_provider_switch: None,
-            inherited: false,
             branch_follows_marker: false,
         }
     }
@@ -3154,41 +3126,6 @@ mod tests {
         ));
 
         assert_eq!(first, second);
-    }
-
-    /// History a branch inherited reads apart from its own: the same text in
-    /// the same hue, a step darker. The cursor row is exempt, since that is
-    /// where the operator is reading.
-    #[test]
-    fn inherited_history_is_drawn_faded_except_under_the_cursor() {
-        let version = version();
-        let event = AgentEvent::AgentMessage {
-            text: "the checks are green".into(),
-        };
-        let fg = |inherited: bool, selected: bool| {
-            let entry = EventEntry {
-                inherited,
-                selected,
-                ..entry_of(&event, version)
-            };
-            entry_rows_with_max_rows(&entry, 120, 40, render_of())[0]
-                .spans
-                .iter()
-                .find(|span| span.content == "checks")
-                .expect("the message text is on the row")
-                .style
-                .fg
-                // Unstyled text is drawn in the default text colour.
-                .unwrap_or(theme::TEXT)
-        };
-        let Color::Rgb(own, ..) = fg(false, false) else {
-            panic!("the message text is an RGB colour");
-        };
-        let Color::Rgb(inherited, ..) = fg(true, false) else {
-            panic!("faded text is still an RGB colour");
-        };
-        assert!(inherited < own, "{inherited} should be darker than {own}");
-        assert_eq!(fg(true, true), fg(false, true));
     }
 
     /// Width is in the key because nothing below the cache re-wraps: the rows

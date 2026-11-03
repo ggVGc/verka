@@ -123,7 +123,6 @@ pub(super) fn status(
 }
 
 pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
-    let branch_point = app.timeline.branch_point();
     let entries = app
         .timeline
         .entries
@@ -151,7 +150,6 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
                     .map(|highlight| highlight.link),
                 branch,
                 branch_provider_switch: branch_provider_switch(app, entry.event()),
-                inherited: branch_point.is_some_and(|point| index < point),
                 branch_follows_marker: false,
             }
         })
