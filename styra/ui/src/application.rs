@@ -79,6 +79,9 @@ pub struct PanelFeedback {
 
 #[derive(Default)]
 pub struct ApplicationOverlays<'a> {
+    /// A rebase this client started. Not drawn over anything: it is a box
+    /// across the bottom of the main panel, under the log the rebase's
+    /// conflict-resolution turn is followed in.
     pub rebase_status: Option<&'a styra_protocol::RebaseStatus>,
     pub retarget_prompt: Option<(&'a str, bool)>,
     pub rename_prompt: Option<&'a str>,

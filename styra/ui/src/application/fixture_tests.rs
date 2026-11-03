@@ -187,6 +187,33 @@ fn footer_leads_with_the_launch_and_the_border_with_the_state() {
     assert!(rows[18].starts_with("┗ ● running 1/1/0 "), "{}", rows[18]);
 }
 
+/// A rebase is followed in the log, with where it stands in a box between the
+/// log and the footer rather than in a popup over the conversation.
+#[test]
+fn rebase_status_sits_between_the_log_and_the_footer() {
+    let list = list(&[]);
+    let footer = footer();
+    let status = styra_protocol::RebaseStatus {
+        finished: false,
+        succeeded: false,
+        message: "Rebasing onto main (abc123)…".into(),
+        source_commit: "abc123".into(),
+        output: "MODEL: resolving file.rs".into(),
+    };
+    let mut view = application(&list, &footer);
+    view.overlays.rebase_status = Some(&status);
+    let (rows, _) = draw(&view, 100, 20);
+    let (_, title) = locate(&rows, "rebasing interaction");
+    let (_, message) = locate(&rows, "Rebasing onto main");
+    let (_, border) = locate(&rows, "┗ ● running");
+    assert_eq!(title, 16, "{rows:#?}");
+    assert_eq!(message, 17, "{rows:#?}");
+    assert!(border < title, "{rows:#?}");
+    assert!(rows[18].contains("locked while rebasing"), "{rows:#?}");
+    assert!(rows[19].starts_with("codex · gpt-5.6-sol"), "{rows:#?}");
+    assert!(!rows.iter().any(|row| row.contains("MODEL:")), "{rows:#?}");
+}
+
 #[test]
 fn focus_and_fleet_markers_belong_to_the_panel_border() {
     let mut list = list(&[]);

@@ -54,6 +54,9 @@ pub struct ServerState {
     inner: Arc<ServerInner>,
 }
 
+#[path = "automatic.rs"]
+mod automatic;
+use automatic::{AutomaticAction, AutomaticActions};
 #[path = "edit_report.rs"]
 mod edit_report;
 #[path = "integration.rs"]
@@ -93,7 +96,8 @@ struct ServerInner {
     /// launch edits so concurrent clients cannot overwrite each other's
     /// templates or mounts with stale intermediate documents.
     workspace_metadata: Mutex<()>,
-    integrating: Mutex<std::collections::HashSet<String>>,
+    /// What each interaction has applied to it automatically, if anything.
+    automatic: AutomaticActions,
     integration_git: Mutex<()>,
     /// Set by a [`Request::Shutdown`]; the connection thread checks it after
     /// acknowledging and then exits the process.
@@ -918,6 +922,36 @@ fn ensure_movable(id: &str, activity: InteractionActivity) -> Result<()> {
     anyhow::bail!(
         "session {id:?} is still working ({working}); wait for it to finish before moving it to a new Git workspace"
     )
+}
+
+/// The interaction a request would act on, when that is refused while an
+/// automatic action is applied to it. Reading it, naming or tagging it,
+/// keeping its draft, and branching a conversation off it are not acting on it.
+fn locked_during_automatic_action(request: &Request) -> Option<&str> {
+    match request {
+        Request::ResumeSession(request) => Some(&request.id),
+        Request::CreateSessionWorktree { id }
+        | Request::RetargetSession { id, .. }
+        | Request::RestoreSessionBranch { id, .. }
+        | Request::RebaseSession { id }
+        | Request::IntegrateSession { id, .. }
+        | Request::ConvertSessionProvider { id }
+        | Request::SendMessage { id, .. }
+        | Request::QueueMessage { id, .. }
+        | Request::SendQueuedMessage { id }
+        | Request::ClearQueuedMessages { id }
+        | Request::SetSessionSelection { id, .. }
+        | Request::SetInteractionWorkingDirectory { id, .. }
+        | Request::SetInteractionAutoRetry { id, .. }
+        | Request::SetInteractionAutoCommit { id, .. }
+        | Request::InterruptInteraction { id }
+        | Request::StopInteraction { id }
+        | Request::SetSessionCompleted { id, .. }
+        | Request::CloseInteraction { id }
+        | Request::Shell { id }
+        | Request::StartProjectAction { id, .. } => Some(id),
+        _ => None,
+    }
 }
 
 fn ensure_provider_switchable(activity: InteractionActivity) -> Result<()> {
@@ -1810,7 +1844,7 @@ impl ServerState {
         let Some(source_id) = source_id else {
             return Ok(None);
         };
-        self.ensure_not_integrating(source_id)?;
+        self.ensure_no_automatic_action(source_id)?;
         let source = self.stored_summary(source_id)?;
         anyhow::ensure!(
             source.workspace_id == workspace_id,
@@ -2045,11 +2079,11 @@ impl ServerState {
         workspace_id: &str,
     ) -> Result<Vec<(String, PathBuf)>> {
         let mut in_use = Vec::new();
-        let integrating = self.inner.integrating.lock().unwrap().clone();
+        let automatic = self.inner.automatic.interactions();
         for session in sessions {
             if session.completed != CompletionState::Active
                 && !self.live_in_checkout(&session.id)
-                && !integrating.contains(&session.id)
+                && !automatic.contains(&session.id)
             {
                 continue;
             }
@@ -2073,8 +2107,7 @@ impl ServerState {
         session: &SessionSummary,
         path: &Path,
     ) -> Result<WorktreeCleanup> {
-        if self.live_in_checkout(&session.id)
-            || self.inner.integrating.lock().unwrap().contains(&session.id)
+        if self.live_in_checkout(&session.id) || self.inner.automatic.applied(&session.id).is_some()
         {
             return Ok(WorktreeCleanup::Live);
         }
@@ -2197,7 +2230,7 @@ impl ServerState {
                 interactions: Mutex::new(HashMap::new()),
                 _standalone_lock: standalone_lock,
                 workspace_metadata: Mutex::new(()),
-                integrating: Mutex::new(std::collections::HashSet::new()),
+                automatic: AutomaticActions::default(),
                 integration_git: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
                 user_config,
@@ -4278,6 +4311,12 @@ impl ServerState {
                 self.stored_summary(id)?;
             }
         }
+        // An automatic action owns its interaction until it finishes: it may
+        // run turns in it, so no client may act on it in the meantime.
+        // Reading it, to follow those turns, stays open.
+        if let Some(id) = locked_during_automatic_action(&request) {
+            self.inner.automatic.ensure_none(id)?;
+        }
         match request {
             Request::DiffBranches { id } => {
                 let summary = self.stored_summary(&id)?;
@@ -4382,7 +4421,7 @@ impl ServerState {
                 // Refuse deletion while integration is running, and only hide
                 // the Workspace once every sandbox has actually exited.
                 for session in journal::list_workspace_sessions(self.store_root(), &id)? {
-                    self.ensure_not_integrating(&session.id)?;
+                    self.ensure_no_automatic_action(&session.id)?;
                 }
                 for interaction in live {
                     interaction.kill()?;
@@ -4492,7 +4531,7 @@ impl ServerState {
                 Ok(Response::ModelRemembered)
             }
             Request::ResumeSession(request) => {
-                self.ensure_not_integrating(&request.id)?;
+                self.ensure_no_automatic_action(&request.id)?;
                 Ok(Response::SessionResumed(self.resume_session(request)?))
             }
             Request::CreateSessionWorktree { id } => {
@@ -4628,7 +4667,7 @@ impl ServerState {
                 ))
             }
             Request::SendMessage { id, message } => {
-                self.ensure_not_integrating(&id)?;
+                self.ensure_no_automatic_action(&id)?;
                 let interaction = self.interaction(&id)?;
                 interaction.send_message(message)?;
                 interaction.note_interacted();
@@ -4640,7 +4679,7 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::SetInteractionWorkingDirectory { id, directory } => {
-                self.ensure_not_integrating(&id)?;
+                self.ensure_no_automatic_action(&id)?;
                 self.interaction(&id)?.set_working_directory(directory)?;
                 Ok(Response::Accepted)
             }
@@ -4649,19 +4688,19 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::SetInteractionAutoCommit { id, enabled } => {
-                self.ensure_not_integrating(&id)?;
+                self.ensure_no_automatic_action(&id)?;
                 self.interaction(&id)?.set_auto_commit(enabled)?;
                 Ok(Response::Accepted)
             }
             Request::QueueMessage { id, message } => {
-                self.ensure_not_integrating(&id)?;
+                self.ensure_no_automatic_action(&id)?;
                 let interaction = self.interaction(&id)?;
                 let queued = interaction.queue_message(&message)?;
                 interaction.note_interacted();
                 Ok(Response::QueuedMessages(queued))
             }
             Request::SendQueuedMessage { id } => {
-                self.ensure_not_integrating(&id)?;
+                self.ensure_no_automatic_action(&id)?;
                 let interaction = self.interaction(&id)?;
                 let (sent, queued) = interaction.send_queued_message()?;
                 interaction.note_interacted();
@@ -4693,7 +4732,7 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::SetSessionCompleted { id, completed } => {
-                self.ensure_not_integrating(&id)?;
+                self.ensure_no_automatic_action(&id)?;
                 if completed == CompletionState::Completed {
                     self.ensure_checkout_integrated(&id)?;
                 }
@@ -4701,7 +4740,7 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::CloseInteraction { id } => {
-                self.ensure_not_integrating(&id)?;
+                self.ensure_no_automatic_action(&id)?;
                 // Closing a row a previous run left is the whole of the work:
                 // there is no agent to stop and no queue to clear, only the
                 // listing to take away — and it must not come back.

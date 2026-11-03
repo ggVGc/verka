@@ -244,8 +244,9 @@ pub struct App {
     /// Commit-message drafts kept in this client, keyed by interaction.
     integration_drafts: std::collections::HashMap<String, String>,
     pub retarget_prompt: Option<(String, Vec<styra_protocol::SavedBranch>)>,
-    pub rebase_status: Option<styra_protocol::RebaseStatus>,
-    pub pending_rebase: Option<String>,
+    /// The last rebase this client started, and the interaction it is of.
+    /// The server locks that interaction while it runs; this only follows it.
+    pub rebase_status: Option<(String, styra_protocol::RebaseStatus)>,
     pub pending_integration: Option<String>,
     /// The tag editor opened from the main view or live-interactions navigator.
     pub tag_picker: Option<TagPicker>,
@@ -624,7 +625,6 @@ impl App {
             integration_drafts: std::collections::HashMap::new(),
             retarget_prompt: None,
             rebase_status: None,
-            pending_rebase: None,
             pending_integration: None,
             tag_picker: None,
             search: Search::default(),
@@ -2068,6 +2068,14 @@ impl App {
             Some(source) => format!("{message}\n\nSource: {source}"),
             None => message,
         })
+    }
+
+    /// The rebase being followed, when it is of the interaction on screen.
+    pub fn shown_rebase(&self) -> Option<&styra_protocol::RebaseStatus> {
+        self.rebase_status
+            .as_ref()
+            .filter(|(id, _)| *id == self.session_id)
+            .map(|(_, status)| status)
     }
 
     /// Ask the event loop for something this screen cannot do itself; see

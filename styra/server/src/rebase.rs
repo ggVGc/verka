@@ -24,7 +24,11 @@ impl ServerState {
         let session = self.stored_summary(id)?;
         let mut status: RebaseStatus =
             serde_json::from_slice(&std::fs::read(session.path.join("rebase.json"))?)?;
-        if !status.finished && !self.inner.integrating.lock().unwrap().contains(id) {
+        let running = matches!(
+            self.inner.automatic.applied(id),
+            Some(AutomaticAction::Rebase | AutomaticAction::Retarget)
+        );
+        if !status.finished && !running {
             status.finished = true;
             status.message = "rebase was interrupted; retry rebase to continue".into();
         }
@@ -41,7 +45,7 @@ impl ServerState {
         target: Option<&str>,
         restore: Option<&str>,
     ) -> Result<()> {
-        self.ensure_not_integrating(id)?;
+        self.ensure_no_automatic_action(id)?;
         let (session, mut checkout, mut source) = if target.is_some() || restore.is_some() {
             let session = self.stored_summary(id)?;
             anyhow::ensure!(
@@ -163,10 +167,12 @@ impl ServerState {
             source_commit,
             output: String::new(),
         };
-        anyhow::ensure!(
-            self.inner.integrating.lock().unwrap().insert(id.into()),
-            "this interaction is already being rebased or integrated"
-        );
+        let action = if target.is_some() || restore.is_some() {
+            AutomaticAction::Retarget
+        } else {
+            AutomaticAction::Rebase
+        };
+        self.inner.automatic.begin(id, action)?;
         let prepared = (|| -> Result<()> {
             let _git = self.inner.integration_git.lock().unwrap();
             if target.is_some() || restored.is_some() {
@@ -222,7 +228,7 @@ impl ServerState {
                     ))));
                 }
             }
-            self.inner.integrating.lock().unwrap().remove(id);
+            self.inner.automatic.finish(id);
             return prepared;
         }
         let state = self.clone();
@@ -250,7 +256,7 @@ impl ServerState {
                     LogEntry::warn(status.message)
                 }));
             }
-            state.inner.integrating.lock().unwrap().remove(&id);
+            state.inner.automatic.finish(&id);
         });
         Ok(())
     }

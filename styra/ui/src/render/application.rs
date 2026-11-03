@@ -42,8 +42,10 @@ fn render_side_preview(
 
 pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     let mut feedback = RenderFeedback::default();
+    let rebase = view.overlays.rebase_status;
     if let MainView::Preview(preview) = &view.main {
-        let measured = preview::render(frame, preview, frame.area());
+        let (preview_area, rebase_area) = split_rebase_status(frame.area(), rebase);
+        let measured = preview::render(frame, preview, preview_area);
         note_preview_scroll(
             &mut feedback,
             PanelId::Preview {
@@ -52,6 +54,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             },
             measured,
         );
+        if let (Some(status), Some(area)) = (rebase, rebase_area) {
+            overlays::render_rebase_status(frame, status, area);
+        }
         render_reading_overlays(frame, &view.overlays);
         if let Some(busy) = &view.overlays.busy {
             busy::render(frame, busy);
@@ -68,12 +73,13 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             Constraint::Length(1),
         ])
         .split(frame.area());
+    let (main_area, rebase_area) = split_rebase_status(chunks[0], rebase);
     match &view.main {
         MainView::Events(events) => {
-            render_events(frame, events, view.session_id, chunks[0], &mut feedback)
+            render_events(frame, events, view.session_id, main_area, &mut feedback)
         }
         MainView::Raw(raw_view) => {
-            let measured = raw::render(frame, raw_view, chunks[0]);
+            let measured = raw::render(frame, raw_view, main_area);
             note_scroll(
                 &mut feedback,
                 PanelId::Preview {
@@ -97,14 +103,14 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             crate::chrome::panel_block(chrome),
             entries,
             *scroll_back,
-            chunks[0],
+            main_area,
         ),
-        MainView::Quota(quota_view) => quota::render(frame, quota_view, chunks[0]),
+        MainView::Quota(quota_view) => quota::render(frame, quota_view, main_area),
         MainView::Processes(processes_view) => {
-            crate::processes::render(frame, processes_view, chunks[0])
+            crate::processes::render(frame, processes_view, main_area)
         }
         MainView::Transcript(transcript_view) => {
-            let limit = transcript::render(frame, transcript_view, chunks[0]);
+            let limit = transcript::render(frame, transcript_view, main_area);
             note_scroll(
                 &mut feedback,
                 PanelId::Transcript {
@@ -115,7 +121,7 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             );
         }
         MainView::CheckoutDiff(panel) => {
-            let measured = panel.render(frame, chunks[0]);
+            let measured = panel.render(frame, main_area);
             feedback.diff_file_list_offset = measured.list_offset;
             feedback.diff_layout = measured.diff_layout;
             feedback.diff_report_page = measured.diff_report_page;
@@ -128,7 +134,7 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             );
         }
         MainView::Driva(driva_view) => {
-            let measured = driva::render(frame, driva_view, chunks[0]);
+            let measured = driva::render(frame, driva_view, main_area);
             note_scroll(
                 &mut feedback,
                 PanelId::Driva {
@@ -139,13 +145,16 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             );
         }
         MainView::Files(files_view) => {
-            render_files(frame, files_view, view.session_id, chunks[0], &mut feedback)
+            render_files(frame, files_view, view.session_id, main_area, &mut feedback)
         }
-        MainView::Answer(answer_view) => answer::render(frame, answer_view, chunks[0]),
+        MainView::Answer(answer_view) => answer::render(frame, answer_view, main_area),
         MainView::Overview(overview_view) => {
-            feedback.overview_rows = Some(overview::render(frame, overview_view, chunks[0]).rows);
+            feedback.overview_rows = Some(overview::render(frame, overview_view, main_area).rows);
         }
         MainView::Preview(_) => unreachable!(),
+    }
+    if let (Some(status), Some(area)) = (rebase, rebase_area) {
+        overlays::render_rebase_status(frame, status, area);
     }
     if message_height > 0 {
         messages::render(frame, view.notices, chunks[1]);
@@ -280,6 +289,32 @@ fn render_events(
     }
 }
 
+/// Take the rebase status box, when a rebase is being shown, off the bottom
+/// of `area`, so it sits under the log that follows the rebase's progress.
+fn split_rebase_status(
+    area: Rect,
+    status: Option<&styra_protocol::RebaseStatus>,
+) -> (Rect, Option<Rect>) {
+    let Some(status) = status else {
+        return (area, None);
+    };
+    let height =
+        overlays::rebase_status_height(status, area.width).min(area.height.saturating_sub(1));
+    if height == 0 {
+        return (area, None);
+    }
+    let main = Rect {
+        height: area.height - height,
+        ..area
+    };
+    let rebase = Rect {
+        y: main.bottom(),
+        height,
+        ..area
+    };
+    (main, Some(rebase))
+}
+
 /// Gently fade the log's border while navigation holds focus.
 fn fade_log_border(frame: &mut Frame, area: Rect) {
     let buffer = frame.buffer_mut();
@@ -388,9 +423,6 @@ fn render_reading_overlays(frame: &mut Frame, view: &ApplicationOverlays<'_>) {
     }
     if let Some((branch, restore)) = view.retarget_prompt {
         overlays::render_retarget(frame, branch, restore);
-    }
-    if let Some(status) = view.rebase_status {
-        overlays::render_rebase_status(frame, status);
     }
     if let Some(message) = view.integration_message {
         overlays::render_integration_message(frame, message, view.integration_target);

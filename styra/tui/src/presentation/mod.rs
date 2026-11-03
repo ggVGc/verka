@@ -794,7 +794,7 @@ fn draw_main(
         notices: &notices,
         footer: &footer,
         overlays: styra_ui::application::ApplicationOverlays {
-            rebase_status: app.rebase_status.as_ref(),
+            rebase_status: app.shown_rebase(),
             retarget_prompt: app.retarget_prompt.as_ref().map(|(text, history)| {
                 (
                     text.as_str(),

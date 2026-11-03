@@ -691,7 +691,7 @@ fn start_rebase(app: &mut App, client: &Client, target: Option<&str>) {
         Some(target) => client.retarget_session(&id, target),
         None => client.rebase_session(&id),
     };
-    app.rebase_status = Some(styra_protocol::RebaseStatus {
+    let status = styra_protocol::RebaseStatus {
         finished: started.is_err(),
         succeeded: false,
         output: String::new(),
@@ -700,10 +700,8 @@ fn start_rebase(app: &mut App, client: &Client, target: Option<&str>) {
             Ok(()) => "Starting rebase…".into(),
             Err(error) => format!("Could not rebase: {error:#}"),
         },
-    });
-    if started.is_ok() {
-        app.pending_rebase = Some(id);
-    }
+    };
+    app.rebase_status = Some((id, status));
 }
 
 /// Shown and logged both: the notice is cut to the terminal's width.

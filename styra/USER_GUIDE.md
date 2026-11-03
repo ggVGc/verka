@@ -629,8 +629,18 @@ worktree cleanup. If a retarget rebase stops, use `Ctrl+B` to retry it before
 switching branches.
 
 Press `Ctrl+B` while viewing an interaction to rebase its branch onto the current
-commit of its recorded source branch. A modal shows progress, conflict resolution,
-and the final result; press `Enter` or `Esc` to close it when the action finishes.
+commit of its recorded source branch. While it runs, a status box at the bottom of
+the interaction shows where the rebase stands, and any conflict resolution shows
+in the interaction's log like any other turn. Press `Enter` or `Esc` to close the
+box once it shows the final result.
+
+A rebase is one of the server's automatic actions, along with retargeting and
+integration: work it applies to an interaction on your behalf, possibly running
+turns in it. Until an automatic action finishes, the server refuses anything that
+would act on the interaction — sending or queueing messages, interrupting or
+stopping it, changing its settings, closing it, or running commands in its
+checkout — from any client, naming the action it is applying. Reading the
+interaction stays open.
 The interaction must be idle, with its changes committed and no queued messages.
 
 If conflicts occur, Styra resumes the interaction using its current model and

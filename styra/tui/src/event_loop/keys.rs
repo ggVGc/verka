@@ -42,7 +42,6 @@ enum Handled {
 pub(super) fn message_paste_active(app: &App) -> bool {
     (app.focus == Focus::Input || app.branch_prompt.is_some())
         && !app.help.is_open()
-        && app.rebase_status.is_none()
         && app.launcher.is_none()
         && app.template_picker.is_none()
         && app.rename_prompt.is_none()
@@ -181,10 +180,14 @@ impl Loop<'_> {
             reference_key(app, key);
             return Ok(Handled::Done);
         }
-        if let Some(status) = &app.rebase_status {
-            if status.finished && matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
-                app.rebase_status = None;
-            }
+        // The server refuses whatever would act on an interaction while it is
+        // rebased, so nothing is held back here: only the finished outcome,
+        // once read, is closed from the list.
+        if app.focus == Focus::List
+            && matches!(key.code, KeyCode::Esc | KeyCode::Enter)
+            && app.shown_rebase().is_some_and(|status| status.finished)
+        {
+            app.rebase_status = None;
             return Ok(Handled::Done);
         }
         if keys::HELP.matches(key) && reference_available(app) {

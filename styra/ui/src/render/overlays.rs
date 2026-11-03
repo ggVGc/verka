@@ -8,68 +8,44 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-pub fn render_rebase_status(frame: &mut Frame, status: &styra_protocol::RebaseStatus) {
-    let outer = frame.area();
-    let has_output = !status.output.is_empty();
-    let width = outer
-        .width
-        .saturating_sub(4)
-        .min(if has_output { 120 } else { 82 });
-    let height = if has_output {
-        outer.height.saturating_sub(4)
-    } else {
-        outer.height.min(10)
-    };
-    let area = Rect {
-        x: outer.x + outer.width.saturating_sub(width) / 2,
-        y: outer.y + outer.height.saturating_sub(height) / 2,
-        width,
-        height,
-    };
-    let title = if !status.finished {
-        " rebasing interaction "
+/// The most rows the rebase status box's message takes: the rebase itself is
+/// followed in the log above it, which keeps the room.
+const REBASE_STATUS_LINES: usize = 4;
+
+/// Rows the rebase status box needs at the bottom of a `width` wide panel.
+pub fn rebase_status_height(status: &styra_protocol::RebaseStatus, width: u16) -> u16 {
+    let lines = Paragraph::new(status.message.as_str())
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .line_count(width.saturating_sub(2))
+        .clamp(1, REBASE_STATUS_LINES);
+    lines as u16 + 2
+}
+
+/// Where a rebase stands, in a box across the bottom of the interaction. The
+/// conflict-resolution turn shows in the log above it, like any other turn.
+pub fn render_rebase_status(frame: &mut Frame, status: &styra_protocol::RebaseStatus, area: Rect) {
+    let (title, tone, footer) = if !status.finished {
+        (
+            " rebasing interaction ",
+            theme::RUNNING,
+            " locked while rebasing · conflicts are resolved by the current model ",
+        )
     } else if status.succeeded {
-        " rebase completed "
+        (" rebase completed ", theme::SUCCESS, " Enter / Esc close ")
     } else {
-        " rebase stopped "
-    };
-    let footer = if status.finished {
-        " Enter / Esc close "
-    } else {
-        " Working · conflicts are resolved by the current model "
+        (" rebase stopped ", theme::ERROR, " Enter / Esc close ")
     };
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::ACCENT))
-        .title(title)
-        .title_bottom(footer);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let message =
-        Paragraph::new(status.message.as_str()).wrap(ratatui::widgets::Wrap { trim: false });
-    let message_height = (message.line_count(inner.width) as u16).min(inner.height);
-    let message_area = Rect {
-        height: message_height,
-        ..inner
-    };
-    frame.render_widget(message, message_area);
-    if has_output {
-        let gap = message_height.saturating_add(1).min(inner.height);
-        let output_area = Rect {
-            y: inner.y + gap,
-            height: inner.height.saturating_sub(gap),
-            ..inner
-        };
-        let output = Paragraph::new(status.output.as_str())
-            .style(Style::default().fg(theme::TEXT))
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        let scroll = output
-            .line_count(output_area.width)
-            .saturating_sub(output_area.height as usize)
-            .min(u16::MAX as usize) as u16;
-        frame.render_widget(output.scroll((scroll, 0)), output_area);
-    }
+        .border_style(Style::default().fg(tone))
+        .title(Span::styled(title, Style::default().fg(tone)))
+        .title_bottom(Span::styled(footer, Style::default().fg(theme::MUTED_TEXT)));
+    let message = Paragraph::new(status.message.as_str())
+        .style(Style::default().fg(theme::TEXT))
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .block(block);
+    frame.render_widget(message, area);
 }
 
 /// Choose a new target or return to a saved branch.
@@ -505,13 +481,13 @@ mod tests {
     }
 
     #[test]
-    fn rebase_modal_shows_progress_and_final_outcomes() {
+    fn rebase_status_box_shows_progress_and_final_outcomes_but_not_model_output() {
         for (finished, succeeded, title) in [
             (false, false, "rebasing interaction"),
             (true, true, "rebase completed"),
             (true, false, "rebase stopped"),
         ] {
-            let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+            let mut terminal = Terminal::new(TestBackend::new(90, 5)).unwrap();
             let status = styra_protocol::RebaseStatus {
                 finished,
                 succeeded,
@@ -519,8 +495,9 @@ mod tests {
                 output: "MODEL: Resolved file.rs and continuing the rebase".into(),
                 source_commit: "abc123".into(),
             };
+            assert_eq!(rebase_status_height(&status, 90), 3);
             terminal
-                .draw(|frame| render_rebase_status(frame, &status))
+                .draw(|frame| render_rebase_status(frame, &status, frame.area()))
                 .unwrap();
             let screen: String = terminal
                 .backend()
@@ -531,40 +508,31 @@ mod tests {
                 .collect();
             assert!(screen.contains(title));
             assert!(screen.contains(&status.message));
-            assert!(screen.contains(&status.output));
+            assert!(!screen.contains(&status.output));
             assert_eq!(screen.contains("Enter / Esc close"), finished);
+            assert_eq!(screen.contains("locked while rebasing"), !finished);
         }
     }
 
     #[test]
-    fn rebase_modal_follows_the_latest_wrapped_model_output() {
-        let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
-        let status = styra_protocol::RebaseStatus {
-            finished: false,
+    fn rebase_status_box_grows_with_a_long_message_up_to_a_limit() {
+        let mut status = styra_protocol::RebaseStatus {
+            finished: true,
             succeeded: false,
-            message: "Resolving rebase conflicts".into(),
+            message: "Rebase stopped: a reason that wraps ".repeat(2),
             source_commit: "abc123".into(),
-            output: format!(
-                "{}\nLATEST: rebase continued successfully",
-                "older output that wraps across multiple rows ".repeat(80)
-            ),
+            output: String::new(),
         };
-        terminal
-            .draw(|frame| render_rebase_status(frame, &status))
-            .unwrap();
-        let screen: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(screen.contains(&status.message));
-        assert!(screen.contains("LATEST: rebase continued successfully"));
+        assert_eq!(rebase_status_height(&status, 42), 4);
+        status.message = status.message.repeat(40);
+        assert_eq!(
+            rebase_status_height(&status, 42),
+            REBASE_STATUS_LINES as u16 + 2
+        );
         for (width, height) in [(1, 1), (4, 4), (20, 6)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| render_rebase_status(frame, &status))
+                .draw(|frame| render_rebase_status(frame, &status, frame.area()))
                 .unwrap();
         }
     }

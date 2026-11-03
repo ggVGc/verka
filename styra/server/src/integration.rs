@@ -161,7 +161,7 @@ impl ServerState {
         &self,
         id: &str,
     ) -> Result<Option<crate::protocol::IntegrationResult>> {
-        if self.inner.integrating.lock().unwrap().contains(id) {
+        if self.inner.automatic.applied(id) == Some(AutomaticAction::Integration) {
             return Ok(None);
         }
         let session = self.stored_summary(id)?;
@@ -187,19 +187,12 @@ impl ServerState {
         })))
     }
 
-    pub(super) fn ensure_not_integrating(&self, id: &str) -> Result<()> {
-        let active: Vec<_> = self
-            .inner
-            .integrating
-            .lock()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect();
-        anyhow::ensure!(
-            !active.iter().any(|held| held == id),
-            "this interaction is being rebased or integrated"
-        );
+    /// Refuse to act on `id` while an automatic action is applied to it, or
+    /// to a checkout that action needs: its own, or the checkout of the
+    /// branch it lands on.
+    pub(super) fn ensure_no_automatic_action(&self, id: &str) -> Result<()> {
+        self.inner.automatic.ensure_none(id)?;
+        let active = self.inner.automatic.interactions();
         if active.is_empty() {
             return Ok(());
         }
@@ -224,8 +217,8 @@ impl ServerState {
             return Ok(());
         };
         let branch = self.inner.git.current_branch(&repository.root)?;
-        for integrating in active {
-            let (_, checkout, source) = self.integration_checkout(&integrating)?;
+        for automatic in active {
+            let (_, checkout, source) = self.integration_checkout(&automatic)?;
             anyhow::ensure!(
                 checkout.path.as_deref() != Some(&repository.root)
                     && !(branch.as_deref() == Some(&source)
@@ -236,7 +229,7 @@ impl ServerState {
                                 },
                             )
                         })),
-                "this checkout is participating in a rebase or integration"
+                "this checkout is participating in an automatic action"
             );
         }
         Ok(())
@@ -268,7 +261,7 @@ impl ServerState {
 
     pub(super) fn generate_integration_message(&self, id: &str) -> Result<String> {
         let (session, checkout, source) = self.integration_checkout(id)?;
-        self.ensure_not_integrating(id)?;
+        self.ensure_no_automatic_action(id)?;
         let path = checkout
             .path
             .as_deref()
@@ -313,7 +306,7 @@ impl ServerState {
     }
 
     pub(super) fn start_integration(&self, id: &str, message: &str) -> Result<()> {
-        self.ensure_not_integrating(id)?;
+        self.ensure_no_automatic_action(id)?;
         anyhow::ensure!(!message.trim().is_empty(), "enter a squash commit message");
         let (session, checkout, source) = self.integration_checkout(id)?;
         self.ensure_branches_closed(&session)?;
@@ -396,17 +389,9 @@ impl ServerState {
                 "send or discard queued messages before integrating"
             );
         }
-        {
-            let mut active = self
-                .inner
-                .integrating
-                .lock()
-                .expect("integration lock poisoned");
-            anyhow::ensure!(
-                active.insert(id.to_owned()),
-                "this interaction is already being integrated"
-            );
-        }
+        self.inner
+            .automatic
+            .begin(id, AutomaticAction::Integration)?;
         // A retry after a successful commit only retries cleanup.
         let stored = (|| -> Result<Progress> {
             let mut progress = prior.unwrap_or_else(|| Progress {
@@ -427,7 +412,7 @@ impl ServerState {
         let progress = match stored {
             Ok(progress) => progress,
             Err(error) => {
-                self.inner.integrating.lock().unwrap().remove(id);
+                self.inner.automatic.finish(id);
                 return Err(error);
             }
         };
@@ -459,7 +444,7 @@ impl ServerState {
             } else if let Err(error) = result {
                 tracing::warn!(session_id = id, "integration stopped: {error:#}");
             }
-            state.inner.integrating.lock().unwrap().remove(&id);
+            state.inner.automatic.finish(&id);
         });
         Ok(())
     }
@@ -1458,13 +1443,7 @@ mod tests {
             assert_eq!(git(&fixture.host, &["rev-parse", "main"]), source);
             assert!(fixture.path().exists());
             assert!(!fixture.session.join(journal::INTEGRATION_FILE).exists());
-            assert!(!fixture
-                .state
-                .inner
-                .integrating
-                .lock()
-                .unwrap()
-                .contains(&fixture.id));
+            assert_eq!(fixture.state.inner.automatic.applied(&fixture.id), None);
             journal::store_session_completed(&path, completed).unwrap();
         }
         fixture
@@ -1838,6 +1817,54 @@ mod tests {
             .set_session_completion(&fixture.id, CompletionState::Sealed)
             .unwrap();
         assert!(fixture.state.start_rebase(&fixture.id).is_err());
+    }
+
+    #[test]
+    fn an_interaction_with_an_automatic_action_refuses_requests_that_act_on_it() {
+        let fixture = Fixture::new();
+        let locked = "an automatic rebase is being applied to this interaction";
+        let id = fixture.id.clone();
+        let acting = || {
+            [
+                Request::SendMessage {
+                    id: id.clone(),
+                    message: SendMessage {
+                        text: "continue".into(),
+                        selection: None,
+                        contract: None,
+                    },
+                },
+                Request::InterruptInteraction { id: id.clone() },
+                Request::StopInteraction { id: id.clone() },
+                Request::ClearQueuedMessages { id: id.clone() },
+                Request::SetInteractionAutoRetry {
+                    id: id.clone(),
+                    enabled: true,
+                },
+                Request::CloseInteraction { id: id.clone() },
+            ]
+        };
+        fixture
+            .state
+            .inner
+            .automatic
+            .begin(&id, AutomaticAction::Rebase)
+            .unwrap();
+        for request in acting() {
+            let error = fixture.state.handle(request).unwrap_err();
+            assert!(format!("{error:#}").contains(locked), "{error:#}");
+        }
+        // Following the rebase reads the interaction, which stays open.
+        fixture
+            .state
+            .handle(Request::SessionBranchHistory { id: id.clone() })
+            .unwrap();
+        fixture.state.inner.automatic.finish(&id);
+        for request in acting() {
+            if let Err(error) = fixture.state.handle(request) {
+                assert!(!format!("{error:#}").contains(locked), "{error:#}");
+            }
+        }
     }
 
     #[test]

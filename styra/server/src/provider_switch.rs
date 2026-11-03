@@ -12,7 +12,7 @@ trait Environment {
     fn summary(&self, id: &str) -> Result<SessionSummary>;
     fn activity(&self, id: &str) -> Option<InteractionActivity>;
     fn finish_shutdown(&self, id: &str) -> bool;
-    fn ensure_not_integrating(&self, id: &str) -> Result<()>;
+    fn ensure_no_automatic_action(&self, id: &str) -> Result<()>;
     fn native_transcripts(&self) -> &dyn NativeTranscripts;
     fn native_location(&self, session: &SessionSummary) -> Result<(String, PathBuf)>;
     fn record_switch(
@@ -53,7 +53,7 @@ fn switch_with(
     id: &str,
     selection: &Selection,
 ) -> Result<SessionSummary> {
-    environment.ensure_not_integrating(id)?;
+    environment.ensure_no_automatic_action(id)?;
     crate::agent::validate_selection(selection)?;
     let summary = environment.summary(id)?;
     let from = summary.selection.provider;
@@ -135,8 +135,8 @@ impl Environment for ServerState {
             .map_or(true, |previous| previous.interaction.shut_down())
     }
 
-    fn ensure_not_integrating(&self, id: &str) -> Result<()> {
-        ServerState::ensure_not_integrating(self, id)
+    fn ensure_no_automatic_action(&self, id: &str) -> Result<()> {
+        ServerState::ensure_no_automatic_action(self, id)
     }
 
     fn native_transcripts(&self) -> &dyn NativeTranscripts {
@@ -323,7 +323,7 @@ mod tests {
             self.activity.unwrap().1
         }
 
-        fn ensure_not_integrating(&self, id: &str) -> Result<()> {
+        fn ensure_no_automatic_action(&self, id: &str) -> Result<()> {
             assert_eq!(id, SESSION);
             Ok(())
         }

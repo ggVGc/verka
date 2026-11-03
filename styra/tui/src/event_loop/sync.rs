@@ -248,23 +248,19 @@ impl Loop<'_> {
 
 /// Follow a rebase this client started. Reports whether there was one.
 fn poll_rebase(app: &mut App, client: &Client) -> bool {
-    let Some(id) = app.pending_rebase.clone() else {
+    let Some((id, status)) = app
+        .rebase_status
+        .as_mut()
+        .filter(|(_, status)| !status.finished)
+    else {
         return false;
     };
-    match client.session_rebase_status(&id) {
-        Ok(status) => {
-            if status.finished {
-                app.pending_rebase = None;
-            }
-            app.rebase_status = Some(status);
-        }
+    match client.session_rebase_status(id) {
+        Ok(progress) => *status = progress,
         Err(error) => {
-            app.pending_rebase = None;
-            if let Some(status) = app.rebase_status.as_mut() {
-                status.finished = true;
-                status.succeeded = false;
-                status.message = format!("Could not read rebase progress: {error:#}");
-            }
+            status.finished = true;
+            status.succeeded = false;
+            status.message = format!("Could not read rebase progress: {error:#}");
         }
     }
     true
