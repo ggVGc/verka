@@ -1555,10 +1555,9 @@ fn has_news(before: &InteractionSummary, now: &InteractionSummary) -> bool {
 }
 
 fn sort_interactions(interactions: &mut [InteractionSummary]) {
-    // Keep paused interactions below the others, latest operator message first.
+    // Latest operator message first, regardless of activity or stop reason.
     interactions.sort_by_key(|interaction| {
         (
-            interaction.activity_reason == Some(styra_protocol::InteractionActivityReason::Paused),
             std::cmp::Reverse(if interaction.last_user_message_at_ms == 0 {
                 created_at_ms(interaction)
             } else {
@@ -1722,7 +1721,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn live_interactions_open_newest_first_with_paused_last() {
+    fn live_interactions_open_newest_first_regardless_of_pause_state() {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
@@ -1771,10 +1770,10 @@ pub(crate) mod tests {
         assert_eq!(
             item_ids(&live),
             [
-                "0000000000200-1-0",
-                "0000000000100-1-0",
                 "0000000000400-1-0",
-                "0000000000300-1-0"
+                "0000000000300-1-0",
+                "0000000000200-1-0",
+                "0000000000100-1-0"
             ]
         );
     }
@@ -1796,10 +1795,10 @@ pub(crate) mod tests {
         assert_eq!(
             item_ids(&live),
             [
+                "0000000000400-paused",
                 "0000000000100-old",
                 "0000000000200-new",
-                "0000000000300-unsent",
-                "0000000000400-paused"
+                "0000000000300-unsent"
             ]
         );
 
@@ -1807,15 +1806,15 @@ pub(crate) mod tests {
         // though no other metadata (or agent response) has changed yet.
         newer.last_user_message_at_ms = 1100;
         let mut refreshed = live.items.clone();
-        refreshed[1] = newer;
+        refreshed[2] = newer;
         assert!(live.refresh(refreshed));
         assert_eq!(
             item_ids(&live),
             [
                 "0000000000200-new",
+                "0000000000400-paused",
                 "0000000000100-old",
-                "0000000000300-unsent",
-                "0000000000400-paused"
+                "0000000000300-unsent"
             ]
         );
     }
