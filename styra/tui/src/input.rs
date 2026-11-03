@@ -54,7 +54,6 @@ pub fn handle_rename_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
             match client.rename_session(&app.session_id, name) {
                 Ok(session) => {
                     app.interactions.note_name(session.id, session.name);
-                    app.branch_needs_prompt_name = false;
                     app.rename_prompt = None;
                 }
                 Err(error) => app.show_error(format!("could not rename interaction: {error:#}")),
@@ -1283,23 +1282,13 @@ pub fn handle_input_key(
     match key {
         // With several boxes, Esc steps back to choosing between them; a
         // second Esc, from there, leaves as it does with one.
-        k if GLOBAL_LEAVE_MESSAGE.matches(k) => leave_message(app),
+        k if GLOBAL_LEAVE_MESSAGE.matches(k) => app.enter_list(),
         // Choosing a shape is part of writing the message, so it lives in the
         // box rather than being a mode entered from outside it.
         k if EDITOR_SEND.matches(k) || EDITOR_SEND_IN_BRANCH.matches(k) => {
             // A mid-turn move is refused by the server, which puts the
             // message back in the box with its reason.
             let create_worktree = creates_worktree(app, k);
-            if app.branch_needs_prompt_name {
-                if let Some(name) =
-                    styra_server::journal::name_from_message(Some(&app.composer.message()))
-                {
-                    if let Err(error) = client.rename_session(&app.session_id, Some(&name)) {
-                        return app.show_error(format!("could not name the branch: {error:#}"));
-                    }
-                    app.branch_needs_prompt_name = false;
-                }
-            }
             if let Some(message) = app.take_message() {
                 app.enter_list();
                 if create_worktree {
@@ -1374,11 +1363,6 @@ fn handle_editor_controls(app: &mut App, key: KeyEvent) {
         k if EDITOR_AUTO_COMMIT.matches(k) => toggle_auto_commit(app),
         _ => {}
     }
-}
-
-fn leave_message(app: &mut App) {
-    app.branch_needs_prompt_name = false;
-    app.enter_list();
 }
 
 #[cfg(test)]
@@ -1567,13 +1551,11 @@ mod tests {
             styra_protocol::agent::Selection::parse("codex").unwrap(),
             "session-1",
         );
-        app.branch_needs_prompt_name = true;
         for (draft, expected) in [("New name", Some("New name")), ("   ", None)] {
             app.rename_prompt = Some(draft.into());
             handle_rename_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
             assert!(app.rename_prompt.is_none());
             assert_eq!(app.interactions.name("session-1"), expected);
-            assert!(!app.branch_needs_prompt_name);
         }
     }
 
@@ -1861,27 +1843,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn escape_closes_the_branch_prompt_without_naming_it_from_a_later_message() {
-        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
-        app.session_id = "branch-1".into();
-        app.branch_needs_prompt_name = true;
-        app.enter_input();
-        app.composer.insert("discarded prompt");
-        let client = Client::new(PathBuf::from("/missing.sock"));
-        let mut live = Attachment::Detached;
-        handle_input_key(
-            &mut app,
-            &client,
-            "workspace",
-            &mut live,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        );
-        assert_eq!(app.focus, crate::app::Focus::List);
-        assert!(!app.branch_needs_prompt_name);
-        assert!(app.take_request().is_none());
-    }
-
     /// Ctrl-N opens another box; with two, Esc chooses between them rather
     /// than leaving, and only a second Esc leaves — with both boxes kept.
     #[test]
@@ -1916,26 +1877,6 @@ mod tests {
         assert_eq!(app.focus, crate::app::Focus::List);
         assert!(!app.composer.choosing());
         assert_eq!(app.composer.parts(), ["a", "b"]);
-    }
-
-    #[test]
-    fn a_blank_branch_prompt_keeps_the_fallback_and_waits_for_input() {
-        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
-        app.session_id = "branch-1".into();
-        app.branch_needs_prompt_name = true;
-        app.enter_input();
-        let client = Client::new(PathBuf::from("/missing.sock"));
-        let mut live = Attachment::Detached;
-        handle_input_key(
-            &mut app,
-            &client,
-            "workspace",
-            &mut live,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        );
-        assert_eq!(app.focus, crate::app::Focus::Input);
-        assert!(app.branch_needs_prompt_name);
-        assert!(app.take_request().is_none());
     }
 
     #[test]

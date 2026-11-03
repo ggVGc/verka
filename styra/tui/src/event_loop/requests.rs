@@ -57,9 +57,6 @@ impl Loop<'_> {
             | Request::GenerateSessionName => {}
             Request::Workspace => return self.pick_workspace(workspace_id),
             Request::OpenSession(id) => return Ok(Some(RunOutcome::OpenSession(id))),
-            Request::OpenBranch(id, message, contract) => {
-                return Ok(Some(RunOutcome::OpenBranch(id, message, contract)))
-            }
             Request::JumpBack => return Ok(Some(RunOutcome::JumpBack)),
             Request::JumpForward => return Ok(Some(RunOutcome::JumpForward)),
             Request::InteractionHistory => return self.pick_from_history(),

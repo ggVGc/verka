@@ -1079,12 +1079,12 @@ pub fn follow_branch(app: &mut App) {
     app.ask(crate::app::Request::OpenSession(session_id));
 }
 
-/// Branch the current Session with the choice confirmed in the main view.
-/// The result is opened immediately so the operator sees the new sibling; the
-/// source Interaction keeps running and stays in the live list, since a branch
-/// takes a copy rather than moving the conversation. The server marks both
-/// sides, so each Session shows where the other one is — see
-/// [`follow_branch`].
+/// Branch the current Session with the choice confirmed in the main view, and
+/// start the branch on `message` in the background. The view stays on the
+/// source: the branch joins the live list, where the operator can enter it
+/// when they choose, and a branch takes a copy rather than moving the
+/// conversation. The server marks both sides, so each Session shows where the
+/// other one is — see [`follow_branch`].
 pub fn branch_session(
     app: &mut App,
     client: &Client,
@@ -1093,35 +1093,51 @@ pub fn branch_session(
     checkout: styra_protocol::BranchCheckout,
     message: String,
 ) {
-    match client.branch_session_with_checkout(
+    let Some(prompt) = app.branch_prompt.as_ref() else {
+        return;
+    };
+    let selection = prompt.selection.clone();
+    let contract = prompt.contract;
+    let branched = match client.branch_session_with_checkout(
         &app.session_id,
         Some(at_ms),
         history,
-        app.branch_prompt
-            .as_ref()
-            .map(|prompt| prompt.selection.provider),
-        app.branch_prompt
-            .as_ref()
-            .map(|prompt| prompt.selection.clone()),
+        Some(selection.provider),
+        Some(selection.clone()),
         Some(checkout),
     ) {
-        Ok(branched) => {
-            app.push_log(LogEntry::info(format!(
-                "branched to session {}",
-                branched.name.as_deref().unwrap_or(&branched.id)
-            )));
-            let contract = app
-                .branch_prompt
-                .as_ref()
-                .and_then(|prompt| prompt.contract);
-            app.branch_prompt = None;
-            app.ask(crate::app::Request::OpenBranch(
-                branched.id,
-                message,
-                contract,
-            ));
+        Ok(branched) => branched,
+        Err(error) => {
+            return app.push_log(LogEntry::error(format!("branch failed: {error:#}")));
         }
-        Err(error) => app.push_log(LogEntry::error(format!("branch failed: {error:#}"))),
+    };
+    app.branch_prompt = None;
+    // The first message names the branch, as it would a new Session.
+    let mut name = branched.name.clone().unwrap_or_else(|| branched.id.clone());
+    if let Some(prompt_name) = styra_server::journal::name_from_message(Some(&message)) {
+        match client.rename_session(&branched.id, Some(&prompt_name)) {
+            Ok(renamed) => {
+                app.interactions
+                    .note_name(renamed.id.clone(), renamed.name.clone());
+                name = prompt_name;
+            }
+            Err(error) => app.push_log(LogEntry::warn(format!(
+                "could not name the branch: {error:#}"
+            ))),
+        }
+    }
+    let started = client
+        .resume_session(&ResumeSession {
+            id: branched.id.clone(),
+            launch: app.launch.interaction.clone(),
+            selection: Some(selection.clone()),
+        })
+        .and_then(|_| client.send_turn(&branched.id, turn(&message, &selection, contract)));
+    match started {
+        Ok(()) => app.push_log(LogEntry::info(format!("branched to session {name}"))),
+        Err(error) => app.push_log(LogEntry::error(format!(
+            "branched to session {name}, but could not start it: {error:#}"
+        ))),
     }
 }
 
@@ -1269,37 +1285,70 @@ mod tests {
     }
 
     #[test]
-    fn branch_dialog_sends_its_message_selection_history_and_checkout_together() {
+    fn branch_dialog_starts_the_branch_without_leaving_the_source() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        use styra_protocol::{BranchCheckout, BranchHistory};
+        use std::sync::Mutex;
+        use styra_protocol::{BranchCheckout, BranchHistory, Request, Response};
 
-        struct BranchServer(BranchCheckout);
+        struct BranchServer {
+            checkout: BranchCheckout,
+            seen: Mutex<Vec<&'static str>>,
+        }
         impl styra_server::InProcessServer for BranchServer {
-            fn handle(
-                &self,
-                request: styra_protocol::Request,
-            ) -> anyhow::Result<styra_protocol::Response> {
-                let styra_protocol::Request::BranchSession {
-                    id,
-                    at_ms,
-                    history,
-                    provider,
-                    selection,
-                    checkout,
-                } = request
-                else {
-                    anyhow::bail!("unexpected request");
-                };
-                assert_eq!(id, "source");
-                assert_eq!(at_ms, Some(42));
-                assert_eq!(history, BranchHistory::SelectedOnly);
-                assert_eq!(checkout, Some(self.0));
-                let selection = selection.unwrap();
-                assert_eq!(provider, Some(selection.provider));
-                assert_eq!(selection.provider, Provider::Claude);
-                Ok(styra_protocol::Response::SessionBranched(summary(
-                    "branched", 1, None,
-                )))
+            fn handle(&self, request: Request) -> anyhow::Result<Response> {
+                match request {
+                    Request::BranchSession {
+                        id,
+                        at_ms,
+                        history,
+                        provider,
+                        selection,
+                        checkout,
+                    } => {
+                        assert_eq!(id, "source");
+                        assert_eq!(at_ms, Some(42));
+                        assert_eq!(history, BranchHistory::SelectedOnly);
+                        assert_eq!(checkout, Some(self.checkout));
+                        let selection = selection.unwrap();
+                        assert_eq!(provider, Some(selection.provider));
+                        assert_eq!(selection.provider, Provider::Claude);
+                        self.seen.lock().unwrap().push("branch");
+                        Ok(Response::SessionBranched(summary("branched", 1, None)))
+                    }
+                    Request::RenameSession(rename) => {
+                        assert_eq!(rename.id, "branched");
+                        assert_eq!(rename.name.as_deref(), Some("branch instruction"));
+                        self.seen.lock().unwrap().push("rename");
+                        let mut renamed = summary("branched", 1, None);
+                        renamed.name = rename.name;
+                        Ok(Response::SessionRenamed(renamed))
+                    }
+                    Request::ResumeSession(resume) => {
+                        assert_eq!(resume.id, "branched");
+                        let selection = resume.selection.unwrap();
+                        assert_eq!(selection.provider, Provider::Claude);
+                        self.seen.lock().unwrap().push("resume");
+                        Ok(Response::SessionResumed(SessionInfo {
+                            id: resume.id,
+                            name: None,
+                            workspace_id: "workspace".into(),
+                            selection,
+                            workspace: "/workspace".into(),
+                            journal_path: "/journal".into(),
+                            driva: Default::default(),
+                            updates_after: 0,
+                            queued: Vec::new(),
+                        }))
+                    }
+                    Request::SendMessage { id, message } => {
+                        assert_eq!(id, "branched");
+                        assert_eq!(message.text, "branch instruction");
+                        assert_eq!(message.contract, Some(Contract::Lines));
+                        self.seen.lock().unwrap().push("send");
+                        Ok(Response::Accepted)
+                    }
+                    _ => anyhow::bail!("unexpected request"),
+                }
             }
             fn shutdown(&self) -> anyhow::Result<()> {
                 Ok(())
@@ -1310,7 +1359,11 @@ mod tests {
             (KeyModifiers::NONE, BranchCheckout::ShareSource),
             (KeyModifiers::CONTROL, BranchCheckout::NewWorktree),
         ] {
-            let client = Client::in_process(std::sync::Arc::new(BranchServer(checkout)));
+            let server = std::sync::Arc::new(BranchServer {
+                checkout,
+                seen: Mutex::default(),
+            });
+            let client = Client::in_process(server.clone());
             let mut app = App::new(Selection::new(Provider::Codex), "source");
             app.composer.set("source draft".into());
             let mut prompt = crate::branch::BranchPrompt::new(42, Selection::new(Provider::Claude));
@@ -1328,11 +1381,18 @@ mod tests {
                 KeyEvent::new(KeyCode::Enter, modifiers),
             );
             assert!(app.branch_prompt.is_none());
+            assert_eq!(app.session_id, "source");
             assert_eq!(app.composer.message(), "source draft");
             assert_eq!(app.selection.provider, Provider::Codex);
-            assert!(matches!(app.take_open_session_request(),
-                Some(crate::app::Request::OpenBranch(id, message, Some(Contract::Lines)))
-                    if id == "branched" && message == "branch instruction"));
+            assert!(app.take_request().is_none());
+            assert_eq!(
+                *server.seen.lock().unwrap(),
+                ["branch", "rename", "resume", "send"]
+            );
+            assert_eq!(
+                app.interactions.name("branched"),
+                Some("branch instruction")
+            );
         }
     }
 

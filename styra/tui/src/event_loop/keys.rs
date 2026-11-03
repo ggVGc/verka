@@ -257,15 +257,7 @@ impl Loop<'_> {
             if !handle_audio_key(&mut self.audio, app, client, key) {
                 input::handle_branch_prompt_key(app, client, key);
             }
-            // Confirming has already branched; open the result on this key
-            // rather than leaving the switch queued behind the next one.
-            return Ok(match app.take_open_session_request() {
-                Some(Request::OpenSession(id)) => Handled::Exit(RunOutcome::OpenSession(id)),
-                Some(Request::OpenBranch(id, message, contract)) => {
-                    Handled::Exit(RunOutcome::OpenBranch(id, message, contract))
-                }
-                _ => Handled::Done,
-            });
+            return Ok(Handled::Done);
         }
         // The link menu is modal over link navigation, so it owns the keys
         // that would otherwise move the highlight or open the link directly.

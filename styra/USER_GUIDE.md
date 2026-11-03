@@ -136,7 +136,7 @@ where `Space` keeps its own link menu.
 | `Esc` (several boxes) | choose between the boxes: `j`/`k` move, `Enter`/`i` type in the chosen box, `d` deletes it, `Ctrl+N` adds one after it, `Esc` again leaves the editor with the boxes kept |
 | `s` / `S` | interrupt the active turn / stop its interaction |
 | `n` / `N` / `Ctrl+N` | go to a newly idle interaction, or the next running one / cycle actively running interactions / start a new session in the current Session's checkout when it has one; pressed again on that still-blank screen, it starts at the Workspace root instead |
-| `B` | branch from history through, or only, the selected entry; choose a new worktree or share the current one; opens the branch and leaves the source running |
+| `B` | branch from history through, or only, the selected entry; choose a new worktree or share the current one; starts the branch in the background and stays on the source |
 | `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |

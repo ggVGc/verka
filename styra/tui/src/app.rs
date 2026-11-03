@@ -168,8 +168,6 @@ pub struct App {
     /// The event list and the operator's place in it; see [`Timeline`].
     pub timeline: Timeline,
     pub focus: Focus,
-    /// The first message in a newly opened branch supplies its title.
-    pub branch_needs_prompt_name: bool,
     pub view: View,
     /// The open page within the details view.
     pub details_tab: DetailsTab,
@@ -400,8 +398,6 @@ pub enum Request {
     /// skipping the picker — e.g. right after branching one, to look at the
     /// result rather than having to find it again in the list.
     OpenSession(String),
-    /// Open a newly created branch and submit its first message and contract.
-    OpenBranch(String, String, Option<styra_protocol::Contract>),
     /// Move backward through explicitly entered interactions.
     JumpBack,
     /// Move forward through explicitly entered interactions.
@@ -595,7 +591,6 @@ impl App {
         Self {
             timeline: Timeline::default(),
             focus: Focus::List,
-            branch_needs_prompt_name: false,
             view: View::Events,
             details_tab: DetailsTab::default(),
             details_scroll: Scroll::default(),
@@ -2089,19 +2084,6 @@ impl App {
         self.requests.pop_front()
     }
 
-    /// Take the next effect only when it is "open this Session". The branch
-    /// chooser uses this to switch on the key that confirmed the branch,
-    /// rather than leaving the new Session queued behind the operator's next
-    /// keypress, and without consuming an unrelated request ahead of it.
-    pub fn take_open_session_request(&mut self) -> Option<Request> {
-        matches!(
-            self.requests.front(),
-            Some(Request::OpenSession(_) | Request::OpenBranch(_, _, _))
-        )
-        .then(|| self.requests.pop_front())
-        .flatten()
-    }
-
     /// Take the next effect only when it is a Workspace launch edit. Modal
     /// launch controls use this to dispatch their own follow-up immediately
     /// without consuming an unrelated request that was already ahead of it.
@@ -3543,23 +3525,6 @@ mod tests {
         assert_eq!(app.take_request(), Some(Request::Templates));
         assert_eq!(app.take_request(), Some(Request::Quit));
         assert_eq!(app.take_request(), None);
-    }
-
-    /// The branch chooser dispatches its own switch on the confirming key, so
-    /// it takes an "open this Session" request — and only that, never one that
-    /// was already waiting ahead of it.
-    #[test]
-    fn only_an_open_session_request_is_taken_by_the_branch_chooser() {
-        let mut app = app();
-        app.ask(Request::Quit);
-        app.ask(Request::OpenSession("s-2".into()));
-
-        assert_eq!(app.take_open_session_request(), None);
-        assert_eq!(app.take_request(), Some(Request::Quit));
-        assert_eq!(
-            app.take_open_session_request(),
-            Some(Request::OpenSession("s-2".into()))
-        );
     }
 
     #[test]

@@ -1020,9 +1020,11 @@ Two client-facing shortcuts:
   leaving the list.
 - `B` in the event list opens a choice and branches the current Session under
   the *same* provider, seeded either with history through the selected entry or
-  with only that entry. It opens the branch immediately after confirmation,
-  the same as `x`, while the source Interaction keeps running and stays in the
-  live list — a branch takes a copy, so there is nothing to stop. The cutoff is resolved by timestamp — Styra's own journal and a
+  with only that entry. Confirming names the branch from its first message
+  and starts it on that message in the background; the view stays on the
+  source, which keeps running, and the branch joins the live list to be
+  entered when the operator chooses — a branch takes a copy, so there is
+  nothing to stop. The cutoff is resolved by timestamp — Styra's own journal and a
   provider's native transcript are decoded differently and do not otherwise
   line up — so a `RawLine`'s `at_ms` (via the selected entry's `raw_index`)
   is compared against each native message's own timestamp. An entry without a
@@ -1032,8 +1034,6 @@ Two client-facing shortcuts:
   resolved from it. So when the cutoff lands on an operator message, the
   server names that message's text and keeps the native message matching it —
   branching through one's own turn must not branch through the previous one.
-  Confirming the chooser opens the branch on that key rather than leaving the
-  switch behind the operator's next keypress.
 - `Enter` on a branch marker in the event list opens the Session that marker
   names, which is how an operator walks between a source and its branches.
   `b` remains a shortcut for that action. On any other entry, `Enter` keeps

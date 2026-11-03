@@ -47,7 +47,6 @@ pub enum RunOutcome {
         open_interactions: bool,
     },
     OpenSession(String),
-    OpenBranch(String, String, Option<styra_protocol::Contract>),
     /// Move backward through explicitly entered interactions.
     JumpBack,
     /// Move forward through explicitly entered interactions.
