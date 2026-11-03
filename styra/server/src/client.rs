@@ -307,8 +307,7 @@ impl Client {
 
     /// Branch a stored Session into a new sibling Session, using `history` to
     /// keep the source through `at_ms` or only the selected entry, optionally
-    /// under a different provider. A same-provider branch leaves the source
-    /// untouched; one that changes provider seals it, as a conversion does.
+    /// under a different provider. The source is left untouched either way.
     pub fn branch_session(
         &self,
         id: &str,

@@ -1804,16 +1804,8 @@ pub fn summary_line(
                 summary_style,
             ));
             if let Some((from, to)) = entry.branch_provider_switch {
-                let sealed = match direction {
-                    styra_protocol::event::BranchDirection::To => "; source sealed",
-                    styra_protocol::event::BranchDirection::From => "",
-                };
                 branch_tail.push(Span::styled(
-                    format!(
-                        " (provider switch: {} → {}{sealed})",
-                        from.as_str(),
-                        to.as_str()
-                    ),
+                    format!(" (provider switch: {} → {})", from.as_str(), to.as_str()),
                     summary_style,
                 ));
             }
@@ -2654,10 +2646,10 @@ mod tests {
         entry.branch_provider_switch = Some((Provider::Claude, Provider::Codex));
         let switched = text(entry_rows_with_max_rows(&entry, 120, 5, render));
         assert!(
-            switched.contains("provider switch: claude → codex; source sealed"),
+            switched.contains("provider switch: claude → codex)"),
             "{switched}"
         );
-        assert!(!plain.contains("sealed"));
+        assert!(!switched.contains("sealed"), "{switched}");
         let destination_marker = AgentEvent::Branched {
             direction: BranchDirection::From,
             session: "source".into(),

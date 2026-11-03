@@ -313,8 +313,8 @@ pub fn run_session_picker(
             // already in it, it goes back to active; pressed on a row in the
             // other one, it changes how the Session is finished with.
             // Sealed rows are not among them: nothing an operator types seals
-            // a Session — Styra does that itself when a conversion leaves the
-            // source behind — and nothing they type undoes it either, so `C`
+            // a Session — Styra does that itself once integration has cleaned
+            // up after it — and nothing they type undoes it either, so `C`
             // and `Z` pass over a sealed row rather than appearing to reopen
             // it.
             k if (keys::SESSIONS_COMPLETE.matches(k) || keys::SESSIONS_ABANDON.matches(k))

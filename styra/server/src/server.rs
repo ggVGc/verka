@@ -3348,11 +3348,9 @@ impl ServerState {
     /// conversation is a fresh copy. A shared checkout still exposes file
     /// changes to both Sessions independently of their conversation histories.
     ///
-    /// A branch that changes provider additionally seals the source: the
-    /// conversation continues under the new provider, and the old transcript
-    /// is not somewhere the operator can go on adding to and have the
-    /// conversion see it. A same-provider branch seals nothing — it is a
-    /// checkpoint, and the source is as usable after it as before.
+    /// Changing provider makes no difference to the source: it is as usable
+    /// after the branch as before. Moving a Session itself to another
+    /// provider is [`Self::switch_session_provider`]'s job, not a branch's.
     ///
     /// The branch always gets a fresh native provider session id, even when
     /// the provider does not change: Genta's own conversion only generates
@@ -3393,15 +3391,6 @@ impl ServerState {
         }
         if let Ok(source) = self.interaction(id) {
             ensure_branchable(id, source.activity.activity())?;
-        }
-        // A conversion seals the source below, and a sealed Session has
-        // nothing running in it. Killed before anything is read, so the
-        // transcript and journal copied are final and the agent cannot go on
-        // working while the branch is made.
-        if to_provider != from_provider {
-            if let Ok(source) = self.interaction(id) {
-                source.kill()?;
-            }
         }
         let provider_session_id = journal::read_provider_session_id(&summary.path)?
             .with_context(|| {
@@ -3454,11 +3443,7 @@ impl ServerState {
         )?;
 
         let profile = crate::agent::resolve_profile(&selection, &layout)?;
-        let branch_name = if to_provider == from_provider {
-            Some(format!("Branch: {}", summary.name.as_deref().unwrap_or(id)))
-        } else {
-            summary.name.clone()
-        };
+        let branch_name = Some(format!("Branch: {}", summary.name.as_deref().unwrap_or(id)));
         let (_, new_id, _) = self.create_session_record(
             &summary.workspace_id,
             &profile,
@@ -3522,16 +3507,6 @@ impl ServerState {
             },
         )?;
         self.record_source_branch(id, &summary.path, &new_id)?;
-
-        // A provider conversion leaves the source Session's native transcript
-        // behind for good — the branch is the only copy the new provider can
-        // read — so continuing to work in the source would build history the
-        // conversion can never pick up. Sealing it says so permanently,
-        // unlike a same-provider branch, which starts a sibling but leaves
-        // the source exactly as usable as before.
-        if to_provider != from_provider {
-            self.set_session_completion(id, CompletionState::Sealed)?;
-        }
 
         let branched = self.stored_summary(&new_id)?;
         self.list_branch(&summary, &branched)?;
@@ -3645,8 +3620,6 @@ impl ServerState {
     /// that is only stored gets the record appended to its journal, where its
     /// next replay picks it up. Recording the marker never stops the source —
     /// a branch takes a copy and leaves the conversation it came from intact.
-    /// A provider conversion does stop it, but by sealing it afterwards; see
-    /// [`Self::branch_session`].
     fn record_source_branch(&self, id: &str, source_path: &Path, branch_id: &str) -> Result<()> {
         if let Ok(interaction) = self.interaction(id) {
             return interaction.interaction.record_branch(branch_id);

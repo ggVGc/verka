@@ -22,8 +22,8 @@ fn switching_provider_retains_the_session_and_records_the_boundary() {
     let workspace = styra_server::workspace::create(&store, &host, Some("work".into())).unwrap();
     let (source_id, source_path) = stored_claude_session(&store, &workspace.id, &home);
 
-    // Nothing is finished with yet: the seal below is the conversion's doing,
-    // not a state the Session was already in.
+    // Nothing is finished with yet, and neither switching nor branching
+    // changes that.
     assert_eq!(
         journal::read_session_completed(&source_path).unwrap(),
         CompletionState::Active
@@ -122,9 +122,11 @@ fn switching_provider_retains_the_session_and_records_the_boundary() {
             .selection,
         chosen
     );
+    // A branch is a separate conversation whatever its provider: the source
+    // stays as usable as it was.
     assert_eq!(
         journal::read_session_completed(&source_path).unwrap(),
-        CompletionState::Sealed
+        CompletionState::Active
     );
 
     // The daemon this test spawned is detached, so it would outlive the run
