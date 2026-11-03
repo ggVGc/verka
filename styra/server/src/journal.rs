@@ -1144,6 +1144,149 @@ pub fn store_session_completed(path: &Path, completed: CompletionState) -> Resul
     write_stored_session_meta(&directory, &stored)
 }
 
+/// Which Sessions in one Workspace were branched from which, and what each
+/// one's stored completion is — what a Session's completion as reported to a
+/// client is derived from.
+///
+/// A Session the operator finished with is not finished while work continues
+/// in a branch of it: branching from a completed Session, or resuming a
+/// branch further down, is the operator working on that line of conversation
+/// again. That is never written back to the parent. It is read off the
+/// branches each time the parent's completion is reported, so the parent
+/// cannot be left saying "completed" after a branch was reopened, nor "active"
+/// after the last branch was finished, by some change that forgot to update it.
+#[derive(Debug, Default)]
+pub struct Lineage {
+    branches: std::collections::HashMap<String, Vec<String>>,
+    completed: std::collections::HashMap<String, CompletionState>,
+}
+
+impl Lineage {
+    /// Read every Session stored in `dir`, one Workspace's sessions
+    /// directory. Only their metadata is read, not the journals a full
+    /// [`SessionSummary`] looks into. A Session whose metadata cannot be read
+    /// is left out: it cannot be shown as working either.
+    pub fn read(dir: &Path) -> Self {
+        let mut lineage = Self::default();
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return lineage;
+        };
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let Ok(meta) = read_stored_session_meta(&entry.path()) else {
+                continue;
+            };
+            let id = entry.file_name().to_string_lossy().into_owned();
+            lineage.add(id, meta.origin.as_ref(), meta.completed);
+        }
+        lineage
+    }
+
+    /// The lineage of `sessions`, already listed.
+    pub fn of(sessions: &[SessionSummary]) -> Self {
+        let mut lineage = Self::default();
+        for session in sessions {
+            lineage.add(
+                session.id.clone(),
+                session.origin.as_ref(),
+                session.completed,
+            );
+        }
+        lineage
+    }
+
+    fn add(&mut self, id: String, origin: Option<&SessionOrigin>, completed: CompletionState) {
+        if let Some(origin) = origin {
+            self.branches
+                .entry(origin.session_id.clone())
+                .or_default()
+                .push(id.clone());
+        }
+        self.completed.insert(id, completed);
+    }
+
+    /// Session `id`'s completion as reported, given the `stored` one: a
+    /// Session marked [`CompletionState::Completed`] or
+    /// [`CompletionState::Abandoned`] is [`CompletionState::Active`] while any
+    /// Session branched from it, however far down, is. A sealed Session stays
+    /// sealed: nothing makes that one active again.
+    pub fn completion(&self, id: &str, stored: CompletionState) -> CompletionState {
+        if !reopened_by_branches(stored) {
+            return stored;
+        }
+        let mut pending = vec![id];
+        let mut visited = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            for branch in self.branches.get(id).into_iter().flatten() {
+                // Walked through finished branches too: a finished branch can
+                // have an active branch of its own.
+                if self.completed.get(branch) == Some(&CompletionState::Active) {
+                    return CompletionState::Active;
+                }
+                pending.push(branch);
+            }
+        }
+        stored
+    }
+
+    /// Replace each of `sessions`' stored completion with the reported one.
+    pub fn report(&self, sessions: &mut [SessionSummary]) {
+        for session in sessions {
+            session.completed = self.completion(&session.id, session.completed);
+        }
+    }
+}
+
+/// Whether a Session's branches decide its reported completion — see
+/// [`Lineage::completion`].
+fn reopened_by_branches(stored: CompletionState) -> bool {
+    matches!(
+        stored,
+        CompletionState::Completed | CompletionState::Abandoned
+    )
+}
+
+/// [`Lineage`]s read as one request needs them, each Workspace's at most once
+/// however many of its Sessions the request reports on, and none at all for a
+/// request whose Sessions all have a completion no branch can change.
+pub struct Lineages<'a> {
+    store_root: &'a Path,
+    read: std::collections::HashMap<String, Lineage>,
+}
+
+impl<'a> Lineages<'a> {
+    pub fn new(store_root: &'a Path) -> Self {
+        Self {
+            store_root,
+            read: std::collections::HashMap::new(),
+        }
+    }
+
+    /// [`Lineage::completion`] for Session `id` in `workspace_id`.
+    pub fn completion(
+        &mut self,
+        workspace_id: &str,
+        id: &str,
+        stored: CompletionState,
+    ) -> CompletionState {
+        if !reopened_by_branches(stored) {
+            return stored;
+        }
+        let store_root = self.store_root;
+        self.read
+            .entry(workspace_id.to_owned())
+            .or_insert_with(|| {
+                Lineage::read(&crate::workspace::sessions_dir(store_root, workspace_id))
+            })
+            .completion(id, stored)
+    }
+}
+
 /// Preserve each old wire line's decoder before changing the session protocol.
 pub(crate) fn prepare_provider_change(path: &Path, protocol: Protocol) -> Result<()> {
     let temporary = path.join("provider-change");
@@ -2387,6 +2530,64 @@ mod tests {
         assert_eq!(
             read_session_meta(directory).unwrap().protocol,
             Protocol::CodexJsonl
+        );
+    }
+
+    /// A finished Session reads as active while anything branched from it,
+    /// however far down, is; a sealed one never does.
+    #[test]
+    fn completion_follows_active_branches_at_any_depth() {
+        let mut lineage = Lineage::default();
+        let origin = |parent: &str| SessionOrigin {
+            session_id: parent.into(),
+            provider: crate::agent::Provider::Codex,
+            at_ms: None,
+            history: Default::default(),
+        };
+        lineage.add("root".into(), None, CompletionState::Completed);
+        lineage.add("sealed".into(), None, CompletionState::Sealed);
+        lineage.add(
+            "child".into(),
+            Some(&origin("root")),
+            CompletionState::Abandoned,
+        );
+        lineage.add(
+            "other".into(),
+            Some(&origin("sealed")),
+            CompletionState::Active,
+        );
+        // A malformed loop must not hang the walk.
+        lineage.add(
+            "loop".into(),
+            Some(&origin("loop")),
+            CompletionState::Completed,
+        );
+
+        assert_eq!(
+            lineage.completion("root", CompletionState::Completed),
+            CompletionState::Completed
+        );
+        assert_eq!(
+            lineage.completion("loop", CompletionState::Completed),
+            CompletionState::Completed
+        );
+
+        lineage.add(
+            "grandchild".into(),
+            Some(&origin("child")),
+            CompletionState::Active,
+        );
+        assert_eq!(
+            lineage.completion("root", CompletionState::Completed),
+            CompletionState::Active
+        );
+        assert_eq!(
+            lineage.completion("child", CompletionState::Abandoned),
+            CompletionState::Active
+        );
+        assert_eq!(
+            lineage.completion("sealed", CompletionState::Sealed),
+            CompletionState::Sealed
         );
     }
 

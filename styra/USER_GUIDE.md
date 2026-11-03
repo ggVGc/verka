@@ -183,6 +183,10 @@ Completing or abandoning an interaction in the list moves to another
 live interaction in the same worktree first, then in the same Workspace, then
 to a stopped one in the same Workspace — the nearest row in the list each time.
 It leaves the Workspace only when nothing unfinished is left in it.
+A completed or abandoned interaction counts as unfinished again while any
+branch of it, however far down, is: branching from it, or resuming one of its
+branches, shows it as active until that branch is finished too. Sealed ones
+stay sealed.
 `/` filters the list as you type —
 case-insensitively, by name, tag, branch, provider, or Workspace name. The
 arrows and `PgUp`/`PgDn` still move the cursor while you type. `Enter` opens the interaction under

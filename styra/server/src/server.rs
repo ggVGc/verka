@@ -1024,8 +1024,14 @@ impl ManagedInteraction {
             self.interaction.session_id(),
             &self.workspace_id,
             self.activity.get().activity,
-            *self.completed.lock().expect("completion lock poisoned"),
+            self.completed(),
         )
+    }
+
+    /// The Session's completion as stored, before its branches are taken
+    /// into account — see [`journal::Lineage`].
+    fn completed(&self) -> CompletionState {
+        *self.completed.lock().expect("completion lock poisoned")
     }
 
     fn summary(&self) -> InteractionSummary {
@@ -1069,7 +1075,7 @@ impl ManagedInteraction {
             auto_retry: self.auto_retry.load(Ordering::Acquire),
             auto_commit: self.auto_commit.load(Ordering::Acquire),
             events: self.events.load(Ordering::Acquire),
-            completed: *self.completed.lock().expect("completion lock poisoned"),
+            completed: self.completed(),
             focus_requested: self.focus_requested,
             integration: stored
                 .as_ref()
@@ -2008,8 +2014,10 @@ impl ServerState {
         let mut listed = Vec::new();
         for workspace in workspaces {
             let mut worktrees: Vec<WorktreeSummary> = Vec::new();
-            for session in journal::list_workspace_sessions(&self.inner.store_root, &workspace.id)?
-            {
+            let mut sessions =
+                journal::list_workspace_sessions(&self.inner.store_root, &workspace.id)?;
+            journal::Lineage::of(&sessions).report(&mut sessions);
+            for session in sessions {
                 let Some(checkout) =
                     self.session_checkout(&session.path, &workspace.id, &session.id)?
                 else {
@@ -3703,6 +3711,8 @@ impl ServerState {
             .last()
             .map(|update| update.sequence)
             .unwrap_or_default();
+        summary.completed =
+            self.reported_completion(&summary.workspace_id, &summary.id, summary.completed);
         // A row mirrored before its interaction had been read — one stopped
         // between a resume and the end of its first turn, or left by a build
         // that recorded no checkout at all — carries none, and a row that
@@ -3733,6 +3743,17 @@ impl ServerState {
             // an Interaction that cannot send anything.
             queued: Vec::new(),
         }))
+    }
+
+    /// Session `id`'s completion as a client is told it, from the `stored`
+    /// one: see [`journal::Lineage::completion`].
+    fn reported_completion(
+        &self,
+        workspace_id: &str,
+        id: &str,
+        stored: CompletionState,
+    ) -> CompletionState {
+        journal::Lineages::new(self.store_root()).completion(workspace_id, id, stored)
     }
 
     /// Mirror the open-Interaction list into the store. Called wherever that
@@ -4777,7 +4798,9 @@ impl ServerState {
                 // checkout is asked about once more just after they arrive,
                 // rather than standing unread until the next turn ends.
                 interaction.working_tree.recheck_after(RECHECK_AFTER_FOCUS);
-                let summary = interaction.summary();
+                let mut summary = interaction.summary();
+                summary.completed =
+                    self.reported_completion(&summary.workspace_id, &summary.id, summary.completed);
                 let all = interaction
                     .updates
                     .lock()
@@ -4830,6 +4853,13 @@ impl ServerState {
             }
             Request::ListInteractions(query) => {
                 let query = query.unwrap_or_default();
+                // Completion as reported depends on the Session's branches, so
+                // a row is held to `skip_done` only once that is derived.
+                let undecided = InteractionQuery {
+                    skip_done: false,
+                    ..query.clone()
+                };
+                let mut lineages = journal::Lineages::new(self.store_root());
                 let interactions = self
                     .inner
                     .interactions
@@ -4837,15 +4867,46 @@ impl ServerState {
                     .expect("server interaction lock poisoned");
                 let mut summaries: Vec<InteractionSummary> = interactions
                     .values()
-                    .filter(|managed| managed.listed_by(&query))
-                    .map(|managed| managed.summary())
+                    .filter(|managed| managed.listed_by(&undecided))
+                    .filter_map(|managed| {
+                        let completed = lineages.completion(
+                            &managed.workspace_id,
+                            managed.interaction.session_id(),
+                            managed.completed(),
+                        );
+                        query
+                            .admits(
+                                managed.interaction.session_id(),
+                                &managed.workspace_id,
+                                managed.activity.get().activity,
+                                completed,
+                            )
+                            .then(|| InteractionSummary {
+                                completed,
+                                ..managed.summary()
+                            })
+                    })
                     .collect();
                 drop(interactions);
                 // Interactions a previous run had open and the operator never
                 // closed. They are listed beside this run's own, stopped: the
                 // conversation is still theirs to go back to, and only the
                 // agent is gone. See [`crate::roster`].
-                summaries.extend(self.inner.roster.restored(&query));
+                summaries.extend(
+                    self.inner
+                        .roster
+                        .restored(&undecided)
+                        .into_iter()
+                        .map(|mut summary| {
+                            summary.completed = lineages.completion(
+                                &summary.workspace_id,
+                                &summary.id,
+                                summary.completed,
+                            );
+                            summary
+                        })
+                        .filter(|summary| query.admits_summary(summary)),
+                );
                 let active: std::collections::HashSet<_> =
                     crate::workspace::list(self.store_root())?
                         .into_iter()
@@ -4859,13 +4920,15 @@ impl ServerState {
             }
             Request::ListSessions { workspace_id } => {
                 crate::workspace::get(self.store_root(), &workspace_id)?;
-                Ok(Response::StoredSessions(journal::list_workspace_sessions(
-                    self.store_root(),
-                    &workspace_id,
-                )?))
+                let mut sessions =
+                    journal::list_workspace_sessions(self.store_root(), &workspace_id)?;
+                journal::Lineage::of(&sessions).report(&mut sessions);
+                Ok(Response::StoredSessions(sessions))
             }
             Request::StoredSession { id, raw: want_raw } => {
-                let summary = self.stored_summary(&id)?;
+                let mut summary = self.stored_summary(&id)?;
+                summary.completed =
+                    self.reported_completion(&summary.workspace_id, &summary.id, summary.completed);
                 let meta = journal::read_session_meta(&summary.path)?;
                 let events = journal::replay(&summary.path, meta.protocol)?;
                 // Reconstructing the raw lines re-reads and re-parses the whole
@@ -8786,5 +8849,118 @@ mod tests {
             .handle(Request::StoredSession { id, raw: false })
             .is_ok());
         drop(state);
+    }
+
+    /// A completed Session is reported active again while a branch further
+    /// down is active, and completed again once that branch is finished, with
+    /// nothing ever written to the Session itself.
+    #[test]
+    fn a_completed_session_reads_active_while_a_branch_of_it_is() {
+        let StoredSession {
+            store,
+            host,
+            state,
+            workspace,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("branch-reopens-parent");
+        drop(state);
+        journal::store_session_completed(&session_path, CompletionState::Completed).unwrap();
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
+        let branch = |parent: &str| {
+            let (journal, branch) =
+                Journal::create_in_workspace(&store, &workspace.id, &profile, &selection, None)
+                    .unwrap();
+            let path = journal.path().parent().unwrap().to_path_buf();
+            journal::store_session_origin(
+                &path,
+                SessionOrigin {
+                    session_id: parent.into(),
+                    provider: selection.provider,
+                    at_ms: None,
+                    history: Default::default(),
+                },
+            )
+            .unwrap();
+            journal::store_session_completed(&path, CompletionState::Completed).unwrap();
+            (branch, path)
+        };
+        let (child, _) = branch(&id);
+        let (_, grandchild_path) = branch(&child);
+        let mut row = listed_interaction(&id, &workspace.id, &host, InteractionActivity::Stopped);
+        row.completed = CompletionState::Completed;
+        crate::roster::Roster::open(&store).publish(vec![(
+            session_path.clone(),
+            row,
+            DrivaOptions::default(),
+        )]);
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        let reported = |id: &str| {
+            let Response::StoredSessions(sessions) = state
+                .handle(Request::ListSessions {
+                    workspace_id: workspace.id.clone(),
+                })
+                .unwrap()
+            else {
+                panic!("expected stored sessions");
+            };
+            let listed = sessions.iter().find(|session| session.id == id).unwrap();
+            let Response::StoredSession(stored) = state
+                .handle(Request::StoredSession {
+                    id: id.into(),
+                    raw: false,
+                })
+                .unwrap()
+            else {
+                panic!("expected a stored session");
+            };
+            assert_eq!(listed.completed, stored.summary.completed);
+            listed.completed
+        };
+        let unfinished_rows = || {
+            let Response::Interactions(rows) = state
+                .handle(Request::ListInteractions(Some(InteractionQuery {
+                    skip_done: true,
+                    ..Default::default()
+                })))
+                .unwrap()
+            else {
+                panic!("expected interactions");
+            };
+            rows.into_iter()
+                .map(|row| (row.id, row.completed))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(reported(&id), CompletionState::Completed);
+        assert!(unfinished_rows().is_empty());
+
+        // Resuming the branch further down clears its completion.
+        journal::store_session_completed(&grandchild_path, CompletionState::Active).unwrap();
+        assert_eq!(reported(&id), CompletionState::Active);
+        assert_eq!(reported(&child), CompletionState::Active);
+        assert_eq!(
+            unfinished_rows(),
+            vec![(id.clone(), CompletionState::Active)]
+        );
+        let Response::InteractionLoaded(loaded) = state
+            .handle(Request::LoadInteraction { id: id.clone() })
+            .unwrap()
+        else {
+            panic!("expected a loaded interaction");
+        };
+        assert_eq!(loaded.summary.completed, CompletionState::Active);
+        assert_eq!(
+            journal::read_session_completed(&session_path).unwrap(),
+            CompletionState::Completed,
+            "the parent's own record is left as the operator set it"
+        );
+
+        journal::store_session_completed(&grandchild_path, CompletionState::Abandoned).unwrap();
+        assert_eq!(reported(&id), CompletionState::Completed);
+        assert!(unfinished_rows().is_empty());
     }
 }
