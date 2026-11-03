@@ -95,7 +95,7 @@ pub struct LiveInteractions {
     /// The first line the navigator showed when last drawn. The cursor moves
     /// freely within the view and only scrolls it near an edge, so where the
     /// view sits has to be remembered between frames. `None` starts a fresh
-    /// client at the bottom before keeping the current interaction in view.
+    /// client at the top before keeping the current interaction in view.
     pub scroll_offset: Option<usize>,
 }
 
@@ -788,8 +788,8 @@ impl LiveInteractions {
             .iter()
             .position(|index| self.items[*index].id == from)
             .map(|position| (position + 1).min(visible.len().saturating_sub(1)))
-            // Match the bottom-aligned viewport when nothing is selected.
-            .unwrap_or_else(|| visible.len().saturating_sub(1));
+            // Start from the top of the list when nothing is selected.
+            .unwrap_or(0);
         visible
             .get(index)
             .and_then(|index| self.items.get(*index))
@@ -807,7 +807,7 @@ impl LiveInteractions {
             .iter()
             .position(|index| self.items[*index].id == from)
             .map(|position| position.saturating_sub(1))
-            .unwrap_or_else(|| visible.len().saturating_sub(1));
+            .unwrap_or(0);
         visible
             .get(position)
             .and_then(|index| self.items.get(*index))
@@ -1254,11 +1254,6 @@ pub struct WorktreeHeading {
 /// — see [`follow_sources`] — and within each checkout the branch tree — see
 /// [`branch_tree`].
 ///
-/// The sort reads bottom up while the headings still head from above: the
-/// item order is turned over, so the latest-messaged entry of each checkout
-/// is its last, and the Workspace and checkout holding the latest of all come
-/// last.
-///
 /// A worktree is headed when it holds more than one shown entry, or is
 /// integrated into, or integrates into, another worktree: an entry drawn among
 /// another worktree's rows has to say which one it works in, and one whose
@@ -1271,9 +1266,7 @@ fn display_tree(
     workspaces: &[WorkspaceSummary],
     visible: Vec<usize>,
 ) -> Vec<DisplayRow> {
-    let mut ordered = grouped_by_workspace(interactions, workspaces, visible);
-    // Each group stays contiguous when the whole list is reversed.
-    ordered.reverse();
+    let ordered = grouped_by_workspace(interactions, workspaces, visible);
     let mut out = Vec::with_capacity(ordered.len());
     for group in ordered.chunk_by(|left, right| {
         interactions[*left].workspace_id == interactions[*right].workspace_id
@@ -1649,6 +1642,31 @@ pub(crate) mod tests {
         interaction
     }
 
+    /// The ids of [`LiveInteractions::items`], in item order.
+    fn item_ids(live: &LiveInteractions) -> Vec<&str> {
+        live.items.iter().map(|item| item.id.as_str()).collect()
+    }
+
+    /// The ids in the order the navigator draws them.
+    fn shown<'a>(live: &'a LiveInteractions, workspace_id: Option<&str>) -> Vec<&'a str> {
+        live.display_indices("", workspace_id)
+            .into_iter()
+            .map(|index| live.items[index].id.as_str())
+            .collect()
+    }
+
+    /// j/k walk the rows exactly as they are drawn: from each row, `next`
+    /// lands on the one below it and `previous` on the one above.
+    fn assert_walk_follows_display(live: &LiveInteractions, workspace_id: Option<&str>) {
+        for pair in shown(live, workspace_id).windows(2) {
+            assert_eq!(live.next(pair[0], "", workspace_id).unwrap().id, pair[1]);
+            assert_eq!(
+                live.previous(pair[1], "", workspace_id).unwrap().id,
+                pair[0]
+            );
+        }
+    }
+
     #[test]
     fn paging_follows_filtered_display_order_and_stops_at_the_ends() {
         let mut live = LiveInteractions::default();
@@ -1667,21 +1685,20 @@ pub(crate) mod tests {
         );
         live.set_tag_filter(vec!["keep".into()], "item-00", None);
 
-        // Display order: item-48 at the top, down to item-00 at the foot.
-        live.cursor_page("item-00", None, false);
+        live.cursor_page("item-00", None, true);
         assert_eq!(live.cursor("item-00"), "item-20");
         assert!(live.pending("item-00").is_some());
         assert!(live.due("item-00").is_none());
-        live.cursor_page("item-00", None, false);
+        live.cursor_page("item-00", None, true);
         assert_eq!(live.cursor("item-00"), "item-40");
         for _ in 0..3 {
-            live.cursor_page("item-00", None, false);
+            live.cursor_page("item-00", None, true);
             assert_eq!(live.cursor("item-00"), "item-48");
         }
-        live.cursor_page("item-00", None, true);
+        live.cursor_page("item-00", None, false);
         assert_eq!(live.cursor("item-00"), "item-28");
         for _ in 0..4 {
-            live.cursor_page("item-00", None, true);
+            live.cursor_page("item-00", None, false);
         }
         assert_eq!(live.cursor("item-00"), "item-00");
         assert!(live.pending("item-00").is_none());
@@ -1717,14 +1734,8 @@ pub(crate) mod tests {
         );
 
         assert!(live.open);
-        let order = |live: &LiveInteractions| {
-            live.items
-                .iter()
-                .map(|interaction| interaction.id.clone())
-                .collect::<Vec<_>>()
-        };
         assert_eq!(
-            order(&live),
+            item_ids(&live),
             [
                 "0000000000300-1-0",
                 "0000000000200-1-0",
@@ -1743,7 +1754,7 @@ pub(crate) mod tests {
             interaction("0000000000300-1-0", InteractionActivity::Stopped),
         ]);
         assert_eq!(
-            order(&live),
+            item_ids(&live),
             [
                 "0000000000300-1-0",
                 "0000000000200-1-0",
@@ -1758,7 +1769,7 @@ pub(crate) mod tests {
         items.push(newer_paused);
         live.refresh(items);
         assert_eq!(
-            order(&live),
+            item_ids(&live),
             [
                 "0000000000200-1-0",
                 "0000000000100-1-0",
@@ -1782,14 +1793,8 @@ pub(crate) mod tests {
         paused.activity_reason = Some(styra_protocol::InteractionActivityReason::Paused);
         let mut live = LiveInteractions::default();
         live.open(vec![newer.clone(), unsent, paused, older], vec![]);
-        let ids = |live: &LiveInteractions| {
-            live.items
-                .iter()
-                .map(|item| item.id.clone())
-                .collect::<Vec<_>>()
-        };
         assert_eq!(
-            ids(&live),
+            item_ids(&live),
             [
                 "0000000000100-old",
                 "0000000000200-new",
@@ -1805,7 +1810,7 @@ pub(crate) mod tests {
         refreshed[1] = newer;
         assert!(live.refresh(refreshed));
         assert_eq!(
-            ids(&live),
+            item_ids(&live),
             [
                 "0000000000200-new",
                 "0000000000100-old",
@@ -1813,7 +1818,6 @@ pub(crate) mod tests {
                 "0000000000400-paused"
             ]
         );
-        assert_eq!(live.display_indices("", Some("workspace")), [3, 2, 1, 0]);
     }
 
     #[test]
@@ -1826,8 +1830,8 @@ pub(crate) mod tests {
             ],
             vec![],
         );
-        let previous = live.previous("one", "", Some("workspace")).unwrap();
-        assert_eq!(previous.id, "two");
+        let next = live.next("one", "", Some("workspace")).unwrap();
+        assert_eq!(next.id, "two");
         let mut refreshed_two = interaction("two", InteractionActivity::Pending);
         refreshed_two.last_message = Some("new response".into());
         live.refresh(vec![
@@ -2252,10 +2256,9 @@ pub(crate) mod tests {
             vec![],
         );
 
-        // Display order: later, busy, unseen, current.
-        assert_eq!(live.next_idle_unseen("current", None).unwrap().id, "later");
-        assert_eq!(live.next_idle_unseen("later", None).unwrap().id, "unseen");
+        assert_eq!(live.next_idle_unseen("current", None).unwrap().id, "unseen");
         assert_eq!(live.next_idle_unseen("unseen", None).unwrap().id, "later");
+        assert_eq!(live.next_idle_unseen("later", None).unwrap().id, "unseen");
     }
 
     /// The step between running interactions walks every live one — waiting on
@@ -2276,9 +2279,9 @@ pub(crate) mod tests {
         );
 
         // The step follows the list's order, wrapping at its end.
-        assert_eq!(live.next_live("current", None).unwrap().id, "background");
-        assert_eq!(live.next_live("background", None).unwrap().id, "waiting");
-        assert_eq!(live.next_live("waiting", None).unwrap().id, "current");
+        assert_eq!(live.next_live("current", None).unwrap().id, "waiting");
+        assert_eq!(live.next_live("waiting", None).unwrap().id, "background");
+        assert_eq!(live.next_live("background", None).unwrap().id, "current");
         // Active navigation skips the idle row in the same fleet.
         assert_eq!(live.next_active("current", None).unwrap().id, "background");
         assert_eq!(live.next_active("background", None).unwrap().id, "current");
@@ -2291,9 +2294,9 @@ pub(crate) mod tests {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                idle,
-                interaction("next-live", InteractionActivity::Running),
                 interaction("current", InteractionActivity::Running),
+                interaction("next-live", InteractionActivity::Running),
+                idle,
             ],
             vec![],
         );
@@ -2492,30 +2495,30 @@ pub(crate) mod tests {
             vec![],
         );
 
-        live.cursor_next("three", Some("workspace"));
-        live.cursor_next("three", Some("workspace"));
+        live.cursor_next("one", Some("workspace"));
+        live.cursor_next("one", Some("workspace"));
 
         // Two rows crossed, and neither of the interactions passed over — nor
         // the one now under the cursor — has been asked for yet.
-        assert_eq!(live.cursor("three"), "one");
+        assert_eq!(live.cursor("one"), "three");
         assert_eq!(
-            live.pending("three")
+            live.pending("one")
                 .map(|interaction| interaction.id.as_str()),
-            Some("one")
+            Some("three")
         );
-        assert!(live.due("three").is_none());
+        assert!(live.due("one").is_none());
 
         std::thread::sleep(LOAD_SETTLE + Duration::from_millis(20));
         assert_eq!(
-            live.due("three").map(|interaction| interaction.id.as_str()),
-            Some("one")
+            live.due("one").map(|interaction| interaction.id.as_str()),
+            Some("three")
         );
 
         // Once the load has landed the cursor is home again, so the settled
         // move is not made a second time.
         live.rest();
-        assert_eq!(live.cursor("one"), "one");
-        assert!(live.due("one").is_none());
+        assert_eq!(live.cursor("three"), "three");
+        assert!(live.due("three").is_none());
     }
 
     #[test]
@@ -2536,12 +2539,12 @@ pub(crate) mod tests {
         live.toggle_workspace_scope();
         let scope = Some("workspace");
 
-        live.cursor_first("one", scope);
+        live.cursor_last("one", scope);
         assert_eq!(live.cursor("one"), "three");
         assert!(live.pending("one").is_some());
         assert!(live.due("one").is_none());
 
-        live.cursor_last("one", scope);
+        live.cursor_first("one", scope);
         assert_eq!(live.cursor("one"), "one");
         assert!(live.pending("one").is_none());
 
@@ -2549,9 +2552,9 @@ pub(crate) mod tests {
         live.items[2].tags = vec!["match".into()];
         live.set_tag_filter(vec!["match".into()], "three", scope);
         live.cursor_last("three", scope);
-        assert_eq!(live.cursor("three"), "one");
-        live.cursor_first("three", scope);
         assert_eq!(live.cursor("three"), "two");
+        live.cursor_first("three", scope);
+        assert_eq!(live.cursor("three"), "one");
 
         live.set_tag_filter(vec!["missing".into()], "three", scope);
         live.rest();
@@ -2572,12 +2575,12 @@ pub(crate) mod tests {
             vec![],
         );
 
-        live.cursor_next("two", Some("workspace"));
-        live.cursor_previous("two", Some("workspace"));
+        live.cursor_next("one", Some("workspace"));
+        live.cursor_previous("one", Some("workspace"));
 
-        assert_eq!(live.cursor("two"), "two");
-        assert!(live.pending("two").is_none());
-        assert!(live.due("two").is_none());
+        assert_eq!(live.cursor("one"), "one");
+        assert!(live.pending("one").is_none());
+        assert!(live.due("one").is_none());
     }
 
     #[test]
@@ -2605,9 +2608,9 @@ pub(crate) mod tests {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("next", InteractionActivity::Running),
-                other,
                 interaction("current", InteractionActivity::Pending),
+                other,
+                interaction("next", InteractionActivity::Running),
             ],
             vec![],
         );
@@ -2653,26 +2656,19 @@ pub(crate) mod tests {
             ],
             vec![],
         );
-        let ordered = |live: &LiveInteractions| {
-            live.display_indices("", Some("workspace"))
-                .into_iter()
-                .map(|index| live.items[index].id.clone())
-                .collect::<Vec<_>>()
-        };
+        let workspace = Some("workspace");
         assert_eq!(
-            ordered(&live),
-            ["other", "main-2", "main-1", "feature-2", "feature-1"]
+            shown(&live, workspace),
+            ["feature-1", "feature-2", "main-1", "main-2", "other"]
         );
-        assert_eq!(
-            live.next("main-1", "", Some("workspace")).unwrap().id,
-            "feature-2"
-        );
+        assert_walk_follows_display(&live, workspace);
 
         live.toggle_workspace_scope();
         assert_eq!(
-            ordered(&live),
-            ["main-2", "main-1", "feature-2", "feature-1"]
+            shown(&live, workspace),
+            ["feature-1", "feature-2", "main-1", "main-2"]
         );
+        assert_walk_follows_display(&live, workspace);
     }
 
     fn branched(id: &str, activity: InteractionActivity, from: &str) -> InteractionSummary {
@@ -2698,7 +2694,7 @@ pub(crate) mod tests {
 
     /// A branch sits beneath the interaction it came from, as it does in the
     /// Session picker, rather than wherever its creation would sort it — a
-    /// fresh branch is the newest, and would otherwise sink to the foot of the
+    /// fresh branch is the newest, and would otherwise rise to the head of the
     /// list, away from its source.
     #[test]
     fn a_branch_is_listed_beneath_its_source() {
@@ -2721,38 +2717,20 @@ pub(crate) mod tests {
             vec![],
         );
 
-        assert_eq!(
-            display(&live, Some("workspace")),
-            [
-                ("0000000000100-source", 0),
-                ("0000000000300-branch", 1),
-                ("0000000000400-twig", 2),
-                ("0000000000200-other", 0),
-            ]
-        );
-        // Walking the list follows the tree the navigator draws.
-        assert_eq!(
-            live.next("0000000000100-source", "", Some("workspace"))
-                .unwrap()
-                .id,
-            "0000000000300-branch"
-        );
-        assert_eq!(
-            live.next("0000000000400-twig", "", Some("workspace"))
-                .unwrap()
-                .id,
-            "0000000000200-other"
-        );
-        live.toggle_workspace_scope();
-        assert_eq!(
-            display(&live, Some("workspace")),
-            [
-                ("0000000000100-source", 0),
-                ("0000000000300-branch", 1),
-                ("0000000000400-twig", 2),
-                ("0000000000200-other", 0),
-            ]
-        );
+        for _ in ["all", "workspace scope"] {
+            assert_eq!(
+                display(&live, Some("workspace")),
+                [
+                    ("0000000000200-other", 0),
+                    ("0000000000100-source", 0),
+                    ("0000000000300-branch", 1),
+                    ("0000000000400-twig", 2),
+                ]
+            );
+            // Walking the list follows the tree the navigator draws.
+            assert_walk_follows_display(&live, Some("workspace"));
+            live.toggle_workspace_scope();
+        }
     }
 
     /// A branch whose source is not shown has nothing to hang from, so it
@@ -2771,12 +2749,12 @@ pub(crate) mod tests {
 
         assert_eq!(
             display(&live, Some("workspace")),
-            [("orphan", 0), ("branch", 0)]
+            [("branch", 0), ("orphan", 0)]
         );
         live.toggle_completed();
         assert_eq!(
             display(&live, Some("workspace")),
-            [("orphan", 0), ("source", 0), ("branch", 1)]
+            [("source", 0), ("branch", 1), ("orphan", 0)]
         );
     }
 
@@ -2855,19 +2833,18 @@ pub(crate) mod tests {
         assert_eq!(
             placements(&live),
             [
-                ("review", 0, 1, into("main"), None),
-                ("rework", 0, 1, None, None),
-                ("jwt", 1, 1, None, None),
-                ("spike", 0, 2, into("auth"), rework.clone()),
-                ("tests", 0, 2, into("auth"), None),
-                // Follows its source's worktree rather than splitting it.
-                ("docs", 0, 0, None, rework),
                 ("tidy", 0, 0, None, None),
                 ("tidy-more", 1, 0, None, None),
+                ("rework", 0, 1, into("main"), None),
+                ("jwt", 1, 1, None, None),
+                ("review", 0, 1, None, None),
+                ("tests", 0, 2, into("auth"), None),
+                ("spike", 0, 2, into("auth"), rework.clone()),
+                // Follows its source's worktree rather than splitting it.
+                ("docs", 0, 0, None, rework),
             ]
         );
-        // Walking the list follows the same order.
-        assert_eq!(live.next("jwt", "", Some("workspace")).unwrap().id, "spike");
+        assert_walk_follows_display(&live, Some("workspace"));
     }
 
     /// A branch working in a worktree of its own still follows the entry it
@@ -2892,18 +2869,15 @@ pub(crate) mod tests {
         assert_eq!(
             placements(&live),
             [
-                ("oldest", 0, 0, None, None),
+                ("newest", 0, 0, None, None),
                 ("source", 0, 0, None, None),
                 ("nested", 1, 0, None, None),
                 ("spike", 0, 0, None, source("source")),
                 ("twig", 0, 0, None, source("spike")),
-                ("newest", 0, 0, None, None),
+                ("oldest", 0, 0, None, None),
             ]
         );
-        assert_eq!(
-            live.next("nested", "", Some("workspace")).unwrap().id,
-            "spike"
-        );
+        assert_walk_follows_display(&live, Some("workspace"));
     }
 
     /// A worktree made from one whose interactions are all hidden has no
@@ -2957,12 +2931,12 @@ pub(crate) mod tests {
 
         assert_eq!(
             display(&live, Some("workspace")),
-            [("sibling", 0), ("source", 0), ("branch", 0)]
+            [("source", 0), ("sibling", 0), ("branch", 0)]
         );
     }
 
     #[test]
-    fn row_navigation_without_a_selection_starts_at_the_bottom() {
+    fn row_navigation_without_a_selection_starts_at_the_top() {
         for backwards in [false, true] {
             let mut live = LiveInteractions::default();
             let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
@@ -2978,10 +2952,6 @@ pub(crate) mod tests {
             );
             live.toggle_workspace_scope();
             let scope = Some("workspace");
-            assert_eq!(
-                display(&live, scope),
-                [("three", 0), ("two", 0), ("one", 0)]
-            );
 
             // The current interaction can be absent or hidden by the scope.
             for current in ["missing", "elsewhere"] {
@@ -2995,9 +2965,9 @@ pub(crate) mod tests {
                 assert_eq!(live.pending(current).unwrap().id, "one");
                 assert!(live.due(current).is_none());
 
-                live.cursor_previous(current, scope);
-                assert_eq!(live.cursor(current), "two");
                 live.cursor_next(current, scope);
+                assert_eq!(live.cursor(current), "two");
+                live.cursor_previous(current, scope);
                 assert_eq!(live.cursor(current), "one");
             }
         }
@@ -3009,55 +2979,37 @@ pub(crate) mod tests {
         assert!(empty.pending("missing").is_none());
     }
 
+    /// Each Workspace's entries are drawn together, in item order, even where
+    /// sorting interleaves the Workspaces — a stopped entry included: its row
+    /// says that it stopped, so it needs no place of its own.
     #[test]
-    fn navigation_follows_the_workspace_grouped_display_order() {
-        // Sorting by activity interleaves the two Workspaces, so raw item
-        // order and the grouped order the navigator draws disagree.
-        let mut other_pending = interaction("other-pending", InteractionActivity::Pending);
-        other_pending.workspace_id = "other-workspace".into();
+    fn entries_are_grouped_by_workspace_in_item_order() {
+        let mut other_stopped = interaction("other-stopped", InteractionActivity::Stopped);
+        other_stopped.workspace_id = "other-workspace".into();
         let mut other_running = interaction("other-running", InteractionActivity::Running);
         other_running.workspace_id = "other-workspace".into();
         let mut live = LiveInteractions::default();
         live.open(
             vec![
                 interaction("pending", InteractionActivity::Pending),
-                other_pending,
-                interaction("running", InteractionActivity::Running),
+                other_stopped,
+                interaction("stopped", InteractionActivity::Stopped),
                 other_running,
             ],
             vec![],
         );
-
-        let ordered = live
-            .display_indices("", Some("workspace"))
-            .into_iter()
-            .map(|index| live.items[index].id.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            ordered,
-            ["other-running", "other-pending", "running", "pending"]
-        );
+        let workspace = Some("workspace");
 
         assert_eq!(
-            live.next("other-running", "", Some("workspace"))
-                .unwrap()
-                .id,
-            "other-pending"
+            shown(&live, workspace),
+            ["pending", "stopped", "other-stopped", "other-running"]
         );
-        assert_eq!(
-            live.next("other-pending", "", Some("workspace"))
-                .unwrap()
-                .id,
-            "running"
-        );
-        assert_eq!(
-            live.previous("running", "", Some("workspace")).unwrap().id,
-            "other-pending"
-        );
-        assert_eq!(
-            live.previous("pending", "", Some("workspace")).unwrap().id,
-            "running"
-        );
+        assert_walk_follows_display(&live, workspace);
+
+        // Workspace scope lists only this Workspace's entries.
+        live.toggle_workspace_scope();
+        assert_eq!(shown(&live, workspace), ["pending", "stopped"]);
+        assert_walk_follows_display(&live, workspace);
     }
 
     #[test]
@@ -3081,46 +3033,44 @@ pub(crate) mod tests {
         );
         let workspace = Some("workspace");
 
-        // Display order: third | other-running, other-pending | running, pending
+        // Display order: pending, running | other-pending, other-running | third
         assert_eq!(
-            live.next_workspace("third", "", workspace).unwrap().id,
-            "other-running"
+            live.next_workspace("pending", "", workspace).unwrap().id,
+            "other-pending"
         );
         assert_eq!(
-            live.next_workspace("other-pending", "", workspace)
-                .unwrap()
-                .id,
-            "running"
+            live.next_workspace("running", "", workspace).unwrap().id,
+            "other-pending"
         );
         assert_eq!(
             live.next_workspace("other-running", "", workspace)
                 .unwrap()
                 .id,
-            "running"
+            "third"
         );
-        assert!(live.next_workspace("pending", "", workspace).is_none());
+        assert!(live.next_workspace("third", "", workspace).is_none());
 
         // From the middle of a group, ctrl-k stops at that group's own first
         // entry before leaving it.
         assert_eq!(
-            live.previous_workspace("other-pending", "", workspace)
-                .unwrap()
-                .id,
-            "other-running"
-        );
-        assert_eq!(
             live.previous_workspace("other-running", "", workspace)
                 .unwrap()
                 .id,
-            "third"
+            "other-pending"
         );
         assert_eq!(
-            live.previous_workspace("pending", "", workspace)
+            live.previous_workspace("other-pending", "", workspace)
                 .unwrap()
                 .id,
-            "running"
+            "pending"
         );
-        assert!(live.previous_workspace("third", "", workspace).is_none());
+        assert_eq!(
+            live.previous_workspace("running", "", workspace)
+                .unwrap()
+                .id,
+            "pending"
+        );
+        assert!(live.previous_workspace("pending", "", workspace).is_none());
         live.toggle_workspace_scope();
         assert!(live.next_workspace("pending", "", workspace).is_none());
         assert!(live.previous_workspace("running", "", workspace).is_none());
@@ -3145,16 +3095,16 @@ pub(crate) mod tests {
         );
         let workspace = Some("workspace");
 
-        live.cursor_previous_workspace("pending", workspace);
-        live.cursor_previous_workspace("pending", workspace);
+        live.cursor_next_workspace("pending", workspace);
+        live.cursor_next_workspace("pending", workspace);
 
         assert_eq!(live.cursor("pending"), "third");
         assert!(live.due("pending").is_none());
 
         // Back the way it came, onto the interaction already on screen: two
         // groups crossed in each direction, and nothing to load at the end.
-        live.cursor_next_workspace("pending", workspace);
-        live.cursor_next_workspace("pending", workspace);
+        live.cursor_previous_workspace("pending", workspace);
+        live.cursor_previous_workspace("pending", workspace);
         assert_eq!(live.cursor("pending"), "pending");
         assert!(live.pending("pending").is_none());
     }
@@ -3174,8 +3124,8 @@ pub(crate) mod tests {
         live.open(
             vec![
                 interaction("current", InteractionActivity::Pending),
-                second,
                 first,
+                second,
             ],
             vec![],
         );
@@ -3184,43 +3134,6 @@ pub(crate) mod tests {
         assert!(!live.only_current_workspace);
         assert_eq!(live.cursor("current"), "first");
         assert!(!live.cursor_to_workspace("missing", "current", Some("workspace")));
-    }
-
-    /// A stopped Interaction stays in its own Workspace's group, in item
-    /// order read bottom up: its row says that it stopped, so it needs no
-    /// place of its own.
-    #[test]
-    fn stopped_interactions_stay_in_their_workspace_group() {
-        let mut other_stopped = interaction("other-stopped", InteractionActivity::Stopped);
-        other_stopped.workspace_id = "other-workspace".into();
-        let mut other_running = interaction("other-running", InteractionActivity::Running);
-        other_running.workspace_id = "other-workspace".into();
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                interaction("pending", InteractionActivity::Pending),
-                other_stopped,
-                interaction("stopped", InteractionActivity::Stopped),
-                other_running,
-            ],
-            vec![],
-        );
-
-        let ordered = |live: &LiveInteractions| {
-            live.display_indices("", Some("workspace"))
-                .into_iter()
-                .map(|index| live.items[index].id.to_owned())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            ordered(&live),
-            ["other-running", "other-stopped", "stopped", "pending"]
-        );
-
-        // And in Workspace scope, where only this Workspace's entries are
-        // listed, in item order read bottom up.
-        live.toggle_workspace_scope();
-        assert_eq!(ordered(&live), ["stopped", "pending"]);
     }
 
     #[test]
@@ -3371,12 +3284,12 @@ pub(crate) mod tests {
         for character in "docs".chars() {
             live.type_filter(Edit::Push(character), "one", Some("workspace"));
         }
-        assert_eq!(live.cursor("one"), "three");
+        assert_eq!(live.cursor("one"), "two");
 
         // Still matching as the term changes, so it stays put.
         live.cursor_next("one", Some("workspace"));
         live.type_filter(Edit::Backspace, "one", Some("workspace"));
-        assert_eq!(live.cursor("one"), "two");
+        assert_eq!(live.cursor("one"), "three");
     }
 
     #[test]

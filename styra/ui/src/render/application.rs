@@ -215,12 +215,12 @@ fn render_events(
         let panes = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(interactions::height(interaction_area.height)),
                 Constraint::Min(1),
+                Constraint::Length(interactions::height(interaction_area.height)),
             ])
             .split(interaction_area);
-        feedback.navigator_offset = Some(interactions::render(frame, navigator, panes[0]));
-        panes[1]
+        feedback.navigator_offset = Some(interactions::render(frame, navigator, panes[1]));
+        panes[0]
     } else {
         interaction_area
     };

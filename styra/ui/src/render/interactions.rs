@@ -235,12 +235,9 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
         block = block.title_bottom(more_lines("↓", below).right_aligned());
     }
     frame.render_widget(block, area);
-    // A list shorter than the pane sits against its foot, next to the newest
-    // entries, rather than leaving a gap between it and the pane below.
-    let top = inner.y + viewport.saturating_sub(lines.len()) as u16;
     for (row, line) in lines.into_iter().skip(offset).take(viewport).enumerate() {
         let line_area = Rect {
-            y: top + row as u16,
+            y: inner.y + row as u16,
             height: 1,
             ..inner
         };
@@ -255,7 +252,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
             .fg(theme::SELECTED_ROW_EDGE)
             .add_modifier(Modifier::BOLD);
         for line in start.max(offset)..end.min(offset + viewport) {
-            frame.buffer_mut()[(area.x, top + (line - offset) as u16)]
+            frame.buffer_mut()[(area.x, inner.y + (line - offset) as u16)]
                 .set_symbol("┃")
                 .set_style(edge);
         }
@@ -266,7 +263,6 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
 /// The first line to draw. The view stays where it was while the cursor moves
 /// inside it, and scrolls only as far as it takes to keep [`SCROLL_MARGIN`]
 /// rows showing past the cursor, fewer where the pane is too short for them.
-/// With no selection, show the newest entries at the bottom.
 fn scroll_offset(
     view: &InteractionNavigator<'_>,
     selected: Option<usize>,
@@ -275,9 +271,9 @@ fn scroll_offset(
 ) -> usize {
     // The foot of the pane is never left empty while there is list to fill it.
     let last = total.saturating_sub(viewport);
-    let mut offset = view.requested_offset.unwrap_or(last).min(last);
+    let mut offset = view.requested_offset.unwrap_or(0).min(last);
     let Some(selected) = selected else {
-        return last;
+        return offset;
     };
     let lines = |rows: &[InteractionRow<'_>]| rows.iter().map(row_height).sum::<usize>();
     let start = lines(&view.rows[..selected]);
@@ -1147,28 +1143,6 @@ mod tests {
         assert!(screen.contains("The checks are green."), "{screen}");
     }
 
-    /// A list shorter than the pane sits against its foot, with the blank
-    /// space above it.
-    #[test]
-    fn a_short_list_is_anchored_to_the_bottom() {
-        let view = InteractionNavigator {
-            rows: vec![placed("older", 0, 0, None), placed("newest", 0, 0, None)],
-            ..many_rows(0)
-        };
-        let screen = rendered(&view)
-            .chars()
-            .collect::<Vec<_>>()
-            .chunks(80)
-            .map(|line| line.iter().collect::<String>())
-            .collect::<Vec<_>>();
-        let foot = screen.len() - 2;
-        assert!(screen[foot].contains("newest"), "{screen:#?}");
-        assert!(
-            screen[1].chars().skip(1).take(78).all(|cell| cell == ' '),
-            "{screen:#?}"
-        );
-    }
-
     #[test]
     fn the_dropdown_height_does_not_depend_on_its_rows() {
         assert_eq!(height(40), 20);
@@ -1218,26 +1192,12 @@ mod tests {
     }
 
     fn lines(view: &InteractionNavigator<'_>) -> Vec<String> {
-        lines_at(view, 80)
-    }
-
-    /// The screen's lines, with the blank lines a short list leaves above it
-    /// removed, so a row's index does not depend on the pane's height.
-    fn lines_at(view: &InteractionNavigator<'_>, width: u16) -> Vec<String> {
-        let mut lines = rendered_at(view, width)
+        rendered(view)
             .chars()
             .collect::<Vec<_>>()
-            .chunks(width.into())
+            .chunks(80)
             .map(|line| line.iter().collect::<String>())
-            .collect::<Vec<_>>();
-        let inner = usize::from(width) - 2;
-        let blank = |line: &String| line.chars().skip(1).take(inner).all(|cell| cell == ' ');
-        let padding = lines[1..lines.len() - 1]
-            .iter()
-            .take_while(|line| blank(line))
-            .count();
-        lines.drain(1..1 + padding);
-        lines
+            .collect()
     }
 
     /// Tree lines show workspace and directory membership without color;
@@ -1401,8 +1361,7 @@ mod tests {
                 rows,
                 ..many_rows(0)
             };
-            // Exactly as tall as the list, so it starts on line 1.
-            let mut terminal = Terminal::new(TestBackend::new(80, 4)).unwrap();
+            let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
             terminal
                 .draw(|frame| {
                     render(frame, &view, frame.area());
@@ -1505,7 +1464,12 @@ mod tests {
         };
         let name = "a prompt far too long to fit in the first column of the list";
         for width in [80u16, 120, 200] {
-            let screen = lines_at(&view, width);
+            let screen = rendered_at(&view, width)
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(width.into())
+                .map(|line| line.iter().collect::<String>())
+                .collect::<Vec<_>>();
             if width >= 120 {
                 assert!(screen[1].contains(name), "{screen:#?}");
             } else {
@@ -1555,7 +1519,12 @@ mod tests {
             assert!(screen.contains(full_tags), "{screen}");
         }
         for width in [140u16, 160] {
-            let screen = lines_at(&view, width);
+            let screen = rendered_at(&view, width)
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(width.into())
+                .map(|line| line.iter().collect::<String>())
+                .collect::<Vec<_>>();
             let at = |line: &str, needle: &str| {
                 line.find(needle)
                     .map(|byte| line[..byte].chars().count())
@@ -1704,27 +1673,27 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_list_starts_at_the_bottom_with_the_current_interaction_selected() {
+    fn a_fresh_list_starts_at_the_top_with_the_current_interaction_selected() {
         let mut view = many_rows(4);
         view.requested_offset = None;
-        assert_eq!(scroll_offset(&view, Some(4), 14, 16), 2);
-        // A saved offset still wins when the selection fits within its margins.
-        view.requested_offset = Some(0);
         assert_eq!(scroll_offset(&view, Some(4), 14, 16), 0);
+        // A saved offset still wins when the selection fits within its margins.
+        view.requested_offset = Some(2);
+        assert_eq!(scroll_offset(&view, Some(4), 14, 16), 2);
         // An older current interaction must remain visible on the first draw.
-        view = many_rows(0);
+        view = many_rows(7);
         view.requested_offset = None;
-        assert_eq!(scroll_offset(&view, Some(0), 10, 16), 0);
+        assert_eq!(scroll_offset(&view, Some(7), 10, 16), 6);
     }
 
     #[test]
-    fn an_unselected_list_shows_the_bottom() {
+    fn an_unselected_list_keeps_its_place() {
         // An index outside the list leaves every interaction unselected.
-        assert_eq!(drawn_offset(usize::MAX, 0), 6);
-        assert_eq!(drawn_offset(usize::MAX, 2), 6);
+        assert_eq!(drawn_offset(usize::MAX, 0), 0);
+        assert_eq!(drawn_offset(usize::MAX, 2), 2);
         let screen = rendered(&many_rows(usize::MAX));
-        assert!(screen.contains("task 7"), "{screen}");
-        assert!(!screen.contains("task 0"), "{screen}");
+        assert!(screen.contains("task 0"), "{screen}");
+        assert!(!screen.contains("task 7"), "{screen}");
     }
 
     #[test]

@@ -129,7 +129,7 @@ pub struct InteractionNavigator<'a> {
     pub typing_filter: bool,
     /// The first line shown last frame. [`render`] keeps it unless the cursor
     /// comes within [`SCROLL_MARGIN`] rows of an edge, and returns the line it
-    /// actually drew from. `None` starts at the bottom on the first draw.
+    /// actually drew from. `None` starts at the top on the first draw.
     pub requested_offset: Option<usize>,
     pub rows: Vec<InteractionRow<'a>>,
 }
