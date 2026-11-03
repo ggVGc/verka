@@ -72,12 +72,13 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
                 .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )
-        // Scope, completion and tag filters are state the list cannot be
+        // Scope, completion, time and tag filters are state the list cannot be
         // read without; the commands that change them are behind `?`.
         .title(format!(
-            " {} · interactions · {}{} · ? keys ",
+            " {} · interactions · {} · {}{} · ? keys ",
             view.scope,
             view.completion_filter,
+            view.time_filter,
             if view.tag_filter.is_empty() {
                 String::new()
             } else {
@@ -1077,6 +1078,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn time_filter_is_visible_in_the_title() {
+        for label in ["time: disabled", "past day", "past 3 days", "past week"] {
+            let view = InteractionNavigator {
+                time_filter: label,
+                ..many_rows(0)
+            };
+            let screen = rendered_at(&view, 120);
+            assert!(screen.contains(label), "{screen}");
+        }
+    }
+
     /// A branch hangs beneath its source with the Session picker's tree edge,
     /// and its last message is indented along with it.
     #[test]
@@ -1104,6 +1117,7 @@ mod tests {
             scope: "All".into(),
             all_workspaces: true,
             completion_filter: "completed hidden".into(),
+            time_filter: "time: disabled",
             tag_filter: &[],
             filter: None,
             typing_filter: false,
@@ -1608,6 +1622,7 @@ mod tests {
             scope: "Payments".into(),
             all_workspaces: false,
             completion_filter: "completed hidden".into(),
+            time_filter: "time: disabled",
             tag_filter: &[],
             filter: None,
             typing_filter: false,

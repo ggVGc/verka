@@ -121,6 +121,7 @@ pub struct InteractionNavigator<'a> {
     pub scope: Cow<'a, str>,
     pub all_workspaces: bool,
     pub completion_filter: Cow<'a, str>,
+    pub time_filter: &'a str,
     /// The tags every listed row carries, chosen with `ctrl-t`.
     pub tag_filter: &'a [String],
     /// The `/` filter's term, when one is being typed or is in force.

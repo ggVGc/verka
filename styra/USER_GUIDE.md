@@ -174,6 +174,11 @@ again. `s` hides or shows every stopped interaction, completed ones included,
 leaving only those still taking messages; the list's title says
 `stopped hidden` while it is on. `m` shows or hides the line under each row
 quoting its last response; these lines are hidden by default.
+`t` cycles the time filter through past day, past 3 days, past week, and disabled
+(the default). The rolling window uses the latest user message, falling back to
+creation time before any message is sent. The current interaction stays visible.
+The setting appears in the list's title and is retained when reopening the list
+or switching interactions.
 `d` toggles the selected interaction's diff pane while keeping the list open
 and focused. Moving to another interaction with the pane open keeps focus
 in the list as its diff loads.

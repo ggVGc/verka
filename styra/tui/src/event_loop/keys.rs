@@ -628,6 +628,9 @@ impl Loop<'_> {
             k if keys::INTERACTIONS_SCOPE.matches(k) => app.interactions.toggle_workspace_scope(),
             k if keys::INTERACTIONS_COMPLETED.matches(k) => app.interactions.toggle_completed(),
             k if keys::INTERACTIONS_STOPPED.matches(k) => app.interactions.toggle_stopped(),
+            k if keys::INTERACTIONS_TIME_FILTER.matches(k) => app
+                .interactions
+                .cycle_time_filter(&app.session_id, app.workspace.id.as_deref()),
             k if keys::INTERACTIONS_ABANDON.matches(k) => {
                 return self.finish_from_navigator(CompletionState::Abandoned)
             }

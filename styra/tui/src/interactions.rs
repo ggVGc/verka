@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+mod time_filter;
+
 use styra_protocol::{InteractionQuery, InteractionSummary, WorkspaceSummary};
 use styra_ui::query::Edit;
 
@@ -41,6 +43,8 @@ pub struct LiveInteractions {
     /// include every completed one, so this hides those whatever
     /// `show_completed` says.
     pub hide_stopped: bool,
+    /// Retained when reopening the list and switching interactions.
+    time_filter: time_filter::TimeFilter,
     /// Shows the line quoting each row's last response. Off by default so
     /// more rows fit in the list.
     pub show_responses: bool,
@@ -409,11 +413,12 @@ impl LiveInteractions {
     }
 
     /// Whether the navigator lists `interaction` once it is opened afresh in
-    /// All scope: the completion, stopped and tag filters stand, while the
+    /// All scope: the completion, stopped, time and tag filters stand, while the
     /// typed filter is one that opening clears.
     pub fn lists(&self, interaction: &InteractionSummary) -> bool {
         (self.show_completed || !interaction.completed.is_done())
             && (!self.hide_stopped || interaction.activity.accepting())
+            && self.time_filter.includes(interaction)
             && self.matches_tag_filter(interaction)
     }
 
@@ -1558,14 +1563,18 @@ fn sort_interactions(interactions: &mut [InteractionSummary]) {
     // Latest operator message first, regardless of activity or stop reason.
     interactions.sort_by_key(|interaction| {
         (
-            std::cmp::Reverse(if interaction.last_user_message_at_ms == 0 {
-                created_at_ms(interaction)
-            } else {
-                interaction.last_user_message_at_ms
-            }),
+            std::cmp::Reverse(last_message_or_creation_ms(interaction)),
             std::cmp::Reverse(created_at_ms(interaction)),
         )
     });
+}
+
+fn last_message_or_creation_ms(interaction: &InteractionSummary) -> u64 {
+    if interaction.last_user_message_at_ms == 0 {
+        created_at_ms(interaction)
+    } else {
+        interaction.last_user_message_at_ms
+    }
 }
 
 /// The creation time the server embeds as the leading field of an Interaction
