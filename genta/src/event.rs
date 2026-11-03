@@ -29,6 +29,8 @@ pub enum Protocol {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
+    /// Total input, including cache reads and cache creation. Cached input is
+    /// a subset of this count, matching Codex's inclusive input counter.
     #[serde(default)]
     pub input_tokens: u64,
     #[serde(default)]
@@ -1672,12 +1674,14 @@ fn decode_claude_result(value: &Value) -> AgentEvent {
     }
 }
 
-/// Map Claude's usage object onto [`TokenUsage`]. Claude reports cached
-/// input as `cache_read_input_tokens`; the rest align by name.
+/// Map Claude's separate input buckets onto our inclusive input count.
+/// Cache creation is new input; only cache reads belong in cached input.
 fn claude_usage(usage: &Value) -> TokenUsage {
     let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
     TokenUsage {
-        input_tokens: count("input_tokens"),
+        input_tokens: count("input_tokens")
+            + count("cache_creation_input_tokens")
+            + count("cache_read_input_tokens"),
         cached_input_tokens: count("cache_read_input_tokens"),
         output_tokens: count("output_tokens"),
         reasoning_output_tokens: 0,
@@ -2614,7 +2618,7 @@ mod tests {
                 outcome: TurnOutcome::Completed,
                 usage: TurnUsage {
                     turn: Some(TokenUsage {
-                        input_tokens: 12,
+                        input_tokens: 20,
                         cached_input_tokens: 8,
                         output_tokens: 3,
                         reasoning_output_tokens: 0,
@@ -2625,7 +2629,7 @@ mod tests {
         );
         assert_eq!(
             usage.summary(),
-            "turn complete · this turn in 12 · out 3 · cached 8"
+            "turn complete · this turn in 20 · out 3 · cached 8"
         );
 
         // A failed `result` is still the turn's ending, and states why.
@@ -2645,6 +2649,51 @@ mod tests {
         assert_eq!(failed.summary(), "turn failed: hit the turn limit");
         // Bookkeeping the operator can hide, a failure is not.
         assert!(!failed.is_minor());
+    }
+
+    #[test]
+    fn claude_input_includes_cache_creation_and_reads_across_turns() {
+        let mut tracker = UsageTracker::default();
+        for (raw, expected_turn, expected_total) in [
+            (
+                r#"{"type":"result","subtype":"success","usage":{"input_tokens":46,"cache_creation_input_tokens":71924,"cache_read_input_tokens":1293031,"output_tokens":19912}}"#,
+                TokenUsage {
+                    input_tokens: 1_365_001,
+                    cached_input_tokens: 1_293_031,
+                    output_tokens: 19_912,
+                    ..Default::default()
+                },
+                TokenUsage {
+                    input_tokens: 1_365_001,
+                    cached_input_tokens: 1_293_031,
+                    output_tokens: 19_912,
+                    ..Default::default()
+                },
+            ),
+            (
+                r#"{"type":"result","subtype":"success","usage":{"input_tokens":4,"cache_creation_input_tokens":100,"cache_read_input_tokens":2000,"output_tokens":50}}"#,
+                TokenUsage {
+                    input_tokens: 2_104,
+                    cached_input_tokens: 2_000,
+                    output_tokens: 50,
+                    ..Default::default()
+                },
+                TokenUsage {
+                    input_tokens: 1_367_105,
+                    cached_input_tokens: 1_295_031,
+                    output_tokens: 19_962,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let mut event = decode_line(Protocol::ClaudeJsonl, raw);
+            tracker.observe(&mut event);
+            let AgentEvent::TurnCompleted { usage, .. } = event else {
+                panic!("expected a turn ending");
+            };
+            assert_eq!(usage.turn, Some(expected_turn));
+            assert_eq!(usage.total, Some(expected_total));
+        }
     }
 
     #[test]
