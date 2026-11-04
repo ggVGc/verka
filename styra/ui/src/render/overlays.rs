@@ -8,44 +8,71 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-/// The most rows the rebase status box's message takes: the rebase itself is
-/// followed in the log above it, which keeps the room.
-const REBASE_STATUS_LINES: usize = 4;
-
-/// Rows the rebase status box needs at the bottom of a `width` wide panel.
-pub fn rebase_status_height(status: &styra_protocol::RebaseStatus, width: u16) -> u16 {
-    let lines = Paragraph::new(status.message.as_str())
-        .wrap(ratatui::widgets::Wrap { trim: false })
-        .line_count(width.saturating_sub(2))
-        .clamp(1, REBASE_STATUS_LINES);
-    lines as u16 + 2
+/// A progress message reserved at the bottom of the main panel.
+pub struct StatusView<'a> {
+    title: &'a str,
+    message: &'a str,
+    footer: &'a str,
+    tone: ratatui::style::Color,
 }
 
-/// Where a rebase stands, in a box across the bottom of the interaction. The
-/// conflict-resolution turn shows in the log above it, like any other turn.
-pub fn render_rebase_status(frame: &mut Frame, status: &styra_protocol::RebaseStatus, area: Rect) {
-    let (title, tone, footer) = if !status.finished {
-        (
-            " rebasing interaction ",
-            theme::RUNNING,
-            " locked while rebasing · conflicts are resolved by the current model ",
-        )
-    } else if status.succeeded {
-        (" rebase completed ", theme::SUCCESS, " Enter / Esc close ")
-    } else {
-        (" rebase stopped ", theme::ERROR, " Enter / Esc close ")
-    };
-    frame.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(tone))
-        .title(Span::styled(title, Style::default().fg(tone)))
-        .title_bottom(Span::styled(footer, Style::default().fg(theme::MUTED_TEXT)));
-    let message = Paragraph::new(status.message.as_str())
-        .style(Style::default().fg(theme::TEXT))
-        .wrap(ratatui::widgets::Wrap { trim: false })
-        .block(block);
-    frame.render_widget(message, area);
+/// Keep room for the conversation above a long status message.
+const STATUS_LINES: usize = 4;
+
+impl<'a> StatusView<'a> {
+    pub fn busy(view: &crate::busy::BusyView<'a>) -> Self {
+        Self {
+            title: " working ",
+            message: view.message,
+            footer: " please wait ",
+            tone: theme::RUNNING,
+        }
+    }
+
+    pub fn rebase(status: &'a styra_protocol::RebaseStatus) -> Self {
+        let (title, tone, footer) = if !status.finished {
+            (
+                " rebasing interaction ",
+                theme::RUNNING,
+                " locked while rebasing · conflicts are resolved by the current model ",
+            )
+        } else if status.succeeded {
+            (" rebase completed ", theme::SUCCESS, " Enter / Esc close ")
+        } else {
+            (" rebase stopped ", theme::ERROR, " Enter / Esc close ")
+        };
+        Self {
+            title,
+            message: &status.message,
+            footer,
+            tone,
+        }
+    }
+
+    pub fn height(&self, width: u16) -> u16 {
+        let lines = Paragraph::new(self.message)
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .line_count(width.saturating_sub(2))
+            .clamp(1, STATUS_LINES);
+        lines as u16 + 2
+    }
+
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(self.tone))
+            .title(Span::styled(self.title, Style::default().fg(self.tone)))
+            .title_bottom(Span::styled(
+                self.footer,
+                Style::default().fg(theme::MUTED_TEXT),
+            ));
+        let message = Paragraph::new(self.message)
+            .style(Style::default().fg(theme::TEXT))
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .block(block);
+        frame.render_widget(message, area);
+    }
 }
 
 /// Choose a new target or return to a saved branch.
@@ -495,9 +522,9 @@ mod tests {
                 output: "MODEL: Resolved file.rs and continuing the rebase".into(),
                 source_commit: "abc123".into(),
             };
-            assert_eq!(rebase_status_height(&status, 90), 3);
+            assert_eq!(StatusView::rebase(&status).height(90), 3);
             terminal
-                .draw(|frame| render_rebase_status(frame, &status, frame.area()))
+                .draw(|frame| StatusView::rebase(&status).render(frame, frame.area()))
                 .unwrap();
             let screen: String = terminal
                 .backend()
@@ -523,16 +550,16 @@ mod tests {
             source_commit: "abc123".into(),
             output: String::new(),
         };
-        assert_eq!(rebase_status_height(&status, 42), 4);
+        assert_eq!(StatusView::rebase(&status).height(42), 4);
         status.message = status.message.repeat(40);
         assert_eq!(
-            rebase_status_height(&status, 42),
-            REBASE_STATUS_LINES as u16 + 2
+            StatusView::rebase(&status).height(42),
+            STATUS_LINES as u16 + 2
         );
         for (width, height) in [(1, 1), (4, 4), (20, 6)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| render_rebase_status(frame, &status, frame.area()))
+                .draw(|frame| StatusView::rebase(&status).render(frame, frame.area()))
                 .unwrap();
         }
     }

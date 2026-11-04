@@ -22,7 +22,7 @@ use styra_server::Client;
 
 /// What the screen says while a Git branch and linked workspace are made,
 /// whichever key asked for them.
-const CREATING_WORKTREE: &str = "creating a Git branch and workspace…";
+const CREATING_WORKTREE: &str = "naming and creating a Git branch and worktree…";
 
 /// The restart that follows making a linked workspace.
 const RESTARTING_IN_WORKTREE: &str = "restarting the interaction in the linked workspace…";

@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
-    answer, busy, driva, event_list, files, footer, interactions, launcher, log, messages,
-    modal_input, overlays, overview, preview, quota, raw, recording, transcript, PanelId,
-    RenderFeedback, ScrollFeedback,
+    answer, driva, event_list, files, footer, interactions, launcher, log, messages, modal_input,
+    overlays, overview, preview, quota, raw, recording, transcript, PanelId, RenderFeedback,
+    ScrollFeedback,
 };
 use crate::{markdown, theme};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -42,9 +42,18 @@ fn render_side_preview(
 
 pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     let mut feedback = RenderFeedback::default();
-    let rebase = view.overlays.rebase_status;
+    let status = view
+        .overlays
+        .busy
+        .as_ref()
+        .map(overlays::StatusView::busy)
+        .or_else(|| {
+            view.overlays
+                .rebase_status
+                .map(overlays::StatusView::rebase)
+        });
     if let MainView::Preview(preview) = &view.main {
-        let (preview_area, rebase_area) = split_rebase_status(frame.area(), rebase);
+        let (preview_area, status_area) = split_status(frame.area(), status.as_ref());
         let measured = preview::render(frame, preview, preview_area);
         note_preview_scroll(
             &mut feedback,
@@ -54,13 +63,10 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             },
             measured,
         );
-        if let (Some(status), Some(area)) = (rebase, rebase_area) {
-            overlays::render_rebase_status(frame, status, area);
+        if let (Some(status), Some(area)) = (status.as_ref(), status_area) {
+            status.render(frame, area);
         }
         render_reading_overlays(frame, &view.overlays);
-        if let Some(busy) = &view.overlays.busy {
-            busy::render(frame, busy);
-        }
         return feedback;
     }
     let message_height =
@@ -73,7 +79,7 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
             Constraint::Length(1),
         ])
         .split(frame.area());
-    let (main_area, rebase_area) = split_rebase_status(chunks[0], rebase);
+    let (main_area, status_area) = split_status(chunks[0], status.as_ref());
     match &view.main {
         MainView::Events(events) => {
             render_events(frame, events, view.session_id, main_area, &mut feedback)
@@ -153,8 +159,8 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
         }
         MainView::Preview(_) => unreachable!(),
     }
-    if let (Some(status), Some(area)) = (rebase, rebase_area) {
-        overlays::render_rebase_status(frame, status, area);
+    if let (Some(status), Some(area)) = (status.as_ref(), status_area) {
+        status.render(frame, area);
     }
     if message_height > 0 {
         messages::render(frame, view.notices, chunks[1]);
@@ -166,7 +172,7 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     };
     footer::render(frame, view.footer, interaction, chunks[2]);
     if view.overlays.busy.is_some() {
-        // Drawn last, below; the box it replaces is not drawn at all.
+        // The bottom status replaces the input while the call runs.
     } else if let Some(capture) = view.overlays.recording {
         recording::render(frame, capture);
     } else if let Some(input) = view.overlays.input {
@@ -193,9 +199,6 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     }
     if let Some(launcher) = view.overlays.launcher {
         launcher::render_launcher(frame, launcher, frame.area());
-    }
-    if let Some(busy) = &view.overlays.busy {
-        busy::render(frame, busy);
     }
     feedback
 }
@@ -289,17 +292,12 @@ fn render_events(
     }
 }
 
-/// Take the rebase status box, when a rebase is being shown, off the bottom
-/// of `area`, so it sits under the log that follows the rebase's progress.
-fn split_rebase_status(
-    area: Rect,
-    status: Option<&styra_protocol::RebaseStatus>,
-) -> (Rect, Option<Rect>) {
+/// Reserve the status box below the main panel, above notices and the footer.
+fn split_status(area: Rect, status: Option<&overlays::StatusView<'_>>) -> (Rect, Option<Rect>) {
     let Some(status) = status else {
         return (area, None);
     };
-    let height =
-        overlays::rebase_status_height(status, area.width).min(area.height.saturating_sub(1));
+    let height = status.height(area.width).min(area.height.saturating_sub(1));
     if height == 0 {
         return (area, None);
     }
@@ -307,12 +305,12 @@ fn split_rebase_status(
         height: area.height - height,
         ..area
     };
-    let rebase = Rect {
+    let status = Rect {
         y: main.bottom(),
         height,
         ..area
     };
-    (main, Some(rebase))
+    (main, Some(status))
 }
 
 /// Gently fade the log's border while navigation holds focus.

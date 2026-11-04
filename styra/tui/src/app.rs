@@ -360,8 +360,8 @@ pub struct App {
     pub recording: Option<Recorded>,
     /// What the client is blocked doing, while a synchronous call the operator
     /// started is running — creating a Git workspace, above all. While it is
-    /// set the message box is replaced by this notice: no key is read until
-    /// the call returns, so a box to type into would be a lie.
+    /// set the input is hidden and progress appears in the bottom status box.
+    /// No key is read until the call returns.
     pub busy: Option<String>,
     /// The open "insert a path" prompt, while the operator is using it; see
     /// [`crate::insert`]. Held here rather than in [`Composer`] because its

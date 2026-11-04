@@ -104,9 +104,8 @@ pub struct ApplicationOverlays<'a> {
     /// The Workspaces with live work, searchable, opened with `v`.
     pub workspace_jump: Option<overlays::WorkspaceJumpView<'a>>,
     pub tags: Option<overlays::TagPickerView<'a>>,
-    /// A synchronous call the operator started, still running. It takes the
-    /// message box's place and covers everything else: no key is read until
-    /// it returns, so nothing beneath it should look like it would answer one.
+    /// A synchronous call the operator started, shown in the same bottom
+    /// status box as a rebase. The input is hidden until the call returns.
     pub busy: Option<busy::BusyView<'a>>,
 }
 

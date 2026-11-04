@@ -407,7 +407,7 @@ fn input(parts: &[String]) -> modal_input::ModalInput<'_> {
     }
 }
 #[test]
-fn message_box_is_centered_and_recording_or_busy_takes_its_place() {
+fn message_box_is_centered_and_recording_or_bottom_status_takes_its_place() {
     let list = list(&[]);
     let footer = footer();
     let parts = vec![String::new()];
@@ -438,6 +438,12 @@ fn message_box_is_centered_and_recording_or_busy_takes_its_place() {
     let text = rows.concat();
     assert!(text.contains("creating a new Git workspace…"));
     assert!(!text.contains("half a sentence"));
+    assert!(!text.contains("boost ×2"));
+    assert_eq!(locate(&rows, "working").1, 16, "{rows:#?}");
+    assert_eq!(locate(&rows, "creating a new Git workspace…").1, 17);
+    assert!(rows[18].contains("please wait"), "{rows:#?}");
+    assert!(rows[19].starts_with("codex · gpt-5.6-sol"), "{rows:#?}");
+    assert!(locate(&rows, "┗ ● running").1 < 16, "{rows:#?}");
 }
 
 #[test]

@@ -177,8 +177,8 @@ fn meter_frames(
 
 /// Run a synchronous call the loop has to wait out, behind [`App::busy`].
 ///
-/// Nothing reads the keyboard until `work` returns, so the notice takes the
-/// message box's place and is painted before the call is made. Keys pressed
+/// Nothing reads the keyboard until `work` returns, so the input is hidden
+/// and the bottom status is painted before the call is made. Keys pressed
 /// under it are thrown away afterwards rather than answered late — least of
 /// all by the event list, where a stray `q` quits.
 pub(super) fn blocked_on<T>(
