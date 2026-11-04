@@ -83,10 +83,14 @@ impl<'a> Directory<'a> {
         for child in &self.children {
             match child {
                 Node::File(index, name, change) => {
+                    // The selection marker takes the indent's last two
+                    // columns, so even a file at the top has them.
+                    let indent = "  ".repeat(depth.max(1));
                     rows.push((
                         Some(*index),
                         Line::from(vec![
-                            Span::raw(format!("{indent}{name}")),
+                            Span::raw(indent),
+                            Span::raw(*name),
                             change_marker(*change),
                         ]),
                     ));
@@ -129,7 +133,8 @@ fn file_tree_rows<'a>(
     rows
 }
 
-/// Marks the selected file in the tree, and is room every row leaves for it.
+/// Marks the selected file in the tree, in the room every file row's indent
+/// leaves for it.
 const SELECTION_MARKER: &str = "› ";
 
 /// Blank columns kept between the tree's longest row and its border.
@@ -144,9 +149,8 @@ const FILE_LIST_MAX_HEIGHT: u16 = 10;
 /// path cannot squeeze the patch out of view.
 fn file_tree_width(rows: &[(Option<usize>, Line<'_>)], available: u16) -> u16 {
     let longest = rows.iter().map(|(_, line)| line.width()).max().unwrap_or(0);
-    let marker = Line::from(SELECTION_MARKER).width();
     // One more for the border on the right.
-    let wanted = u16::try_from(marker + longest)
+    let wanted = u16::try_from(longest)
         .unwrap_or(u16::MAX)
         .saturating_add(FILE_TREE_PADDING + 1);
     wanted.min(available / 2)
@@ -514,7 +518,7 @@ fn render_inside(
                     .file_layers(file.patch)
                     .iter()
                     .any(|layer| file_touched.contains(layer));
-                if let Some(name) = line.spans.first_mut() {
+                if let Some(name) = line.spans.get_mut(1) {
                     name.style = if changed {
                         name.style.fg(theme::TEXT).add_modifier(Modifier::BOLD)
                     } else {
@@ -524,8 +528,11 @@ fn render_inside(
             }
         }
         // Only the name: its change marker keeps its own color.
-        if let Some(name) = selected.and_then(|row| rows[row].1.spans.first_mut()) {
-            name.style = name.style.fg(theme::SELECTED_FILE_NAME);
+        if let Some(row) = selected {
+            let spans = &mut rows[row].1.spans;
+            let indent = spans[0].width() - Line::from(SELECTION_MARKER).width();
+            spans[0] = Span::raw(format!("{}{SELECTION_MARKER}", " ".repeat(indent)));
+            spans[1].style = spans[1].style.fg(theme::SELECTED_FILE_NAME);
         }
         let items = rows.into_iter().map(|(_, line)| ListItem::new(line));
         let list = List::new(items)
@@ -536,8 +543,7 @@ fn render_inside(
                 Style::default()
                     .bg(theme::SELECTION_BACKGROUND)
                     .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol(SELECTION_MARKER);
+            );
         let mut state = ListState::default()
             .with_selected(selected)
             .with_offset(file_list_offset);
@@ -3762,8 +3768,8 @@ index 1111111..2222222 100644
         let files = filtered_file_diffs(text, Some("c"));
         let rows = file_tree_rows(&files, true);
         assert_eq!(rows[0].0, Some(2));
-        assert_eq!(rows[0].1.to_string(), "c [R]");
-        assert_eq!(rows[0].1.spans[1].style.fg, Some(theme::DIRECTORY_NAME));
+        assert_eq!(rows[0].1.to_string(), "  c [R]");
+        assert_eq!(rows[0].1.spans[2].style.fg, Some(theme::DIRECTORY_NAME));
         for (_, file) in filtered_file_diffs(text, None) {
             let tree = file_tree_rows(
                 &[(
@@ -3776,7 +3782,7 @@ index 1111111..2222222 100644
                 true,
             );
             let title = file_info(&file);
-            assert_eq!(title.spans[1], tree[0].1.spans[1]);
+            assert_eq!(title.spans[1], tree[0].1.spans[2]);
         }
     }
 
@@ -3795,11 +3801,12 @@ index 1111111..2222222 100644
                 .map(|(index, line)| (index, Line::from(line.to_string())))
                 .collect::<Vec<_>>()
         };
-        // "  main.rs [M]": 13, + marker 2 + padding 2 + border 1.
-        assert_eq!(file_tree_width(&rows(&["src/main.rs", "a.rs"]), 120), 18);
+        // "  main.rs [M]", its indent room for the marker: 13, + padding 2
+        // + border 1.
+        assert_eq!(file_tree_width(&rows(&["src/main.rs", "a.rs"]), 120), 16);
         let deep = ["a/very/deep/directory/structure/with/a_long_file_name.rs"];
         assert_eq!(file_tree_width(&rows(&deep), 60), 30);
-        assert_eq!(file_tree_width(&[], 60), 5);
+        assert_eq!(file_tree_width(&[], 60), 3);
     }
 
     #[test]
@@ -3808,9 +3815,16 @@ index 1111111..2222222 100644
             .map(|n| format!("diff --git a/src/dir{n}/file{n} b/src/dir{n}/file{n}\n@@ -1 +1 @@\n-old{n}\n+new{n}\n"))
             .collect::<String>();
         let ((output, _), _) = file_screen(Ok(&text), None, 0, true, 29);
-        assert!(output.contains("›     file29"), "{output}");
+        assert!(output.contains("  ▾ dir29/"), "{output}");
+        assert!(output.contains("  › file29"), "{output}");
         assert!(output.contains("new29"), "{output}");
         assert!(!output.contains("new0"), "{output}");
+        // Directories are never selected, so the top one needs no room for
+        // the marker.
+        let ((output, _), _) = file_screen(Ok(&text), None, 0, true, 0);
+        assert!(output.contains("│▾ src/"), "{output}");
+        assert!(output.contains("│  ▾ dir0/"), "{output}");
+        assert!(output.contains("│  › file0"), "{output}");
     }
 
     #[test]
@@ -3960,7 +3974,7 @@ index 1111111..2222222 100644
         assert_eq!(
             displayed,
             vec![
-                (Some(2), "README.md [M]".into()),
+                (Some(2), "  README.md [M]".into()),
                 (None, "▾ src/".into()),
                 (None, "  ▾ a/".into()),
                 (Some(3), "    b.rs [M]".into()),
@@ -4003,7 +4017,7 @@ index 1111111..2222222 100644
         assert_eq!(
             shown(true),
             [
-                "Cargo.toml [M]",
+                "  Cargo.toml [M]",
                 "▾ styra/",
                 "  ▾ diff/src/",
                 "    lib.rs [M]",
@@ -4016,7 +4030,7 @@ index 1111111..2222222 100644
         assert_eq!(
             shown(false),
             [
-                "Cargo.toml [M]",
+                "  Cargo.toml [M]",
                 "▾ styra/",
                 "  ▾ diff/",
                 "    ▾ src/",
