@@ -239,6 +239,13 @@ impl StopReason {
         })
     }
 
+    /// Whether nobody chose this stop and nothing went wrong: the interaction
+    /// is idle with no agent behind it, and the next message resumes one. See
+    /// [`InteractionActivityReason::leaves_dormant`].
+    pub fn is_dormant(&self) -> bool {
+        matches!(self, StopReason::ServerRestarted | StopReason::Branched)
+    }
+
     /// The reason as a status-line fragment. Always worth naming — unlike
     /// idling, stopping is never just what a session does next.
     pub fn label(&self) -> String {
@@ -264,7 +271,7 @@ impl StopReason {
                 exit_code: Some(code),
             } => format!("exited ({code})"),
             StopReason::Exited { exit_code: None } => "exited".into(),
-            StopReason::ServerRestarted => "server restarted".into(),
+            StopReason::ServerRestarted => "no agent since server restart".into(),
             StopReason::Branched => "branched, not started".into(),
             StopReason::NotAccepting => "not accepting messages".into(),
         }
@@ -391,6 +398,9 @@ impl Status {
             // Integration is the outcome, not one more way of stopping: "stopped"
             // in front of it would bury what the operator came to read.
             Status::Stopped(reason @ StopReason::Integrated { .. }) => reason.label(),
+            // Dormant work is waiting on the operator, as idle work is; only
+            // the agent is missing, and the next message brings it back.
+            Status::Stopped(reason) if reason.is_dormant() => format!("idle · {}", reason.label()),
             Status::Stopped(reason) => format!("stopped · {}", reason.label()),
             Status::Ended { error: Some(_), .. } => "failed".into(),
             // An ending the operator asked for is named as such rather than by
@@ -882,6 +892,14 @@ mod tests {
         assert_eq!(
             Status::Stopped(StopReason::Paused).label(),
             "stopped · paused"
+        );
+        assert_eq!(
+            Status::Stopped(StopReason::ServerRestarted).label(),
+            "idle · no agent since server restart"
+        );
+        assert_eq!(
+            Status::Stopped(StopReason::Branched).label(),
+            "idle · branched, not started"
         );
     }
 

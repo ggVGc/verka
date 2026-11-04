@@ -334,7 +334,8 @@ impl LiveInteractions {
 
     /// How the listed Interactions divide between running, idle and stopped:
     /// the standing tally of the whole fleet. `Background` is work in
-    /// flight, so it counts as running.
+    /// flight, so it counts as running, and a dormant interaction is idle
+    /// with no agent behind it yet, so it counts as idle.
     ///
     /// Completed Interactions are left out entirely. Completion is the reason
     /// the server stopped them, so counting them would fold work the operator
@@ -351,6 +352,9 @@ impl LiveInteractions {
                 styra_protocol::InteractionActivity::Pending => counts.idle += 1,
                 styra_protocol::InteractionActivity::Running
                 | styra_protocol::InteractionActivity::Background => counts.running += 1,
+                styra_protocol::InteractionActivity::Stopped if interaction.dormant() => {
+                    counts.idle += 1
+                }
                 styra_protocol::InteractionActivity::Stopped => counts.stopped += 1,
             }
         }
@@ -417,14 +421,14 @@ impl LiveInteractions {
     /// typed filter is one that opening clears.
     pub fn lists(&self, interaction: &InteractionSummary) -> bool {
         (self.show_completed || !interaction.completed.is_done())
-            && (!self.hide_stopped || interaction.activity.accepting())
+            && (!self.hide_stopped || interaction.open())
             && self.time_filter.includes(interaction)
             && self.matches_tag_filter(interaction)
     }
 
     /// The Interactions the overview tiles, in the order it lays them out:
-    /// every one whose agent still takes turns — working or waiting on the
-    /// operator — newest first by creation time.
+    /// every one still open — working, waiting on the operator, or dormant
+    /// until the operator's next message — newest first by creation time.
     ///
     /// Shares the global Workspace scope with the navigator and n/N, while
     /// ignoring the navigator's search, tag and completion filters. Completed
@@ -435,7 +439,7 @@ impl LiveInteractions {
             .iter()
             .enumerate()
             .filter(|(_, interaction)| {
-                interaction.activity.accepting()
+                interaction.open()
                     && !interaction.completed.is_done()
                     && self.in_workspace_scope(interaction, workspace_id)
             })
@@ -532,16 +536,13 @@ impl LiveInteractions {
         })
     }
 
-    /// The next Interaction that is still live — one the agent can still be
-    /// handed a turn — from `from` in display order, wrapping past the end of
+    /// The next Interaction that is still live — see [`is_live`] — from `from` in display order, wrapping past the end of
     /// the list so repeated presses walk the whole working set and come back.
     ///
     /// Scoped as [`Self::next_idle_unseen`] is. Completed Interactions are not
     /// candidates, for the same reason the navigator hides them.
     pub fn next_live(&self, from: &str, workspace_id: Option<&str>) -> Option<InteractionSummary> {
-        self.step_from(&self.step_order(workspace_id), from, |interaction| {
-            interaction.activity.accepting() && !interaction.completed.is_done()
-        })
+        self.step_from(&self.step_order(workspace_id), from, is_live)
     }
 
     /// The next destination for the global `n` shortcut. An interaction that
@@ -564,11 +565,7 @@ impl LiveInteractions {
         self.step_from(order, from, |interaction| {
             is_idle(interaction) && interaction.idle_unseen
         })
-        .or_else(|| {
-            self.step_from(order, from, |interaction| {
-                interaction.activity.accepting() && !interaction.completed.is_done()
-            })
-        })
+        .or_else(|| self.step_from(order, from, is_live))
     }
 
     /// The next Interaction that is actually working — Running or Background —
@@ -1060,13 +1057,13 @@ impl LiveInteractions {
                 *index != hidden
                     && interaction.workspace_id == *own_workspace
                     && !interaction.completed.is_done()
-                    && (!self.hide_stopped || interaction.activity.accepting())
+                    && (!self.hide_stopped || interaction.open())
             })
             .collect::<Vec<_>>();
         let live_alongside = alongside
             .iter()
             .copied()
-            .filter(|(_, index)| self.items[*index].activity.accepting())
+            .filter(|(_, index)| self.items[*index].open())
             .collect::<Vec<_>>();
         let same_worktree = live_alongside
             .iter()
@@ -1124,10 +1121,12 @@ impl LiveInteractions {
     }
 }
 
-/// Unfinished work whose agent can still receive messages. Shared by startup
-/// selection, Workspace entry and the live Workspace jump.
+/// Unfinished work that is still open: its agent can receive messages, or it
+/// is dormant and the next message resumes one (see
+/// [`InteractionSummary::open`]). Shared by startup selection, Workspace
+/// entry, the live Workspace jump and `n`.
 pub fn is_live(interaction: &InteractionSummary) -> bool {
-    interaction.activity.accepting() && !interaction.completed.is_done()
+    interaction.open() && !interaction.completed.is_done()
 }
 
 /// The Interaction to land on when entering `workspace_id`: the one an
@@ -1137,9 +1136,10 @@ pub fn is_live(interaction: &InteractionSummary) -> bool {
 /// wins a tie. This also counts opening an Interaction, while the navigator
 /// sorts by the most recent operator message.
 ///
-/// Stopped and completed Interactions are not candidates. Entering a Workspace
-/// should land on work that can still be talked to; a stopped Interaction is reached the
-/// same way it always was, through the Session picker.
+/// Stopped and completed Interactions are not candidates; dormant ones are.
+/// Entering a Workspace should land on work that can still be talked to; a
+/// stopped Interaction is reached the same way it always was, through the
+/// Session picker.
 pub fn first_live_in_workspace(
     interactions: &[InteractionSummary],
     workspace_id: &str,
@@ -1956,6 +1956,61 @@ pub(crate) mod tests {
             live.visible_indices("", Some("workspace")),
             vec![1],
             "stopped rows, completed ones included, are hidden"
+        );
+    }
+
+    /// A server restart, or a branch nobody has sent to yet, leaves work
+    /// dormant rather than stopped: it stays in the live set — listed with
+    /// stopped rows hidden, tiled, counted as idle, landed on and stepped to —
+    /// while a pause still takes it out.
+    #[test]
+    fn dormant_rows_stay_live() {
+        use styra_protocol::InteractionActivityReason;
+        let stopped_for = |id: &str, reason| InteractionSummary {
+            activity_reason: Some(reason),
+            ..interaction(id, InteractionActivity::Stopped)
+        };
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                stopped_for("restarted", InteractionActivityReason::ServerRestarted),
+                stopped_for("branched", InteractionActivityReason::Branched),
+                stopped_for("paused", InteractionActivityReason::Paused),
+                interaction("idle", InteractionActivity::Pending),
+            ],
+            vec![],
+        );
+        live.toggle_stopped();
+        let listed = |indices: Vec<usize>| {
+            let mut ids = indices
+                .into_iter()
+                .map(|index| live.items[index].id.as_str())
+                .collect::<Vec<_>>();
+            ids.sort();
+            ids
+        };
+
+        assert_eq!(
+            listed(live.visible_indices("", Some("workspace"))),
+            ["branched", "idle", "restarted"]
+        );
+        assert_eq!(
+            listed(live.overview_indices(None)),
+            ["branched", "idle", "restarted"]
+        );
+        let counts = live.activity_counts();
+        assert_eq!((counts.idle, counts.stopped), (3, 1));
+        assert!(is_live(&live.items[0]) && !is_live(&live.items[2]));
+        assert_ne!(first_live(&live.items).unwrap().id, "paused");
+        let mut stepped = std::collections::BTreeSet::new();
+        let mut from = "idle".to_owned();
+        for _ in 0..4 {
+            from = live.next_live(&from, None).unwrap().id;
+            stepped.insert(from.clone());
+        }
+        assert_eq!(
+            stepped.into_iter().collect::<Vec<_>>(),
+            ["branched", "idle", "restarted"]
         );
     }
 

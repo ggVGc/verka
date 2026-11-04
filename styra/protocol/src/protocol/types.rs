@@ -940,6 +940,22 @@ impl InteractionActivityReason {
             InteractionActivityReason::Paused | InteractionActivityReason::RateLimited { .. }
         )
     }
+
+    /// Whether an interaction stopped for this reason is only dormant: idle,
+    /// with no agent running behind it, but still the operator's open work.
+    ///
+    /// Neither the operator nor a problem stopped it. A server restart took
+    /// its agent without anyone deciding the work was over, and a branch has
+    /// simply not had its first message yet; in both the next message the
+    /// operator sends resumes the Session and carries on. Everything else that
+    /// stops an interaction — a pause, a failure, a refusal, an exit — is
+    /// something the operator should see as stopped.
+    pub fn leaves_dormant(&self) -> bool {
+        matches!(
+            self,
+            InteractionActivityReason::ServerRestarted | InteractionActivityReason::Branched
+        )
+    }
 }
 
 /// Where an interaction's agent is working, in Git's terms.
@@ -1313,6 +1329,30 @@ pub struct InteractionSummary {
     /// update stream stand behind it; its history is the stored Session's.
     #[serde(default)]
     pub restored: bool,
+}
+
+impl InteractionSummary {
+    /// Stopped, but only dormant — see
+    /// [`InteractionActivityReason::leaves_dormant`]. No agent takes a turn
+    /// until a message resumes the Session.
+    pub fn dormant(&self) -> bool {
+        self.activity == InteractionActivity::Stopped
+            && self
+                .activity_reason
+                .as_ref()
+                .is_some_and(InteractionActivityReason::leaves_dormant)
+    }
+
+    /// Whether this is still part of the operator's open work: its agent takes
+    /// messages, or it is [`Self::dormant`] and the next message brings one
+    /// back.
+    ///
+    /// The question live lists ask. It is not the question the send path asks
+    /// — that is [`InteractionActivity::accepting`], since only a running
+    /// agent can be handed a turn without resuming first.
+    pub fn open(&self) -> bool {
+        self.activity.accepting() || self.dormant()
+    }
 }
 
 /// Which interactions a [`crate::protocol::Request::ListInteractions`] answers
@@ -1738,6 +1778,45 @@ mod tests {
             assert!(activity.accepting(), "{activity:?}");
         }
         assert!(!InteractionActivity::Stopped.accepting());
+    }
+
+    /// A restart or a fresh branch leaves work dormant, still open; a stop
+    /// the operator chose, or one that went wrong, does not.
+    #[test]
+    fn only_stops_nobody_chose_leave_an_interaction_open() {
+        let mut summary: InteractionSummary = serde_json::from_str(
+            r#"{
+                "id": "s1",
+                "workspace_id": "w1",
+                "selection": {"provider": "claude", "model": "sonnet", "effort": "medium"},
+                "workspace": "/srv/work",
+                "activity": "pending"
+            }"#,
+        )
+        .unwrap();
+        assert!(summary.open() && !summary.dormant());
+
+        summary.activity = InteractionActivity::Stopped;
+        for (reason, dormant) in [
+            (Some(InteractionActivityReason::ServerRestarted), true),
+            (Some(InteractionActivityReason::Branched), true),
+            (Some(InteractionActivityReason::Paused), false),
+            (
+                Some(InteractionActivityReason::Exited { exit_code: Some(1) }),
+                false,
+            ),
+            (
+                Some(InteractionActivityReason::Failed {
+                    message: "boom".into(),
+                }),
+                false,
+            ),
+            (None, false),
+        ] {
+            summary.activity_reason = reason.clone();
+            assert_eq!(summary.dormant(), dormant, "{reason:?}");
+            assert_eq!(summary.open(), dormant, "{reason:?}");
+        }
     }
 
     /// The reason travels as its own tagged object, so a variant that carries

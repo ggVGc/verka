@@ -1118,9 +1118,9 @@ fn last_worked_at_ms(workspace: &WorkspaceSummary, interactions: &[InteractionSu
 }
 
 fn has_live_interaction(workspace: &WorkspaceSummary, interactions: &[InteractionSummary]) -> bool {
-    interactions.iter().any(|interaction| {
-        interaction.activity.accepting() && interaction.workspace_id == workspace.id
-    })
+    interactions
+        .iter()
+        .any(|interaction| interaction.open() && interaction.workspace_id == workspace.id)
 }
 
 /// Whether a Session has an Interaction with a live update stream behind it.

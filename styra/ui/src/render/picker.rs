@@ -522,14 +522,12 @@ fn live_label(live: usize) -> String {
     }
 }
 
-/// Interactions in a Workspace the server still accepts input for, whether
-/// idle and waiting on the operator or busy with a turn.
+/// Interactions in a Workspace that are still open work: idle and waiting on
+/// the operator, busy with a turn, or dormant until the next message.
 fn live_interactions(workspace_id: &str, interactions: &[InteractionSummary]) -> usize {
     interactions
         .iter()
-        .filter(|interaction| {
-            interaction.activity.accepting() && interaction.workspace_id == workspace_id
-        })
+        .filter(|interaction| interaction.open() && interaction.workspace_id == workspace_id)
         .count()
 }
 
@@ -564,9 +562,9 @@ fn render_sessions_preview(
     let items: Vec<ListItem> = sessions
         .iter()
         .map(|session| {
-            let live = interactions.iter().any(|interaction| {
-                interaction.activity.accepting() && interaction.id == session.id
-            });
+            let live = interactions
+                .iter()
+                .any(|interaction| interaction.open() && interaction.id == session.id);
             preview_session_item(session, live)
         })
         .collect();
