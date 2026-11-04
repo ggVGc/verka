@@ -202,12 +202,41 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     }
 
     let width = area.width.saturating_sub(2) as usize;
-    let viewport_height = area.height.saturating_sub(2) as usize;
     let entry_render = EntryRender {
         protocol: view.protocol,
         links: view.links,
         search: view.search.term(),
     };
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    // A branch's log begins at its `branched from` marker, which stays locked
+    // at the top of the pane: the rest of the list scrolls beneath it, in its
+    // own numbering one behind the caller's. Held to half the pane, so an
+    // expanded marker cannot crowd out the list it heads.
+    let pinned = pinned_marker(&view.entries);
+    let skipped = usize::from(pinned.is_some());
+    let pinned_rows = pinned.map_or(0, |marker| {
+        let max_rows = (usize::from(inner.height) / 2).max(1);
+        let rows = entry_rows_with_max_rows(marker, width, max_rows, entry_render);
+        let height = rows.len().min(usize::from(inner.height)) as u16;
+        frame.render_widget(Paragraph::new(rows), Rect { height, ..inner });
+        height
+    });
+    let area = Rect {
+        y: inner.y + pinned_rows,
+        height: inner.height - pinned_rows,
+        ..inner
+    };
+    let viewport_height = usize::from(area.height);
+    let rest;
+    let entries: &[EventEntry<'_>] = match pinned {
+        Some(_) => {
+            rest = beneath_pinned(&view.entries[1..]);
+            &rest
+        }
+        None => &view.entries,
+    };
+    let requested_offset = view.requested_offset.saturating_sub(skipped);
     // Built on demand: the offset math below asks about a window of items, not
     // all of them. See [`LazyItems`] and [`Heights`].
     //
@@ -216,9 +245,9 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     // past a tall entry can look attractive merely because the algorithm
     // cannot see what is under it.
     let mut items = LazyItems {
-        entries: &view.entries,
+        entries,
         tail: ListItem::new(tail_lines(&view.status, view.queued, width)),
-        built: (0..=view.entries.len()).map(|_| None).collect(),
+        built: (0..=entries.len()).map(|_| None).collect(),
         width,
         viewport_height,
         render: entry_render,
@@ -229,23 +258,30 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     // `entry_item` paints the backdrop on the summary row alone instead, so
     // the selection reads as a single line rather than as a block.
     let mut state = ListState::default();
-    let position = view.entries.iter().position(|entry| entry.selected);
+    // With the pinned marker under the cursor, the list beneath it is placed
+    // as for its first entry: the top of the branch's own work in view.
+    let selected = entries.iter().position(|entry| entry.selected);
+    let position = selected.or_else(|| {
+        pinned
+            .is_some_and(|marker| marker.selected && !entries.is_empty())
+            .then_some(0)
+    });
     let anchored_position = if view.anchor == ListAnchor::Free {
         None
     } else {
         position
     };
     let tail_in_view = view.anchor == ListAnchor::Selection
-        && position.is_some_and(|selected| selected + 1 == view.entries.len());
+        && selected.is_some_and(|selected| selected + 1 == entries.len());
     let response_space = tail_in_view
         && matches!(
-            view.entries[position.unwrap()].event,
+            entries[position.unwrap()].event,
             AgentEvent::UserMessage { .. }
         );
     let (offset, row_offset) = if response_space || (tail_in_view && view.requested_row_offset > 0)
     {
         tail_space_anchor(
-            view.requested_offset,
+            requested_offset,
             view.requested_row_offset,
             position.unwrap(),
             &mut items,
@@ -259,7 +295,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         .flatten()
         .and_then(|selected| {
             kept_anchor(
-                view.requested_offset,
+                requested_offset,
                 view.requested_row_offset,
                 selected,
                 &mut items,
@@ -271,7 +307,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     } else if view.anchor != ListAnchor::Free {
         (
             list_offset_with_scrolloff(
-                view.requested_offset,
+                requested_offset,
                 anchored_position,
                 &mut items,
                 viewport_height,
@@ -281,20 +317,20 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         )
     } else {
         normalize_scroll_anchor(
-            view.requested_offset,
+            requested_offset,
             view.requested_row_offset,
             view.scroll_delta,
             &mut items,
-            view.entries.len(),
+            entries.len(),
         )
     };
     // Only what the viewport can show is built, and only that is handed over.
     // A session of any length therefore costs one screen of rendering per
     // frame rather than its whole history — see [`LazyItems::into_window`].
     let mut items = items.into_window(offset, anchored_position, row_offset);
-    if row_offset > 0 && offset < view.entries.len() {
+    if row_offset > 0 && offset < entries.len() {
         items[0] = entry_item_slice(
-            &entry_at(&view.entries, offset),
+            &entry_at(entries, offset),
             width,
             viewport_height,
             row_offset,
@@ -304,7 +340,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     }
     clip_boundary_entry(
         &mut items,
-        &view.entries,
+        entries,
         offset,
         viewport_height,
         width,
@@ -314,7 +350,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     let visible_selection = anchored_position
         .filter(|position| *position >= offset && *position < offset + items.len())
         .map(|position| position - offset);
-    let list = List::new(items).block(block);
+    let list = List::new(items);
     // Both indices are rebased onto the window, which begins at `offset`: to
     // ratatui this is the whole list, seen from the top.
     //
@@ -330,7 +366,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     EventListFeedback {
         // Back into the caller's numbering. Ratatui only ever moves the offset
         // forward from where it was put, so this stays within the window.
-        effective_offset: offset + state.offset(),
+        effective_offset: offset + state.offset() + skipped,
         effective_row_offset: row_offset,
     }
 }
@@ -494,9 +530,35 @@ struct LazyItems<'a> {
     render: EntryRender<'a>,
 }
 
+/// The `branched from` marker a branch's log begins with, when this list is
+/// one: [`render`] locks it at the top of the pane, so where the conversation
+/// came from stays in sight however far the operator scrolls.
+fn pinned_marker<'e, 'a>(entries: &'e [EventEntry<'a>]) -> Option<&'e EventEntry<'a>> {
+    entries.first().filter(|entry| {
+        matches!(
+            entry.event,
+            AgentEvent::Branched {
+                direction: styra_protocol::event::BranchDirection::From,
+                ..
+            }
+        )
+    })
+}
+
+/// The entries under a pinned marker, numbered from the first of them. That
+/// one still sits directly beneath the marker, so a marker there shares its
+/// lower border as it would in the unpinned list — see [`entry_at`].
+fn beneath_pinned<'a>(entries: &[EventEntry<'a>]) -> Vec<EventEntry<'a>> {
+    let mut entries = entries.to_vec();
+    if let Some(first) = entries.first_mut() {
+        first.branch_follows_marker |= branch_border(first.event).is_some();
+    }
+    entries
+}
+
 fn entry_at<'a>(entries: &[EventEntry<'a>], index: usize) -> EventEntry<'a> {
     let mut entry = entries[index].clone();
-    entry.branch_follows_marker = index > 0
+    entry.branch_follows_marker |= index > 0
         && branch_border(entries[index - 1].event).is_some()
         && branch_border(entry.event).is_some();
     entry
@@ -2309,6 +2371,37 @@ mod tests {
             Some(theme::SELECTED_INTERACTION_TEXT)
         );
         assert_ne!(fg(true, "«"), Some(theme::SELECTED_INTERACTION_TEXT));
+    }
+
+    /// A branch's `branched from` marker heads the pane however far down the
+    /// list is read, and offsets stay in the caller's numbering around it.
+    #[test]
+    fn the_branched_from_marker_stays_locked_at_the_top() {
+        use styra_protocol::event::BranchDirection;
+        let mut events = vec![AgentEvent::Branched {
+            direction: BranchDirection::From,
+            session: "parent".into(),
+            name: None,
+        }];
+        events.extend(numbered(20));
+        let divider = "─".repeat(78);
+        let (rows, offset) = scrolled_screen(&events, 20, 0, true, 0);
+        assert!(offset > 1, "the list scrolled past the marker: {offset}");
+        assert!(rows[1].contains(&divider), "{rows:#?}");
+        assert!(rows[2].contains("from: untitled"), "{rows:#?}");
+        assert!(rows[3].contains(&divider), "{rows:#?}");
+        assert!(
+            rows[4].contains(&format!("message {}", offset - 1)),
+            "{rows:#?}"
+        );
+        assert!(rows.iter().any(|row| row.contains("message 19")));
+
+        // From the top, the marker is where it always was, with the branch's
+        // own first entry right beneath it: the scrolling part starts there.
+        let (rows, offset) = scrolled_screen(&events, 0, 0, true, 0);
+        assert_eq!(offset, 1);
+        assert!(rows[2].contains("from: untitled"), "{rows:#?}");
+        assert!(rows[4].contains("message 0"), "{rows:#?}");
     }
 
     #[test]

@@ -1004,7 +1004,8 @@ never what `selected_only` resolves to — a boundary is not an entry the
 operator could have selected. The event list does not show a branch's
 inherited history at all: it begins at the last `branched from` marker, so the
 first marker and everything copied after it stay hidden, and the operator
-follows the marker to read them in the source.
+follows the marker to read them in the source. That marker stays locked at
+the top of the pane while the branch's own work scrolls beneath it.
 
 The branch's Styra journal is seeded with the same chosen history as its native
 provider transcript, so opening the new Session shows its starting context
