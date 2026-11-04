@@ -149,7 +149,25 @@ fn pending_app(
     // A blank screen starts at the Workspace root, having no interaction that
     // could have moved somewhere else.
     app.workspace.enter(workspace.host_path.clone());
+    app.workspace_branch = workspace
+        .git_repository
+        .as_deref()
+        .and_then(checkout_branch);
     app
+}
+
+/// The branch checked out in the repository `directory` is in. `None` for a
+/// detached head, or when `directory` is not in a repository at all.
+fn checkout_branch(directory: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(directory)
+        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .output()
+        .ok()?;
+    let branch = String::from_utf8(output.stdout).ok()?;
+    let branch = branch.trim();
+    (output.status.success() && !branch.is_empty()).then(|| branch.to_owned())
 }
 
 /// Build the blank screen reached with `n`, including the current Session as

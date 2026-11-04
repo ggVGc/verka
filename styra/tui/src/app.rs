@@ -258,6 +258,10 @@ pub struct App {
     /// Set by `n`; the server resolves and validates the association rather
     /// than accepting a client-supplied path.
     pub checkout_from: Option<String>,
+    /// The branch the Workspace's own checkout is on, which a new Session
+    /// starts from unless `checkout_from` lends a linked one. Read once when
+    /// the blank screen opens rather than on every frame.
+    pub workspace_branch: Option<String>,
     /// The sandbox policy: both of its layers, the sandbox they resolve to, and
     /// which layer the driva view's keys are editing. See [`Launch`].
     pub launch: Launch,
@@ -625,6 +629,7 @@ impl App {
             search: Search::default(),
             session_id: session_id.into(),
             checkout_from: None,
+            workspace_branch: None,
             launch: Launch::default(),
             raw: RawView::default(),
             messages: RawView::default(),

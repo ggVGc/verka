@@ -201,7 +201,7 @@ pub fn names_at(worktree: &Path, commit: &str) -> Vec<String> {
 pub fn target(directory: &Path, base: Option<&str>) -> Result<DiffTarget, String> {
     let worktree = toplevel(directory)?;
     // Fails only for a detached head, the repository having just answered.
-    let branch = git(directory, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    let branch = branch(directory);
     let commit = match base {
         Some(base) => git(directory, &["merge-base", base, "HEAD"])?,
         None => git(directory, &["rev-parse", "--verify", "HEAD"])?,
@@ -213,6 +213,12 @@ pub fn target(directory: &Path, base: Option<&str>) -> Result<DiffTarget, String
         base: commit,
         branch_point: base.is_some(),
     })
+}
+
+/// The branch checked out in the repository `directory` is in. `None` for a
+/// detached head, or when `directory` is not in a repository at all.
+fn branch(directory: &Path) -> Option<String> {
+    git(directory, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok()
 }
 
 /// The top of the working tree `directory` is in, where a diff's paths start.

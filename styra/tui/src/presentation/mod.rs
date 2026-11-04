@@ -223,14 +223,11 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         },
         workspace: app.workspace.name.clone(),
         worktree,
-        source_branch: app.session_id.is_empty().then(|| {
-            app.checkout_from
-                .as_deref()
-                .and_then(|id| app.interactions.current(id))
-                .and_then(|interaction| interaction.checkout.as_ref())
-                .and_then(|checkout| checkout.branch.clone())
-                .unwrap_or_else(|| "Workspace branch".into())
-        }),
+        source_branch: if app.session_id.is_empty() {
+            source_branch(app)
+        } else {
+            None
+        },
         agent: label.agent,
         model: label.model.unwrap_or_else(|| "default model".into()),
         model_reported: label.model_reported,
@@ -247,6 +244,25 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
                 .unwrap_or("untitled")
                 .to_owned()
         }),
+    }
+}
+
+/// The branch a new interaction would start from: the linked checkout it was
+/// opened from, or else the Workspace's own, which is marked as such. `None`
+/// when that branch is unknown — a detached head, or no Git checkout at all.
+fn source_branch(app: &App) -> Option<String> {
+    let linked = app
+        .checkout_from
+        .as_deref()
+        .and_then(|id| app.interactions.current(id))
+        .and_then(|interaction| interaction.checkout.as_ref())
+        .filter(|checkout| checkout.linked());
+    match linked {
+        Some(checkout) => checkout.branch.clone(),
+        None => app
+            .workspace_branch
+            .as_ref()
+            .map(|branch| format!("{branch} (Workspace)")),
     }
 }
 
@@ -1400,6 +1416,23 @@ mod tests {
                 Some("styra/source-work")
             );
         });
+        // A source standing in the Workspace's own checkout lends nothing of
+        // its own: the launch starts from the Workspace branch.
+        app.workspace_branch = Some("main".into());
+        app.interactions.items[0].checkout = Some(CheckoutState {
+            branch: Some("main".into()),
+            worktree: "/workspace".into(),
+            repository: "/workspace".into(),
+        });
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert_eq!(
+                e.list.chrome.source_branch.as_deref(),
+                Some("main (Workspace)")
+            );
+        });
         app.checkout_from = None;
         inspect(&app, |v| {
             let MainView::Events(e) = &v.main else {
@@ -1407,8 +1440,15 @@ mod tests {
             };
             assert_eq!(
                 e.list.chrome.source_branch.as_deref(),
-                Some("Workspace branch")
+                Some("main (Workspace)")
             );
+        });
+        app.workspace_branch = None;
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert!(e.list.chrome.source_branch.is_none());
         });
         app.session_id = "source-session".into();
         inspect(&app, |v| {
