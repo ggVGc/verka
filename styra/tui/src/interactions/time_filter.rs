@@ -12,9 +12,9 @@ pub(super) struct TimeFilter {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Window {
+    #[default]
     Disabled,
     PastDay,
-    #[default]
     Past3Days,
     PastWeek,
 }
