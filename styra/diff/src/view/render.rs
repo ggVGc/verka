@@ -889,15 +889,24 @@ fn render_inside(
 }
 
 fn render_commits(frame: &mut Frame, commits: &crate::state::Commits, area: Rect) {
+    // Ids and who made each commit when are tinted apart from the
+    // summaries, as in the line cursor's legend; muted further while the
+    // list recedes.
+    let metadata = Style::default().fg(if commits.focused {
+        theme::MUTED_TEXT
+    } else {
+        theme::INACTIVE
+    });
     let mut items = vec![ListItem::new("All changes (including uncommitted)")];
     items.extend(commits.entries.iter().map(|commit| {
-        ListItem::new(format!(
-            "{} {} · {} · {}",
-            &commit.id[..7.min(commit.id.len())],
-            commit.summary,
-            commit.author,
-            commit.date
-        ))
+        ListItem::new(Line::from(vec![
+            Span::styled(
+                format!("{} ", &commit.id[..7.min(commit.id.len())]),
+                Style::default().fg(theme::ACCENT),
+            ),
+            Span::raw(commit.summary.clone()),
+            Span::styled(format!(" · {} · {}", commit.author, commit.date), metadata),
+        ]))
     }));
     // Outlined like a panel in Styra's grid: the thick accent border while
     // the list has the keys, a plain inactive one, the list receding, while
