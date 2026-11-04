@@ -598,6 +598,9 @@ The application is a single full-screen view with three regions:
   moving the selection upward pins the view so incoming events do not yank it
   away. `J`/`K` scroll the viewport by ten rendered lines without moving that
   selection, clamping at the bottom with at least five interaction lines visible.
+  While anything is scrolled away above, the pane's top border says so on the
+  right, `▲ 12 entries above`; it is gone once the first entry is back in full
+  view.
 - **Message box (center overlay).** A floating single- or multi-line editor.
   Submitting sends the text to the agent (encoded by the profile) and appends a
   `UserMessage` entry to the list.

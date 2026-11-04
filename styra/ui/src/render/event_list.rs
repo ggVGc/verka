@@ -207,8 +207,8 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         links: view.links,
         search: view.search.term(),
     };
+    let outer = area;
     let inner = block.inner(area);
-    frame.render_widget(block, area);
     // A branch's log begins at its `branched from` marker, which stays locked
     // at the top of the pane: the rest of the list scrolls beneath it, in its
     // own numbering one behind the caller's. Held to half the pane, so an
@@ -363,6 +363,15 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     *state.selected_mut() = visible_selection;
     *state.offset_mut() = 0;
     frame.render_stateful_widget(list, area, &mut state);
+    // Whether the top of the list is in view is otherwise only told by its
+    // first entry, which reads like any other: the top border says so instead
+    // whenever anything is scrolled away above. A pinned marker is not counted:
+    // it is always in view.
+    let above = offset + state.offset();
+    if above > 0 || row_offset > 0 {
+        block = block.title(scrolled_title(above).right_aligned());
+    }
+    frame.render_widget(block, outer);
     EventListFeedback {
         // Back into the caller's numbering. Ratatui only ever moves the offset
         // forward from where it was put, so this stays within the window.
@@ -543,6 +552,22 @@ fn pinned_marker<'e, 'a>(entries: &'e [EventEntry<'a>]) -> Option<&'e EventEntry
             }
         )
     })
+}
+
+/// The top-border marker for a list scrolled away from its top: how many
+/// entries are out of sight above, or only that some of the first one is.
+fn scrolled_title(above: usize) -> Line<'static> {
+    let text = match above {
+        0 => " ▲ more above ".to_owned(),
+        1 => " ▲ 1 entry above ".to_owned(),
+        above => format!(" ▲ {above} entries above "),
+    };
+    Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(theme::ACCENT)
+            .add_modifier(Modifier::BOLD),
+    ))
 }
 
 /// The entries under a pinned marker, numbered from the first of them. That
@@ -2402,6 +2427,34 @@ mod tests {
         assert_eq!(offset, 1);
         assert!(rows[2].contains("from: untitled"), "{rows:#?}");
         assert!(rows[4].contains("message 0"), "{rows:#?}");
+    }
+
+    /// The top border says when the list is scrolled away from its top, and
+    /// says nothing once it is back there.
+    #[test]
+    fn the_top_border_marks_a_list_scrolled_away_from_its_top() {
+        let events = numbered(20);
+        let (rows, offset) = scrolled_screen(&events, 0, 0, true, 0);
+        assert_eq!(offset, 0);
+        assert!(!rows[0].contains("above"), "{rows:#?}");
+
+        let (rows, offset) = scrolled_screen(&events, 19, 0, true, 0);
+        assert!(offset > 1, "the list scrolled: {offset}");
+        assert!(
+            rows[0].contains(&format!("▲ {offset} entries above")),
+            "{rows:#?}"
+        );
+
+        // Under a pinned marker, the top is the branch's own first entry.
+        use styra_protocol::event::BranchDirection;
+        let mut events = vec![AgentEvent::Branched {
+            direction: BranchDirection::From,
+            session: "parent".into(),
+            name: None,
+        }];
+        events.extend(numbered(20));
+        let (rows, _) = scrolled_screen(&events, 0, 0, true, 0);
+        assert!(!rows[0].contains("above"), "{rows:#?}");
     }
 
     #[test]
