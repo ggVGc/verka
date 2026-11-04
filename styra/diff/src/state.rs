@@ -670,6 +670,8 @@ impl CheckoutDiff {
             Action::Up if self.per_file => self.select_file(false, 1),
             Action::FilesDown if self.per_file => self.select_file(true, 5),
             Action::FilesUp if self.per_file => self.select_file(false, 5),
+            Action::First if self.per_file => self.select_file(false, usize::MAX),
+            Action::Last if self.per_file => self.select_file(true, usize::MAX),
             Action::Down => self.scroll.line_down(),
             Action::Up => self.scroll.line_up(),
             Action::ScrollDown => self.scroll.page_down(),
@@ -1434,7 +1436,8 @@ mod tests {
     }
 
     /// The same keys scroll the combined diff and walk the files of the
-    /// per-file one; the file-only actions do nothing in the combined diff.
+    /// per-file one, g/G to its first and last; the file-only actions do
+    /// nothing in the combined diff.
     #[test]
     fn up_and_down_move_through_lines_or_files_by_view() {
         let mut diff = two_files();
@@ -1450,6 +1453,10 @@ mod tests {
         diff.apply(Action::Down);
         assert_eq!((diff.scroll.offset, diff.selected_file), (0, 1));
         diff.apply(Action::Up);
+        assert_eq!(diff.selected_file, 0);
+        diff.apply(Action::Last);
+        assert_eq!((diff.scroll.offset, diff.selected_file), (0, 1));
+        diff.apply(Action::First);
         assert_eq!(diff.selected_file, 0);
     }
 

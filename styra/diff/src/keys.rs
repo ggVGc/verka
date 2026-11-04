@@ -230,13 +230,13 @@ pub const BINDINGS: &[Binding] = &[
     bind(
         &[KeyCode::Char('g')],
         "g",
-        "go to the top",
+        "go to the top, or the first file (per-file view)",
         Command::View(Action::First),
     ),
     bind(
         &[KeyCode::Char('G')],
         "G",
-        "go to the bottom",
+        "go to the bottom, or the last file (per-file view)",
         Command::View(Action::Last),
     ),
     bind(
