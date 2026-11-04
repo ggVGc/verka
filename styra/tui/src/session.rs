@@ -1063,14 +1063,10 @@ pub fn open_branch_prompt(app: &mut App) {
 /// Follow the branch marker under the cursor, opening the Session on the
 /// other side of it. Both sides carry one — the source names the branch, the
 /// branch names the source — so this walks a branch in either direction.
+/// With the cursor on one of the branches drawn beneath a marker, that branch
+/// is the one opened.
 pub fn follow_branch(app: &mut App) {
-    let Some(session_id) = app
-        .timeline
-        .entries
-        .get(app.timeline.selected)
-        .and_then(|entry| entry.event().branch_target())
-        .map(str::to_owned)
-    else {
+    let Some(session_id) = app.selected_branch_target() else {
         return app.show_warning("the selected entry is not a branch marker");
     };
     if session_id == app.session_id {

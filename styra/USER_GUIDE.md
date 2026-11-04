@@ -137,7 +137,7 @@ where `Space` keeps its own link menu.
 | `s` / `S` | interrupt the active turn / stop its interaction |
 | `n` / `N` / `Ctrl+N` | go to a newly idle interaction, or the next running one / cycle actively running interactions / start a new session in the current Session's checkout when it has one; pressed again on that still-blank screen, it starts at the Workspace root instead |
 | `B` | branch from history through, or only, the selected entry; choose a new worktree or share the current one; starts the branch in the background and stays on the source |
-| `Enter` / `b` | follow the selected `branch` marker to the Session it names |
+| `Enter` / `b` | follow the selected `branch` marker to the Session it names; `j`/`k` also select the branches listed beneath a marker, and `Enter` opens the one selected |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `~` | open a host shell in the interaction's working directory, in the configured terminal |
 | `r` / `R` (main interaction view) | run / test the project from the interaction's worktree, or the Workspace directory, in the configured terminal; see "Run and test actions" |

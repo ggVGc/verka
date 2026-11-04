@@ -341,6 +341,11 @@ pub struct App {
     pub answer: AnswerView,
     /// The Markdown link selected while walking the conversation with `f`.
     pub link_highlight: Option<LinkHighlight>,
+    /// Which of the branches drawn beneath a `branched to` marker carries the
+    /// cursor, as the marker's entry index and the branch's place in
+    /// [`crate::interactions::Interactions::branch_tree`]. Only meant while
+    /// that entry stays selected; see [`Self::selected_branch`].
+    branch_cursor: Option<(usize, usize)>,
     /// Preview visibility to restore when leaving link navigation.
     link_preview_open: Option<bool>,
     /// The actions offered on the highlighted link, while that menu is open.
@@ -653,6 +658,7 @@ impl App {
             files: FilesView::default(),
             answer: AnswerView::default(),
             link_highlight: None,
+            branch_cursor: None,
             link_preview_open: None,
             link_menu: None,
             action_menu: None,
@@ -1306,6 +1312,7 @@ impl App {
     // [`Timeline::select_forward`] for what "moved" means.
 
     fn moved(&mut self, moved: bool) {
+        self.branch_cursor = None;
         self.timeline.list_anchor = ListAnchor::Kept;
         self.timeline.list_scroll_delta = 0;
         if moved {
@@ -1350,9 +1357,7 @@ impl App {
         let entries = self.timeline.entries.iter().enumerate();
         let after_selection = self.timeline.selected.saturating_add(1);
         let target = if next {
-            entries
-                .skip(after_selection)
-                .find(is_message)
+            entries.skip(after_selection).find(is_message)
         } else {
             // The first message at or before the selection starts the current turn.
             entries
@@ -1387,15 +1392,76 @@ impl App {
     /// Move to the next visible entry regardless of whether it has anything
     /// beyond its summary — a finer-grained step than [`Self::select_next`],
     /// which skips entries with no arrow.
+    ///
+    /// A `branched to` marker's branches are rows of their own here: the step
+    /// walks down through them before leaving the marker.
     pub fn select_next_line(&mut self) {
+        let next = self.selected_branch().map_or(0, |at| at + 1);
+        if next < self.marker_branches().len() {
+            self.moved(true);
+            self.branch_cursor = Some((self.timeline.selected, next));
+            return;
+        }
         let moved = self.timeline.select_forward(Step::Line);
         self.moved(moved);
     }
 
     /// Move to the previous visible entry; see [`Self::select_next_line`].
+    /// Stepping up onto a marker lands on the last of its branches.
     pub fn select_prev_line(&mut self) {
+        if let Some(at) = self.selected_branch() {
+            self.moved(true);
+            self.branch_cursor = at.checked_sub(1).map(|at| (self.timeline.selected, at));
+            return;
+        }
         let moved = self.timeline.select_backward(Step::Line);
         self.moved(moved);
+        if moved {
+            self.branch_cursor = self
+                .marker_branches()
+                .len()
+                .checked_sub(1)
+                .map(|last| (self.timeline.selected, last));
+        }
+    }
+
+    /// The sessions drawn beneath the selected entry when it is a `branched
+    /// to` marker, in the order they are drawn. Empty for any other entry.
+    fn marker_branches(&self) -> Vec<&str> {
+        match self.timeline.selected_entry().map(|entry| entry.event()) {
+            Some(AgentEvent::Branched {
+                direction: styra_protocol::event::BranchDirection::To,
+                session,
+                ..
+            }) => self
+                .interactions
+                .branch_tree(session, &self.session_id)
+                .into_iter()
+                .map(|(_, id)| id)
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Which of the selected marker's branches carries the cursor, counted as
+    /// [`Self::marker_branches`] lists them. `None` while the marker's own
+    /// row — or any other entry — does.
+    pub fn selected_branch(&self) -> Option<usize> {
+        let (entry, at) = self.branch_cursor?;
+        (entry == self.timeline.selected && at < self.marker_branches().len()).then_some(at)
+    }
+
+    /// The session the selected row leads to: the branch carrying the cursor
+    /// beneath a marker, else the selected marker's own target.
+    pub fn selected_branch_target(&self) -> Option<String> {
+        match self.selected_branch() {
+            Some(at) => self.marker_branches().get(at).map(|id| (*id).to_owned()),
+            None => self
+                .timeline
+                .selected_entry()
+                .and_then(|entry| entry.event().branch_target())
+                .map(str::to_owned),
+        }
     }
 
     pub fn select_first(&mut self) {

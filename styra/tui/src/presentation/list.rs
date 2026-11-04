@@ -31,14 +31,55 @@ pub(crate) fn ui_link_display(value: crate::app::LinkDisplay) -> LinkDisplay {
 /// and a rename since would leave it stale — as would a worktree made for
 /// the branch afterward. Empty both for an event that is not a marker and for
 /// one whose target the roster has no row for.
+///
+/// A `branched to` marker also carries the listed sessions branched off its
+/// target, and theirs in turn, so the marker can show the whole subtree.
 pub(crate) fn branch_link<'a>(
     app: &'a App,
     owner: &str,
     event: &styra_protocol::event::AgentEvent,
 ) -> styra_ui::event_list::BranchLink<'a> {
+    use styra_protocol::event::{AgentEvent, BranchDirection};
     let Some(id) = event.branch_target() else {
         return Default::default();
     };
+    let mut link = session_link(app, owner, id);
+    if matches!(
+        event,
+        AgentEvent::Branched {
+            direction: BranchDirection::To,
+            ..
+        }
+    ) {
+        let tree = app.interactions.branch_tree(id, owner);
+        link.children = nested(app, owner, &mut tree.iter().peekable(), 1);
+    }
+    link
+}
+
+/// The links for the run of `tree` — [`crate::interactions::Interactions::branch_tree`]
+/// — at `depth`, each holding the deeper run that follows it.
+fn nested<'a>(
+    app: &'a App,
+    owner: &str,
+    tree: &mut std::iter::Peekable<std::slice::Iter<'_, (usize, &str)>>,
+    depth: usize,
+) -> Vec<styra_ui::event_list::BranchLink<'a>> {
+    let mut links = Vec::new();
+    while let Some(&&(at, id)) = tree.peek() {
+        if at != depth {
+            break;
+        }
+        tree.next();
+        let mut link = session_link(app, owner, id);
+        link.children = nested(app, owner, tree, depth + 1);
+        links.push(link);
+    }
+    links
+}
+
+/// [`branch_link`] for the session `id`, without the branches beneath it.
+fn session_link<'a>(app: &'a App, owner: &str, id: &str) -> styra_ui::event_list::BranchLink<'a> {
     let interaction = app.interactions.current(id);
     styra_ui::event_list::BranchLink {
         name: app.interactions.name(id),
@@ -48,6 +89,7 @@ pub(crate) fn branch_link<'a>(
             let here = app.interactions.current(owner)?.checkout.as_ref()?;
             other_worktree(here, interaction.checkout.as_ref()?)
         }),
+        children: Vec::new(),
     }
 }
 
@@ -151,6 +193,9 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
                 branch,
                 branch_provider_switch: branch_provider_switch(app, entry.event()),
                 branch_follows_marker: false,
+                selected_branch: (index == app.timeline.selected)
+                    .then(|| app.selected_branch())
+                    .flatten(),
             }
         })
         .collect();
@@ -243,6 +288,50 @@ mod tests {
                 "{here:?} → {there:?}"
             );
         }
+    }
+
+    /// A `branched to` marker brings the branches off where it leads, and
+    /// theirs, while a `branched from` marker leaves its source's out.
+    #[test]
+    fn a_branch_marker_carries_the_branches_off_where_it_leads() {
+        use styra_protocol::event::BranchDirection;
+        use styra_protocol::{InteractionActivity, InteractionSummary};
+        let interaction = |id: &str, from: Option<&str>| InteractionSummary {
+            name: Some(id.to_uppercase()),
+            origin: from.map(|from| styra_protocol::SessionOrigin {
+                session_id: from.into(),
+                provider: styra_protocol::agent::Provider::Codex,
+                at_ms: None,
+                history: Default::default(),
+            }),
+            ..crate::interactions::tests::interaction(id, InteractionActivity::Running)
+        };
+        let marker = |direction, session: &str| AgentEvent::Branched {
+            direction,
+            session: session.into(),
+            name: None,
+        };
+        let mut app = crate::presentation::test_support::app("parent");
+        app.interactions.refresh(vec![
+            interaction("parent", None),
+            interaction("child", Some("parent")),
+            interaction("grandchild", Some("child")),
+            interaction("sibling", Some("child")),
+            interaction("great", Some("grandchild")),
+            interaction("unrelated", None),
+        ]);
+        fn names(link: &styra_ui::event_list::BranchLink<'_>) -> String {
+            let children = link.children.iter().map(names).collect::<Vec<_>>();
+            if children.is_empty() {
+                link.name.unwrap_or("?").to_owned()
+            } else {
+                format!("{}({})", link.name.unwrap_or("?"), children.join(" "))
+            }
+        }
+        let to = super::branch_link(&app, "parent", &marker(BranchDirection::To, "child"));
+        assert_eq!(names(&to), "CHILD(GRANDCHILD(GREAT) SIBLING)");
+        let from = super::branch_link(&app, "child", &marker(BranchDirection::From, "parent"));
+        assert_eq!(names(&from), "PARENT");
     }
 
     /// The `/` prompt is shown along the bottom of the list it is marking, and

@@ -41,6 +41,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EntryLogView<'_> {
             branch: branch_link(app, &app.session_id, entry.event()),
             branch_provider_switch: branch_provider_switch(app, entry.event()),
             branch_follows_marker: false,
+            selected_branch: None,
         })
         .collect();
     styra_ui::event_list::EntryLogView {

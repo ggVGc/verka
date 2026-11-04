@@ -1051,15 +1051,36 @@ struct RowKey {
     links: LinkDisplay,
     link_highlight: Option<EntryIndex>,
     branch_follows_marker: bool,
+    selected_branch: Option<usize>,
     search: Option<String>,
-    branch_name: Option<String>,
-    branch_state: Option<crate::interactions::InteractionState>,
-    branch_message: Option<String>,
-    branch_worktree: Option<String>,
+    branch: BranchKey,
     branch_provider_switch: Option<(
         styra_protocol::agent::Provider,
         styra_protocol::agent::Provider,
     )>,
+}
+
+/// A [`BranchLink`] as [`RowKey`] holds it: owned, and with the whole tree
+/// of branches beneath it, since any of them changing changes the rows.
+#[derive(PartialEq, Eq, Hash)]
+struct BranchKey {
+    name: Option<String>,
+    state: Option<crate::interactions::InteractionState>,
+    message: Option<String>,
+    worktree: Option<String>,
+    children: Vec<BranchKey>,
+}
+
+impl BranchKey {
+    fn of(branch: &BranchLink<'_>) -> Self {
+        Self {
+            name: branch.name.map(str::to_owned),
+            state: branch.state.clone(),
+            message: branch.message.map(str::to_owned),
+            worktree: branch.worktree.map(str::to_owned),
+            children: branch.children.iter().map(Self::of).collect(),
+        }
+    }
 }
 
 impl Weigh for Vec<Line<'static>> {
@@ -1109,11 +1130,9 @@ fn entry_rows_with_max_rows(
         links: render.links,
         link_highlight: entry.link_highlight,
         branch_follows_marker: entry.branch_follows_marker,
+        selected_branch: entry.selected_branch,
         search: render.search.map(str::to_owned),
-        branch_name: entry.branch.name.map(str::to_owned),
-        branch_state: entry.branch.state.clone(),
-        branch_message: entry.branch.message.map(str::to_owned),
-        branch_worktree: entry.branch.worktree.map(str::to_owned),
+        branch: BranchKey::of(&entry.branch),
         branch_provider_switch: entry.branch_provider_switch,
     };
     ROW_CACHE.with(|cache| {
@@ -1191,6 +1210,7 @@ pub fn message_rows(
         branch,
         branch_provider_switch: None,
         branch_follows_marker: false,
+        selected_branch: None,
     };
     let render = EntryRender {
         protocol,
@@ -1208,10 +1228,23 @@ fn build_entry_rows(
     max_rows: usize,
     render: EntryRender<'_>,
 ) -> Vec<Line<'static>> {
+    // With the cursor on one of the marker's branches, that row is drawn
+    // selected and the marker's own row is not.
+    let unselected;
+    let entry = if entry.selected_branch.is_some() {
+        unselected = EventEntry {
+            selected: false,
+            ..entry.clone()
+        };
+        &unselected
+    } else {
+        entry
+    };
     let mut rows = build_branch_entry_rows(entry, width, max_rows, render);
     if finished_branch(entry) && !entry.selected {
         let fade = 3;
-        for row in &mut rows {
+        let cursor = Some(theme::SELECTION_BACKGROUND);
+        for row in rows.iter_mut().filter(|row| row.style.bg != cursor) {
             row.style = faded_style(row.style, fade);
             for span in &mut row.spans {
                 span.style = faded_style(span.style, fade);
@@ -1234,14 +1267,84 @@ fn build_branch_entry_rows(
     if width == 0 || max_rows <= border_rows {
         return build_entry_content_rows(entry, width, max_rows, render);
     }
-    let content = build_entry_content_rows(entry, width, max_rows - border_rows, render);
+    // The marker's own summary row always fits; its branches take what is
+    // left before its detail does.
+    let mut children = branch_children_rows(
+        &entry.branch.children,
+        1,
+        width,
+        render.protocol,
+        &mut entry.selected_branch.map(|at| at + 1),
+    );
+    children.truncate(max_rows - border_rows - 1);
+    let content = build_entry_content_rows(
+        entry,
+        width,
+        max_rows - border_rows - children.len(),
+        render,
+    );
     let divider = Line::from(Span::styled("─".repeat(width), Style::default().fg(color)));
-    let mut rows = Vec::with_capacity(content.len() + border_rows);
+    let mut rows = Vec::with_capacity(content.len() + children.len() + border_rows);
     if !entry.branch_follows_marker {
         rows.push(divider.clone());
     }
     rows.extend(content);
+    rows.extend(children);
     rows.push(divider);
+    rows
+}
+
+/// The branches taken off where a marker leads, within its band: each one a
+/// collapsed `branched to` marker of its own, indented `depth` steps, with its
+/// own branches a step further in beneath it. `cursor` counts down the rows
+/// still to draw before the selected one, which it reaches at `Some(1)`.
+fn branch_children_rows(
+    children: &[BranchLink<'_>],
+    depth: usize,
+    width: usize,
+    protocol: Protocol,
+    cursor: &mut Option<usize>,
+) -> Vec<Line<'static>> {
+    let event = AgentEvent::Branched {
+        direction: styra_protocol::event::BranchDirection::To,
+        session: String::new(),
+        name: None,
+    };
+    let mut rows = Vec::new();
+    for child in children {
+        let entry = EventEntry {
+            event: &event,
+            // Drawn as part of its parent's rows, which the cache keys on.
+            version: EntryVersion { id: 0, revision: 0 },
+            expanded: false,
+            has_detail: false,
+            contract: None,
+            selected: *cursor == Some(1),
+            link_highlight: None,
+            branch: child.clone(),
+            branch_provider_switch: None,
+            branch_follows_marker: false,
+            selected_branch: None,
+        };
+        *cursor = cursor.map(|left| left.saturating_sub(1));
+        let row = summary_line(&entry, SummaryContext::EventList, protocol);
+        let mut row = selected_summary_line(row, false, entry.selected);
+        row.spans.insert(0, Span::raw("  ".repeat(depth)));
+        let mut row = with_entry_backdrop(truncate_line(row, width, false), &entry);
+        if finished_branch(&entry) && !entry.selected {
+            for span in &mut row.spans {
+                span.style = faded_style(span.style, 3);
+            }
+        }
+        rows.push(row);
+        rows.extend(branch_children_rows(
+            &child.children,
+            depth + 1,
+            width,
+            protocol,
+            cursor,
+        ));
+    }
     rows
 }
 
@@ -2511,6 +2614,78 @@ mod tests {
         assert!(!unnamed.contains("stale snapshot"), "{unnamed}");
     }
 
+    /// The branches off where a marker leads sit inside its band, each a
+    /// marker of its own, indented a step further per generation.
+    #[test]
+    fn a_branch_marker_shows_its_child_branches_indented_beneath_it() {
+        use styra_protocol::event::BranchDirection;
+        let event = AgentEvent::Branched {
+            direction: BranchDirection::To,
+            session: "4f1c-session-id".into(),
+            name: None,
+        };
+        let named = |name, children| BranchLink {
+            name: Some(name),
+            children,
+            ..Default::default()
+        };
+        let entry = EventEntry {
+            expanded: false,
+            has_detail: false,
+            branch: named(
+                "Retry backoff",
+                vec![
+                    named("Jitter", vec![named("Cap", Vec::new())]),
+                    named("Metrics", Vec::new()),
+                ],
+            ),
+            ..entry_of(&event, version())
+        };
+        let rows = entry_rows_with_max_rows(&entry, 40, 20, render_of())
+            .into_iter()
+            .map(|row| row.to_string().trim_end().to_owned())
+            .collect::<Vec<_>>();
+        let divider = "─".repeat(40);
+        assert_eq!(
+            rows,
+            [
+                divider.as_str(),
+                "▌ Retry backoff",
+                "  ▌ Jitter",
+                "    ▌ Cap",
+                "  ▌ Metrics",
+                divider.as_str(),
+            ]
+        );
+        // Short of room, the marker's own row is kept over its branches.
+        let cut = entry_rows_with_max_rows(&entry, 40, 4, render_of());
+        assert_eq!(cut.len(), 4);
+        assert_eq!(cut[1].to_string().trim_end(), "▌ Retry backoff");
+
+        // With the cursor on a branch, that row is drawn selected instead of
+        // the marker's own.
+        let cursor = Some(theme::SELECTION_BACKGROUND);
+        let selected = EventEntry {
+            selected: true,
+            selected_branch: Some(1),
+            ..entry.clone()
+        };
+        let rows = entry_rows_with_max_rows(&selected, 40, 20, render_of());
+        let marked = rows
+            .iter()
+            .map(|row| row.style.bg == cursor)
+            .collect::<Vec<_>>();
+        assert_eq!(marked, [false, false, false, true, false, false]);
+        assert_eq!(rows[3].to_string().trim_end(), "    • Cap");
+        let on_marker = EventEntry {
+            selected_branch: None,
+            ..selected
+        };
+        let rows = entry_rows_with_max_rows(&on_marker, 40, 20, render_of());
+        assert_eq!(rows[1].style.bg, cursor);
+        assert!(rows[2..].iter().all(|row| row.style.bg != cursor));
+    }
+
     #[test]
     fn a_branch_marker_names_a_worktree_only_when_it_is_another_one() {
         use styra_protocol::event::BranchDirection;
@@ -2574,6 +2749,7 @@ mod tests {
                 state: Some(paused),
                 message: Some(&long),
                 worktree: None,
+                children: Vec::new(),
             },
             ..entry_of(&event, version())
         };
@@ -2699,6 +2875,7 @@ mod tests {
                     }),
                     message: Some("Latest message"),
                     worktree: None,
+                    children: Vec::new(),
                 },
                 ..entry_of(&event, version())
             };
@@ -3190,6 +3367,7 @@ mod tests {
             branch: Default::default(),
             branch_provider_switch: None,
             branch_follows_marker: false,
+            selected_branch: None,
         }
     }
 

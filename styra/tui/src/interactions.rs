@@ -302,6 +302,37 @@ impl LiveInteractions {
             .map(|(parent, _, _)| parent.as_str())
     }
 
+    /// The listed Sessions branched off `id`, and off those in turn, as a
+    /// `branched to` marker leading to `id` in `owner`'s conversation draws
+    /// them: in listing order, each followed by its own, with how many
+    /// generations below `id` it is, counting from 1. A Session already above
+    /// one — `owner` included — is not listed beneath it again, so a cycle in
+    /// the origins ends.
+    pub fn branch_tree(&self, id: &str, owner: &str) -> Vec<(usize, &str)> {
+        fn walk<'a>(
+            items: &'a [InteractionSummary],
+            id: &str,
+            lineage: &mut Vec<String>,
+            tree: &mut Vec<(usize, &'a str)>,
+        ) {
+            lineage.push(id.to_owned());
+            for child in items {
+                let branched_here = child
+                    .origin
+                    .as_ref()
+                    .is_some_and(|origin| origin.session_id == id);
+                if branched_here && !lineage.contains(&child.id) {
+                    tree.push((lineage.len() - 1, child.id.as_str()));
+                    walk(items, &child.id, lineage, tree);
+                }
+            }
+            lineage.pop();
+        }
+        let mut tree = Vec::new();
+        walk(&self.items, id, &mut vec![owner.to_owned()], &mut tree);
+        tree
+    }
+
     /// The current operator-facing name for `id`, shared by every TUI surface.
     pub fn name(&self, id: &str) -> Option<&str> {
         self.names.get(id).and_then(Option::as_deref)

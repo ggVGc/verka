@@ -41,6 +41,7 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
             branch_provider_switch: branch_provider_switch(app, entry.event()),
             // The preview is for reading the entry in full, wherever it sits.
             branch_follows_marker: false,
+            selected_branch: None,
         });
     let branch_log = branch_log(app);
     styra_ui::preview::PreviewView {

@@ -2579,6 +2579,88 @@ mod tests {
         }
     }
 
+    /// `j` and `k` walk the branches drawn beneath a `branched to` marker as
+    /// rows of their own, and Enter opens the one the cursor is on.
+    #[test]
+    fn j_and_k_select_a_markers_child_branches_and_enter_opens_one() {
+        use styra_protocol::event::{AgentEvent, BranchDirection};
+        use styra_protocol::{InteractionActivity, InteractionSummary};
+
+        let (_root_directory, root) = tree("follow-child-branch");
+        let mut app = app(&root);
+        app.enter_list();
+        let branched = |id: &str, from: &str| InteractionSummary {
+            origin: Some(styra_protocol::SessionOrigin {
+                session_id: from.into(),
+                provider: styra_protocol::agent::Provider::Codex,
+                at_ms: None,
+                history: Default::default(),
+            }),
+            ..crate::interactions::tests::interaction(id, InteractionActivity::Running)
+        };
+        app.interactions.refresh(vec![
+            branched("branch-2", &app.session_id.clone()),
+            branched("child-3", "branch-2"),
+            branched("grandchild-4", "child-3"),
+        ]);
+        app.push_event(AgentEvent::AgentMessage {
+            text: "before".into(),
+        });
+        app.push_event(AgentEvent::Branched {
+            direction: BranchDirection::To,
+            session: "branch-2".into(),
+            name: None,
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "after".into(),
+        });
+        app.select_last();
+        let marker = app.timeline.selected - 1;
+
+        // Up onto the marker lands on its deepest branch, then on up.
+        press_list_key(&mut app, &root, KeyCode::Char('k').into());
+        assert_eq!(
+            (app.timeline.selected, app.selected_branch()),
+            (marker, Some(1))
+        );
+        press_list_key(&mut app, &root, KeyCode::Char('k').into());
+        assert_eq!(app.selected_branch(), Some(0));
+        press_list_key(&mut app, &root, KeyCode::Enter.into());
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenSession("child-3".into()))
+        );
+        press_list_key(&mut app, &root, KeyCode::Char('k').into());
+        assert_eq!(
+            (app.timeline.selected, app.selected_branch()),
+            (marker, None)
+        );
+        press_list_key(&mut app, &root, KeyCode::Enter.into());
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenSession("branch-2".into()))
+        );
+
+        // And back down through them and past.
+        for expected in [Some(0), Some(1)] {
+            press_list_key(&mut app, &root, KeyCode::Char('j').into());
+            assert_eq!(
+                (app.timeline.selected, app.selected_branch()),
+                (marker, expected)
+            );
+        }
+        press_list_key(&mut app, &root, KeyCode::Enter.into());
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenSession("grandchild-4".into()))
+        );
+        press_list_key(&mut app, &root, KeyCode::Char('j').into());
+        assert_eq!(
+            (app.timeline.selected, app.selected_branch()),
+            (marker + 1, None)
+        );
+    }
+
     #[test]
     fn enter_on_a_regular_event_still_toggles_its_expansion() {
         let (_root_directory, root) = tree("regular-enter");

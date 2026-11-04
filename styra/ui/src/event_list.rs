@@ -50,6 +50,10 @@ pub struct EventEntry<'a> {
     )>,
     /// The previous visible entry is another branch marker; share its lower border.
     pub branch_follows_marker: bool,
+    /// On a selected marker, which of [`BranchLink::children`] — counted in
+    /// the order they are drawn, each before its own — carries the cursor
+    /// instead of the marker's own row.
+    pub selected_branch: Option<usize>,
 }
 
 /// The session an [`AgentEvent::Branched`] marker leads to, as the host's
@@ -73,6 +77,11 @@ pub struct BranchLink<'a> {
     /// not the worktree of the interaction the marker sits in. `None` when
     /// the two share one, and when either checkout is unknown.
     pub worktree: Option<&'a str>,
+    /// The sessions branched off this one in turn, each drawn beneath the
+    /// marker as a marker of its own, indented a step per generation. Empty
+    /// for a `branched from` marker: what was branched off its source is the
+    /// interaction the marker sits in, and that one's siblings.
+    pub children: Vec<BranchLink<'a>>,
 }
 
 pub enum EventListStatus {

@@ -37,6 +37,7 @@ fn list(events: &[AgentEvent]) -> EventListView<'_> {
             branch: Default::default(),
             branch_provider_switch: None,
             branch_follows_marker: false,
+            selected_branch: None,
         })
         .collect();
     EventListView {

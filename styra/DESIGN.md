@@ -1008,7 +1008,10 @@ operator could have selected. The event list does not show a branch's
 inherited history at all: it begins at the last `branched from` marker, so the
 first marker and everything copied after it stay hidden, and the operator
 follows the marker to read them in the source. That marker stays locked at
-the top of the pane while the branch's own work scrolls beneath it.
+the top of the pane while the branch's own work scrolls beneath it. A
+`branched to` marker also shows, inside its band, the listed Sessions branched
+off where it leads — each drawn as a marker of its own, indented a step per
+generation — so a whole subtree reads from the Session it started in.
 
 The branch's Styra journal is seeded with the same chosen history as its native
 provider transcript, so opening the new Session shows its starting context
@@ -1044,7 +1047,10 @@ Two client-facing shortcuts:
 - `Enter` on a branch marker in the event list opens the Session that marker
   names, which is how an operator walks between a source and its branches.
   `b` remains a shortcut for that action. On any other entry, `Enter` keeps
-  its normal fold/unfold behavior.
+  its normal fold/unfold behavior. The branches drawn beneath a `branched to`
+  marker are rows of their own to `j`/`k`, which walk down through them
+  before leaving the marker (and up onto the marker lands on its last one);
+  `Enter` on one opens that branch. `↓`/`↑` step over them.
 
 ### Current Interactions
 
