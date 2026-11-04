@@ -54,20 +54,14 @@ pub struct ServerState {
     inner: Arc<ServerInner>,
 }
 
-#[path = "automatic.rs"]
 mod automatic;
 use automatic::{AutomaticAction, AutomaticActions};
-#[path = "edit_report.rs"]
 mod edit_report;
-#[path = "integration.rs"]
 mod integration;
-#[path = "native_transcripts.rs"]
 mod native_transcripts;
 use native_transcripts::{FilesystemTranscripts, NativeTranscripts};
 
-#[path = "provider_switch.rs"]
 mod provider_switch;
-#[path = "rebase.rs"]
 mod rebase;
 
 struct ServerInner {

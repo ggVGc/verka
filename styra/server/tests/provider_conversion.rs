@@ -7,9 +7,8 @@ use styra_server::event::Protocol;
 use styra_server::journal::{self, Journal};
 use styra_server::protocol::{BranchHistory, CompletionState};
 
-#[path = "support/provider_conversion.rs"]
-mod fixture;
-use fixture::{scratch, stored_claude_session};
+mod support;
+use support::provider_conversion::{scratch, stored_claude_session};
 
 #[test]
 fn switching_provider_retains_the_session_and_records_the_boundary() {

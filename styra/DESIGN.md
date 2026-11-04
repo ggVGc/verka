@@ -1327,13 +1327,19 @@ styra/server/            # the server application + its client interface library
     types.rs             # data vocabulary that crosses the wire (interface)
     paths.rs             # default socket/store locations (interface + server)
     server.rs            # socket dispatch and the server-owned interaction manager
+    server/
+      automatic.rs       # automatic actions for interactions
+      edit_report.rs     # each edited file described by errands, kept with the Session
+      integration.rs     # integrating interaction changes
+      native_transcripts.rs # provider-native conversation history
+      provider_switch.rs # switching a Session's provider
+      rebase.rs          # rebasing interaction changes
     interaction.rs               # one live agent interaction: Driva launch, pipes, threads
     journal.rs           # raw event/input capture and replay
     workspace.rs         # Workspace metadata and hierarchy
     git.rs               # host-side enclosing-repository discovery
     worktree.rs          # the linked checkout an interaction works in
     errand.rs            # one cheap, bounded, bare-sandbox question Styra asks for itself
-    edit_report.rs       # each edited file described by errands, kept with the Session
     naming.rs            # an interaction's topic: what its branch and its Session are called
 
 styra/tui/               # the terminal client application
