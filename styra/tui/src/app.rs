@@ -101,9 +101,6 @@ pub enum View {
     /// the view is open.
     Processes,
     Transcript,
-    /// The interaction's checkout diffed against where its branch started,
-    /// as last read into [`App::checkout_diff`].
-    CheckoutDiff,
     Driva,
     Files,
     /// The last turn's typed answer, rendered as the shape it was asked for.
@@ -305,8 +302,8 @@ pub struct App {
     /// Unlike the raw/log views, the transcript reads as a document from the
     /// beginning rather than anchoring to the tail.
     pub transcript: Scroll,
-    /// The diff [`View::CheckoutDiff`] shows. Kept after the view is left, but
-    /// read afresh each time it is opened.
+    /// The diff the diff pane shows. Kept after the pane is closed, but read
+    /// afresh each time it is opened.
     pub checkout_diff: Option<styra_diff::CheckoutDiff>,
     pub diff_branch_picker: Option<crate::checkout_diff::BranchPicker>,
     /// Temporarily use the preview pane for the diff without changing the
@@ -319,11 +316,14 @@ pub struct App {
     pub diff_turn: bool,
     /// Highlight the selected turn within the checkout diff.
     pub diff_turn_highlight: bool,
+    /// Whether the per-file view lists its files in a strip under the patch
+    /// rather than in a column to its left.
+    pub diff_files_below: bool,
+    /// Whether the diff pane takes the whole interaction view, hiding the
+    /// log; a newly opened pane starts under the log again.
+    pub diff_maximized: bool,
     /// The turn diff the side diff shows while [`Self::diff_turn`] is set.
     pub turn_diff: Option<crate::turn_diff::TurnDiffPanel>,
-    /// Whether the fullscreen diff shows the conversation's latest messages
-    /// where its header would be. Kept as the diff is left and opened again.
-    pub diff_conversation: bool,
     /// What the message being written is about, when it was started from the
     /// diff: the file it was on, and the line the line cursor was on. Shown
     /// under the message box, and put under the message when it is sent.
@@ -458,15 +458,12 @@ pub enum Request {
     /// Read the checkout diff into the preview pane. Reading it runs `git`,
     /// so the event loop does it rather than the key handler.
     ShowDiff(String),
-    /// Read the checkout diff into the fullscreen view.
-    ShowDiffFullscreen(String),
     /// Open the diff at the selected file or file reference, when it occurs
     /// in the checkout's changes.
     ShowDiffAt {
         id: String,
         path: PathBuf,
         line: Option<u32>,
-        fullscreen: bool,
     },
     /// Open a Markdown link's resolved path in the configured editor.
     OpenPath(PathBuf),
@@ -575,7 +572,6 @@ enum Opened {
     Events,
     Preview,
     DiffPane,
-    DiffFullscreen,
 }
 
 /// One announced quota reading, as told apart from another: where it was
@@ -649,9 +645,10 @@ impl App {
             diff_preview: false,
             diff_turn: false,
             diff_turn_highlight: false,
+            diff_files_below: false,
+            diff_maximized: false,
             turn_diff: None,
             diff_interaction_focus: false,
-            diff_conversation: false,
             entry_log: EntryLog::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
@@ -697,8 +694,6 @@ impl App {
             Opened::Preview
         } else if !self.diff_visible() {
             Opened::Events
-        } else if self.view == View::CheckoutDiff {
-            Opened::DiffFullscreen
         } else {
             Opened::DiffPane
         };
@@ -758,10 +753,6 @@ impl App {
                     self.ask(Request::ShowDiff(self.session_id.clone()));
                 }
             }
-            Opened::DiffFullscreen if has_checkout => {
-                self.ask(Request::ShowDiffFullscreen(self.session_id.clone()))
-            }
-            Opened::DiffFullscreen => {}
         }
     }
 
@@ -1088,11 +1079,6 @@ impl App {
     pub fn set_view(&mut self, view: View) {
         if self.view != view {
             self.clear_link_highlight();
-            if view == View::CheckoutDiff {
-                if let Some(diff) = self.checkout_diff.as_mut() {
-                    diff.show_files();
-                }
-            }
             self.view = view;
         }
     }
@@ -1783,8 +1769,7 @@ impl App {
 
     /// Whether the checkout diff is on screen, including while composing.
     pub fn diff_visible(&self) -> bool {
-        self.view == View::CheckoutDiff
-            || (self.diff_preview && matches!(self.view, View::Events | View::Files))
+        self.diff_preview && matches!(self.view, View::Events | View::Files)
     }
 
     /// Whether the live interactions navigator is on screen. It stays open
@@ -1798,7 +1783,7 @@ impl App {
     pub fn diff_focused(&self) -> bool {
         self.diff_visible()
             && self.focus == Focus::List
-            && (self.view == View::CheckoutDiff || !self.diff_interaction_focus)
+            && !self.diff_interaction_focus
     }
 
     /// The entry the preview panel and the `y` shortcut act on: the one the
@@ -1951,7 +1936,6 @@ impl App {
             View::Log
             | View::Quota
             | View::Transcript
-            | View::CheckoutDiff
             | View::Driva
             | View::Overview => None,
         }
@@ -4316,15 +4300,6 @@ mod tests {
         assert_eq!(
             next.take_request(),
             Some(Request::ShowDiff("session-2".into()))
-        );
-
-        let mut screen = app();
-        screen.checkout_diff = Some(styra_diff::CheckoutDiff::read(target.clone()));
-        screen.set_view(View::CheckoutDiff);
-        let mut next = carry(&mut screen, true);
-        assert_eq!(
-            next.take_request(),
-            Some(Request::ShowDiffFullscreen("session-2".into()))
         );
 
         // One without a checkout has no diff to show, so none is asked for.

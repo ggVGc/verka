@@ -27,7 +27,6 @@ bindings! { GLOBAL = "Global";
     GLOBAL_SHELL: [Key::ch('!')] => Action::GlobalShell;
     GLOBAL_DIRECTORY: [Key::ch('~')] => Action::GlobalDirectory;
     GLOBAL_DIFF: [Key::ch('d')] ("checkout with a branch point") => Action::GlobalDiff;
-    GLOBAL_DIFF_FULLSCREEN: [Key::ch('D')] => Action::GlobalDiffFullscreen;
     GLOBAL_INTERACTIONS: [Key::ch('a')] => Action::GlobalInteractions;
     GLOBAL_OVERVIEW: [Key::ch('o')] => Action::GlobalOverview;
     GLOBAL_SESSIONS: [Key::ch('A')] => Action::GlobalSessions;
@@ -121,13 +120,13 @@ bindings! { READING = "Raw, messages, log, quota, processes, and transcript";
 }
 
 bindings! { CHECKOUT_DIFF = "Diff";
-    DIFF_CONVERSATION: [Key::code(KeyCode::Tab), Key::code(KeyCode::BackTab)] ("fullscreen")
-        => Action::DiffConversation;
     DIFF_BRANCH: [Key::ch('b')] => Action::DiffBranch;
     DIFF_TURN: [Key::ch('u')] => Action::DiffTurn;
     DIFF_NEXT_TURN: [Key::ch(']')] ("turn diff") => Action::DiffNextTurn;
     DIFF_PREV_TURN: [Key::ch('[')] ("turn diff") => Action::DiffPrevTurn;
     DIFF_TURN_HIGHLIGHT: [Key::ch('H')] => Action::DiffTurnHighlight;
+    DIFF_FILES_BELOW: [Key::ctrl('f')] => Action::DiffFilesBelow;
+    DIFF_MAXIMIZE: [Key::ch('D')] => Action::DiffMaximize;
 }
 
 bindings! { PREVIEW = "Full-screen preview";
@@ -850,7 +849,6 @@ mod reference_tests {
             offered
         };
         // Taken by the view's own keys.
-        assert!(!offers(Window::Driva, Action::GlobalDiffFullscreen));
         assert!(!offers(Window::Driva, Action::GlobalWorktrees));
         assert!(!offers(Window::Driva, Action::GlobalIntegrate));
         assert!(!offers(Window::Driva, Action::GlobalTags));

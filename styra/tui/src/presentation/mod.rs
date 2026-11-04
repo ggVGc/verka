@@ -135,7 +135,7 @@ pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrom
 /// Workspace name followed by the interaction's own title. `suffix` names
 /// the view in the title; `None` is the event list, which is the default
 /// view and so needs no name.
-/// The diff on screen, in the side panel or fullscreen: the checkout's, or —
+/// The diff on screen in the diff pane: the checkout's, or —
 /// while `u` has it so — the selected turn's, with the message that started
 /// the turn above it. A turn diff has no edit report to write: that is the
 /// checkout's.
@@ -150,9 +150,17 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
     };
     let mut chrome = panel_chrome(app, Some("diff"));
     chrome.suffix = Some(title.to_owned());
+    // Under the log, whose border already says where the interaction is.
+    if !app.diff_maximized {
+        chrome.workspace = None;
+        chrome.session = None;
+        chrome.parent = None;
+        chrome.worktree = None;
+        chrome.source_branch = None;
+    }
     let mut view = match app.shown_diff() {
         Some(diff) => diff.view_model(chrome),
-        None if turn || app.view == View::CheckoutDiff => {
+        None if turn => {
             styra_diff::CheckoutDiffView::from_chrome(chrome)
         }
         None => return None,
@@ -164,10 +172,16 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
             "H",
             "toggle highlighting the selected turn in the full diff",
         ),
+        (
+            "ctrl-f",
+            "per-file view's file list beside / below the patch",
+        ),
+        (
+            "D",
+            "the diff over the whole view, hiding the interaction log, and back",
+        ),
     ];
-    // The side panel is too narrow to give the files a column; fullscreen
-    // puts them back beside the patch.
-    view.files_below = app.view != View::CheckoutDiff;
+    view.files_below = app.diff_files_below;
     if !turn && app.diff_turn_highlight {
         view.highlight_diff = app
             .turn_diff
@@ -178,8 +192,11 @@ fn shown_diff(app: &App) -> Option<styra_diff::CheckoutDiffView<'_>> {
     view.prompts = app.diff_prompts();
     if turn {
         view.report = None;
+        // The message that started the turn is the one selected in the log,
+        // unless the diff has the whole view.
         view.intro_message = app
             .turn_message()
+            .filter(|_| app.diff_maximized)
             .map(|event| styra_ui::preview::MessageView {
                 event,
                 protocol: app.selection.provider.protocol(),
@@ -216,8 +233,7 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         focused: if app.navigator_shown() {
             false
         } else if suffix == Some("diff") {
-            // Fullscreen, the diff is the only panel: nothing to tell it from.
-            app.diff_focused() && app.view != View::CheckoutDiff
+            app.diff_focused()
         } else {
             app.focus == Focus::List && !app.diff_focused() && shares_screen(app)
         },
@@ -327,6 +343,10 @@ pub(crate) fn current_window(app: &App) -> crate::keybindings::Window {
     if app.navigator_shown() {
         return Window::Interactions;
     }
+    // The diff pane owns the keyboard while it has the keys.
+    if app.diff_focused() {
+        return Window::CheckoutDiff;
+    }
     view_window(app.view)
 }
 
@@ -342,7 +362,6 @@ pub(crate) fn view_window(view: View) -> crate::keybindings::Window {
         View::Quota => Window::Quota,
         View::Processes => Window::Processes,
         View::Transcript => Window::Transcript,
-        View::CheckoutDiff => Window::CheckoutDiff,
         View::Driva => Window::Driva,
         View::Files => Window::Files,
         View::Answer => Window::Answer,
@@ -350,10 +369,6 @@ pub(crate) fn view_window(view: View) -> crate::keybindings::Window {
         View::Overview => Window::Overview,
     }
 }
-
-/// How many of the conversation's messages the fullscreen diff shows in place
-/// of its header.
-const DIFF_MESSAGES: usize = 3;
 
 /// The reference rows for one window, in the UI's vocabulary.
 pub(crate) fn help_rows(
@@ -531,6 +546,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                     entry_log: entry_log.as_ref(),
                     processes: processes.as_ref(),
                     preview: side_preview,
+                    diff_maximized: app.diff_maximized,
                     link_mode: app.link_highlight.is_some(),
                 }),
             )
@@ -603,18 +619,6 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 requested_scroll: app.transcript.offset,
             };
             draw_main(ui, app, MainView::Transcript(&transcript))
-        }
-        View::CheckoutDiff => {
-            let mut diff = shown_diff(app).expect("fullscreen always draws a diff");
-            diff.thumbnail = true;
-            if app.diff_conversation {
-                diff.conversation_data = Some(styra_ui::picker::conversation(
-                    app.timeline.entries.iter().map(|entry| entry.event()),
-                    app.selection.provider.protocol(),
-                    DIFF_MESSAGES,
-                ));
-            }
-            draw_main(ui, app, MainView::CheckoutDiff(&diff))
         }
         View::Driva => {
             let driva = driva::view(app);
@@ -999,9 +1003,18 @@ mod tests {
             checkpoint: None,
             checkpoint_error: None,
         });
+        app.workspace.name = Some("payments".into());
         app.diff_preview = true;
         app.diff_turn = true;
         app.sync_turn_diff();
+        // Under the log, the pane repeats neither the selected message nor
+        // where the interaction is.
+        let view = shown_diff(&app).unwrap();
+        assert!(view.intro_message.is_none());
+        let chrome = view.chrome.unwrap();
+        assert_eq!(chrome.workspace, None);
+        assert_eq!(chrome.session, None);
+        app.diff_maximized = true;
         let view = shown_diff(&app).unwrap();
         let message = view.intro_message.unwrap();
         assert!(
@@ -1554,10 +1567,7 @@ mod tests {
         diff.diff = Ok("diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new\n".into());
         diff.side_by_side = true;
         app.checkout_diff = Some(diff);
-        app.view = View::CheckoutDiff;
-        inspect(&app, |v| {
-            assert!(matches!(v.main, MainView::CheckoutDiff(_)));
-        });
+        app.diff_preview = true;
         for split in [true, false, true] {
             let feedback = styra_ui::RenderFeedback {
                 diff_layout: Some((split, 7)),
@@ -1568,6 +1578,73 @@ mod tests {
             assert_eq!((diff.rendered_side, diff.horizontal_scroll), (split, 7));
             assert!(diff.side_by_side);
         }
+    }
+
+    /// The files sit in a column left of the patch until ctrl-f moves them
+    /// under it.
+    #[test]
+    fn ctrl_f_moves_the_diff_file_list_below_the_patch_and_back() {
+        let mut app = test_support::app("s1");
+        app.checkout_diff = Some(crate::checkout_diff::read(styra_diff::DiffTarget {
+            worktree: "/no-such-styra-diff-checkout".into(),
+            branch: None,
+            base_branch: None,
+            base: "HEAD".into(),
+            branch_point: false,
+        }));
+        app.diff_preview = true;
+        let below = |app: &App| shown_diff(app).unwrap().files_below;
+        assert!(
+            shown_diff(&app).unwrap().per_file,
+            "a fresh diff opens on its file list"
+        );
+        assert!(!below(&app));
+        let f = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('f'),
+            crossterm::event::KeyModifiers::CONTROL,
+        );
+        crate::input::handle_diff_key(&mut app, f);
+        assert!(below(&app));
+        app.view = View::Files;
+        assert!(below(&app), "the choice holds in the files view");
+        crate::input::handle_diff_key(&mut app, f);
+        assert!(!below(&app));
+    }
+
+    /// `D` gives the diff the whole view and takes the keys from the log it
+    /// hides; Tab cannot hand them back until `D` returns the log.
+    #[test]
+    fn d_maximizes_the_diff_pane_and_back() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut app = test_support::app("s1");
+        app.checkout_diff = Some(crate::checkout_diff::read(styra_diff::DiffTarget {
+            worktree: "/no-such-styra-diff-checkout".into(),
+            branch: None,
+            base_branch: None,
+            base: "HEAD".into(),
+            branch_point: false,
+        }));
+        app.diff_preview = true;
+        let maximized = |app: &App| {
+            let mut shown = None;
+            inspect(app, |v| {
+                let MainView::Events(e) = &v.main else {
+                    panic!()
+                };
+                shown = Some(e.diff_maximized);
+            });
+            shown.unwrap()
+        };
+        assert!(!maximized(&app));
+        crate::input::handle_diff_key(&mut app, KeyEvent::from(KeyCode::Char('D')));
+        assert!(maximized(&app));
+        assert!(app.diff_focused());
+        crate::input::handle_diff_key(&mut app, KeyEvent::from(KeyCode::Tab));
+        assert!(app.diff_focused(), "no hidden log to hand the keys to");
+        crate::input::handle_diff_key(&mut app, KeyEvent::from(KeyCode::Char('D')));
+        assert!(!maximized(&app));
+        crate::input::handle_diff_key(&mut app, KeyEvent::from(KeyCode::Tab));
+        assert!(!app.diff_focused());
     }
 
     #[test]
@@ -1602,7 +1679,7 @@ mod tests {
     }
 
     #[test]
-    fn checkout_diff_is_dispatched_to_fullscreen_and_side_views() {
+    fn checkout_diff_is_dispatched_to_the_side_views() {
         let mut app = test_support::app("s1");
         app.checkout_diff = Some(styra_diff::CheckoutDiff {
             commits: Default::default(),
@@ -1642,11 +1719,6 @@ mod tests {
             line_cursor: None,
             find: Default::default(),
             find_from: None,
-        });
-        app.view = View::CheckoutDiff;
-
-        inspect(&app, |v| {
-            assert!(matches!(v.main, MainView::CheckoutDiff(_)));
         });
         for view in [View::Events, View::Files] {
             app.view = view;

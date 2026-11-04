@@ -19,6 +19,9 @@ pub struct EventView<'a> {
     /// Takes the place of the entry log, which the client closes for it.
     pub processes: Option<&'a crate::processes::ProcessesView<'a>>,
     pub preview: Option<SidePreview<'a>>,
+    /// Whether the checkout diff takes the whole view, the log and every
+    /// other pane hidden, rather than the bottom of it.
+    pub diff_maximized: bool,
     /// Whether link navigation is on, which washes out everything in the
     /// event list but the links and file references it walks.
     pub link_mode: bool,
@@ -45,9 +48,6 @@ pub enum MainView<'a> {
     Quota(&'a quota::QuotaView<'a>),
     Processes(&'a crate::processes::ProcessesView<'a>),
     Transcript(&'a transcript::TranscriptView<'a>),
-    /// The checkout diff, which `styra-diff` draws: it is built on this
-    /// crate so that it can also run as a program of its own.
-    CheckoutDiff(&'a dyn Panel),
     Driva(&'a driva::DrivaView<'a>),
     Files(FilesView<'a>),
     Answer(&'a answer::AnswerView<'a>),

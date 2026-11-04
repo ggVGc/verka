@@ -277,7 +277,7 @@ its library. UI model modules remain available without the feature, while widget
 implementations in `styra/ui/src/render/` and terminal ownership in
 `styra/ui/src/terminal.rs` require it.
 
-The checkout diff view (`d` in the preview pane, `D` fullscreen) is its own crate, `styra-diff` in `styra/diff`,
+The checkout diff view (`d`, in the diff pane under the interaction log) is its own crate, `styra-diff` in `styra/diff`,
 built on `styra-ui`; its `styra-diff` binary opens the same view over any
 repository: `styra-diff [-C DIR] [BASE]` shows the working tree against where
 the current branch left `BASE`, or against `HEAD` when no base is given, and
@@ -291,9 +291,9 @@ Enter returns focus to the patch and Tab returns to the list. Select “All
 changes”, press Esc, or close the list with `h` to restore the full comparison,
 including uncommitted changes. Merge commits show their changes against their
 first parent. Supplied patches and snapshot tree baselines have no commit history.
-`D` also expands a diff already open in the preview pane to fullscreen.
-In the diff, in the preview pane or fullscreen, `u` switches between the
-checkout's diff and the selected turn's (`D` takes either fullscreen as it is): the diff between the snapshots taken as the turn started and ended, or
+In the diff pane, `D` lets the diff take the whole view, hiding the
+interaction log, and `D` again puts it back under the log; `u` switches between the
+checkout's diff and the selected turn's: the diff between the snapshots taken as the turn started and ended, or
 — a turn without both, or still running — the file changes the agent reported,
 with the message that started the turn above it. The turn diff follows the
 selection, keeping the view's layout, and has no edit report.
@@ -341,7 +341,7 @@ selection, and `J`/`K` scroll it; the page opens with it shown or not as it was
 last left. `E` asks for a new report from it, `e` has only the picked file
 described again, keeping the other files' descriptions, and `o` or `Esc` closes
 it. Like everything the diff shows, the page stays within the diff's area,
-inside its frame, in the side pane as fullscreen.
+inside its frame in the diff pane.
 `Enter` (or `V`) in the diff selects lines: a cursor starts on the line at the
 top of the patch shown — one file's, or the combined diff — and `j`/`k`,
 PgUp/PgDn and `g`/`G` move it instead of the view; `Enter`, `V` or `Esc` leaves.

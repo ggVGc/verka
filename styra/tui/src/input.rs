@@ -137,11 +137,10 @@ pub fn handle_integration_prompt_key(app: &mut App, key: KeyEvent) {
 /// `styra-diff` answers every key, the same way its own program does, and
 /// `i` starts a message about the file and line the diff is on and `q` quits
 /// Styra unless the diff's filter is being typed.
-/// `u` switches between the checkout's diff and the selected turn's. Tab
-/// hands navigation to the interaction when the diff is in a side pane, and
-/// fullscreen swaps the diff's header for the conversation's latest
-/// messages; `D` takes a side diff fullscreen as it is, turn diff and all. Other global bindings and the other views' keys do not act from
-/// it.
+/// `u` switches between the checkout's diff and the selected turn's, `D` lets
+/// the diff take the whole view and back, and Tab hands navigation to the
+/// interaction while the log is shown. Other global bindings and the other
+/// views' keys do not act from it.
 pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
     // The commit browser owns its navigation and Enter before host actions.
     if let Some(diff) = app.shown_diff_mut() {
@@ -165,14 +164,20 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
     {
         return;
     }
-    if DIFF_CONVERSATION.matches(key) && app.view == View::CheckoutDiff && !typing_filter {
-        app.diff_conversation = !app.diff_conversation;
-        return;
-    }
     if DIFF_TURN_HIGHLIGHT.matches(key) && !typing_filter {
         app.diff_turn_highlight = !app.diff_turn_highlight;
         app.diff_turn = false;
         app.sync_turn_diff();
+        return;
+    }
+    if DIFF_FILES_BELOW.matches(key) && !typing_filter {
+        app.diff_files_below = !app.diff_files_below;
+        return;
+    }
+    if DIFF_MAXIMIZE.matches(key) && !typing_filter {
+        // The log it hides cannot hold the keys.
+        app.diff_maximized = !app.diff_maximized;
+        app.diff_interaction_focus = false;
         return;
     }
     if DIFF_TURN.matches(key) && !typing_filter {
@@ -195,13 +200,6 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
         app.enter_input_from_diff();
         return;
     }
-    if key.code == KeyCode::Char('D') && !typing_filter {
-        app.diff_preview = false;
-        app.diff_interaction_focus = false;
-        app.set_view(View::CheckoutDiff);
-        app.sync_turn_diff();
-        return;
-    }
     let outcome = match app.shown_diff_mut() {
         Some(diff) => diff.handle_key(key),
         None if matches!(key.code, KeyCode::Esc | KeyCode::Char('d'))
@@ -216,12 +214,8 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
     match outcome {
         Outcome::Handled | Outcome::Ignored => {}
         Outcome::Close | Outcome::Toggle => {
-            if app.view == View::CheckoutDiff {
-                app.set_view(View::Events);
-            } else {
-                app.diff_preview = false;
-                app.diff_interaction_focus = false;
-            }
+            app.diff_preview = false;
+            app.diff_interaction_focus = false;
             app.diff_turn = false;
         }
         Outcome::OpenFile => open_diff_file(app),
@@ -234,12 +228,13 @@ pub fn handle_diff_key(app: &mut App, key: KeyEvent) {
 }
 
 /// Tab exchanges the side diff's reading keys with the interaction pane.
-/// Prompts retain their keys, and fullscreen diffs keep their own Tab action.
+/// Prompts retain their keys.
 pub fn handle_diff_focus_key(app: &mut App, key: KeyEvent) -> bool {
     if !matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
         || app.focus != crate::app::Focus::List
         || !app.diff_preview
         || !matches!(app.view, View::Events | View::Files)
+        || (app.diff_maximized && app.view == View::Events)
         || app.search.typing()
         || app.interactions.typing_filter()
         || app
@@ -526,9 +521,16 @@ pub fn handle_list_key(
         // standing where the interaction is working. That works with no live
         // interaction — a finished one still has a directory to look at.
         k if GLOBAL_DIRECTORY.matches(k) => return app.ask(Request::OpenDirectory),
-        // `d` opens the diff in the preview; `D` opens it fullscreen.
-        k if GLOBAL_DIFF.matches(k) => return ask_for_diff(app, false),
-        k if GLOBAL_DIFF_FULLSCREEN.matches(k) => return ask_for_diff(app, true),
+        // `d` opens the diff pane, or closes it from the log as from the pane.
+        // A highlighted link is a place to show in the diff, so it still opens
+        // the diff there.
+        k if GLOBAL_DIFF.matches(k) && app.diff_visible() && app.link_highlight.is_none() => {
+            app.diff_preview = false;
+            app.diff_interaction_focus = false;
+            app.diff_turn = false;
+            return;
+        }
+        k if GLOBAL_DIFF.matches(k) => return ask_for_diff(app),
         // Not from the preview. The overview takes `i` itself, for the tile
         // under its cursor.
         k if GLOBAL_FOCUS_MESSAGE.matches_in(k, window) => return app.enter_input(),
@@ -778,8 +780,6 @@ pub fn handle_list_key(
             k if READING_COPY.matches(k) => copy_selection(app),
             _ => {}
         },
-        // Every key was taken by `handle_diff_key`.
-        View::CheckoutDiff => {}
         View::Transcript => match key {
             k if READING_LINKS.matches(k) => app.highlight_first_link(),
             k if READING_ALL_EVENTS.matches(k) => app.toggle_all_events(),
@@ -1233,7 +1233,7 @@ fn open_diff_file(app: &mut App) {
 }
 
 /// Ask the event loop to open the checkout against where it will be integrated.
-fn ask_for_diff(app: &mut App, fullscreen: bool) {
+pub(crate) fn ask_for_diff(app: &mut App) {
     let Some(interaction) = app.interactions.current(&app.session_id) else {
         return app.show_warning("no interaction to diff");
     };
@@ -1256,14 +1256,7 @@ fn ask_for_diff(app: &mut App, fullscreen: bool) {
         None
     };
     if let Some((path, line)) = location {
-        app.ask(Request::ShowDiffAt {
-            id,
-            path,
-            line,
-            fullscreen,
-        });
-    } else if fullscreen {
-        app.ask(Request::ShowDiffFullscreen(id));
+        app.ask(Request::ShowDiffAt { id, path, line });
     } else {
         app.ask(Request::ShowDiff(id));
     }
@@ -2674,7 +2667,6 @@ mod tests {
                 id: "styra-7".into(),
                 path: root.join("notes.txt"),
                 line: None,
-                fullscreen: false,
             })
         );
 
@@ -2684,71 +2676,59 @@ mod tests {
         });
         app.select_last();
         app.highlight_first_link();
-        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('D')));
+        press_d(&mut app, &root);
         assert_eq!(
             app.take_request(),
             Some(Request::ShowDiffAt {
                 id: "styra-7".into(),
                 path: root.join("notes.txt"),
                 line: Some(3),
-                fullscreen: true,
             })
         );
     }
 
-    /// `d` asks the event loop to resolve this Session's diff base;
-    /// `D` asks for the same diff fullscreen.
+    /// `d` closes an open diff pane whichever side holds the keys.
     #[test]
-    fn diff_keys_ask_for_the_checkout_diff() {
-        for (fixture, character, modifiers, request) in [
-            (
-                "diff-checkout",
-                'd',
-                KeyModifiers::NONE,
-                Request::ShowDiff("styra-7".into()),
-            ),
-            (
-                "diff-external",
-                'D',
-                KeyModifiers::SHIFT,
-                Request::ShowDiffFullscreen("styra-7".into()),
-            ),
-        ] {
-            let (_root_directory, root) = tree(fixture);
-            let mut app = app_with_diffable_interaction(&root);
-
-            press_list_key(
-                &mut app,
-                &root,
-                KeyEvent::new(KeyCode::Char(character), modifiers),
-            );
-
-            assert_eq!(app.take_request(), Some(request));
+    fn d_closes_the_diff_from_the_log_and_from_the_pane() {
+        let (_root_directory, root) = tree("diff-toggle");
+        let mut app = app_with_diffable_interaction(&root);
+        for log_focus in [true, false] {
+            app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
+            app.diff_preview = true;
+            app.diff_interaction_focus = log_focus;
+            assert_eq!(app.diff_focused(), !log_focus);
+            press_d(&mut app, &root);
+            assert!(!app.diff_visible(), "log focus: {log_focus}");
+            assert_eq!(app.take_request(), None);
         }
+        press_d(&mut app, &root);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ShowDiff("styra-7".into()))
+        );
     }
 
-    /// The details view keeps `D` for saving the launch default, so no diff
-    /// is asked for there.
+    /// `d` asks the event loop to resolve this Session's diff base; `D`
+    /// asks for nothing.
     #[test]
-    fn shift_d_in_the_details_view_is_not_a_diff() {
-        let (_root_directory, root) = tree("diff-details");
+    fn diff_keys_ask_for_the_checkout_diff() {
+        let (_root_directory, root) = tree("diff-checkout");
         let mut app = app_with_diffable_interaction(&root);
-        app.view = View::Driva;
-
+        press_d(&mut app, &root);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ShowDiff("styra-7".into()))
+        );
         press_list_key(
             &mut app,
             &root,
             KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
         );
-
-        assert!(!matches!(
-            app.take_request(),
-            Some(Request::ShowDiffFullscreen(_))
-        ));
+        assert_eq!(app.take_request(), None);
     }
 
     #[test]
-    fn preview_diff_can_be_scrolled_promoted_and_closed() {
+    fn preview_diff_can_be_scrolled_and_closed() {
         let (_root_directory, root) = tree("diff-preview");
         let mut app = app_with_diffable_interaction(&root);
         app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
@@ -2782,43 +2762,6 @@ mod tests {
         );
         assert!(!app.diff_visible());
         assert!(app.preview.open);
-
-        app.diff_preview = true;
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
-        );
-        assert_eq!(app.view, View::CheckoutDiff);
-        assert!(!app.diff_preview);
-        let diff = app.checkout_diff.as_ref().unwrap();
-        assert!(diff.per_file);
-        assert_eq!(diff.scroll.offset, 0);
-        assert_eq!(diff.combined_scroll.offset, 10);
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        );
-        assert!(!app.diff_visible());
-        assert!(app.preview.open);
-
-        // Promoting a temporary diff also preserves a closed preview.
-        app.preview.toggle();
-        app.diff_preview = true;
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
-        );
-        assert_eq!(app.view, View::CheckoutDiff);
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        );
-        assert!(!app.diff_visible());
-        assert!(!app.preview.open);
     }
 
     /// `u` swaps the diff between the checkout's and the selected turn's, the
@@ -2861,30 +2804,6 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Esc);
         assert!(!app.diff_visible());
-        assert!(!app.diff_turn);
-
-        // `D` takes the turn diff fullscreen as it is, where `u` switches
-        // the same way, and leaving fullscreen forgets it.
-        app.diff_preview = true;
-        press(&mut app, KeyCode::Char('u'));
-        press(&mut app, KeyCode::Char('D'));
-        assert_eq!(app.view, View::CheckoutDiff);
-        assert!(app.turn_diff_shown());
-        assert!(app.shown_diff().unwrap().per_file, "the same turn diff");
-        crate::presentation::test_support::inspect(&app, |v| {
-            assert!(matches!(
-                v.main,
-                styra_ui::application::MainView::CheckoutDiff(_)
-            ))
-        });
-        press(&mut app, KeyCode::Char('u'));
-        assert!(!app.turn_diff_shown());
-        assert!(app.shown_diff().unwrap().target().is_some());
-        press(&mut app, KeyCode::Char('u'));
-        assert!(app.turn_diff_shown());
-        press(&mut app, KeyCode::Esc);
-        press(&mut app, KeyCode::Esc);
-        assert_ne!(app.view, View::CheckoutDiff);
         assert!(!app.diff_turn);
     }
 
@@ -2944,8 +2863,6 @@ mod tests {
         assert_eq!(app.selected_turn(), Some(1));
         press(&mut app, KeyCode::Esc);
 
-        press(&mut app, KeyCode::Char('D'));
-        assert_eq!(app.view, View::CheckoutDiff);
         press(&mut app, KeyCode::Char(']'));
         assert_eq!(app.selected_turn(), Some(2));
         press(&mut app, KeyCode::Char('['));
@@ -2961,13 +2878,9 @@ mod tests {
         diff.per_file = true;
         diff.line_cursor = Some(3);
         app.checkout_diff = Some(diff);
-        app.view = View::CheckoutDiff;
+        app.diff_preview = true;
         handle_diff_key(&mut app, KeyEvent::from(KeyCode::Enter));
-        assert_eq!(
-            app.view,
-            View::CheckoutDiff,
-            "unmarked lines stay in the diff"
-        );
+        assert!(app.diff_focused(), "unmarked lines stay in the diff");
         app.checkout_diff.as_mut().unwrap().line_cursor = Some(3);
         for text in [
             "file\n\nSource: a.txt",
@@ -2981,20 +2894,15 @@ mod tests {
         assert_eq!(app.diff_prompts().len(), 4);
         app.checkout_diff.as_mut().unwrap().search.open();
         handle_diff_key(&mut app, KeyEvent::from(KeyCode::Enter));
-        assert_eq!(
-            app.view,
-            View::CheckoutDiff,
-            "Enter accepts the filter first"
-        );
+        assert!(app.diff_focused(), "Enter accepts the filter first");
         handle_diff_key(&mut app, KeyEvent::from(KeyCode::Enter));
-        assert_eq!(app.view, View::Events);
+        assert!(app.diff_interaction_focus, "side pane returns keys to log");
         assert_eq!(app.timeline.selected, expected);
         assert!(!app.timeline.follow);
         assert_ne!(app.timeline.list_anchor, ListAnchor::Free);
         assert!(app.timeline.entries[expected].expanded);
 
-        app.view = View::CheckoutDiff;
-        app.diff_preview = true;
+        app.diff_interaction_focus = false;
         app.checkout_diff.as_mut().unwrap().line_cursor = None;
         handle_diff_key(&mut app, KeyEvent::from(KeyCode::Enter));
         assert_eq!(app.timeline.selected, expected - 2, "file prompt");
@@ -3007,7 +2915,7 @@ mod tests {
     fn a_message_started_from_the_diff_notes_its_file_and_line() {
         let (_root_directory, root) = tree("diff-message-source");
         let mut app = app_with_diffable_interaction(&root);
-        app.view = View::CheckoutDiff;
+        app.diff_preview = true;
         let mut diff = styra_diff::CheckoutDiff::read(diffable_target());
         diff.diff = Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\n\
                         diff --git a/b.txt b/b.txt\n@@ -4,2 +4,2 @@\n c\n-d\n+e\n"
@@ -3052,7 +2960,7 @@ mod tests {
         let (_root_directory, root) = tree("diff-files");
         let mut app = app_with_diffable_interaction(&root);
         app.enter_list();
-        app.view = View::CheckoutDiff;
+        app.diff_preview = true;
         app.checkout_diff = Some(styra_diff::CheckoutDiff {
             commits: Default::default(),
             source: styra_diff::Source::Checkout(diffable_target()),
@@ -3095,7 +3003,7 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         assert!(app.checkout_diff.as_ref().unwrap().commits.focused);
         assert!(
-            !app.diff_conversation,
+            !app.diff_interaction_focus,
             "Tab belongs to the open commit list"
         );
         press(&mut app, KeyCode::Char('h'));
@@ -3109,17 +3017,9 @@ mod tests {
         // with the rules around the headers, is row 8 once the two removed
         // lines are gone.
         assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 8);
-        assert_eq!(app.view, View::CheckoutDiff, "r is the diff's here");
+        assert!(app.diff_focused(), "r is the diff's here");
         press(&mut app, KeyCode::Char('r'));
         assert!(!app.checkout_diff.as_ref().unwrap().hide_removed);
-        // Tab swaps the header for the latest messages and back, and is
-        // nothing to the diff itself.
-        press(&mut app, KeyCode::Tab);
-        assert!(app.diff_conversation);
-        assert!(!app.checkout_diff.as_ref().unwrap().per_file);
-        assert_eq!(app.view, View::CheckoutDiff);
-        press(&mut app, KeyCode::BackTab);
-        assert!(!app.diff_conversation);
         press(&mut app, KeyCode::Char('l'));
         assert!(app.checkout_diff.as_ref().unwrap().per_file);
         // As drawing the per-file view would.
@@ -3128,7 +3028,7 @@ mod tests {
         diff.scroll.note_viewport(30);
         press(&mut app, KeyCode::Char('C'));
         assert!(!app.checkout_diff.as_ref().unwrap().compact_dirs);
-        assert_eq!(app.view, View::CheckoutDiff, "C is the diff's here");
+        assert!(app.diff_focused(), "C is the diff's here");
         press(&mut app, KeyCode::Char('C'));
         assert!(app.checkout_diff.as_ref().unwrap().compact_dirs);
         press(&mut app, KeyCode::Char('t'));
@@ -3136,11 +3036,11 @@ mod tests {
             app.checkout_diff.as_ref().unwrap().tint,
             styra_diff::Tint::Half
         );
-        assert_eq!(app.view, View::CheckoutDiff, "t is the diff's here");
+        assert!(app.diff_focused(), "t is the diff's here");
         // `e` puts the edit report away and back; `E` asks for a new one.
         press(&mut app, KeyCode::Char('e'));
         assert!(app.checkout_diff.as_ref().unwrap().report.hidden);
-        assert_eq!(app.view, View::CheckoutDiff, "e is the diff's here");
+        assert!(app.diff_focused(), "e is the diff's here");
         press(&mut app, KeyCode::Char('e'));
         assert!(!app.checkout_diff.as_ref().unwrap().report.hidden);
         press(&mut app, KeyCode::Char('E'));
@@ -3185,7 +3085,7 @@ mod tests {
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 1);
         press(&mut app, KeyCode::Esc);
-        assert_eq!(app.view, View::CheckoutDiff);
+        assert!(app.diff_focused());
         assert_eq!(app.checkout_diff.as_ref().unwrap().search.query(), None);
         press(&mut app, KeyCode::Char('k'));
         assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 0);
@@ -3194,7 +3094,7 @@ mod tests {
         for character in "dq?".chars() {
             press(&mut app, KeyCode::Char(character));
         }
-        assert_eq!(app.view, View::CheckoutDiff);
+        assert!(app.diff_focused());
         assert_eq!(
             app.checkout_diff.as_ref().unwrap().search.query(),
             Some("dq?")
@@ -3297,7 +3197,7 @@ mod tests {
     fn v_in_the_diff_opens_the_file_at_the_top_at_its_line() {
         let (_root_directory, root) = tree("diff-open");
         let mut app = app_with_diffable_interaction(&root);
-        app.view = View::CheckoutDiff;
+        app.diff_preview = true;
         let mut diff = styra_diff::CheckoutDiff::read(DiffTarget {
             worktree: root.clone(),
             ..diffable_target()
@@ -3315,7 +3215,7 @@ mod tests {
             app.take_request(),
             Some(Request::OpenPathAt(root.join("notes.txt"), Some(3)))
         );
-        assert_eq!(app.view, View::CheckoutDiff, "v is the diff's here");
+        assert!(app.diff_focused(), "v is the diff's here");
 
         app.checkout_diff.as_mut().unwrap().scroll.offset = 5;
         press_list_key(&mut app, &root, v);
@@ -3325,10 +3225,10 @@ mod tests {
     #[test]
     fn i_from_the_diff_focuses_the_message_and_esc_returns_to_the_diff() {
         let (_root_directory, root) = tree("diff-message-focus");
-        for view in [View::Events, View::Files, View::CheckoutDiff] {
+        for view in [View::Events, View::Files] {
             let mut app = app_with_diffable_interaction(&root);
             app.view = view;
-            app.diff_preview = view != View::CheckoutDiff;
+            app.diff_preview = true;
             press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('i')));
             assert_eq!(app.focus, crate::app::Focus::Input);
             assert!(app.diff_visible());
@@ -3377,12 +3277,12 @@ mod tests {
     }
 
     #[test]
-    fn q_from_the_diff_quits_styra_in_either_layout() {
+    fn q_from_the_diff_quits_styra_in_either_view() {
         let (_root_directory, root) = tree("diff-quit");
-        for view in [View::Events, View::Files, View::CheckoutDiff] {
+        for view in [View::Events, View::Files] {
             let mut app = app_with_diffable_interaction(&root);
             app.view = view;
-            app.diff_preview = view != View::CheckoutDiff;
+            app.diff_preview = true;
             app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
             press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('q')));
             assert_eq!(app.take_request(), Some(Request::Quit));
@@ -3395,11 +3295,11 @@ mod tests {
     fn d_and_esc_close_the_diff_view() {
         let (_root_directory, root) = tree("diff-exclusive");
         let mut app = app_with_diffable_interaction(&root);
-        app.view = View::CheckoutDiff;
+        app.diff_preview = true;
 
         for character in "DlawnAQPXe".chars() {
             press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char(character)));
-            assert_eq!(app.view, View::CheckoutDiff, "{character} left the diff");
+            assert!(app.diff_focused(), "{character} left the diff");
             assert_eq!(app.take_request(), None, "{character} asked for something");
             assert_eq!(
                 app.focus,
@@ -3409,20 +3309,13 @@ mod tests {
         }
         for loaded in [false, true] {
             for code in [KeyCode::Char('d'), KeyCode::Esc] {
-                for view in [View::Events, View::Files, View::CheckoutDiff] {
+                for view in [View::Events, View::Files] {
                     app.view = view;
-                    app.diff_preview = view != View::CheckoutDiff;
+                    app.diff_preview = true;
                     app.checkout_diff =
                         loaded.then(|| styra_diff::CheckoutDiff::read(diffable_target()));
                     press_list_key(&mut app, &root, KeyEvent::from(code));
-                    assert_eq!(
-                        app.view,
-                        if view == View::CheckoutDiff {
-                            View::Events
-                        } else {
-                            view
-                        }
-                    );
+                    assert_eq!(app.view, view);
                     assert!(!app.diff_visible());
                     assert_eq!(app.take_request(), None);
                 }

@@ -35,8 +35,15 @@ pub fn reopen(shown: Option<CheckoutDiff>, target: DiffTarget) -> CheckoutDiff {
             diff.refresh();
             diff
         }
-        _ => CheckoutDiff::read(target),
+        _ => read(target),
     }
+}
+
+/// A fresh read of `target`, opened on its file list.
+pub fn read(target: DiffTarget) -> CheckoutDiff {
+    let mut diff = CheckoutDiff::read(target);
+    diff.show_files();
+    diff
 }
 
 /// A comparison preference belonging to the interaction, independent of its
@@ -117,7 +124,7 @@ mod tests {
         assert_eq!(kept.line_cursor, Some(3));
 
         let fresh = reopen(Some(kept), target("0000000"));
-        assert!(!fresh.per_file);
+        assert!(fresh.per_file, "a fresh read opens on its file list");
         assert_eq!(fresh.scroll.offset, 0);
         assert_eq!(fresh.line_cursor, None);
     }

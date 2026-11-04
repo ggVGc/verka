@@ -126,19 +126,6 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
                 transcript_view.requested_scroll.min(limit),
             );
         }
-        MainView::CheckoutDiff(panel) => {
-            let measured = panel.render(frame, main_area);
-            feedback.diff_file_list_offset = measured.list_offset;
-            feedback.diff_layout = measured.diff_layout;
-            feedback.diff_report_page = measured.diff_report_page;
-            note_preview_scroll(
-                &mut feedback,
-                PanelId::CheckoutDiff {
-                    session: view.session_id.into(),
-                },
-                measured.scroll,
-            );
-        }
         MainView::Driva(driva_view) => {
             let measured = driva::render(frame, driva_view, main_area);
             note_scroll(
@@ -211,8 +198,17 @@ fn render_events(
     feedback: &mut RenderFeedback,
 ) {
     let mut tint_area = area;
+    // The checkout diff sits below the log rather than beside it.
+    let diff = view
+        .preview
+        .filter(|preview| matches!(preview, SidePreview::CheckoutDiff(_)));
+    let side_preview = view.preview.filter(|_| diff.is_none());
+    if let (Some(diff), true) = (diff, view.diff_maximized) {
+        render_side_preview(frame, diff, session_id, area, feedback);
+        return;
+    }
     let bottom_pane = view.entry_log.is_some() || view.processes.is_some();
-    let interaction_area = if let (Some(preview), true) = (view.preview, bottom_pane) {
+    let interaction_area = if let (Some(preview), true) = (side_preview, bottom_pane) {
         let panes = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -235,6 +231,17 @@ fn render_events(
         panes[0]
     } else {
         interaction_area
+    };
+    let event_area = if let Some(diff) = diff {
+        let panes = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(event_area);
+        tint_area.height = panes[0].bottom() - tint_area.y;
+        render_side_preview(frame, diff, session_id, panes[1], feedback);
+        panes[0]
+    } else {
+        event_area
     };
     if let Some(entry_log) = view.entry_log {
         let panes = Layout::default()
@@ -269,7 +276,7 @@ fn render_events(
             fade_log_border(frame, panes[1]);
         }
     } else {
-        let list_area = if let Some(preview_view) = view.preview {
+        let list_area = if let Some(preview_view) = side_preview {
             let panes = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])

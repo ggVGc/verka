@@ -120,6 +120,7 @@ fn application<'a>(
             entry_log: None,
             processes: None,
             preview: None,
+            diff_maximized: false,
             link_mode: false,
         }),
         notices: &[],
@@ -587,7 +588,34 @@ fn branch_preview_renders_the_supplied_log_and_loading_state() {
 }
 
 #[test]
-fn external_panel_receives_the_side_pane_area_and_returns_its_feedback() {
+fn maximized_diff_takes_the_whole_view_and_hides_the_log() {
+    struct FixturePanel(std::cell::Cell<Rect>);
+    impl Panel for FixturePanel {
+        fn render(&self, frame: &mut Frame, area: Rect) -> PanelFeedback {
+            self.0.set(area);
+            frame.render_widget(ratatui::widgets::Paragraph::new("Edit report"), area);
+            PanelFeedback::default()
+        }
+    }
+    let panel = FixturePanel(std::cell::Cell::new(Rect::default()));
+    let events = [AgentEvent::UserMessage {
+        text: "hidden conversation".into(),
+    }];
+    let list = list(&events);
+    let footer = footer();
+    let mut view = application(&list, &footer);
+    let MainView::Events(e) = &mut view.main else {
+        unreachable!()
+    };
+    e.preview = Some(SidePreview::CheckoutDiff(&panel));
+    e.diff_maximized = true;
+    let (rows, _) = draw(&view, 160, 30);
+    assert_eq!(panel.0.get(), Rect::new(0, 0, 160, 29));
+    assert!(!rows.iter().any(|row| row.contains("hidden conversation")));
+}
+
+#[test]
+fn external_panel_receives_the_bottom_pane_area_and_returns_its_feedback() {
     use std::cell::Cell;
     struct FixturePanel(Cell<Rect>);
     impl Panel for FixturePanel {
@@ -616,9 +644,10 @@ fn external_panel_receives_the_side_pane_area_and_returns_its_feedback() {
     };
     e.preview = Some(SidePreview::CheckoutDiff(&panel));
     let (rows, feedback) = draw(&view, 160, 30);
-    assert_eq!(panel.0.get(), Rect::new(80, 0, 80, 29));
-    assert!(locate(&rows, "Edit report").0 >= 80);
-    assert!(locate(&rows, "left conversation").0 < 80);
+    let area = panel.0.get();
+    assert_eq!(area, Rect::new(0, 9, 160, 20));
+    assert!(locate(&rows, "Edit report").1 >= usize::from(area.y));
+    assert!(locate(&rows, "left conversation").1 < usize::from(area.y));
     assert_eq!(feedback.diff_layout, Some((false, 3)));
     assert_eq!(feedback.diff_file_list_offset, Some(4));
 }

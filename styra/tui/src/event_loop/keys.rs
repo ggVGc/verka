@@ -379,7 +379,7 @@ impl Loop<'_> {
                 });
                 match result {
                     Ok(target) => {
-                        app.checkout_diff = Some(styra_diff::CheckoutDiff::read(target));
+                        app.checkout_diff = Some(crate::checkout_diff::read(target));
                         app.diff_turn = false;
                         app.diff_branch_picker = None;
                         self.edit_reports.load(app, client);
@@ -599,7 +599,8 @@ impl Loop<'_> {
                 // interaction's diff fails. Keep it for the next row.
                 app.diff_preview = true;
                 app.diff_interaction_focus = true;
-                return Ok(Handled::Pass);
+                input::ask_for_diff(app);
+                return Ok(Handled::Done);
             }
             k if keys::INTERACTIONS_CLOSE.matches(k) => {
                 if k.code == KeyCode::Enter && chosen == app.session_id {
@@ -839,8 +840,9 @@ mod tests {
         app.search.open();
         assert!(!action_menu_available(&app));
         app.search.cancel();
-        app.view = View::CheckoutDiff;
+        app.diff_preview = true;
         assert!(!action_menu_available(&app), "the diff owns the keyboard");
+        app.diff_preview = false;
         app.view = View::Overview;
         assert!(action_menu_available(&app));
         app.integration_prompt = Some(String::new());

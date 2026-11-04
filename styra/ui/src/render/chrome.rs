@@ -187,11 +187,12 @@ fn titled_block(chrome: &PanelChrome, launch_and_status: bool) -> Block<'static>
         spans.pop();
     }
     let empty = spans.len() == 1 && chrome.suffix.is_none();
+    let separator = if spans.len() > 1 { " · " } else { "" };
     spans.push(Span::styled(
         chrome
             .suffix
             .as_ref()
-            .map(|suffix| format!(" · {suffix} "))
+            .map(|suffix| format!("{separator}{suffix} "))
             .unwrap_or_else(|| " ".into()),
         text,
     ));
@@ -232,6 +233,20 @@ mod tests {
             elapsed: None,
             suffix: None,
         }
+    }
+
+    /// A panel with nothing but its own name starts the title with it.
+    #[test]
+    fn a_title_of_only_a_suffix_has_no_leading_separator() {
+        let mut chrome = chrome(None);
+        chrome.suffix = Some("diff".into());
+        let area = Rect::new(0, 0, 40, 3);
+        let mut buffer = Buffer::empty(area);
+        focused_interaction_block(&chrome).render(area, &mut buffer);
+        let top: String = (0..area.width)
+            .map(|x| buffer[(x, 0)].symbol().to_owned())
+            .collect();
+        assert!(top.starts_with("┏ diff ━"), "{top}");
     }
 
     #[test]

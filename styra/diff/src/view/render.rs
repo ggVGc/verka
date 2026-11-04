@@ -166,7 +166,7 @@ pub fn render(frame: &mut Frame, view: &CheckoutDiffView<'_>, area: Rect) -> Che
     let block = view
         .chrome
         .as_ref()
-        .map(styra_ui::chrome::focused_panel_block)
+        .map(styra_ui::chrome::focused_interaction_block)
         .unwrap_or_else(|| view.block.clone());
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -4755,7 +4755,9 @@ mod boundary_tests {
             .chunks(120)
             .map(|row| row.iter().map(|cell| cell.symbol()).collect())
             .collect();
-        assert!(rows[0].starts_with("┏ payments · codex"));
+        // The agent and its state are the footer's and the log's to show.
+        assert!(rows[0].starts_with("┏ payments · turn diff"), "{}", rows[0]);
+        assert!(!rows[0].contains("codex"));
         let text = rows.concat();
         assert!(text.contains("fix the retry backoff"));
         assert!(text.contains("the retries now work"));

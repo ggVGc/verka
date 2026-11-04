@@ -229,14 +229,8 @@ impl Loop<'_> {
             Request::OpenPathAt(path, line) => open_path(app, self.config, &path, line),
             Request::OpenUrl(url) => open_url(app, self.config, &url),
             Request::OpenDirectory => open_directory(app, self.config),
-            Request::ShowDiffAt {
-                id,
-                path,
-                line,
-                fullscreen,
-            } => self.show_diff(&id, fullscreen, Some((path, line))),
-            Request::ShowDiff(id) => self.show_diff(&id, false, None),
-            Request::ShowDiffFullscreen(id) => self.show_diff(&id, true, None),
+            Request::ShowDiffAt { id, path, line } => self.show_diff(&id, Some((path, line))),
+            Request::ShowDiff(id) => self.show_diff(&id, None),
             Request::ProjectAction(action) => run_project_action(app, client, self.config, action),
             Request::GenerateEditReport(only) => self.edit_reports.start(app, client, only),
             Request::OpenShell => {
@@ -634,12 +628,11 @@ impl Loop<'_> {
         Ok(None)
     }
 
-    /// Read interaction `id`'s checkout diff into the preview pane, or the
-    /// fullscreen view. Reading it runs `git`, which is why it is a request.
+    /// Read interaction `id`'s checkout diff into the diff pane. Reading it runs `git`, which is why it is a request.
     /// With `at`, the diff is read afresh and opened at that file and line,
     /// and left as it was if the file is not among its changes; without, the
     /// diff on screen is reopened against the checkout.
-    fn show_diff(&mut self, id: &str, fullscreen: bool, at: Option<(PathBuf, Option<u32>)>) {
+    fn show_diff(&mut self, id: &str, at: Option<(PathBuf, Option<u32>)>) {
         let app = &mut *self.app;
         let Some(interaction) = app.interactions.items.iter().find(|row| row.id == id) else {
             app.show_error("no interaction to diff");
@@ -654,7 +647,7 @@ impl Loop<'_> {
         };
         // Reopening the pane already open, as a switch of interaction does,
         // leaves the keys with whichever side had them.
-        let reopened = !fullscreen && at.is_none() && app.diff_preview;
+        let reopened = at.is_none() && app.diff_preview;
         let diff = match at {
             Some((path, line)) => {
                 let mut diff = styra_diff::CheckoutDiff::read(target);
@@ -670,13 +663,12 @@ impl Loop<'_> {
         self.edit_reports.load(app, self.client);
         self.diff_refreshed = Instant::now();
         if !reopened {
-            app.diff_interaction_focus = !fullscreen && app.interactions.open;
+            app.diff_interaction_focus = app.interactions.open;
+            app.diff_maximized = false;
         }
-        app.diff_preview = !fullscreen;
+        app.diff_preview = true;
         app.diff_turn = false;
-        if fullscreen {
-            app.set_view(View::CheckoutDiff);
-        } else if !matches!(app.view, View::Events | View::Files) {
+        if !matches!(app.view, View::Events | View::Files) {
             app.set_view(View::Events);
         }
     }

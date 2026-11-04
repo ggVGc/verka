@@ -26,12 +26,12 @@ pub(crate) enum Action {
     EventsRun,
     EventsTest,
     GlobalDiff,
-    GlobalDiffFullscreen,
-    DiffConversation,
     DiffTurn,
     DiffNextTurn,
     DiffPrevTurn,
     DiffTurnHighlight,
+    DiffFilesBelow,
+    DiffMaximize,
     DiffBranch,
     GlobalInteractions,
     GlobalOverview,
@@ -339,15 +339,17 @@ impl Action {
             Self::EventsRun => "run the project from the Workspace directory in a new terminal",
             Self::EventsTest => "test the project from the Workspace directory in a new terminal",
             Self::GlobalDiff => {
-                "diff the checkout in the preview pane, at the selected file or reference"
+                "open / close the checkout's diff pane, at the selected file or reference"
             }
-            Self::GlobalDiffFullscreen => "the same diff fullscreen; Esc returns to events",
-            Self::DiffConversation => "switch the header for the last 3 messages and back",
             Self::DiffBranch => "choose and save the interaction’s comparison branch",
             Self::DiffTurnHighlight => "toggle highlighting the selected turn in the full diff",
             Self::DiffNextTurn => "show the next turn’s diff",
             Self::DiffPrevTurn => "show the previous turn’s diff",
             Self::DiffTurn => "switch between the checkout's diff and the selected turn's",
+            Self::DiffMaximize => {
+                "the diff over the whole view, hiding the interaction log, and back"
+            }
+            Self::DiffFilesBelow => "per-file view's file list beside / below the patch",
             Self::GlobalInteractions => "live interactions",
             Self::GlobalOverview => "overview: every running and idle interaction as a grid",
             Self::GlobalSessions => "stored sessions",

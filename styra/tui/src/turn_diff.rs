@@ -1,6 +1,6 @@
 //! The diff view's turn diff: what the selected message's turn changed, shown
 //! by `styra-diff` as a supplied diff in place of the checkout's whole diff
-//! while `u` has it so, in the side panel or fullscreen. `H` uses the same
+//! while `u` has it so, in the diff pane. `H` uses the same
 //! turn patch to highlight matching changes within the checkout diff.
 //!
 //! The turn is the stretch of the conversation the selection is in (see
@@ -26,8 +26,7 @@ pub struct TurnDiffPanel {
 }
 
 impl App {
-    /// Whether a diff is on screen — fullscreen or in the side panel —
-    /// showing the turn diff.
+    /// Whether the diff pane is on screen showing the turn diff.
     pub fn turn_diff_shown(&self) -> bool {
         self.diff_turn && self.diff_visible()
     }

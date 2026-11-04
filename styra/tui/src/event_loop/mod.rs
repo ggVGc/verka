@@ -235,7 +235,6 @@ impl<'a> Loop<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::View;
     use crossterm::event::{Event, KeyCode, KeyModifiers};
     use std::thread;
     use std::time::Duration;
@@ -569,7 +568,7 @@ mod tests {
         assert_eq!(history.target("s1", false), Some((0, "earlier")));
     }
 
-    /// Run the loop over a fullscreen diff of two files, pressing `keys`.
+    /// Run the loop over a diff pane of two files, pressing `keys`.
     /// The loop ends with what the keys asked for or, once the script runs
     /// out, with an error.
     fn run_over_diff(keys: &str, server: std::sync::Arc<Unreachable>) -> Result<RunOutcome> {
@@ -578,7 +577,7 @@ mod tests {
             "s1",
         );
         app.enter_list();
-        app.view = View::CheckoutDiff;
+        app.diff_preview = true;
         let mut diff = styra_diff::CheckoutDiff::read(styra_diff::DiffTarget {
             worktree: std::env::temp_dir().join("styra-event-loop-no-such-checkout"),
             branch: None,
