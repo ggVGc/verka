@@ -461,9 +461,9 @@ impl LiveInteractions {
     /// every one still open — working, waiting on the operator, or dormant
     /// until the operator's next message — newest first by creation time.
     ///
-    /// Shares the global Workspace scope with the navigator and n/N, while
-    /// ignoring the navigator's search, tag and completion filters. Completed
-    /// and stopped interactions are never tiled.
+    /// Shares the global Workspace scope and time filter with the navigator,
+    /// while ignoring its search, tag and completion filters. Completed and
+    /// stopped interactions are never tiled.
     pub fn overview_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
         let mut indices: Vec<usize> = self
             .items
@@ -472,6 +472,7 @@ impl LiveInteractions {
             .filter(|(_, interaction)| {
                 interaction.open()
                     && !interaction.completed.is_done()
+                    && self.time_filter.includes(interaction)
                     && self.in_workspace_scope(interaction, workspace_id)
             })
             .map(|(index, _)| index)

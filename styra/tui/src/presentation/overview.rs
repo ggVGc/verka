@@ -20,6 +20,7 @@ pub(crate) fn view(app: &App) -> OverviewView<'_> {
         tiles,
         layout: app.overview.layout,
         running_only: app.overview.running_only,
+        time_filter: app.interactions.time_filter_label(),
         workspace_scope: app
             .interactions
             .only_current_workspace

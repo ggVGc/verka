@@ -239,6 +239,9 @@ idle — in every Workspace, whatever the `a` list's scope or filter — as a gr
 of tiles, so the whole fleet can be watched at once. Running and background
 work comes before idle interactions. `r` toggles viewing only currently running
 work (including background work); the title shows when this filter is active.
+`t` cycles the same time filter as the `a` list (past day, past 3 days, past
+week, disabled); the grid and the list share the setting, and the title shows
+it. `n` only steps to interactions inside the window.
 Each tile names the
 interaction, its Workspace and branch, its agent and model, and what it is
 doing (with how long a turn has been running), carries the same `NEWLY IDLE`,

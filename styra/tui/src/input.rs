@@ -1044,6 +1044,12 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
             app.overview.open();
         }
         k if OVERVIEW_RUNNING_ONLY.matches(k) => app.overview.toggle_running_only(),
+        // The window is the navigator's, so cycling it here narrows both.
+        k if OVERVIEW_TIME_FILTER.matches(k) => {
+            app.interactions
+                .cycle_time_filter(&current, app.workspace.id.as_deref());
+            app.overview.open();
+        }
         k if OVERVIEW_LAYOUT.matches(k) => app.overview.toggle_layout(),
         k if OVERVIEW_SEARCH.matches(k) => app.search.open(),
         // As in the event list, Esc clears a standing search before it

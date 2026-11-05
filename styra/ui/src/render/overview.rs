@@ -109,9 +109,10 @@ pub fn render(frame: &mut Frame, view: &OverviewView<'_>, area: Rect) -> Overvie
         })
         .count();
     let counts = format!(
-        " · {running} running · {} idle · r running only: {} · c layout: {} · ? keys ",
+        " · {running} running · {} idle · r running only: {} · t {} · c layout: {} · ? keys ",
         view.tiles.len() - running,
         if view.running_only { "on" } else { "off" },
+        view.time_filter,
         view.layout.label()
     );
     // A narrowed grid names its Workspace up front, on a band of the
@@ -476,6 +477,7 @@ mod tests {
             tiles: Vec::new(),
             layout: OverviewLayout::Auto,
             running_only: false,
+            time_filter: "time: disabled",
             workspace_scope: None,
             selected: 0,
             links: LinkDisplay::Compact,

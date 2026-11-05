@@ -138,4 +138,16 @@ mod tests {
         assert_eq!(live.time_filter.window, Window::Disabled);
         assert_eq!(shown(&live, None), ["recent", "1-0-0"]);
     }
+
+    #[test]
+    fn the_overview_shares_the_time_window() {
+        let mut live = LiveInteractions::default();
+        let mut recent = interaction("recent", InteractionActivity::Pending);
+        recent.last_user_message_at_ms = u64::MAX;
+        let old = interaction("1-0-0", InteractionActivity::Pending);
+        live.open(vec![recent, old], vec![]);
+        assert_eq!(live.overview_indices(None).len(), 2);
+        live.cycle_time_filter("1-0-0", None);
+        assert_eq!(live.overview_indices(None), [0]);
+    }
 }

@@ -292,6 +292,7 @@ bindings! { OVERVIEW = "Overview";
     OVERVIEW_MESSAGE: [Key::ch('i')] => Action::OverviewMessage;
     OVERVIEW_SCOPE: [Key::ch('w')] => Action::InteractionsScope;
     OVERVIEW_RUNNING_ONLY: [Key::ch('r')] => Action::OverviewRunningOnly;
+    OVERVIEW_TIME_FILTER: [Key::ch('t')] => Action::InteractionsTimeFilter;
     OVERVIEW_LAYOUT: [Key::ch('c')] => Action::OverviewLayout;
     OVERVIEW_SEARCH: [Key::ch('/')] => Action::OverviewSearch;
     OVERVIEW_CLOSE: [Key::ch('o'), Key::code(KeyCode::Esc)] => Action::OverviewClose;

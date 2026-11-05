@@ -70,6 +70,8 @@ pub struct OverviewView<'a> {
     pub tiles: Vec<OverviewTile<'a>>,
     pub layout: OverviewLayout,
     pub running_only: bool,
+    /// The navigator's time window, which the grid shares.
+    pub time_filter: &'a str,
     /// The name of the one Workspace the grid is narrowed to, or `None` when
     /// it shows every Workspace.
     pub workspace_scope: Option<Cow<'a, str>>,
