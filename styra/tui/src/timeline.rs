@@ -214,6 +214,9 @@ pub struct Timeline {
     /// `selected` distinguishes deliberate upward navigation from a live row
     /// merely changing height between frames.
     pub rendered_selection: Option<usize>,
+    /// Where that selection was drawn, and at what width — see
+    /// [`styra_ui::event_list::EventListView::rendered_selection_row`].
+    pub rendered_selection_row: Option<styra_ui::event_list::SelectionRow>,
     /// Where a branched Session's own history begins: the index of its last
     /// `branched from` marker. The server writes one at the top of a branch
     /// and another after the history it copied, so everything before the last
@@ -240,6 +243,7 @@ impl Default for Timeline {
             list_scroll_delta: 0,
             list_anchor: ListAnchor::Selection,
             rendered_selection: None,
+            rendered_selection_row: None,
             branch_point: None,
         }
     }

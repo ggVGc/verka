@@ -102,6 +102,7 @@ pub struct RenderFeedback {
     pub scroll: Vec<ScrollFeedback>,
     pub list_offset: Option<usize>,
     pub list_row_offset: Option<usize>,
+    pub list_selection_row: Option<event_list::SelectionRow>,
     /// The line the interactions navigator was drawn from, when it was drawn.
     pub navigator_offset: Option<usize>,
     /// First visible row in the checkout diff's file tree.

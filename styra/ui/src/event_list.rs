@@ -161,6 +161,11 @@ pub struct EventListView<'a> {
     pub requested_row_offset: usize,
     /// Signed rendered-row movement to apply to the requested anchor.
     pub scroll_delta: i32,
+    /// Where the selected entry was drawn last frame, if it is still the one
+    /// selected. A pane that has changed width since — a preview opening
+    /// beside it, say — re-wraps every entry, and the requested anchor would
+    /// then push the selection down the screen; it stays on this row instead.
+    pub rendered_selection_row: Option<SelectionRow>,
     /// Where the viewport sits relative to the selected entry.
     pub anchor: ListAnchor,
     /// Whether an explicit move toward older entries permits scrolloff to
@@ -182,6 +187,16 @@ pub struct EventListView<'a> {
 pub struct EventListFeedback {
     pub effective_offset: usize,
     pub effective_row_offset: usize,
+    /// Where the selected entry was drawn, when it was in view.
+    pub selection_row: Option<SelectionRow>,
+}
+
+/// The screen row the selected entry's first line was drawn on, counted from
+/// the top of the pane's inside, and the width its text was wrapped to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectionRow {
+    pub width: usize,
+    pub row: usize,
 }
 
 pub struct EntryLogView<'a> {

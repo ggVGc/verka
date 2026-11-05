@@ -251,6 +251,7 @@ fn render_events(
         let list = event_list::render(frame, view.list, panes[0]);
         feedback.list_offset = Some(list.effective_offset);
         feedback.list_row_offset = Some(list.effective_row_offset);
+        feedback.list_selection_row = list.selection_row;
         let measured = event_list::render_entry_log(frame, entry_log, panes[1]);
         note_scroll(
             feedback,
@@ -270,6 +271,7 @@ fn render_events(
         let list = event_list::render(frame, view.list, panes[0]);
         feedback.list_offset = Some(list.effective_offset);
         feedback.list_row_offset = Some(list.effective_row_offset);
+        feedback.list_selection_row = list.selection_row;
         crate::processes::render(frame, processes, panes[1]);
         if view.navigator.is_some() {
             fade_log_border(frame, panes[0]);
@@ -290,6 +292,7 @@ fn render_events(
         let list = event_list::render(frame, view.list, list_area);
         feedback.list_offset = Some(list.effective_offset);
         feedback.list_row_offset = Some(list.effective_row_offset);
+        feedback.list_selection_row = list.selection_row;
         if view.navigator.is_some() {
             fade_log_border(frame, list_area);
         }
@@ -368,6 +371,7 @@ fn render_files(
     let list = event_list::render(frame, view.list, left[0]);
     feedback.list_offset = Some(list.effective_offset);
     feedback.list_row_offset = Some(list.effective_row_offset);
+    feedback.list_selection_row = list.selection_row;
     let content_area = if let Some(preview_view) = view.preview {
         let right = Layout::default()
             .direction(Direction::Vertical)

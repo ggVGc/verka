@@ -131,6 +131,7 @@ fn rendered_frame(events: &[AgentEvent], versions: &[EntryVersion], selected: us
         // Anchored where the selection is, as it would be after scrolling there.
         requested_offset: selected,
         requested_row_offset: 0,
+        rendered_selection_row: None,
         scroll_delta: 0,
         anchor: ListAnchor::Selection,
         moved_backward: false,

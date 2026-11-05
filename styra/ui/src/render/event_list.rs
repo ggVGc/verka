@@ -266,6 +266,18 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
             .is_some_and(|marker| marker.selected && !entries.is_empty())
             .then_some(0)
     });
+    // Re-wrapped to a new width, the entries above the selection take a
+    // different number of rows, so the anchor last drawn no longer puts it
+    // where it was. Start instead from the one that does, and let the anchor
+    // below treat that as where the view already is.
+    let (requested_offset, requested_row_offset) = match (view.rendered_selection_row, position) {
+        (Some(last), Some(_)) if last.width != width => selection_top_anchor(
+            position,
+            &mut items,
+            last.row.saturating_sub(usize::from(pinned_rows)),
+        ),
+        _ => (requested_offset, view.requested_row_offset),
+    };
     let anchored_position = if view.anchor == ListAnchor::Free {
         None
     } else {
@@ -278,11 +290,10 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
             entries[position.unwrap()].event,
             AgentEvent::UserMessage { .. }
         );
-    let (offset, row_offset) = if response_space || (tail_in_view && view.requested_row_offset > 0)
-    {
+    let (offset, row_offset) = if response_space || (tail_in_view && requested_row_offset > 0) {
         tail_space_anchor(
             requested_offset,
-            view.requested_row_offset,
+            requested_row_offset,
             position.unwrap(),
             &mut items,
             viewport_height,
@@ -296,7 +307,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         .and_then(|selected| {
             kept_anchor(
                 requested_offset,
-                view.requested_row_offset,
+                requested_row_offset,
                 selected,
                 &mut items,
                 viewport_height,
@@ -318,12 +329,21 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     } else {
         normalize_scroll_anchor(
             requested_offset,
-            view.requested_row_offset,
+            requested_row_offset,
             view.scroll_delta,
             &mut items,
             entries.len(),
         )
     };
+    let selection_row = position
+        .filter(|position| *position < entries.len())
+        .and_then(|position| {
+            rows_above_selection(offset, row_offset, position, &mut items, viewport_height)
+        })
+        .map(|rows| SelectionRow {
+            width,
+            row: usize::from(pinned_rows) + rows,
+        });
     // Only what the viewport can show is built, and only that is handed over.
     // A session of any length therefore costs one screen of rendering per
     // frame rather than its whole history — see [`LazyItems::into_window`].
@@ -376,6 +396,7 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         // forward from where it was put, so this stays within the window.
         effective_offset: offset + state.offset() + skipped,
         effective_row_offset: row_offset,
+        selection_row,
     }
 }
 
@@ -407,6 +428,29 @@ fn kept_anchor(
         selection_top_anchor(Some(selected), heights, viewport_height - height)
     };
     Some((offset, row_offset).max(required))
+}
+
+/// How many rows of the view, anchored at `offset` and `row_offset`, are
+/// above the selected entry; `None` when it is not in view. Stops at the foot
+/// of the view rather than measuring everything up to a selection far below.
+fn rows_above_selection(
+    offset: usize,
+    row_offset: usize,
+    selected: usize,
+    heights: &mut impl Heights,
+    viewport_height: usize,
+) -> Option<usize> {
+    if selected < offset {
+        return None;
+    }
+    let mut rows = 0usize;
+    for index in offset..selected {
+        rows += heights.height(index);
+        if rows.saturating_sub(row_offset) >= viewport_height {
+            return None;
+        }
+    }
+    Some(rows.saturating_sub(row_offset))
 }
 
 /// The latest viewport anchor that leaves no more than `maximum_lines` before
@@ -2312,6 +2356,7 @@ mod tests {
             requested_offset: 0,
             requested_row_offset: 0,
             scroll_delta: 0,
+            rendered_selection_row: None,
             anchor: ListAnchor::Selection,
             moved_backward: false,
             protocol: Protocol::default(),
@@ -3608,6 +3653,67 @@ mod tests {
         ));
 
         assert_eq!(first, second);
+    }
+
+    /// A pane narrowed by a preview opening beside it re-wraps the entries
+    /// above the selection onto more rows. The selection stays on the row it
+    /// was drawn on, rather than being pushed down by them.
+    #[test]
+    fn the_selection_keeps_its_row_when_the_pane_changes_width() {
+        let long = AgentEvent::AgentMessage {
+            text: "a message long enough to wrap onto more rows in a narrow pane ".repeat(2),
+        };
+        let focused = AgentEvent::AgentMessage {
+            text: "focused".into(),
+        };
+        let mut events = vec![&long; 6];
+        events.push(&focused);
+        events.push(&long);
+        let draw = |width, previous: EventListFeedback, kept: bool| {
+            let entries = events
+                .iter()
+                .enumerate()
+                .map(|(index, event)| EventEntry {
+                    selected: index == 6,
+                    ..entry_of(event, version())
+                })
+                .collect();
+            let view = EventListView {
+                anchor: ListAnchor::Kept,
+                requested_offset: previous.effective_offset,
+                requested_row_offset: previous.effective_row_offset,
+                rendered_selection_row: previous.selection_row.filter(|_| kept),
+                ..list_view(entries)
+            };
+            let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+            let mut feedback = EventListFeedback::default();
+            terminal
+                .draw(|frame| feedback = render(frame, &view, frame.area()))
+                .unwrap();
+            let rows = buffer_rows(terminal.backend().buffer());
+            let row = rows.iter().position(|row| row.contains("focused"));
+            (feedback, row)
+        };
+        let start = EventListFeedback {
+            effective_offset: 2,
+            ..EventListFeedback::default()
+        };
+        let (wide, wide_row) = draw(160, start, true);
+        assert!(wide.selection_row.is_some(), "{wide:?}");
+
+        let (narrow, narrow_row) = draw(60, wide, true);
+        assert_eq!(narrow_row, wide_row);
+        assert_eq!(
+            narrow.selection_row.map(|at| at.row),
+            wide.selection_row.map(|at| at.row)
+        );
+        let (_, unkept_row) = draw(60, wide, false);
+        assert_ne!(unkept_row, wide_row, "the entries above did re-wrap");
+
+        let (_, again_row) = draw(60, narrow, true);
+        assert_eq!(again_row, wide_row, "the next frame stays where it was put");
+        let (_, wide_again_row) = draw(160, narrow, true);
+        assert_eq!(wide_again_row, wide_row, "and so does widening back");
     }
 
     /// Width is in the key because nothing below the cache re-wraps: the rows

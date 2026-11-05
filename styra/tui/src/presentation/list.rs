@@ -237,6 +237,10 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         requested_offset: app.timeline.list_offset,
         requested_row_offset: app.timeline.list_row_offset,
         scroll_delta: app.timeline.list_scroll_delta,
+        rendered_selection_row: app
+            .timeline
+            .rendered_selection_row
+            .filter(|_| app.timeline.rendered_selection == Some(app.timeline.selected)),
         anchor: app.timeline.list_anchor,
         moved_backward: app
             .timeline

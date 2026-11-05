@@ -900,6 +900,7 @@ pub(crate) fn apply_feedback(app: &mut App, feedback: &styra_ui::RenderFeedback)
         app.timeline.list_row_offset = feedback.list_row_offset.unwrap_or_default();
         app.timeline.list_scroll_delta = 0;
         app.timeline.rendered_selection = Some(app.timeline.selected);
+        app.timeline.rendered_selection_row = feedback.list_selection_row;
     }
     if let Some(offset) = feedback.navigator_offset {
         app.interactions.scroll_offset = Some(offset);

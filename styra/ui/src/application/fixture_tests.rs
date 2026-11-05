@@ -68,6 +68,7 @@ fn list(events: &[AgentEvent]) -> EventListView<'_> {
         selection_name: "codex".into(),
         requested_offset,
         requested_row_offset: 0,
+        rendered_selection_row: None,
         scroll_delta,
         anchor: ListAnchor::Selection,
         moved_backward: false,

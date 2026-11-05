@@ -137,6 +137,7 @@ where
                 }],
                 list_offset: None,
                 list_row_offset: None,
+                list_selection_row: None,
                 navigator_offset: None,
                 diff_file_list_offset: None,
                 diff_layout: None,
