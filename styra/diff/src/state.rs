@@ -175,6 +175,47 @@ pub struct CheckoutDiff {
     pub find_from: Option<(usize, u16)>,
 }
 
+/// An empty supplied diff, shown as a diff view opens: combined, unified,
+/// with removed lines, words highlighted, and single-subdirectory
+/// directories folded.
+impl Default for CheckoutDiff {
+    fn default() -> Self {
+        Self {
+            source: Source::Supplied(Supplied {
+                label: String::new(),
+                root: None,
+            }),
+            commits: Commits::default(),
+            diff: Ok(String::new()),
+            base_names: Vec::new(),
+            scroll: Scroll::default(),
+            combined_scroll: Scroll::default(),
+            help: None,
+            per_file: false,
+            side_by_side: false,
+            rendered_side: false,
+            combined_side: false,
+            horizontal_scroll: 0,
+            hide_removed: false,
+            compact_dirs: true,
+            tint: Tint::default(),
+            word_highlights: true,
+            thumbnail_hidden: false,
+            layers: None,
+            involved_layers: None,
+            selected_file: 0,
+            file_list_offset: 0,
+            search: Search::default(),
+            report: ReportState::default(),
+            report_page: None,
+            report_preview: false,
+            line_cursor: None,
+            find: Search::default(),
+            find_from: None,
+        }
+    }
+}
+
 impl CheckoutDiff {
     /// Whether a prompt — for text to find, or for the file-name filter —
     /// has the keys, so a letter is typed into it rather than a command to
@@ -259,33 +300,9 @@ impl CheckoutDiff {
     fn new(source: Source, diff: Result<String, String>, base_names: Vec<String>) -> Self {
         Self {
             source,
-            commits: Commits::default(),
             diff,
             base_names,
-            scroll: Scroll::default(),
-            combined_scroll: Scroll::default(),
-            help: None,
-            per_file: false,
-            side_by_side: false,
-            rendered_side: false,
-            combined_side: false,
-            horizontal_scroll: 0,
-            hide_removed: false,
-            compact_dirs: true,
-            tint: Tint::Full,
-            word_highlights: true,
-            layers: None,
-            involved_layers: None,
-            thumbnail_hidden: false,
-            selected_file: 0,
-            file_list_offset: 0,
-            search: Default::default(),
-            report: ReportState::default(),
-            report_page: None,
-            report_preview: false,
-            line_cursor: None,
-            find: Search::default(),
-            find_from: None,
+            ..Self::default()
         }
     }
 
@@ -450,11 +467,6 @@ impl CheckoutDiff {
             Source::Checkout(_) => None,
         };
         CheckoutDiffView {
-            #[cfg(feature = "renderer")]
-            block: ratatui::widgets::Block::bordered(),
-            chrome: None,
-            intro_message: None,
-            conversation_data: None,
             commits: Some(&self.commits),
             worktree: self.root().unwrap_or(Path::new("")),
             branch: target.and_then(|target| target.branch.as_deref()),
@@ -467,19 +479,15 @@ impl CheckoutDiff {
                 Ok(text) => Ok(text),
                 Err(error) => Err(error),
             },
-            highlight_diff: None,
             requested_scroll: self.scroll.clamped(),
             help: self.help,
-            host_shortcuts: &[],
             per_file: self.per_file,
             side_by_side: self.side_by_side,
             rendered_side: self.rendered_side,
             horizontal_scroll: self.horizontal_scroll,
-            thumbnail: false,
             thumbnail_hidden: self.thumbnail_hidden,
             hide_removed: self.hide_removed,
             compact_dirs: self.compact_dirs,
-            files_below: false,
             tint: self.tint,
             word_highlights: self.word_highlights,
             layers: self
@@ -496,16 +504,12 @@ impl CheckoutDiff {
             search: self.search.view(),
             report: (self.commits.selected == 0).then_some(&self.report),
             report_page: self.report_page,
-            #[cfg(feature = "renderer")]
-            conversation: None,
-            #[cfg(feature = "renderer")]
-            intro: None,
             line_cursor: self.line_cursor,
             find: match self.line_cursor {
                 Some(_) => self.find.view(),
                 None => Default::default(),
             },
-            prompts: Vec::new(),
+            ..CheckoutDiffView::default()
         }
     }
 

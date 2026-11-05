@@ -1682,7 +1682,6 @@ mod tests {
     fn checkout_diff_is_dispatched_to_the_side_views() {
         let mut app = test_support::app("s1");
         app.checkout_diff = Some(styra_diff::CheckoutDiff {
-            commits: Default::default(),
             source: styra_diff::Source::Checkout(styra_diff::DiffTarget {
                 worktree: "/state/worktrees/styra-7".into(),
                 branch: Some("styra/rename".into()),
@@ -1694,31 +1693,7 @@ mod tests {
                 "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n"
                     .into(),
             ),
-            base_names: Vec::new(),
-            scroll: Default::default(),
-            combined_scroll: Default::default(),
-            per_file: false,
-            side_by_side: false,
-            rendered_side: false,
-            combined_side: false,
-            help: None,
-            horizontal_scroll: 0,
-            hide_removed: false,
-            compact_dirs: true,
-            tint: Default::default(),
-            word_highlights: true,
-            layers: None,
-            involved_layers: None,
-            thumbnail_hidden: false,
-            selected_file: 0,
-            file_list_offset: 0,
-            search: Default::default(),
-            report: Default::default(),
-            report_page: None,
-            report_preview: false,
-            line_cursor: None,
-            find: Default::default(),
-            find_from: None,
+            ..Default::default()
         });
         for view in [View::Events, View::Files] {
             app.view = view;

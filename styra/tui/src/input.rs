@@ -3044,34 +3044,9 @@ mod tests {
         app.enter_list();
         app.diff_preview = true;
         app.checkout_diff = Some(styra_diff::CheckoutDiff {
-            commits: Default::default(),
             source: styra_diff::Source::Checkout(diffable_target()),
             diff: Ok("diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n".into()),
-            base_names: Vec::new(),
-            scroll: Default::default(),
-            combined_scroll: Default::default(),
-            per_file: false,
-            side_by_side: false,
-            rendered_side: false,
-            combined_side: false,
-            help: None,
-            horizontal_scroll: 0,
-            hide_removed: false,
-            compact_dirs: true,
-            tint: Default::default(),
-            word_highlights: true,
-            layers: None,
-            involved_layers: None,
-            thumbnail_hidden: false,
-            selected_file: 0,
-                        file_list_offset: 0,
-            search: Default::default(),
-            report: Default::default(),
-            report_page: None,
-            report_preview: false,
-            line_cursor: None,
-            find: Default::default(),
-            find_from: None,
+            ..Default::default()
         });
         let diff = app.checkout_diff.as_mut().unwrap();
         diff.scroll.note_limit(100);

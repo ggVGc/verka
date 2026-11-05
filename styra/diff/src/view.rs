@@ -109,19 +109,25 @@ impl<'a> CheckoutDiffView<'a> {
     /// The view before any diff has been read into it, saying so.
     #[cfg(feature = "renderer")]
     pub fn unread(block: Block<'a>) -> Self {
-        let mut view = Self::empty();
-        view.block = block;
-        view
+        Self {
+            block,
+            ..Self::default()
+        }
     }
 
     /// A host panel described without terminal widgets or styled text.
     pub fn from_chrome(chrome: styra_ui::chrome::PanelChrome) -> Self {
-        let mut view = Self::empty();
-        view.chrome = Some(chrome);
-        view
+        Self {
+            chrome: Some(chrome),
+            ..Self::default()
+        }
     }
+}
 
-    pub fn empty() -> Self {
+/// Nothing read yet, drawn as Styra draws diffs: removed lines shown, words
+/// highlighted, and directories with a single subdirectory folded.
+impl Default for CheckoutDiffView<'_> {
+    fn default() -> Self {
         Self {
             #[cfg(feature = "renderer")]
             block: ratatui::widgets::Block::bordered(),
