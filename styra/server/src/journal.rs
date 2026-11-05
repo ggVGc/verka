@@ -765,6 +765,36 @@ fn first_prompt_at(path: &Path) -> Result<Option<String>> {
     Ok(None)
 }
 
+/// The first operator message the Session wrote itself: for a branch, the
+/// first one after its branch point rather than the inherited opening prompt
+/// its copied history starts with. A Session that was never branched has no
+/// branch point, and answers with its first prompt.
+///
+/// A branch's own history starts after the last marker saying where it came
+/// from (see `branch_session`); markers saying a child branched off this
+/// Session are not boundaries of its own.
+pub fn own_first_prompt_at(path: &Path) -> Result<Option<String>> {
+    let journal = path.join(JOURNAL_FILE);
+    let file = match File::open(&journal) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("opening {}", journal.display())),
+    };
+    let mut prompt = None;
+    for line in BufReader::new(file).lines() {
+        let line = line.context("reading journal line")?;
+        match serde_json::from_str(&line) {
+            Ok(Record::Branch {
+                direction: BranchDirection::From,
+                ..
+            }) => prompt = None,
+            Ok(Record::User { text, .. }) if prompt.is_none() => prompt = Some(text),
+            _ => {}
+        }
+    }
+    Ok(prompt)
+}
+
 /// Summarize `session_id` in `workspace_id`, or `None` when that Workspace
 /// stores no such Session.
 pub fn find_workspace_session(
@@ -2743,6 +2773,73 @@ mod tests {
             first_prompt_at(&directory).unwrap().as_deref(),
             Some("Find the flaky checkout test")
         );
+    }
+
+    #[test]
+    fn a_session_never_branched_owns_its_first_prompt() {
+        let directory = temp_dir("own-first-prompt-plain");
+        let mut journal = Journal::create(&directory).unwrap();
+        journal.record_user_message("Find the flaky test").unwrap();
+        // A child branching off this Session is no boundary of its own.
+        journal.record_branch(BranchDirection::To, "child").unwrap();
+        journal.record_user_message("Then fix it").unwrap();
+
+        assert_eq!(
+            own_first_prompt_at(&directory).unwrap().as_deref(),
+            Some("Find the flaky test")
+        );
+    }
+
+    /// A branch of a branch carries both of its ancestors' markers in its
+    /// copied history; only the last one is its own branch point.
+    #[test]
+    fn a_branch_owns_the_first_prompt_after_its_branch_point() {
+        let directory = temp_dir("own-first-prompt-branch");
+        let mut journal = Journal::create(&directory).unwrap();
+        journal
+            .record_branch(BranchDirection::From, "parent")
+            .unwrap();
+        journal
+            .record_branch(BranchDirection::From, "grandparent")
+            .unwrap();
+        journal.record_user_message("Find the flaky test").unwrap();
+        journal
+            .record_branch(BranchDirection::From, "grandparent")
+            .unwrap();
+        journal.record_user_message("Try retrying").unwrap();
+        journal
+            .record_branch(BranchDirection::To, "sibling")
+            .unwrap();
+        journal
+            .record_branch(BranchDirection::From, "parent")
+            .unwrap();
+        journal.record_agent_line("provider prelude").unwrap();
+        journal.record_user_message("Try a lock instead").unwrap();
+        journal.record_user_message("And test it").unwrap();
+
+        assert_eq!(
+            own_first_prompt_at(&directory).unwrap().as_deref(),
+            Some("Try a lock instead")
+        );
+        assert_eq!(
+            first_prompt_at(&directory).unwrap().as_deref(),
+            Some("Find the flaky test")
+        );
+    }
+
+    #[test]
+    fn a_branch_with_no_message_of_its_own_has_no_own_prompt() {
+        let directory = temp_dir("own-first-prompt-empty");
+        let mut journal = Journal::create(&directory).unwrap();
+        journal
+            .record_branch(BranchDirection::From, "parent")
+            .unwrap();
+        journal.record_user_message("Find the flaky test").unwrap();
+        journal
+            .record_branch(BranchDirection::From, "parent")
+            .unwrap();
+
+        assert_eq!(own_first_prompt_at(&directory).unwrap(), None);
     }
 
     #[test]

@@ -3215,7 +3215,8 @@ function M.request.rename_session(data)
 end
 
 --- Ask an errand for an editable Session name, read from its first
---- prompt. The Session keeps its name until a rename saves one.
+--- prompt — for a branch, the first one after its branch point. The
+--- Session keeps its name until a rename saves one.
 ---
 --- Fields of `data`:
 ---   id  string

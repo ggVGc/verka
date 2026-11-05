@@ -4567,10 +4567,12 @@ impl ServerState {
                 self.generate_integration_message(&id)?,
             )),
             Request::GenerateSessionName { id } => {
+                // A branch is named for its own work, not for the opening
+                // prompt it inherited with its parent's history.
                 let session = self.stored_summary(&id)?;
                 Ok(Response::SessionName(crate::naming::name_for_prompt(
                     &session.selection,
-                    session.first_prompt.as_deref(),
+                    journal::own_first_prompt_at(&session.path)?.as_deref(),
                 )?))
             }
             Request::GenerateEditReport {
