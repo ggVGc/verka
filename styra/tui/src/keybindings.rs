@@ -36,14 +36,14 @@ bindings! { GLOBAL = "Global";
     GLOBAL_WORKTREES: [Key::ch('w')] => Action::GlobalWorktrees;
     GLOBAL_SESSION_WORKTREE: [Key::ctrl('w')] ("existing session")
         => Action::GlobalSessionWorktree;
-    GLOBAL_TAGS: [Key::ch('T')] => Action::GlobalTags;
+    GLOBAL_TAGS: [Key::ch('t')] => Action::GlobalTags;
     GLOBAL_REBASE: [Key::ctrl('b')] => Action::GlobalRebase;
     GLOBAL_RETARGET: [Key::alt_code(KeyCode::Char('b'))] => Action::GlobalRetarget;
     GLOBAL_INTEGRATE: [Key::ch('I')] => Action::GlobalIntegrate;
     GLOBAL_MESSAGES: [Key::ch('M')] => Action::GlobalMessages;
     GLOBAL_RAW: [Key::ctrl('r')] => Action::GlobalRaw;
     GLOBAL_LOG: [Key::ctrl('l')] => Action::GlobalLog;
-    GLOBAL_TRANSCRIPT: [Key::ch('t')] => Action::GlobalTranscript;
+    GLOBAL_TRANSCRIPT: [Key::ch('T')] => Action::GlobalTranscript;
     GLOBAL_DETAILS: [Key::ctrl('s')] => Action::GlobalDetails;
     GLOBAL_JUMP_BACK: [Key::ctrl('o')] => Action::GlobalJumpBack;
     GLOBAL_JUMP_FORWARD: [Key::ctrl('u')] => Action::GlobalJumpForward;
