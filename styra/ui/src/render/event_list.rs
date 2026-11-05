@@ -1333,7 +1333,8 @@ fn build_branch_entry_rows(
 
 /// The branches taken off where a marker leads, within its band: each one a
 /// collapsed `branched to` marker of its own, indented `depth` steps, with its
-/// own branches a step further in beneath it. `cursor` counts down the rows
+/// last message under it and its own branches a step further in beneath
+/// that. `cursor` counts down the branches
 /// still to draw before the selected one, which it reaches at `Some(1)`.
 fn branch_children_rows(
     children: &[BranchLink<'_>],
@@ -1367,13 +1368,22 @@ fn branch_children_rows(
         let row = summary_line(&entry, SummaryContext::EventList, protocol);
         let mut row = selected_summary_line(row, false, entry.selected);
         row.spans.insert(0, Span::raw("  ".repeat(depth)));
-        let mut row = with_entry_backdrop(truncate_line(row, width, false), &entry);
-        if finished_branch(&entry) && !entry.selected {
-            for span in &mut row.spans {
-                span.style = faded_style(span.style, 3);
+        let row = with_entry_backdrop(truncate_line(row, width, false), &entry);
+        // Its last message beneath it, as the marker's own sits beneath its
+        // summary row.
+        let message = branch_message_line(child).map(|mut line| {
+            line.spans.insert(0, Span::raw("  ".repeat(depth)));
+            truncate_line(line, width, false)
+        });
+        let fade = finished_branch(&entry) && !entry.selected;
+        for mut row in std::iter::once(row).chain(message) {
+            if fade {
+                for span in &mut row.spans {
+                    span.style = faded_style(span.style, 3);
+                }
             }
+            rows.push(row);
         }
-        rows.push(row);
         rows.extend(branch_children_rows(
             &child.children,
             depth + 1,
@@ -2718,6 +2728,72 @@ mod tests {
         let rows = entry_rows_with_max_rows(&on_marker, 40, 20, render_of());
         assert_eq!(rows[1].style.bg, cursor);
         assert!(rows[2..].iter().all(|row| row.style.bg != cursor));
+    }
+
+    /// A branch beneath a marker quotes its last message under its row, as
+    /// the marker does its own, at that branch's indent.
+    #[test]
+    fn a_child_branch_shows_its_last_message_beneath_it() {
+        use styra_protocol::event::BranchDirection;
+        let event = AgentEvent::Branched {
+            direction: BranchDirection::To,
+            session: "4f1c-session-id".into(),
+            name: None,
+        };
+        let link = |name, message, children| BranchLink {
+            name: Some(name),
+            message,
+            children,
+            ..Default::default()
+        };
+        let entry = EventEntry {
+            has_detail: false,
+            branch: link(
+                "Retry backoff",
+                Some("Doubled it"),
+                vec![
+                    link(
+                        "Jitter",
+                        Some("Added jitter"),
+                        vec![link("Cap", Some("Capped at 30s"), Vec::new())],
+                    ),
+                    link("Metrics", None, Vec::new()),
+                ],
+            ),
+            ..entry_of(&event, version())
+        };
+        let rows = entry_rows_with_max_rows(&entry, 40, 20, render_of())
+            .into_iter()
+            .map(|row| row.to_string().trim_end().to_owned())
+            .filter(|row| !row.starts_with('─'))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            [
+                "▌ Retry backoff",
+                "    « Doubled it",
+                "  ▌ Jitter",
+                "      « Added jitter",
+                "    ▌ Cap",
+                "        « Capped at 30s",
+                "  ▌ Metrics",
+            ]
+        );
+
+        // The cursor still counts branches, not rows: the second is `Cap`.
+        let selected = EventEntry {
+            selected: true,
+            selected_branch: Some(1),
+            ..entry
+        };
+        let rows = entry_rows_with_max_rows(&selected, 40, 20, render_of());
+        let cursor = Some(theme::SELECTION_BACKGROUND);
+        let marked = rows
+            .iter()
+            .filter(|row| row.style.bg == cursor)
+            .map(|row| row.to_string().trim_end().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(marked, ["    • Cap"]);
     }
 
     #[test]

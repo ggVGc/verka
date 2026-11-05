@@ -1010,8 +1010,9 @@ first marker and everything copied after it stay hidden, and the operator
 follows the marker to read them in the source. That marker stays locked at
 the top of the pane while the branch's own work scrolls beneath it. A
 `branched to` marker also shows, inside its band, the listed Sessions branched
-off where it leads — each drawn as a marker of its own, indented a step per
-generation — so a whole subtree reads from the Session it started in.
+off where it leads — each drawn as a marker of its own with its last message
+beneath it, indented a step per generation — so a whole subtree reads from
+the Session it started in.
 
 The branch's Styra journal is seeded with the same chosen history as its native
 provider transcript, so opening the new Session shows its starting context
