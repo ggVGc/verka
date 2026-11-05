@@ -1344,16 +1344,7 @@ impl ManagedInteraction {
     /// tail so a long-running interaction pays for the trailing tool traffic
     /// only, not for its whole history.
     fn last_message(&self) -> Option<String> {
-        let updates = self.updates.lock().expect("interaction updates poisoned");
-        updates
-            .iter()
-            .rev()
-            .find_map(|sequenced| match &sequenced.update {
-                InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage { text }) => {
-                    Some(one_line(text))
-                }
-                _ => None,
-            })
+        last_message(&self.updates.lock().expect("interaction updates poisoned"))
     }
 
     /// The latest messages from either side, oldest first, for
@@ -1362,6 +1353,30 @@ impl ManagedInteraction {
     fn recent_messages(&self) -> Vec<RecentMessage> {
         recent_messages(&self.updates.lock().expect("interaction updates poisoned"))
     }
+}
+
+/// The agent's last message in `updates`, as one clipped line. Only the
+/// interaction's own: a branch's history before its last `branched from`
+/// marker was copied from the source, and saying the source's last message
+/// for a branch that has not answered yet would credit it with words it
+/// never said.
+fn last_message(updates: &[SequencedUpdate]) -> Option<String> {
+    updates
+        .iter()
+        .rev()
+        .map_while(|sequenced| match &sequenced.update {
+            InteractionUpdate::Event(crate::event::AgentEvent::Branched {
+                direction: crate::event::BranchDirection::From,
+                ..
+            }) => None,
+            update => Some(update),
+        })
+        .find_map(|update| match update {
+            InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage { text }) => {
+                Some(one_line(text))
+            }
+            _ => None,
+        })
 }
 
 /// The last messages from either side in `updates`, oldest first, with the
@@ -6255,6 +6270,46 @@ mod tests {
             "Fixed the flaky test\n\n\
              User:\nFix the flaky test\n\n\
              Agent:\nLooking at the tests.\n\n## Fixed the flaky test\n\nIt raced the clock.\n"
+        );
+    }
+
+    /// A branch's last message is its own: what it inherited before its
+    /// `branched from` marker is the source's, so a branch that has not
+    /// answered yet has none, and one that has says only its own.
+    #[test]
+    fn a_branchs_last_message_is_never_its_sources() {
+        let mut updates = Vec::new();
+        push_sequenced(
+            &mut updates,
+            InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage {
+                text: "The source's answer".into(),
+            }),
+        );
+        push_sequenced(
+            &mut updates,
+            InteractionUpdate::Event(crate::event::AgentEvent::Branched {
+                direction: crate::event::BranchDirection::From,
+                session: "source".into(),
+                name: Some("Source".into()),
+            }),
+        );
+        push_sequenced(
+            &mut updates,
+            InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
+                text: "Try it another way".into(),
+            }),
+        );
+        assert_eq!(last_message(&updates), None);
+
+        push_sequenced(
+            &mut updates,
+            InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage {
+                text: "The branch's answer".into(),
+            }),
+        );
+        assert_eq!(
+            last_message(&updates).as_deref(),
+            Some("The branch's answer")
         );
     }
 
