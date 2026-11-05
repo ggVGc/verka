@@ -9,6 +9,9 @@ pub struct BranchPrompt {
     pub composer: Composer,
     pub selection: Selection,
     pub contract: Option<styra_protocol::Contract>,
+    /// Whether the message was carried over from the main message box, which
+    /// gets it back if the branch is not made.
+    pub from_input: bool,
 }
 
 impl BranchPrompt {
@@ -19,6 +22,7 @@ impl BranchPrompt {
             composer: Composer::default(),
             selection,
             contract: None,
+            from_input: false,
         }
     }
 

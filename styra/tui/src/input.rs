@@ -362,8 +362,8 @@ pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
     if BRANCH_CHANGE.matches(key) {
         prompt.change();
     } else if handle_composer_key(&mut prompt.composer, key) {
-    } else if GLOBAL_LEAVE_MESSAGE.matches(key) {
-        app.branch_prompt = None;
+    } else if GLOBAL_LEAVE_MESSAGE.matches(key) || EDITOR_BRANCH.matches(key) {
+        leave_branch_prompt(app);
     } else if EDITOR_SEND.matches(key) || EDITOR_SEND_IN_BRANCH.matches(key) {
         let message = prompt.composer.message();
         if message.is_empty() {
@@ -379,6 +379,26 @@ pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
         session::branch_session(app, client, at_ms, history, checkout, message);
     } else {
         handle_editor_controls(app, key);
+    }
+}
+
+/// Close the branch box. A message carried over from the main message box
+/// goes back to it, so switching to a branch and back loses nothing.
+fn leave_branch_prompt(app: &mut App) {
+    let Some(mut prompt) = app.branch_prompt.take() else {
+        return;
+    };
+    if prompt.from_input {
+        prompt.composer.hand_over(&mut app.composer);
+    }
+}
+
+/// Carry the message being typed over to a branch from the selected entry.
+fn switch_to_branch_prompt(app: &mut App) {
+    session::open_branch_prompt(app);
+    if let Some(prompt) = app.branch_prompt.as_mut() {
+        app.composer.hand_over(&mut prompt.composer);
+        prompt.from_input = true;
     }
 }
 
@@ -1282,6 +1302,7 @@ pub fn handle_input_key(
         // With several boxes, Esc steps back to choosing between them; a
         // second Esc, from there, leaves as it does with one.
         k if GLOBAL_LEAVE_MESSAGE.matches(k) => app.enter_list(),
+        k if EDITOR_BRANCH.matches(k) => switch_to_branch_prompt(app),
         // Choosing a shape is part of writing the message, so it lives in the
         // box rather than being a mode entered from outside it.
         k if EDITOR_SEND.matches(k) || EDITOR_SEND_IN_BRANCH.matches(k) => {
@@ -1435,6 +1456,51 @@ mod tests {
         handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
         assert!(app.branch_prompt.is_none());
         assert_eq!(app.composer.message(), "source draft");
+    }
+
+    #[test]
+    fn ctrl_b_moves_the_message_to_a_branch_and_back() {
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
+            "source",
+        );
+        session::apply_update(
+            &mut app,
+            styra_protocol::InteractionUpdate::Event(
+                styra_protocol::event::AgentEvent::UserMessage {
+                    text: "question".into(),
+                },
+            ),
+        );
+        session::apply_update(
+            &mut app,
+            styra_protocol::InteractionUpdate::Raw(styra_protocol::RawLine {
+                direction: styra_protocol::Direction::ToAgent,
+                text: "question".into(),
+                at_ms: 42,
+            }),
+        );
+        app.enter_input();
+        app.composer.set("try it the other way".into());
+        let client = Client::new(PathBuf::from("/missing.sock"));
+        let mut live = Attachment::Detached;
+        let ctrl_b = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+
+        handle_input_key(&mut app, &client, "workspace", &mut live, ctrl_b);
+        let prompt = app.branch_prompt.as_ref().unwrap();
+        assert_eq!(prompt.at_ms(), 42);
+        assert_eq!(prompt.composer.message(), "try it the other way");
+        assert_eq!(app.composer.message(), "");
+
+        handle_branch_prompt_key(&mut app, &client, ctrl_b);
+        assert!(app.branch_prompt.is_none());
+        assert_eq!(app.composer.message(), "try it the other way");
+        assert_eq!(app.focus, crate::app::Focus::Input);
+
+        handle_input_key(&mut app, &client, "workspace", &mut live, ctrl_b);
+        handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
+        assert!(app.branch_prompt.is_none());
+        assert_eq!(app.composer.message(), "try it the other way");
     }
 
     #[test]

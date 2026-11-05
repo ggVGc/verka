@@ -1094,6 +1094,7 @@ pub fn branch_session(
     };
     let selection = prompt.selection.clone();
     let contract = prompt.contract;
+    let from_input = prompt.from_input;
     let branched = match client.branch_session_with_checkout(
         &app.session_id,
         Some(at_ms),
@@ -1108,6 +1109,10 @@ pub fn branch_session(
         }
     };
     app.branch_prompt = None;
+    // Sent from the main message box, as a message would be from there.
+    if from_input {
+        app.enter_list();
+    }
     // The first message names the branch, as it would a new Session.
     let mut name = branched.name.clone().unwrap_or_else(|| branched.id.clone());
     if let Some(prompt_name) = styra_server::journal::name_from_message(Some(&message)) {

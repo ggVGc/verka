@@ -227,6 +227,8 @@ Sharing the current worktree gives both interactions the same directory and
 Git branch, including uncommitted changes. History selection only controls the
 copied conversation; it never rewinds files. The default is a new worktree for
 a source with a managed checkout, and the shared Workspace directory otherwise.
+While typing a message, `Ctrl+B` moves it to the branch box for the selected
+entry instead; `Ctrl+B` or Esc there moves it back to the message box.
 
 An interaction that went idle away from every
 client's screen, and has not been focused since, is marked `NEWLY IDLE`; the

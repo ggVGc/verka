@@ -263,6 +263,17 @@ impl Composer {
         self.draft.clear();
     }
 
+    /// Move the boxes being typed into `other`, leaving a single empty box
+    /// here. Each side keeps its own history.
+    pub fn hand_over(&mut self, other: &mut Composer) {
+        other.parts = std::mem::replace(&mut self.parts, vec![String::new()]);
+        other.focused = std::mem::take(&mut self.focused);
+        self.choosing = false;
+        other.choosing = false;
+        self.reset_history();
+        other.reset_history();
+    }
+
     /// Take the message for sending (see [`Composer::message`]), leaving a
     /// single empty box. Returns `None` when every box holds only whitespace.
     pub fn take(&mut self) -> Option<String> {

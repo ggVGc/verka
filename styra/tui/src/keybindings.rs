@@ -210,6 +210,7 @@ bindings! { MESSAGE_EDITOR = "Message editor";
     EDITOR_SEND: [Key::code(KeyCode::Enter)] => Action::EditorSend;
     EDITOR_SEND_IN_BRANCH: [Key::ctrl_code(KeyCode::Enter)]
         => Action::EditorSendInBranch;
+    EDITOR_BRANCH: [Key::ctrl('b')] => Action::EditorBranch;
     EDITOR_CHANGE_DIRECTORY: [] as "/cd <directory>"
         => Action::EditorChangeDirectory;
     EDITOR_NEWLINE: [Key::alt_code(KeyCode::Enter)] => Action::EditorNewline;
