@@ -1212,12 +1212,24 @@ pub fn message_rows(
         branch_follows_marker: false,
         selected_branch: None,
     };
+    entry_rows(&entry, width, protocol, links)
+}
+
+/// Every row `entry` is drawn as in the event list, for a view that shows
+/// another list's entries outside it. Uncapped and uncached: the entry's
+/// version is not consulted.
+pub fn entry_rows(
+    entry: &EventEntry<'_>,
+    width: usize,
+    protocol: Protocol,
+    links: LinkDisplay,
+) -> Vec<Line<'static>> {
     let render = EntryRender {
         protocol,
         links,
         search: None,
     };
-    build_entry_rows(&entry, width, usize::MAX, render)
+    build_entry_rows(entry, width, usize::MAX, render)
 }
 
 /// [`entry_item_with_max_rows`] proper, behind its cache: every finished row

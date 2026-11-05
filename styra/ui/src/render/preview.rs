@@ -68,7 +68,7 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
         )
     };
     let mut lines = wrap_preview_lines(
-        preview_lines(view),
+        preview_lines(view, usize::from(content_area.width)),
         usize::from(content_area.width),
         if view.answer_target.is_some() {
             0
@@ -98,7 +98,9 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
     }
 }
 
-pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
+/// Everything the preview shows, `width` columns wide. Only the linked
+/// Session's log is laid out to it here; the rest is wrapped afterward.
+pub fn preview_lines(view: &PreviewView<'_>, width: usize) -> Vec<Line<'static>> {
     if let Some(answer) = &view.answer_target {
         return crate::answer::preview_lines(answer);
     }
@@ -113,9 +115,9 @@ pub fn preview_lines(view: &PreviewView<'_>) -> Vec<Line<'static>> {
         lines.extend(change_lines(change, &view.workspace_roots));
         return lines;
     }
-    if let Some(log) = view.branch_log {
+    if let Some(log) = &view.branch_log {
         lines.push(Line::from(""));
-        lines.extend(branch_log_lines(log));
+        lines.extend(branch_log_lines(log, width, view.links));
         return lines;
     }
     let suspicious = suspicious_shell_success(entry.event);
@@ -148,8 +150,9 @@ pub fn message_lines(
     )
 }
 
-/// The linked Session's conversation, one line per message, oldest first.
-fn branch_log_lines(log: BranchLog<'_>) -> Vec<Line<'static>> {
+/// The linked Session's conversation, oldest first, each entry drawn as its
+/// own event list draws it — already `width` columns wide.
+fn branch_log_lines(log: &BranchLog<'_>, width: usize, links: LinkDisplay) -> Vec<Line<'static>> {
     let muted = |text: String| {
         vec![Line::from(Span::styled(
             text,
@@ -162,10 +165,10 @@ fn branch_log_lines(log: BranchLog<'_>) -> Vec<Line<'static>> {
             format!("{DETAIL_INDENT}could not load the branch's log: {error}"),
             Style::default().fg(theme::ERROR),
         ))],
-        BranchLog::Ready { events, protocol } => {
-            let lines: Vec<_> = events
+        BranchLog::Ready { entries, protocol } => {
+            let lines: Vec<_> = entries
                 .iter()
-                .filter_map(|event| crate::picker::conversation_line(event, Some(protocol)))
+                .flat_map(|entry| crate::event_list::entry_rows(entry, width, *protocol, links))
                 .collect();
             if lines.is_empty() {
                 muted(format!("{DETAIL_INDENT}no messages yet"))

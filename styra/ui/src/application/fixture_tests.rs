@@ -564,22 +564,36 @@ fn branch_preview_renders_the_supplied_log_and_loading_state() {
         session: "branch".into(),
         name: None,
     }];
-    let log = [AgentEvent::AgentMessage {
-        text: "done it the other way".into(),
-    }];
+    let log = [
+        AgentEvent::UserMessage {
+            text: "try the other approach".into(),
+        },
+        AgentEvent::AgentMessage {
+            text: "done it the other way\n\nand **tested** it".into(),
+        },
+    ];
     let list = list(&[]);
     let footer = footer();
     let mut preview = preview();
     preview.entry = self::list(&marker).entries.pop();
+    let mut entries = self::list(&log).entries;
+    for entry in &mut entries {
+        entry.selected = false;
+        entry.expanded = true;
+    }
     preview.branch_log = Some(preview::BranchLog::Ready {
-        events: &log,
+        entries,
         protocol: Protocol::default(),
     });
     let mut view = application(&list, &footer);
     view.main = MainView::Preview(&preview);
-    let text = draw(&view, 140, 30).0.concat();
+    let rows = draw(&view, 140, 30).0;
+    let text = rows.concat();
+    assert!(text.contains("try the other approach"));
     assert!(text.contains("done it the other way"));
     assert!(text.contains("branch log"));
+    // Drawn as the event list draws it: the whole message, not one line.
+    assert!(text.contains("and tested it"), "{rows:#?}");
     preview.branch_log = Some(preview::BranchLog::Loading);
     let mut view = application(&list, &footer);
     view.main = MainView::Preview(&preview);

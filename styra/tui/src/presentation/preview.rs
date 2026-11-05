@@ -5,7 +5,9 @@ use std::borrow::Cow;
 use styra_protocol::agent::SandboxLayout;
 use styra_protocol::event::AgentEvent;
 
-use super::list::{branch_link, branch_provider_switch, ui_link_display};
+use super::list::{
+    branch_link, branch_provider_switch, owned_branch_provider_switch, ui_link_display,
+};
 use crate::app::App;
 use crate::preview::PreviewTarget;
 
@@ -71,6 +73,10 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
 /// The linked Session's log while the preview is on a `branch` marker. Until
 /// the event loop has started loading the marker the cursor just reached, it
 /// reads as loading rather than as the log of the one it left.
+///
+/// It shows what the main interaction view would show of it under the
+/// operator's current filters, each entry folded as a fresh one there is,
+/// and its markers leading where that Session's own markers lead.
 fn branch_log(app: &App) -> Option<styra_ui::preview::BranchLog<'_>> {
     use crate::branch_log::{shown_from, Contents};
     use styra_ui::preview::BranchLog;
@@ -84,8 +90,35 @@ fn branch_log(app: &App) -> Option<styra_ui::preview::BranchLog<'_>> {
     };
     Some(match log.contents() {
         Contents::Loading => BranchLog::Loading,
-        Contents::Ready { events, protocol } => BranchLog::Ready {
-            events: shown_from(direction, events),
+        Contents::Ready { entries, protocol } => BranchLog::Ready {
+            entries: shown_from(direction, entries)
+                .iter()
+                .filter(|entry| app.timeline.event_is_visible(&entry.event))
+                .map(|entry| {
+                    let branch = branch_link(app, target, &entry.event);
+                    styra_ui::event_list::EventEntry {
+                        event: &entry.event,
+                        // Drawn outside the list's row cache, so never compared.
+                        version: styra_ui::event_list::EntryVersion { id: 0, revision: 0 },
+                        expanded: !app.timeline.all_events,
+                        has_detail: match entry.event.branch_target() {
+                            Some(_) => branch.message.is_some(),
+                            None => crate::timeline::has_detail(&entry.event),
+                        },
+                        contract: entry.contract.as_ref(),
+                        selected: false,
+                        link_highlight: None,
+                        branch,
+                        branch_provider_switch: owned_branch_provider_switch(
+                            app,
+                            target,
+                            &entry.event,
+                        ),
+                        branch_follows_marker: false,
+                        selected_branch: None,
+                    }
+                })
+                .collect(),
             protocol: *protocol,
         },
         Contents::Failed(error) => BranchLog::Failed(error),

@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use styra_protocol::event::{AgentEvent, BranchDirection, Protocol};
-use styra_protocol::InteractionUpdate;
+use styra_protocol::{Contract, InteractionUpdate};
 use styra_server::Client;
 
 /// How long the preview must rest on a marker before its Session is loaded.
@@ -18,10 +18,19 @@ const SETTLE: Duration = Duration::from_millis(120);
 pub enum Contents {
     Loading,
     Ready {
-        events: Vec<AgentEvent>,
+        entries: Vec<Entry>,
         protocol: Protocol,
     },
     Failed(String),
+}
+
+/// One event of the linked Session's log, as its own event list holds it: an
+/// operator message without the server's contract framing, and the answer
+/// shape it asked for.
+#[derive(Debug, PartialEq)]
+pub struct Entry {
+    pub event: AgentEvent,
+    pub contract: Option<Contract>,
 }
 
 pub struct BranchLog {
@@ -62,7 +71,7 @@ impl BranchLog {
                         Ok(batch) => {
                             self.live_cursor = Some(batch.next);
                             Contents::Ready {
-                                events: events(batch.updates.into_iter().map(|s| s.update)),
+                                entries: entries(batch.updates.into_iter().map(|s| s.update)),
                                 protocol,
                             }
                         }
@@ -72,7 +81,7 @@ impl BranchLog {
                     // lines are left on the server.
                     None => match client.stored_session_events(&self.session_id) {
                         Ok(session) => Contents::Ready {
-                            events: events(
+                            entries: entries(
                                 session.events.into_iter().map(InteractionUpdate::Event),
                             ),
                             protocol: session.summary.selection.provider.protocol(),
@@ -82,14 +91,14 @@ impl BranchLog {
                 };
                 true
             }
-            (Contents::Ready { events: shown, .. }, Some(cursor)) => {
+            (Contents::Ready { entries: shown, .. }, Some(cursor)) => {
                 // A failed poll leaves what was read on screen; the next
                 // round asks again.
                 let Ok(batch) = client.updates_without_raw(&self.session_id, cursor) else {
                     return false;
                 };
                 self.live_cursor = Some(batch.next);
-                let more = events(batch.updates.into_iter().map(|s| s.update));
+                let more = entries(batch.updates.into_iter().map(|s| s.update));
                 let changed = !more.is_empty();
                 shown.extend(more);
                 changed
@@ -99,11 +108,14 @@ impl BranchLog {
     }
 }
 
-fn events(updates: impl Iterator<Item = InteractionUpdate>) -> Vec<AgentEvent> {
+fn entries(updates: impl Iterator<Item = InteractionUpdate>) -> Vec<Entry> {
     updates
         .filter_map(|update| match update {
             InteractionUpdate::Event(AgentEvent::Unknown { .. }) => None,
-            InteractionUpdate::Event(event) => Some(event),
+            InteractionUpdate::Event(event) => {
+                let (event, contract) = crate::ingest::unframed(event);
+                Some(Entry { event, contract })
+            }
             _ => None,
         })
         .collect()
@@ -114,15 +126,15 @@ fn events(updates: impl Iterator<Item = InteractionUpdate>) -> Vec<AgentEvent> {
 /// [`crate::timeline::Timeline::is_visible`]); what comes before was copied
 /// from the source this screen is showing, so following a `branched to`
 /// marker shows only what the branch did. The source's log is shown whole.
-pub fn shown_from(direction: BranchDirection, events: &[AgentEvent]) -> &[AgentEvent] {
+pub fn shown_from(direction: BranchDirection, entries: &[Entry]) -> &[Entry] {
     if direction != BranchDirection::To {
-        return events;
+        return entries;
     }
-    let start = events
+    let start = entries
         .iter()
-        .rposition(|event| {
+        .rposition(|entry| {
             matches!(
-                event,
+                entry.event,
                 AgentEvent::Branched {
                     direction: BranchDirection::From,
                     ..
@@ -130,7 +142,7 @@ pub fn shown_from(direction: BranchDirection, events: &[AgentEvent]) -> &[AgentE
             )
         })
         .map_or(0, |marker| marker + 1);
-    &events[start..]
+    &entries[start..]
 }
 
 /// Keep `app.branch_log` on the Session the preview's marker names: start a
@@ -163,7 +175,10 @@ impl BranchLog {
     /// A log as it stands once loaded, without a server to load it from.
     pub(crate) fn loaded(session_id: &str, events: Vec<AgentEvent>, protocol: Protocol) -> Self {
         Self {
-            contents: Contents::Ready { events, protocol },
+            contents: Contents::Ready {
+                entries: entries(events.into_iter().map(InteractionUpdate::Event)),
+                protocol,
+            },
             ..Self::new(session_id.into())
         }
     }
@@ -190,12 +205,16 @@ mod tests {
     /// following the marker to it shows what the branch did after.
     #[test]
     fn a_branch_is_shown_from_where_its_own_history_begins() {
-        let events = vec![
-            marker(BranchDirection::From, "source"),
-            said("inherited"),
-            marker(BranchDirection::From, "source"),
-            said("its own"),
-        ];
+        let events = entries(
+            [
+                marker(BranchDirection::From, "source"),
+                said("inherited"),
+                marker(BranchDirection::From, "source"),
+                said("its own"),
+            ]
+            .into_iter()
+            .map(InteractionUpdate::Event),
+        );
         assert_eq!(
             shown_from(BranchDirection::To, &events),
             &events[3..],
@@ -232,7 +251,7 @@ mod tests {
         ));
         let view = crate::presentation::preview::view(&app, false);
         let Some(styra_ui::preview::BranchLog::Ready {
-            events,
+            entries,
             protocol: actual,
         }) = view.branch_log
         else {
@@ -240,7 +259,10 @@ mod tests {
         };
         assert_eq!(actual, protocol);
         assert_eq!(
-            events,
+            entries
+                .iter()
+                .map(|entry| entry.event.clone())
+                .collect::<Vec<_>>(),
             [
                 said("try the other approach"),
                 AgentEvent::AgentMessage {
@@ -248,6 +270,46 @@ mod tests {
                 }
             ]
         );
+    }
+
+    /// The log is the linked Session's event list as this one would show it:
+    /// conversation only, and every event once all events are shown, folded
+    /// as a fresh entry there is. An operator message reads as it was
+    /// written, with the answer shape it asked for.
+    #[test]
+    fn the_linked_log_follows_the_lists_own_filters() {
+        let mut app = app_on_marker();
+        let protocol = app.selection.provider.protocol();
+        let framed = styra_protocol::contract::frame("show me", Contract::Lines);
+        app.branch_log = Some(BranchLog::loaded(
+            "branch-2",
+            vec![
+                AgentEvent::UserMessage { text: framed },
+                AgentEvent::CommandStarted {
+                    command: "cargo test".into(),
+                },
+            ],
+            protocol,
+        ));
+        let shown = |app: &crate::app::App| {
+            let view = crate::presentation::preview::view(app, false);
+            let Some(styra_ui::preview::BranchLog::Ready { entries, .. }) = view.branch_log else {
+                panic!("linked log expected")
+            };
+            entries
+                .iter()
+                .map(|entry| (entry.event.clone(), entry.contract.copied(), entry.expanded))
+                .collect::<Vec<_>>()
+        };
+        app.timeline.all_events = false;
+        assert_eq!(
+            shown(&app),
+            [(said("show me"), Some(Contract::Lines), true)]
+        );
+        app.timeline.all_events = true;
+        let all = shown(&app);
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().all(|(_, _, expanded)| !expanded));
     }
 
     /// Until the marker the cursor reached is loaded, the pane says so rather

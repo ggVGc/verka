@@ -258,7 +258,7 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
 /// Strip the server's contract framing from an operator message, returning the
 /// text as it was written and the shape it asked for. Anything else is passed
 /// through untouched — only a message this server framed can be unframed.
-fn unframed(event: AgentEvent) -> (AgentEvent, Option<Contract>) {
+pub(crate) fn unframed(event: AgentEvent) -> (AgentEvent, Option<Contract>) {
     let AgentEvent::UserMessage { text } = &event else {
         return (event, None);
     };

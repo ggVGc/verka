@@ -145,12 +145,17 @@ impl Entry {
     /// ellipsis also counts, even with no extra detail lines, since its full
     /// text is only reachable by expanding.
     pub fn has_detail(&self) -> bool {
-        // A branch marker's detail is what the host knows of the session it
-        // leads to, which the event alone does not carry.
-        detail_line_count(&self.event) > 0
-            || self.event.summary().ends_with('…')
-            || self.event.branch_target().is_some()
+        has_detail(&self.event)
     }
+}
+
+/// [`Entry::has_detail`] for an event that is not in this list.
+pub fn has_detail(event: &AgentEvent) -> bool {
+    // A branch marker's detail is what the host knows of the session it
+    // leads to, which the event alone does not carry.
+    detail_line_count(event) > 0
+        || event.summary().ends_with('…')
+        || event.branch_target().is_some()
 }
 
 /// Total line count across an event's detail blocks, splitting multi-line

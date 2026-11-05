@@ -117,15 +117,25 @@ pub(crate) fn branch_provider_switch(
     styra_protocol::agent::Provider,
     styra_protocol::agent::Provider,
 )> {
+    owned_branch_provider_switch(app, &app.session_id, event)
+}
+
+/// [`branch_provider_switch`] for a marker in the log of the session `owner`.
+pub(crate) fn owned_branch_provider_switch(
+    app: &App,
+    owner: &str,
+    event: &styra_protocol::event::AgentEvent,
+) -> Option<(
+    styra_protocol::agent::Provider,
+    styra_protocol::agent::Provider,
+)> {
     use styra_protocol::event::{AgentEvent, BranchDirection};
     match event {
         AgentEvent::Branched {
             direction: BranchDirection::From,
             session,
             ..
-        } => app
-            .interactions
-            .provider_switch_from(session, &app.session_id),
+        } => app.interactions.provider_switch_from(session, owner),
         AgentEvent::Branched {
             direction: BranchDirection::To,
             session,

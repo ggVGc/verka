@@ -418,9 +418,11 @@ including what shell commands or you changed, rather than what the agent
 reported editing. A turn that is still running is shown from its latest
 snapshot, and one with no snapshot from its start shows the agent's reported
 changes. On a `branch` marker,
-both previews show the linked interaction's conversation instead: a branch
-from where its own history begins, after what it copied from this one, and a
-source in full. A live interaction's log keeps growing while it is shown.
+both previews show the linked interaction's conversation instead, drawn just
+as the main interaction view would draw it under your current `c`/`m`
+filters: a branch from where its own history begins, after what it copied
+from this one, and a source in full. A live interaction's log keeps growing
+while it is shown.
 Diffs mark additions and removals with a green `+` and a red `-` and highlight
 the code in the language of each file's extension, with each line's number in
 the file beside it; only the changed lines are shown. Claude's edits carry no line numbers, so they are found in

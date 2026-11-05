@@ -56,12 +56,12 @@ pub struct ChangeView<'a> {
 /// Whether the linked Session's log has been read yet. Loading is a round
 /// trip to the server, so an unread log and an empty one must not read the
 /// same.
-#[derive(Clone, Copy, Debug)]
 pub enum BranchLog<'a> {
     Loading,
-    /// Its events, presented as its own provider presents them.
+    /// The entries its event list would show, drawn as that list draws them,
+    /// and presented as its own provider presents them.
     Ready {
-        events: &'a [AgentEvent],
+        entries: Vec<EventEntry<'a>>,
         protocol: Protocol,
     },
     Failed(&'a str),
