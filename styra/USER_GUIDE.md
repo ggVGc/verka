@@ -423,7 +423,9 @@ changes. On a `branch` marker,
 both previews show the linked interaction's conversation instead, drawn just
 as the main interaction view would draw it under your current `c`/`m`
 filters: a branch from where its own history begins, after what it copied
-from this one, and a source in full. A live interaction's log keeps growing
+from this one, and a source in full. It opens as an overview tile shows a
+conversation: on the latest entry, from its start if it is taller than the
+preview. A live interaction's log keeps growing
 while it is shown.
 Diffs mark additions and removals with a green `+` and a red `-` and highlight
 the code in the language of each file's extension, with each line's number in

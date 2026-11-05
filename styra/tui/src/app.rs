@@ -1877,7 +1877,8 @@ impl App {
 
     /// The Session named by the `branch` marker the preview is on, and which
     /// way the marker points, while the preview is on screen. A marker that
-    /// names this Session has nothing else to show.
+    /// names this Session has nothing else to show. When the cursor is on one
+    /// of the branches listed beneath the selected marker, it is that branch.
     pub(crate) fn preview_branch_target(
         &self,
     ) -> Option<(&str, styra_protocol::event::BranchDirection)> {
@@ -1889,7 +1890,20 @@ impl App {
         if !shown {
             return None;
         }
-        match self.preview_entry()?.event() {
+        let entry = self.preview_entry()?;
+        let on_selection = self
+            .timeline
+            .selected_entry()
+            .is_some_and(|selected| std::ptr::eq(selected, entry));
+        if let Some(at) = self.selected_branch().filter(|_| on_selection) {
+            // Each listed branch was branched off the one above it, so it is
+            // read as a `branched to` marker naming it would be.
+            return self
+                .marker_branches()
+                .get(at)
+                .map(|id| (*id, styra_protocol::event::BranchDirection::To));
+        }
+        match entry.event() {
             AgentEvent::Branched {
                 direction, session, ..
             } if *session != self.session_id => Some((session, *direction)),

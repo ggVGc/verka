@@ -83,7 +83,16 @@ pub fn render(frame: &mut Frame, view: &PreviewView<'_>, area: Rect) -> PreviewF
     );
     crate::diff::fill_changed_rows(&mut lines, usize::from(content_area.width));
     let limit = preview_scroll_limit(&lines, content_area.width, content_area.height);
-    let effective = view.requested_scroll.min(limit);
+    let effective = match latest_branch_entry_rows(view, usize::from(content_area.width)) {
+        // Asked for the end of a linked Session's log, it shows as an
+        // overview tile does: the latest entry, with as much before it as
+        // fits, or from its start when it is taller than the pane.
+        Some(latest) if view.requested_scroll == u16::MAX => {
+            let total = preview_scroll_limit(&lines, content_area.width, 0);
+            limit.min(total.saturating_sub(latest))
+        }
+        _ => view.requested_scroll.min(limit),
+    };
     let mut paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((effective, 0));
@@ -177,6 +186,20 @@ fn branch_log_lines(log: &BranchLog<'_>, width: usize, links: LinkDisplay) -> Ve
             }
         }
     }
+}
+
+/// How many rows the last entry of a loaded linked Session's log takes,
+/// when that log is what the preview shows. It ends the preview's content.
+fn latest_branch_entry_rows(view: &PreviewView<'_>, width: usize) -> Option<u16> {
+    if view.answer_target.is_some() || view.entry_change.is_some() {
+        return None;
+    }
+    let Some(BranchLog::Ready { entries, protocol }) = &view.branch_log else {
+        return None;
+    };
+    let latest = entries.last()?;
+    let rows = crate::event_list::entry_rows(latest, width, *protocol, view.links).len();
+    Some(rows.min(usize::from(u16::MAX)) as u16)
 }
 
 /// A file change's paths and its diff, drawn by [`diff_block_lines`] so each

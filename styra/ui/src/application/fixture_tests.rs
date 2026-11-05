@@ -602,6 +602,62 @@ fn branch_preview_renders_the_supplied_log_and_loading_state() {
     assert!(!text.contains("done it the other way"));
 }
 
+/// Asked for its end, a linked Session's log is shown as an overview tile
+/// shows its conversation: the latest entry with what fits before it, or,
+/// taller than the pane, the latest entry from its start.
+#[test]
+fn branch_preview_at_its_end_shows_the_latest_entry_from_its_start() {
+    use styra_protocol::event::BranchDirection;
+    let marker = [AgentEvent::Branched {
+        direction: BranchDirection::To,
+        session: "branch".into(),
+        name: None,
+    }];
+    let screen = |latest: String| {
+        let log = [
+            AgentEvent::UserMessage {
+                text: (0..20)
+                    .map(|n| format!("earlier {n}"))
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            },
+            AgentEvent::AgentMessage { text: latest },
+        ];
+        let list = list(&[]);
+        let footer = footer();
+        let mut preview = preview();
+        preview.entry = self::list(&marker).entries.pop();
+        let mut entries = self::list(&log).entries;
+        for entry in &mut entries {
+            entry.selected = false;
+            entry.expanded = true;
+        }
+        preview.branch_log = Some(preview::BranchLog::Ready {
+            entries,
+            protocol: Protocol::default(),
+        });
+        preview.requested_scroll = u16::MAX;
+        let mut view = application(&list, &footer);
+        view.main = MainView::Preview(&preview);
+        draw(&view, 80, 16).0.concat()
+    };
+
+    let short = screen("latest start\n\nlatest end".into());
+    assert!(short.contains("latest start"), "{short}");
+    assert!(short.contains("latest end"), "{short}");
+    assert!(short.contains("earlier 19"), "what fits before it\n{short}");
+
+    let tall = screen(
+        std::iter::once("latest start".to_owned())
+            .chain((0..30).map(|n| format!("latest {n}")))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    );
+    assert!(tall.contains("latest start"), "{tall}");
+    assert!(!tall.contains("latest 29"), "{tall}");
+    assert!(!tall.contains("earlier 19"), "{tall}");
+}
+
 #[test]
 fn maximized_diff_takes_the_whole_view_and_hides_the_log() {
     struct FixturePanel(std::cell::Cell<Rect>);

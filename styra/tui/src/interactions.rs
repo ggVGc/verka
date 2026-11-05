@@ -2766,7 +2766,11 @@ pub(crate) mod tests {
         assert_walk_follows_display(&live, workspace);
     }
 
-    fn branched(id: &str, activity: InteractionActivity, from: &str) -> InteractionSummary {
+    pub(crate) fn branched(
+        id: &str,
+        activity: InteractionActivity,
+        from: &str,
+    ) -> InteractionSummary {
         let mut interaction = interaction(id, activity);
         interaction.origin = Some(styra_protocol::SessionOrigin {
             session_id: from.into(),

@@ -2616,25 +2616,18 @@ mod tests {
     /// as rows of their own, and Enter opens the one the cursor is on.
     #[test]
     fn moving_by_line_selects_a_markers_child_branches_and_enter_opens_one() {
+        use crate::interactions::tests::branched;
         use styra_protocol::event::{AgentEvent, BranchDirection};
-        use styra_protocol::{InteractionActivity, InteractionSummary};
+        use styra_protocol::InteractionActivity::Running;
 
         let (_root_directory, root) = tree("follow-child-branch");
         let mut app = app(&root);
         app.enter_list();
-        let branched = |id: &str, from: &str| InteractionSummary {
-            origin: Some(styra_protocol::SessionOrigin {
-                session_id: from.into(),
-                provider: styra_protocol::agent::Provider::Codex,
-                at_ms: None,
-                history: Default::default(),
-            }),
-            ..crate::interactions::tests::interaction(id, InteractionActivity::Running)
-        };
+        let source = app.session_id.clone();
         app.interactions.refresh(vec![
-            branched("branch-2", &app.session_id.clone()),
-            branched("child-3", "branch-2"),
-            branched("grandchild-4", "child-3"),
+            branched("branch-2", Running, &source),
+            branched("child-3", Running, "branch-2"),
+            branched("grandchild-4", Running, "child-3"),
         ]);
         app.push_event(AgentEvent::AgentMessage {
             text: "before".into(),

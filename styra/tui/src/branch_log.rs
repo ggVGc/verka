@@ -147,7 +147,8 @@ pub fn shown_from(direction: BranchDirection, entries: &[Entry]) -> &[Entry] {
 
 /// Keep `app.branch_log` on the Session the preview's marker names: start a
 /// fresh load when it moves to another, and drop it once the preview leaves
-/// markers. Whether anything on screen changed.
+/// markers. A log that has just loaded is shown from its end. Whether
+/// anything on screen changed.
 pub fn sync(app: &mut crate::app::App, client: &Client) -> bool {
     let Some(target) = app
         .preview_branch_target()
@@ -165,9 +166,17 @@ pub fn sync(app: &mut crate::app::App, client: &Client) -> bool {
         .current(&target)
         .filter(|interaction| !interaction.restored)
         .map(|interaction| interaction.selection.provider.protocol());
-    app.branch_log
-        .as_mut()
-        .is_some_and(|log| log.load(client, live))
+    let Some(log) = app.branch_log.as_mut() else {
+        return false;
+    };
+    let was_loading = matches!(log.contents, Contents::Loading);
+    let changed = log.load(client, live);
+    // What the operator opens a marker to see is how the other side ended
+    // up, so a freshly loaded log is shown from its bottom.
+    if was_loading && !matches!(log.contents, Contents::Loading) {
+        app.preview.scroll.scroll_to_end();
+    }
+    changed
 }
 
 #[cfg(test)]
@@ -187,6 +196,7 @@ impl BranchLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::App;
     use crate::presentation::test_support;
 
     fn marker(direction: BranchDirection, session: &str) -> AgentEvent {
@@ -199,6 +209,42 @@ mod tests {
 
     fn said(text: &str) -> AgentEvent {
         AgentEvent::UserMessage { text: text.into() }
+    }
+
+    /// A screen on `source` whose preview is open on its `branched to`
+    /// marker naming `branch-2`.
+    fn app_on_marker() -> App {
+        let mut app = test_support::app("source");
+        app.push_event(said("before the branch"));
+        app.push_event(marker(BranchDirection::To, "branch-2"));
+        app.select_last();
+        app.preview.show();
+        app
+    }
+
+    /// Give `app` the loaded log of `session`, in its own protocol.
+    fn load(app: &mut App, session: &str, events: Vec<AgentEvent>) {
+        let protocol = app.selection.provider.protocol();
+        app.branch_log = Some(BranchLog::loaded(session, events, protocol));
+    }
+
+    /// What the preview draws of the linked log: each entry's event, answer
+    /// shape and folding, and the protocol it is drawn in.
+    fn shown(app: &App) -> (Vec<(AgentEvent, Option<Contract>, bool)>, Protocol) {
+        let view = crate::presentation::preview::view(app, false);
+        let Some(styra_ui::preview::BranchLog::Ready { entries, protocol }) = view.branch_log
+        else {
+            panic!("linked log expected")
+        };
+        let entries = entries
+            .iter()
+            .map(|entry| (entry.event.clone(), entry.contract.copied(), entry.expanded))
+            .collect();
+        (entries, protocol)
+    }
+
+    fn target(app: &App) -> Option<&str> {
+        app.preview_branch_target().map(|(id, _)| id)
     }
 
     /// The branch's copy of the source's history is already on this screen;
@@ -223,92 +269,47 @@ mod tests {
         assert_eq!(shown_from(BranchDirection::From, &events), &events[..]);
     }
 
-    fn app_on_marker() -> crate::app::App {
-        let mut app = test_support::app("source");
-        app.push_event(said("before the branch"));
-        app.push_event(marker(BranchDirection::To, "branch-2"));
-        app.select_last();
-        app.preview.show();
-        app
-    }
-
+    /// The log is the linked Session's event list as this one would show it:
+    /// from where the branch's own history begins, conversation only, and
+    /// every event once all events are shown, folded as a fresh entry there
+    /// is. An operator message reads as it was written, with the answer shape
+    /// it asked for.
     #[test]
-    fn the_preview_on_a_branch_marker_shows_the_linked_sessions_log() {
+    fn the_preview_on_a_branch_marker_shows_the_linked_log_as_the_list_would() {
         let mut app = app_on_marker();
-        let protocol = app.selection.provider.protocol();
-        app.branch_log = Some(BranchLog::loaded(
+        let framed = styra_protocol::contract::frame("show me", Contract::Lines);
+        let done = AgentEvent::AgentMessage {
+            text: "done it the other way".into(),
+        };
+        load(
+            &mut app,
             "branch-2",
             vec![
                 marker(BranchDirection::From, "source"),
                 said("before the branch"),
                 marker(BranchDirection::From, "source"),
-                said("try the other approach"),
-                AgentEvent::AgentMessage {
-                    text: "done it the other way".into(),
-                },
-            ],
-            protocol,
-        ));
-        let view = crate::presentation::preview::view(&app, false);
-        let Some(styra_ui::preview::BranchLog::Ready {
-            entries,
-            protocol: actual,
-        }) = view.branch_log
-        else {
-            panic!("linked log expected")
-        };
-        assert_eq!(actual, protocol);
-        assert_eq!(
-            entries
-                .iter()
-                .map(|entry| entry.event.clone())
-                .collect::<Vec<_>>(),
-            [
-                said("try the other approach"),
-                AgentEvent::AgentMessage {
-                    text: "done it the other way".into()
-                }
-            ]
-        );
-    }
-
-    /// The log is the linked Session's event list as this one would show it:
-    /// conversation only, and every event once all events are shown, folded
-    /// as a fresh entry there is. An operator message reads as it was
-    /// written, with the answer shape it asked for.
-    #[test]
-    fn the_linked_log_follows_the_lists_own_filters() {
-        let mut app = app_on_marker();
-        let protocol = app.selection.provider.protocol();
-        let framed = styra_protocol::contract::frame("show me", Contract::Lines);
-        app.branch_log = Some(BranchLog::loaded(
-            "branch-2",
-            vec![
                 AgentEvent::UserMessage { text: framed },
                 AgentEvent::CommandStarted {
                     command: "cargo test".into(),
                 },
+                done.clone(),
             ],
-            protocol,
-        ));
-        let shown = |app: &crate::app::App| {
-            let view = crate::presentation::preview::view(app, false);
-            let Some(styra_ui::preview::BranchLog::Ready { entries, .. }) = view.branch_log else {
-                panic!("linked log expected")
-            };
-            entries
-                .iter()
-                .map(|entry| (entry.event.clone(), entry.contract.copied(), entry.expanded))
-                .collect::<Vec<_>>()
-        };
-        app.timeline.all_events = false;
-        assert_eq!(
-            shown(&app),
-            [(said("show me"), Some(Contract::Lines), true)]
         );
+
+        app.timeline.all_events = false;
+        let (entries, protocol) = shown(&app);
+        assert_eq!(protocol, app.selection.provider.protocol());
+        assert_eq!(
+            entries,
+            [
+                (said("show me"), Some(Contract::Lines), true),
+                (done, None, true),
+            ]
+        );
+
         app.timeline.all_events = true;
-        let all = shown(&app);
-        assert_eq!(all.len(), 2);
+        let (all, _) = shown(&app);
+        assert_eq!(all.len(), 3, "the command too");
         assert!(all.iter().all(|(_, _, expanded)| !expanded));
     }
 
@@ -317,29 +318,70 @@ mod tests {
     #[test]
     fn a_marker_not_yet_loaded_reads_as_loading() {
         let mut app = app_on_marker();
-        let protocol = app.selection.provider.protocol();
-        app.branch_log = Some(BranchLog::loaded(
-            "elsewhere",
-            vec![said("another branch entirely")],
-            protocol,
-        ));
+        load(&mut app, "elsewhere", vec![said("another branch entirely")]);
         assert!(matches!(
             crate::presentation::preview::view(&app, false).branch_log,
             Some(styra_ui::preview::BranchLog::Loading)
         ));
     }
 
+    /// The operator opens a marker to see how the other side ended up, so
+    /// once its log arrives the preview starts at the bottom rather than
+    /// where the loading placeholder left it.
     #[test]
-    fn the_preview_off_a_marker_has_no_branch_to_load() {
+    fn a_freshly_loaded_marker_is_shown_from_its_end() {
+        let root = tempfile::tempdir().unwrap();
+        let client = Client::new(root.path().join("missing.sock"));
         let mut app = app_on_marker();
-        assert!(app.preview_branch_target().is_some());
+
+        assert!(sync(&mut app, &client), "a load starts");
+        assert_eq!(app.preview.scroll.offset, 0, "still loading");
+
+        app.branch_log.as_mut().unwrap().since -= SETTLE;
+        assert!(sync(&mut app, &client));
+        assert!(!matches!(
+            app.branch_log.as_ref().unwrap().contents,
+            Contents::Loading
+        ));
+        assert_eq!(app.preview.scroll.offset, u16::MAX, "at the end");
+
+        app.preview.scroll.page_up();
+        sync(&mut app, &client);
+        assert_ne!(
+            app.preview.scroll.offset,
+            u16::MAX,
+            "only the first load moves it"
+        );
+    }
+
+    /// The preview loads whatever row the cursor is on: the marker, or one of
+    /// the branches listed beneath it as rows of their own. Off markers, or
+    /// with the preview closed, there is nothing to load.
+    #[test]
+    fn the_preview_loads_the_branch_the_cursor_is_on() {
+        use crate::interactions::tests::branched;
+        use styra_protocol::InteractionActivity::Running;
+
+        let mut app = app_on_marker();
+        app.interactions.refresh(vec![
+            branched("branch-2", Running, "source"),
+            branched("child-3", Running, "branch-2"),
+            branched("grandchild-4", Running, "child-3"),
+        ]);
+
+        assert_eq!(target(&app), Some("branch-2"));
+        app.select_next_line();
+        assert_eq!(target(&app), Some("child-3"));
+        app.select_next_line();
+        assert_eq!(target(&app), Some("grandchild-4"));
+        app.select_prev_line();
+        app.select_prev_line();
+        assert_eq!(target(&app), Some("branch-2"), "the marker's own row");
+
         app.select_first();
-        assert!(app.preview_branch_target().is_none());
+        assert_eq!(target(&app), None, "off the marker");
         app.select_last();
         app.preview.toggle();
-        assert!(
-            app.preview_branch_target().is_none(),
-            "the preview is closed"
-        );
+        assert_eq!(target(&app), None, "the preview is closed");
     }
 }
