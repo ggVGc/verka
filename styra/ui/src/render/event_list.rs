@@ -332,7 +332,6 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         items[0] = entry_item_slice(
             &entry_at(entries, offset),
             width,
-            viewport_height,
             row_offset,
             usize::MAX,
             entry_render,
@@ -380,8 +379,12 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     }
 }
 
-/// The requested anchor, if the selected entry's summary line is visible from
-/// it; `None` when the view has to move to show the selection.
+/// The requested anchor, as long as the whole selected entry is visible from
+/// it. A selection running past the foot of the view — off it entirely, or cut
+/// short with its `… more rows` line — scrolls it down only as far as it takes
+/// to show the whole entry, starting partway through a tall entry above if
+/// need be, rather than putting the selection at the top. `None` when the view
+/// has to move up to show the selection.
 fn kept_anchor(
     offset: usize,
     row_offset: usize,
@@ -393,11 +396,17 @@ fn kept_anchor(
         return None;
     }
     let row_offset = row_offset.min(heights.height(offset).saturating_sub(1));
-    if selected == offset {
-        return (row_offset == 0).then_some((offset, 0));
+    if selected == offset && row_offset > 0 {
+        return None;
     }
-    let rows_above = heights.total(offset..selected).saturating_sub(row_offset);
-    (rows_above < viewport_height).then_some((offset, row_offset))
+    // An entry taller than the pane shows its first rows.
+    let height = heights.height(selected);
+    let required = if height >= viewport_height {
+        (selected, 0)
+    } else {
+        selection_top_anchor(Some(selected), heights, viewport_height - height)
+    };
+    Some((offset, row_offset).max(required))
 }
 
 /// The latest viewport anchor that leaves no more than `maximum_lines` before
@@ -510,7 +519,6 @@ fn clip_boundary_entry(
             entry_item_slice(
                 entry,
                 width,
-                viewport_height,
                 first_row_offset,
                 max_rows,
                 entry_render,
@@ -592,10 +600,14 @@ fn entry_at<'a>(entries: &[EventEntry<'a>], index: usize) -> EventEntry<'a> {
 impl LazyItems<'_> {
     fn item(&mut self, index: usize) -> &ListItem<'static> {
         self.built[index].get_or_insert_with(|| match self.entries.get(index) {
-            Some(_) => entry_item(
+            // Whole, however tall: the viewport scrolls through an entry
+            // taller than itself, so the rows past the pane's height must be
+            // there to reach. What is handed to `List` is cut to fit — see
+            // [`clip_boundary_entry`].
+            Some(_) => entry_item_with_max_rows(
                 &entry_at(self.entries, index),
                 self.width,
-                self.viewport_height,
+                usize::MAX,
                 self.render,
             ),
             None => self.tail.clone(),
@@ -1164,25 +1176,38 @@ pub(crate) fn blended_style(style: Style, toward: Color, tenths: u16) -> Style {
     }
 }
 
+/// `take` rows of the whole entry from row `skip` on, the view having scrolled
+/// partway into it. Where rows still follow past them, the last one says how
+/// many instead, as a cut entry does at the top.
 fn entry_item_slice(
     entry: &EventEntry<'_>,
     width: usize,
-    viewport_height: usize,
     skip: usize,
     take: usize,
     render: EntryRender<'_>,
 ) -> ListItem<'static> {
-    let rows = entry_rows_with_max_rows(
-        entry,
-        width,
-        viewport_height.saturating_sub(1).max(1),
-        render,
-    )
-    .into_iter()
-    .skip(skip)
-    .take(take)
-    .collect::<Vec<_>>();
+    let mut rows = entry_rows_with_max_rows(entry, width, usize::MAX, render)
+        .into_iter()
+        .skip(skip)
+        .collect::<Vec<_>>();
+    if rows.len() > take {
+        if take > 1 {
+            let hidden = rows.len() - (take - 1);
+            rows.truncate(take - 1);
+            rows.push(more_rows_line(hidden));
+        } else {
+            rows.truncate(take);
+        }
+    }
     ListItem::new(rows)
+}
+
+/// The last row of an entry cut short at the foot of the pane.
+fn more_rows_line(hidden: usize) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("{DETAIL_INDENT}… {hidden} more rows — press p for the full entry"),
+        Style::default().fg(theme::MUTED_TEXT),
+    ))
 }
 
 /// The rows a conversation entry — a message or a branch marker — is drawn
@@ -1429,10 +1454,7 @@ fn build_entry_content_rows(
         } else {
             let hidden = wrapped.len() - (max_rows - 1);
             wrapped.truncate(max_rows - 1);
-            wrapped.push(Line::from(Span::styled(
-                format!("{DETAIL_INDENT}… {hidden} more rows — press p for the full entry"),
-                Style::default().fg(theme::MUTED_TEXT),
-            )));
+            wrapped.push(more_rows_line(hidden));
         }
     }
     // After wrapping, so a word broken across two rows is marked on the row it
@@ -3178,6 +3200,54 @@ mod tests {
         assert_eq!(offset, 2, "two rows of scrolloff above the selection");
     }
 
+    /// Moving from a long entry to a short one below the view scrolls only far
+    /// enough to show the short one whole: the long one keeps the rest of the
+    /// pane rather than the short one jumping to the top.
+    #[test]
+    fn kept_view_scrolls_down_only_as_far_as_the_selection_needs() {
+        // A short entry, a long one, a short one, then the status tail.
+        let heights = [1, 12, 2, 1];
+
+        assert_eq!(
+            kept_anchor(0, 0, 2, &mut &heights[..], 10),
+            Some((1, 4)),
+            "the long entry's last eight rows stay above the selection"
+        );
+        assert_eq!(
+            kept_anchor(1, 0, 2, &mut &heights[..], 10),
+            Some((1, 4)),
+        );
+        assert_eq!(
+            kept_anchor(0, 0, 1, &mut &[1, 3, 2, 1][..], 10),
+            Some((0, 0)),
+            "a selection already in view does not scroll"
+        );
+        assert_eq!(
+            kept_anchor(0, 0, 1, &mut &heights[..], 10),
+            Some((1, 0)),
+            "a selection too tall for the pane fills it from its first row"
+        );
+        assert_eq!(
+            kept_anchor(0, 0, 1, &mut &[1, 1, 1, 12, 1][..], 10),
+            Some((0, 0)),
+        );
+        assert_eq!(
+            kept_anchor(0, 0, 3, &mut &[1, 12, 2, 12, 1][..], 10),
+            Some((3, 0)),
+            "an entry taller than the pane shows its first rows"
+        );
+        assert_eq!(
+            kept_anchor(0, 0, 3, &mut &[1, 1, 1, 4, 1][..], 5),
+            Some((2, 0)),
+            "a selection cut off at the foot scrolls until it is shown whole"
+        );
+        assert_eq!(
+            kept_anchor(0, 0, 2, &mut &[1, 1, 8, 1][..], 5),
+            Some((2, 0)),
+            "as much of a tall selection as fits"
+        );
+    }
+
     #[test]
     fn viewport_scroll_is_measured_in_rendered_rows_across_entries() {
         // Four entries followed by the one-row status tail.
@@ -3466,6 +3536,44 @@ mod tests {
 
     /// Width is in the key because nothing below the cache re-wraps: the rows
     /// it holds are already wrapped. A narrower pane has to rebuild them.
+    /// An entry taller than the pane is cut short at its foot only until the
+    /// view scrolls down to its end, which then shows in full.
+    #[test]
+    fn scrolling_through_an_entry_taller_than_the_pane_reaches_its_end() {
+        let event = AgentEvent::AgentMessage {
+            text: (0..30)
+                .map(|n| format!("line {n}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        };
+        let screen = |anchor, scroll_delta| {
+            let view = EventListView {
+                anchor,
+                scroll_delta,
+                ..list_view(vec![EventEntry {
+                    selected: true,
+                    ..entry_of(&event, version())
+                }])
+            };
+            let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render(frame, &view, frame.area());
+                })
+                .unwrap();
+            buffer_rows(terminal.backend().buffer()).join("\n")
+        };
+
+        let top = screen(ListAnchor::Selection, 0);
+        assert!(top.contains("more rows"), "{top}");
+        let half = screen(ListAnchor::Free, 10);
+        assert!(half.contains("line 12"), "{half}");
+        assert!(half.contains("more rows"), "{half}");
+        let end = screen(ListAnchor::Free, 100);
+        assert!(end.contains("line 29"), "{end}");
+        assert!(!end.contains("more rows"), "{end}");
+    }
+
     #[test]
     fn a_narrower_pane_does_not_reuse_rows_wrapped_for_a_wider_one() {
         let version = version();
