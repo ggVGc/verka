@@ -542,8 +542,9 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_keys_target_separate_lists_and_filters_until_enter_applies_both() {
-        use crossterm::event::{KeyCode, KeyModifiers};
+    fn cycling_targets_separate_lists_and_filters_until_selecting_applies_both() {
+        use crate::keybindings::press;
+        use crossterm::event::KeyCode;
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("defaults.json");
         let original = Selection::new(Provider::Codex);
@@ -554,11 +555,7 @@ mod tests {
             handle_key(&mut app, KeyCode::Char(ch).into(), &path);
         }
         let model = app.launcher.as_ref().unwrap().selection().model;
-        handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
-            &path,
-        );
+        handle_key(&mut app, press(&keys::EDITOR_CYCLE_EFFORT), &path);
         assert_eq!(app.launcher.as_ref().unwrap().selection().model, model);
         for ch in "high".chars() {
             handle_key(&mut app, KeyCode::Char(ch).into(), &path);
@@ -568,11 +565,7 @@ mod tests {
         assert_eq!(picker.list.query, model_query);
         assert_eq!(picker.effort_list.query, "high");
         let effort = picker.selection().effort;
-        handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
-            &path,
-        );
+        handle_key(&mut app, press(&keys::EDITOR_CYCLE_MODEL), &path);
         handle_key(&mut app, KeyCode::Backspace.into(), &path);
         let picker = app.launcher.as_ref().unwrap();
         assert_eq!(picker.active, Field::Model);
@@ -581,13 +574,9 @@ mod tests {
         assert_eq!(picker.selection().effort, effort);
         assert_eq!(app.selection, original);
         assert!(app.take_request().is_none());
-        handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
-            &path,
-        );
+        handle_key(&mut app, press(&keys::EDITOR_CYCLE_EFFORT), &path);
         let chosen = app.launcher.as_ref().unwrap().selection();
-        handle_key(&mut app, KeyCode::Enter.into(), &path);
+        handle_key(&mut app, press(&keys::LAUNCHER_SELECT), &path);
         assert_eq!(app.selection, chosen);
         assert!(app.launcher.is_none());
     }

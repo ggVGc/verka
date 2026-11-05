@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn highlighting_follows_the_turn_while_keeping_the_full_diff_and_scroll() {
-        use crossterm::event::{KeyCode, KeyEvent};
+        use crate::keybindings::{press, DIFF_TURN_HIGHLIGHT};
         let mut app = app_with_two_turns();
         let full = "diff --git a/src/retry.rs b/src/retry.rs\n@@ -1 +1 @@\n-delay * 3\n+delay * 2\ndiff --git a/src/helper.rs b/src/helper.rs\n@@ -1 +1 @@\n-fn old_name\n+fn new_name\n";
         app.checkout_diff = Some(CheckoutDiff::supplied(
@@ -285,7 +285,7 @@ mod tests {
             },
         ));
         app.checkout_diff.as_mut().unwrap().scroll.offset = 3;
-        crate::input::handle_diff_key(&mut app, KeyEvent::from(KeyCode::Char('H')));
+        crate::input::handle_diff_key(&mut app, press(&DIFF_TURN_HIGHLIGHT));
         assert!(app.diff_turn_highlight);
         assert!(!app.turn_diff_shown());
         assert_eq!(shown(&app), full);
@@ -312,7 +312,7 @@ mod tests {
             .unwrap()
             .contains("+fn new_name"));
         assert_eq!(shown(&app), full);
-        crate::input::handle_diff_key(&mut app, KeyEvent::from(KeyCode::Char('H')));
+        crate::input::handle_diff_key(&mut app, press(&DIFF_TURN_HIGHLIGHT));
         assert!(!app.diff_turn_highlight);
         assert_eq!(shown(&app), full);
     }

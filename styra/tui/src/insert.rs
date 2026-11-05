@@ -289,7 +289,8 @@ pub fn complete(base: Option<&Path>, text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEvent, KeyModifiers};
+    use crate::keybindings::{self as keys, press};
+    use crossterm::event::KeyEvent;
     use styra_protocol::{AttributedMount, MountAccess, MountOrigin};
 
     /// A scratch tree to complete and resolve against, named per test so the
@@ -378,16 +379,12 @@ mod tests {
         Prompt::new(Some(root.to_path_buf()), Some(&driva(root)), true)
     }
 
-    fn press(prompt: &mut Prompt, code: KeyCode) -> Outcome {
-        prompt.key(KeyEvent::new(code, KeyModifiers::NONE))
-    }
-
     /// Type `text` and accept it, returning what the prompt decided.
     fn typed(prompt: &mut Prompt, text: &str) -> Outcome {
         for ch in text.chars() {
-            press(prompt, KeyCode::Char(ch));
+            prompt.key(KeyEvent::from(KeyCode::Char(ch)));
         }
-        press(prompt, KeyCode::Enter)
+        prompt.key(KeyEvent::from(KeyCode::Enter))
     }
 
     /// A path the sandbox already carries is decided straight away — and in the
@@ -426,7 +423,7 @@ mod tests {
         );
 
         assert_eq!(
-            press(&mut prompt, KeyCode::Char('w')),
+            prompt.key(press(&keys::EDITOR_MOUNT_WRITABLE)),
             Outcome::Grant {
                 mount: LaunchMount {
                     source: host.clone(),
@@ -443,8 +440,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&outside);
     }
 
-    /// `n` is the answer that grants nothing: the path is still inserted,
-    /// because naming a file the agent cannot open is a legitimate thing to do.
+    /// Mounting neither is the answer that grants nothing: the path is still
+    /// inserted, because naming a file the agent cannot open is a legitimate
+    /// thing to do.
     #[test]
     fn declining_the_grant_still_inserts_the_path() {
         let root = std::fs::canonicalize(tree("declined")).unwrap();
@@ -453,7 +451,7 @@ mod tests {
         let host = outside.join("notes.txt");
 
         typed(&mut prompt, &host.display().to_string());
-        let outcome = press(&mut prompt, KeyCode::Char('n'));
+        let outcome = prompt.key(press(&keys::EDITOR_MOUNT_NEITHER));
 
         let Outcome::Insert { path, notice } = outcome else {
             panic!("expected an insert, got {outcome:?}");
@@ -518,7 +516,7 @@ mod tests {
         assert_eq!(prompt.state(), &Insert::Typing("reprots/summary.md".into()));
 
         // Tab completion is what fixes it, and Esc abandons it either way.
-        assert_eq!(press(&mut prompt, KeyCode::Esc), Outcome::Closed);
+        assert_eq!(prompt.key(KeyEvent::from(KeyCode::Esc)), Outcome::Closed);
 
         let _ = std::fs::remove_dir_all(&root);
     }

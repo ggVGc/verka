@@ -140,7 +140,8 @@ impl WorkspaceJump {
 mod tests {
     use super::*;
     use crate::interactions::tests::interaction;
-    use crossterm::event::{KeyCode, KeyModifiers};
+    use crate::keybindings::press;
+    use crossterm::event::KeyCode;
     use styra_protocol::InteractionActivity;
 
     fn workspace(id: &str, name: &str) -> WorkspaceSummary {
@@ -220,16 +221,16 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_n_asks_for_a_new_interaction_in_the_highlighted_workspace() {
+    fn new_asks_for_a_new_interaction_in_the_highlighted_workspace() {
         let workspaces = [workspace("a", "alpha"), workspace("c", "gamma")];
         let interactions = [
             in_workspace("1", "a", InteractionActivity::Running),
             in_workspace("2", "c", InteractionActivity::Pending),
         ];
         let mut jump = WorkspaceJump::new(&workspaces, &interactions);
-        jump.handle_key(KeyEvent::from(KeyCode::Down));
+        jump.handle_key(press(&keys::WORKSPACE_JUMP_NEXT));
         assert_eq!(
-            jump.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+            jump.handle_key(press(&keys::WORKSPACE_JUMP_NEW)),
             Outcome::New("c".into())
         );
     }
@@ -246,7 +247,7 @@ mod tests {
             jump.handle_key(KeyEvent::from(KeyCode::Char(character)));
         }
         assert_eq!(
-            jump.handle_key(KeyEvent::from(KeyCode::Enter)),
+            jump.handle_key(press(&keys::WORKSPACE_JUMP_OPEN)),
             Outcome::Open("c".into())
         );
     }

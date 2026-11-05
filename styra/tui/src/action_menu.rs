@@ -102,30 +102,37 @@ mod tests {
         }
     }
 
+    /// The key text comes from the configuration, so only where it goes is
+    /// asserted here.
     #[test]
     fn each_action_shows_its_shortcut_in_parentheses() {
         let menu = ActionMenu::new(Window::Events);
-        assert!(menu.rows().contains(&"quit (q)".to_owned()));
-        assert!(menu
-            .rows()
-            .contains(&"toggle selected entry (Enter)".to_owned()));
-        assert!(menu.rows().contains(&"expand all (z R)".to_owned()));
+        let shows = |row: String| menu.rows().contains(&row);
+        assert!(shows(format!("quit ({})", keys::GLOBAL_QUIT.keys_label())));
+        assert!(shows(format!(
+            "expand all ({})",
+            keys::EVENTS_EXPAND_ALL.keys_label()
+        )));
+        let narrowed = keys::EVENTS_PREVIEW_TARGET;
         assert!(
-            menu.rows()
-                .contains(&"preview the newest command (C; preview open)".to_owned()),
+            shows(format!(
+                "preview the newest command ({}; {})",
+                narrowed.keys_label(),
+                narrowed.note().unwrap()
+            )),
             "a narrowed binding says where it applies"
         );
     }
 
-    /// Choosing an action answers with the key that runs it, for the event
+    /// Choosing an action answers with the keys that run it, for the event
     /// loop to press.
     #[test]
-    fn a_typed_query_finds_an_action_and_enter_runs_its_key() {
+    fn a_typed_query_finds_an_action_and_running_it_answers_its_keys() {
         let mut menu = ActionMenu::new(Window::Events);
         typed(&mut menu, "transcript view");
         assert_eq!(
-            menu.handle_key(KeyEvent::from(KeyCode::Enter)),
-            Outcome::Run(vec![KeyEvent::from(KeyCode::Char('t'))])
+            menu.handle_key(keys::press(&keys::ACTION_MENU_RUN)),
+            Outcome::Run(keys::presses(&keys::GLOBAL_TRANSCRIPT))
         );
     }
 
@@ -148,23 +155,23 @@ mod tests {
         let mut menu = ActionMenu::new(Window::Events);
         typed(&mut menu, "zzzzzz");
         assert_eq!(
-            menu.handle_key(KeyEvent::from(KeyCode::Enter)),
+            menu.handle_key(keys::press(&keys::ACTION_MENU_RUN)),
             Outcome::Stay
         );
         assert_eq!(
-            menu.handle_key(KeyEvent::from(KeyCode::Esc)),
+            menu.handle_key(keys::press(&keys::ACTION_MENU_CANCEL)),
             Outcome::Cancel
         );
     }
 
     #[test]
-    fn the_arrows_move_between_actions() {
+    fn moving_down_selects_the_next_action() {
         let mut menu = ActionMenu::new(Window::Overview);
-        menu.handle_key(KeyEvent::from(KeyCode::Down));
+        menu.handle_key(keys::press(&keys::ACTION_MENU_NEXT));
         assert_eq!(
-            menu.handle_key(KeyEvent::from(KeyCode::Enter)),
-            Outcome::Run(vec![KeyEvent::from(KeyCode::Char('l'))]),
-            "the second of the overview's actions: next tile"
+            menu.handle_key(keys::press(&keys::ACTION_MENU_RUN)),
+            Outcome::Run(keys::presses(Window::Overview.actions()[1])),
+            "the second of the overview's actions"
         );
     }
 }

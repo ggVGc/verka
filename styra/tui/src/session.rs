@@ -1287,7 +1287,7 @@ mod tests {
 
     #[test]
     fn branch_dialog_starts_the_branch_without_leaving_the_source() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use crate::keybindings::{press, BRANCH_CHANGE, EDITOR_SEND, EDITOR_SEND_IN_BRANCH};
         use std::sync::Mutex;
         use styra_protocol::{BranchCheckout, BranchHistory, Request, Response};
 
@@ -1356,9 +1356,9 @@ mod tests {
             }
         }
 
-        for (modifiers, checkout) in [
-            (KeyModifiers::NONE, BranchCheckout::ShareSource),
-            (KeyModifiers::CONTROL, BranchCheckout::NewWorktree),
+        for (send, checkout) in [
+            (&EDITOR_SEND, BranchCheckout::ShareSource),
+            (&EDITOR_SEND_IN_BRANCH, BranchCheckout::NewWorktree),
         ] {
             let server = std::sync::Arc::new(BranchServer {
                 checkout,
@@ -1371,16 +1371,8 @@ mod tests {
             prompt.composer.set("branch instruction".into());
             prompt.contract = Some(Contract::Lines);
             app.branch_prompt = Some(prompt);
-            crate::input::handle_branch_prompt_key(
-                &mut app,
-                &client,
-                KeyEvent::from(KeyCode::Left),
-            );
-            crate::input::handle_branch_prompt_key(
-                &mut app,
-                &client,
-                KeyEvent::new(KeyCode::Enter, modifiers),
-            );
+            crate::input::handle_branch_prompt_key(&mut app, &client, press(&BRANCH_CHANGE));
+            crate::input::handle_branch_prompt_key(&mut app, &client, press(send));
             assert!(app.branch_prompt.is_none());
             assert_eq!(app.session_id, "source");
             assert_eq!(app.composer.message(), "source draft");

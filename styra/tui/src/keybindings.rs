@@ -680,6 +680,13 @@ pub(crate) fn presses(binding: &Binding) -> Vec<crossterm::event::KeyEvent> {
     prefix.into_iter().chain(binding.press()).collect()
 }
 
+/// The keypress that runs `binding`, for a test that runs a command without
+/// caring which key the configuration gives it.
+#[cfg(test)]
+pub(crate) fn press(binding: &Binding) -> crossterm::event::KeyEvent {
+    binding.press().expect("the binding has a key")
+}
+
 #[cfg(test)]
 mod reference_tests {
     use super::*;
@@ -746,23 +753,20 @@ mod reference_tests {
             Window::TemplatePicker,
         ] {
             let rows = window.reference();
-            let help = KeyEvent::from(KeyCode::Char('?'));
-            assert!(
+            let has = |description: &str| {
                 rows.iter().any(|row| matches!(
                     row,
-                    ReferenceRow::Binding(binding) if binding.matches(help)
-                )),
+                    ReferenceRow::Binding(binding)
+                        if binding.press().is_some()
+                            && binding.action().description() == description
+                ))
+            };
+            assert!(
+                has("show/close this reference"),
                 "{} says how to reopen the reference",
                 window.name()
             );
-            assert!(
-                rows.iter().any(|row| matches!(
-                    row,
-                    ReferenceRow::Binding(binding) if binding.action().description() == "cancel"
-                )),
-                "{} says how to leave",
-                window.name()
-            );
+            assert!(has("cancel"), "{} says how to leave", window.name());
         }
     }
 
@@ -788,18 +792,51 @@ mod reference_tests {
     /// so a rebinding cannot leave the documentation behind.
     #[test]
     fn a_bindings_label_is_made_of_its_own_keys() {
-        assert_eq!(GLOBAL_FILES.action(), Action::GlobalFiles);
-        assert_eq!(GLOBAL_FILES_ALIAS.action(), Action::GlobalFiles);
-        assert_eq!(EVENTS_SCROLL_DOWN.label(), "J");
-        assert_eq!(EVENTS_NEXT_ENTRY.label(), "↓");
-        assert_eq!(OVERVIEW_CLOSE.label(), "o/Esc");
-        assert_eq!(EDITOR_NEWLINE.label(), "alt-Enter");
+        const ONE: Binding = Binding::new(
+            &[Key::ch('J')],
+            None,
+            None,
+            Windows::All,
+            Action::EventsScrollDown,
+        );
+        const SEVERAL: Binding = Binding::new(
+            &[Key::ch('o'), Key::code(KeyCode::Esc)],
+            None,
+            None,
+            Windows::All,
+            Action::OverviewClose,
+        );
+        const MODIFIED: Binding = Binding::new(
+            &[Key::alt_code(KeyCode::Enter), Key::ctrl('w')],
+            None,
+            None,
+            Windows::All,
+            Action::EditorNewline,
+        );
+        const NARROWED: Binding = Binding::new(
+            &[Key::ctrl('w')],
+            None,
+            Some("existing session"),
+            Windows::All,
+            Action::GlobalSessionWorktree,
+        );
+        const CHORD: Binding = Binding::new(
+            &[Key::ch('R')],
+            Some("z R"),
+            None,
+            Windows::All,
+            Action::EventsExpandAll,
+        );
+        assert_eq!(ONE.label(), "J");
+        assert_eq!(SEVERAL.label(), "o/Esc");
+        assert_eq!(MODIFIED.label(), "alt-Enter/ctrl-w");
         assert_eq!(
-            GLOBAL_SESSION_WORKTREE.label(),
+            NARROWED.label(),
             "ctrl-w (existing session)",
             "a narrower binding says where it applies"
         );
-        assert_eq!(EVENTS_EXPAND_ALL.label(), "z R", "a chord names its prefix");
+        assert_eq!(NARROWED.keys_label(), "ctrl-w");
+        assert_eq!(CHORD.label(), "z R", "a chord names its prefix");
     }
 
     /// The menu offers what the window's reference lists, so the operator
@@ -812,7 +849,12 @@ mod reference_tests {
             .iter()
             .map(|binding| binding.action())
             .collect();
-        assert_eq!(actions.first(), Some(&Action::EventsPreviewScrollDown));
+        assert!(
+            EVENTS.iter().any(
+                |row| matches!(row, ReferenceRow::Binding(binding) if binding.action() == actions[0])
+            ),
+            "the window's own commands come first"
+        );
         assert!(actions.contains(&Action::EventsToggleExpand));
         assert!(actions.contains(&Action::GlobalQuit));
         assert!(!actions.contains(&Action::GlobalActionMenu), "not itself");
@@ -836,72 +878,92 @@ mod reference_tests {
 
     /// A global command whose key the window's own section takes, or that is
     /// narrowed to other windows, is neither listed nor offered there: the
-    /// menu would press a key that does something else.
+    /// menu would press a key that does something else. Where neither holds
+    /// for one of its keys, it is offered on that key. Which keys collide is
+    /// the configuration's business, so this holds for whatever it says.
     #[test]
     fn a_window_offers_only_the_commands_its_keys_reach() {
-        let offers = |window: Window, action: Action| {
-            let listed = window.reference().iter().any(
-                |row| matches!(row, ReferenceRow::Binding(binding) if binding.action() == action),
-            );
-            let offered = window
-                .actions()
-                .iter()
-                .any(|binding| binding.action() == action);
-            assert_eq!(listed, offered, "{} lists what it offers", window.name());
-            offered
-        };
-        // Taken by the view's own keys.
-        assert!(!offers(Window::Driva, Action::GlobalWorktrees));
-        assert!(!offers(Window::Driva, Action::GlobalIntegrate));
-        assert!(!offers(Window::Driva, Action::GlobalTags));
-        assert!(!offers(Window::Files, Action::GlobalEntryLog));
-        assert!(!offers(Window::Files, Action::GlobalInteractions));
-        assert!(!offers(Window::Raw, Action::GlobalWorkspaceJump));
-        assert!(!offers(Window::Overview, Action::GlobalLauncher));
-        assert!(!offers(Window::Interactions, Action::GlobalInterrupt));
-        // Narrowed to other windows.
-        assert!(!offers(Window::Events, Action::GlobalBack));
-        assert!(!offers(Window::Preview, Action::GlobalFocusMessage));
-        assert!(!offers(Window::Log, Action::ReadingPageDown));
-        assert!(!offers(Window::Log, Action::ReadingProviderRaw));
-        assert!(!offers(Window::Quota, Action::ReadingFirst));
-        // Still there where nothing takes the key.
-        assert!(offers(Window::Raw, Action::GlobalFiles));
-        assert!(offers(Window::Raw, Action::GlobalTags));
-        assert!(offers(Window::Raw, Action::ReadingPageDown));
-        assert!(offers(Window::Driva, Action::GlobalBack));
-        assert!(offers(Window::Events, Action::GlobalWorktrees));
-        // The answer view takes `F`, so files is offered on its other key.
-        let files: Vec<String> = Window::Answer
-            .actions()
-            .iter()
-            .filter(|binding| binding.action() == Action::GlobalFiles)
-            .map(|binding| binding.keys_label())
-            .collect();
-        assert_eq!(files, ["f"]);
-        // A conditional key and a chord's second key take nothing.
-        assert!(
-            offers(Window::Events, Action::GlobalMessages),
-            "z M is a chord"
-        );
-        assert!(!Window::Events.claims(KeyEvent::from(KeyCode::Char('M'))));
+        for window in WINDOWS {
+            let sections = window.sections();
+            let has_global = sections.iter().any(|section| section.first() == GLOBAL.first());
+            let own = sections.first().copied().unwrap_or_default();
+            if !has_global || own.first() == GLOBAL.first() {
+                continue;
+            }
+            // Only a plain binding of the window's own holds its key all the
+            // time: one narrowed by a note, or the second key of a chord, does
+            // not.
+            let taken = |key: KeyEvent| {
+                own.iter().any(|row| {
+                    matches!(row, ReferenceRow::Binding(binding)
+                        if binding.note().is_none()
+                            && !is_chord(binding)
+                            && binding.matches_in(key, window))
+                })
+            };
+            let listed = window.reference();
+            let offered = window.actions();
+            for binding in offered.iter() {
+                assert!(
+                    listed.contains(&ReferenceRow::Binding(binding)),
+                    "{} lists what it offers",
+                    window.name()
+                );
+            }
+            for row in GLOBAL {
+                let ReferenceRow::Binding(binding) = row else {
+                    continue;
+                };
+                let Some(key) = binding.press() else {
+                    continue;
+                };
+                let reaches = binding.applies_in(window) && !taken(key);
+                assert_eq!(
+                    listed.contains(row),
+                    reaches,
+                    "{} lists {:?} on {} only where its key reaches it",
+                    window.name(),
+                    binding.action(),
+                    binding.keys_label()
+                );
+                if !reaches {
+                    assert!(
+                        !offered.iter().any(|seen| *seen == *binding),
+                        "{} does not offer {:?} on {}",
+                        window.name(),
+                        binding.action(),
+                        binding.keys_label()
+                    );
+                }
+            }
+        }
     }
 
-    /// A chord is run by pressing its prefix first, as the operator would.
+    /// A chord is run by pressing its prefix first, as the operator would; any
+    /// other command by its own key alone.
     #[test]
     fn a_chord_is_run_with_its_prefix() {
         assert_eq!(
             presses(&EVENTS_EXPAND_ALL),
-            [
-                KeyEvent::from(KeyCode::Char('z')),
-                KeyEvent::from(KeyCode::Char('R'))
-            ]
+            [press(&EVENTS_FOLD_PREFIX), press(&EVENTS_EXPAND_ALL)]
         );
-        assert_eq!(
-            presses(&GLOBAL_LOG),
-            [KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL)]
-        );
+        assert_eq!(presses(&GLOBAL_LOG), [press(&GLOBAL_LOG)]);
     }
+
+    const PLAIN: Binding = Binding::new(
+        &[Key::ch('l')],
+        None,
+        None,
+        Windows::All,
+        Action::GlobalLauncher,
+    );
+    const CONTROL: Binding = Binding::new(
+        &[Key::ctrl('l')],
+        None,
+        None,
+        Windows::All,
+        Action::GlobalLog,
+    );
 
     /// Control is part of the binding, so ctrl-l is not plain `l`.
     #[test]
@@ -909,17 +971,31 @@ mod reference_tests {
         let plain = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
         let control = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
 
-        assert!(GLOBAL_LAUNCHER.matches(plain));
-        assert!(!GLOBAL_LAUNCHER.matches(control));
-        assert!(GLOBAL_LOG.matches(control));
-        assert!(!GLOBAL_LOG.matches(plain));
+        assert!(PLAIN.matches(plain));
+        assert!(!PLAIN.matches(control));
+        assert!(CONTROL.matches(control));
+        assert!(!CONTROL.matches(plain));
     }
 
     /// Shift is not: a capital already arrives as its own character, and
     /// terminals disagree about reporting the modifier for punctuation.
     #[test]
     fn shift_is_ignored_so_capitals_and_punctuation_still_match() {
-        assert!(GLOBAL_NEXT_WORKING.matches(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT)));
-        assert!(GLOBAL_DIRECTORY.matches(KeyEvent::new(KeyCode::Char('~'), KeyModifiers::SHIFT)));
+        const CAPITAL: Binding = Binding::new(
+            &[Key::ch('N')],
+            None,
+            None,
+            Windows::All,
+            Action::GlobalNextWorking,
+        );
+        const PUNCTUATION: Binding = Binding::new(
+            &[Key::ch('~')],
+            None,
+            None,
+            Windows::All,
+            Action::GlobalDirectory,
+        );
+        assert!(CAPITAL.matches(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT)));
+        assert!(PUNCTUATION.matches(KeyEvent::new(KeyCode::Char('~'), KeyModifiers::SHIFT)));
     }
 }

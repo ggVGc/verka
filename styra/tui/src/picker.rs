@@ -1137,6 +1137,7 @@ fn session_has_live_interaction(id: &str, interactions: &[InteractionSummary]) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keybindings::press;
     use std::path::PathBuf;
     use styra_protocol::{agent::Selection, InteractionActivity, SessionSummary};
 
@@ -1233,20 +1234,20 @@ mod tests {
             vec!["rust".into(), "removed".into()],
         );
         assert_eq!(
-            picker.handle_key(KeyCode::Enter.into()),
+            picker.handle_key(press(&keys::TEMPLATES_APPLY)),
             TemplatePickerAction::None
         );
 
         picker.loaded(vec![template("rust"), template("browser")]);
         assert_eq!(picker.chosen, vec!["rust"]);
         assert_eq!(
-            picker.handle_key(KeyCode::Enter.into()),
+            picker.handle_key(press(&keys::TEMPLATES_APPLY)),
             TemplatePickerAction::Unchanged
         );
-        picker.handle_key(KeyCode::Down.into());
-        picker.handle_key(KeyCode::Char(' ').into());
+        picker.handle_key(press(&keys::TEMPLATES_NEXT));
+        picker.handle_key(press(&keys::TEMPLATES_TOGGLE));
         assert_eq!(
-            picker.handle_key(KeyCode::Enter.into()),
+            picker.handle_key(press(&keys::TEMPLATES_APPLY)),
             TemplatePickerAction::Apply {
                 scope: LaunchScope::Workspace,
                 chosen: vec!["rust".into(), "browser".into()],

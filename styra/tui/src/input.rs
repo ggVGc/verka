@@ -1389,6 +1389,7 @@ fn handle_editor_controls(app: &mut App, key: KeyEvent) {
 mod tests {
     use super::*;
     use crate::activity::Status;
+    use crate::keyboard::Binding;
     use std::path::PathBuf;
     use styra_diff::DiffTarget;
     use styra_protocol::{
@@ -1405,7 +1406,7 @@ mod tests {
         app.branch_prompt = Some(crate::branch::BranchPrompt::new(42, selection.clone()));
         let client = Client::new(PathBuf::from("/missing.sock"));
         // Empty sends do not create or dismiss the branch.
-        handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
+        handle_branch_prompt_key(&mut app, &client, press(&EDITOR_SEND));
         assert!(app.branch_prompt.is_some());
         for ch in "q j k h l ?".chars() {
             handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Char(ch)));
@@ -1414,28 +1415,21 @@ mod tests {
             app.branch_prompt.as_ref().unwrap().composer.message(),
             "q j k h l ?"
         );
-        handle_branch_prompt_key(
-            &mut app,
-            &client,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT),
-        );
+        handle_branch_prompt_key(&mut app, &client, press(&EDITOR_NEWLINE));
         handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Char('x')));
-        handle_branch_prompt_key(
-            &mut app,
-            &client,
-            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
-        );
+        handle_branch_prompt_key(&mut app, &client, press(&EDITOR_ADD_BOX));
         app.editor_composer_mut().paste("second box");
         assert_eq!(
             app.branch_prompt.as_ref().unwrap().composer.parts(),
             ["q j k h l ?\nx", "", "second box", ""]
         );
-        for shortcut in ['l', 'p', 'o', 'e'] {
-            handle_branch_prompt_key(
-                &mut app,
-                &client,
-                KeyEvent::new(KeyCode::Char(shortcut), KeyModifiers::CONTROL),
-            );
+        for picker in [
+            EDITOR_LAUNCHER,
+            EDITOR_CYCLE_PROVIDER,
+            EDITOR_CYCLE_MODEL,
+            EDITOR_CYCLE_EFFORT,
+        ] {
+            handle_branch_prompt_key(&mut app, &client, press(&picker));
             assert!(app.launcher.is_some());
             app.cancel_launcher();
         }
@@ -1451,9 +1445,9 @@ mod tests {
         );
         assert_eq!(app.selection, selection);
         assert!(app.take_request().is_none());
-        handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
+        handle_branch_prompt_key(&mut app, &client, press(&EDITOR_CHOOSE_BOX));
         assert!(app.branch_prompt.as_ref().unwrap().composer.choosing());
-        handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
+        handle_branch_prompt_key(&mut app, &client, press(&EDITOR_BOX_LEAVE));
         assert!(app.branch_prompt.is_none());
         assert_eq!(app.composer.message(), "source draft");
     }
@@ -1513,7 +1507,7 @@ mod tests {
         prompt.composer.set("keep this instruction".into());
         app.branch_prompt = Some(prompt);
         let client = Client::new(PathBuf::from("/missing.sock"));
-        handle_branch_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
+        handle_branch_prompt_key(&mut app, &client, press(&EDITOR_SEND));
         assert_eq!(
             app.branch_prompt.as_ref().unwrap().composer.message(),
             "keep this instruction"
@@ -1530,15 +1524,7 @@ mod tests {
         app.interactions
             .note_name("session-1", Some("Original".into()));
         let client = Client::new(PathBuf::from("/missing.sock"));
-        let mut live = Attachment::Detached;
-        handle_list_key(
-            &mut app,
-            &client,
-            &mut live,
-            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT),
-            &mut false,
-            Path::new("/missing-preferences"),
-        );
+        run_list_action(&mut app, Path::new("/missing"), &EVENTS_RENAME);
         assert_eq!(app.rename_prompt.as_deref(), Some("Original"));
         handle_rename_prompt_key(
             &mut app,
@@ -1782,8 +1768,11 @@ mod tests {
         handle_insert_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     }
 
+    /// Each picker command opens its picker without changing the selection;
+    /// running it again, typing and moving only preview a choice, and only
+    /// selecting one applies it.
     #[test]
-    fn selection_shortcuts_open_fuzzy_pickers_and_apply_only_on_enter() {
+    fn selection_commands_open_fuzzy_pickers_and_apply_only_on_select() {
         use crate::launcher::{self, Choice};
         use styra_protocol::agent::{Provider, Selection};
 
@@ -1798,10 +1787,10 @@ mod tests {
                 (picker.list.clone(), picker.labels())
             }
         };
-        for (shortcut, choice) in [
-            ('p', Choice::Provider),
-            ('o', Choice::ModelEffort),
-            ('e', Choice::ModelEffort),
+        for (command, choice) in [
+            (EDITOR_CYCLE_PROVIDER, Choice::Provider),
+            (EDITOR_CYCLE_MODEL, Choice::ModelEffort),
+            (EDITOR_CYCLE_EFFORT, Choice::ModelEffort),
         ] {
             let provider = Provider::Codex;
             let model = &provider.models()[0];
@@ -1813,13 +1802,14 @@ mod tests {
             let mut app = App::pending(original.clone());
             app.enter_input();
             app.composer.insert("draft message");
-            let key = KeyEvent::new(KeyCode::Char(shortcut), KeyModifiers::CONTROL);
+            let key = press(&command);
             handle_input_key(&mut app, &client, "workspace", &mut live, key);
             assert_eq!(app.launcher.as_ref().unwrap().choice, choice);
             assert_eq!(app.selection, original);
             assert!(app.take_request().is_none());
 
-            // The same chord advances, including ctrl-p which normally moves up.
+            // The same command advances, even where its key is also one the
+            // picker otherwise moves up with.
             launcher::handle_key(&mut app, key, &preferences);
             let picker = app.launcher.as_ref().unwrap();
             let chosen = picker.selection();
@@ -1842,7 +1832,7 @@ mod tests {
                 launcher::handle_key(&mut app, KeyCode::Char(ch).into(), &preferences);
             }
             let filtered = app.launcher.as_ref().unwrap().selection();
-            if shortcut == 'o' {
+            if command == EDITOR_CYCLE_MODEL {
                 assert_eq!(filtered.model, chosen.model);
             } else {
                 assert_eq!(filtered, chosen);
@@ -1859,7 +1849,7 @@ mod tests {
             assert_eq!(list.query, query);
             let chosen = picker.selection();
             assert_eq!(app.selection, original);
-            launcher::handle_key(&mut app, KeyCode::Enter.into(), &preferences);
+            launcher::handle_key(&mut app, press(&LAUNCHER_SELECT), &preferences);
             assert_eq!(app.selection, chosen);
             assert_eq!(app.composer.message(), "draft message");
             assert_eq!(app.focus, crate::app::Focus::Input);
@@ -1869,7 +1859,7 @@ mod tests {
     }
 
     #[test]
-    fn escape_cancels_filtered_selection_pickers_and_empty_results_do_not_apply() {
+    fn cancelling_closes_filtered_selection_pickers_and_empty_results_do_not_apply() {
         use crate::launcher;
         use styra_protocol::agent::{Provider, Selection};
 
@@ -1877,30 +1867,26 @@ mod tests {
         let preferences = root.path().join("defaults.json");
         let client = Client::new(PathBuf::from("/missing.sock"));
         let mut live = Attachment::Detached;
-        for shortcut in ['p', 'o', 'e'] {
+        for command in [EDITOR_CYCLE_PROVIDER, EDITOR_CYCLE_MODEL, EDITOR_CYCLE_EFFORT] {
             let original = Selection::new(Provider::Codex);
             let mut app = App::pending(original.clone());
             app.enter_input();
-            handle_input_key(
-                &mut app,
-                &client,
-                "workspace",
-                &mut live,
-                KeyEvent::new(KeyCode::Char(shortcut), KeyModifiers::CONTROL),
-            );
+            handle_input_key(&mut app, &client, "workspace", &mut live, press(&command));
             for ch in "no-such-choice".chars() {
                 launcher::handle_key(&mut app, KeyCode::Char(ch).into(), &preferences);
             }
-            launcher::handle_key(&mut app, KeyCode::Enter.into(), &preferences);
+            launcher::handle_key(&mut app, press(&LAUNCHER_SELECT), &preferences);
             assert!(app.launcher.is_some(), "empty results cannot be selected");
-            launcher::handle_key(
-                &mut app,
-                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
-                &preferences,
+            launcher::handle_key(&mut app, press(&LAUNCHER_DEFAULT), &preferences);
+            assert!(
+                app.launcher.is_some(),
+                "only selecting chooses here; a default is the launch picker's"
             );
-            assert!(app.launcher.is_some(), "only Enter selects a choice");
-            launcher::handle_key(&mut app, KeyCode::Esc.into(), &preferences);
-            assert!(app.launcher.is_none(), "one Esc cancels a filtered picker");
+            launcher::handle_key(&mut app, press(&LAUNCHER_CANCEL), &preferences);
+            assert!(
+                app.launcher.is_none(),
+                "one cancel closes a filtered picker"
+            );
             assert_eq!(app.selection, original);
             assert!(app.take_request().is_none());
             assert!(app.recent_models.is_empty());
@@ -1908,55 +1894,47 @@ mod tests {
         }
     }
 
-    /// Ctrl-N opens another box; with two, Esc chooses between them rather
-    /// than leaving, and only a second Esc leaves — with both boxes kept.
+    /// Adding a box opens another; with two, choosing between them comes
+    /// before leaving, and only leaving from there leaves — with both boxes
+    /// kept.
     #[test]
-    fn escape_chooses_between_boxes_before_leaving() {
+    fn leaving_chooses_between_boxes_first() {
         let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
         app.enter_input();
         let client = Client::new(PathBuf::from("/missing.sock"));
         let mut live = Attachment::Detached;
-        let mut press = |app: &mut App, code: KeyCode, modifiers: KeyModifiers| {
-            handle_input_key(
-                app,
-                &client,
-                "workspace",
-                &mut live,
-                KeyEvent::new(code, modifiers),
-            )
+        let mut send = |app: &mut App, key: KeyEvent| {
+            handle_input_key(app, &client, "workspace", &mut live, key)
         };
-        press(&mut app, KeyCode::Char('a'), KeyModifiers::NONE);
-        press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
-        press(&mut app, KeyCode::Char('b'), KeyModifiers::NONE);
+        send(&mut app, KeyEvent::from(KeyCode::Char('a')));
+        send(&mut app, press(&EDITOR_ADD_BOX));
+        send(&mut app, KeyEvent::from(KeyCode::Char('b')));
         assert_eq!(app.composer.parts(), ["a", "b"]);
 
-        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        send(&mut app, press(&EDITOR_CHOOSE_BOX));
         assert_eq!(app.focus, crate::app::Focus::Input);
         assert!(app.composer.choosing());
-        // While choosing, letters move between boxes instead of typing.
-        press(&mut app, KeyCode::Char('k'), KeyModifiers::NONE);
+        // While choosing, the box commands move between boxes instead of
+        // typing.
+        send(&mut app, press(&EDITOR_BOX_PREV));
         assert_eq!(app.composer.focused(), 0);
         assert_eq!(app.composer.parts(), ["a", "b"]);
 
-        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        send(&mut app, press(&EDITOR_BOX_LEAVE));
         assert_eq!(app.focus, crate::app::Focus::List);
         assert!(!app.composer.choosing());
         assert_eq!(app.composer.parts(), ["a", "b"]);
     }
 
     #[test]
-    fn uppercase_g_in_details_opens_the_git_checkout_prompt_prefilled() {
+    fn the_git_checkout_command_in_details_opens_its_prompt_prefilled() {
         let (_root_directory, root) = tree("git-checkout-prompt");
         let mut app = app(&root);
         app.enter_list();
         app.workspace.git_repository = Some(root.join("repository"));
         app.toggle_view(View::Driva);
 
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
-        );
+        run_list_action(&mut app, &root, &DRIVA_GIT_CHECKOUT);
 
         assert_eq!(
             app.git_repository_prompt.as_deref(),
@@ -1964,9 +1942,11 @@ mod tests {
         );
     }
 
-    /// A view's own key wins over the global command on the same key, as the
-    /// reference and the action menu say: `I` in details is the inherit
-    /// toggle, not integration.
+    /// A view's own command wins over the global command on the same key, as
+    /// the reference and the action menu say: where details claims
+    /// integration's key for one of its own commands, integrating does not
+    /// happen from there, and where it does not, integrating works as
+    /// anywhere else.
     #[test]
     fn a_views_own_key_wins_over_the_global_one() {
         let (_root_directory, root) = tree("own-key-wins");
@@ -1974,18 +1954,20 @@ mod tests {
         app.enter_list();
         app.session_id = "session-1".into();
         app.toggle_view(View::Driva);
+        let claimed =
+            crate::presentation::view_window(View::Driva).claims(press(&GLOBAL_INTEGRATE));
 
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT),
+        run_list_action(&mut app, &root, &GLOBAL_INTEGRATE);
+
+        assert_eq!(
+            app.integration_prompt.is_some(),
+            !claimed,
+            "details claims integration's key: {claimed}"
         );
-
-        assert!(app.integration_prompt.is_none());
     }
 
-    /// `T` is global, so it edits the interaction's tags from the reading
-    /// views too, not only from the event list.
+    /// Editing tags is global, so it works on the interaction's tags from the
+    /// reading views too, not only from the event list.
     #[test]
     fn tags_are_edited_from_a_reading_view() {
         let (_root_directory, root) = tree("tags-from-raw");
@@ -1994,11 +1976,7 @@ mod tests {
         app.session_id = "session-1".into();
         app.toggle_view(View::Raw);
 
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT),
-        );
+        run_list_action(&mut app, &root, &GLOBAL_TAGS);
 
         // With no server to answer, reaching the tag editor shows as its
         // failure to list the interactions.
@@ -2119,63 +2097,49 @@ mod tests {
         assert_eq!(sources(&app), [root.join("alpha"), root.join("reports")]);
     }
 
-    /// Ctrl-N starts a new session, while `N` moves among actively working
-    /// interactions and plain `n` follows newly idle work first.
+    /// Starting a new session, moving among actively working interactions
+    /// and following newly idle work first are distinct commands, as are the
+    /// other ways of moving between interactions and their checkouts.
     #[test]
-    fn interaction_shortcuts_distinguish_new_live_and_working() {
+    fn interaction_commands_distinguish_new_live_and_working() {
         let (_root_directory, root) = tree("live-step");
         let mut app = app(&root);
         app.enter_list();
         app.session_id = "session-1".into();
-        let press = |app: &mut App, code, modifiers| {
-            press_list_key(app, &root, KeyEvent::new(code, modifiers));
-        };
 
-        press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
-        assert_eq!(app.take_request(), Some(Request::NewSession));
-
-        press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
-        assert_eq!(app.take_request(), Some(Request::NextLiveInteraction));
-
-        press(&mut app, KeyCode::Char('N'), KeyModifiers::SHIFT);
-        assert_eq!(app.take_request(), Some(Request::NextWorkingInteraction));
-
-        press(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
-        assert_eq!(app.take_request(), Some(Request::JumpBack));
-
-        press(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
-        assert_eq!(app.take_request(), Some(Request::JumpForward));
-
-        press(&mut app, KeyCode::Char('o'), KeyModifiers::ALT);
-        assert_eq!(app.take_request(), Some(Request::InteractionHistory));
-
-        press(&mut app, KeyCode::Char('w'), KeyModifiers::CONTROL);
-        assert_eq!(
-            app.take_request(),
-            Some(Request::CreateWorktree { message: None })
-        );
-        press(&mut app, KeyCode::Char('~'), KeyModifiers::SHIFT);
-        assert_eq!(app.take_request(), Some(Request::OpenDirectory));
+        for (command, request) in [
+            (GLOBAL_NEW_SESSION, Request::NewSession),
+            (GLOBAL_NEXT_LIVE, Request::NextLiveInteraction),
+            (GLOBAL_NEXT_WORKING, Request::NextWorkingInteraction),
+            (GLOBAL_JUMP_BACK, Request::JumpBack),
+            (GLOBAL_JUMP_FORWARD, Request::JumpForward),
+            (GLOBAL_INTERACTION_HISTORY, Request::InteractionHistory),
+            (
+                GLOBAL_SESSION_WORKTREE,
+                Request::CreateWorktree { message: None },
+            ),
+            (GLOBAL_DIRECTORY, Request::OpenDirectory),
+        ] {
+            run_list_action(&mut app, &root, &command);
+            assert_eq!(app.take_request(), Some(request), "{:?}", command.action());
+        }
     }
 
     #[test]
-    fn plain_l_opens_the_launcher_from_the_main_view() {
+    fn the_launcher_opens_from_the_main_view() {
         let (_root_directory, root) = tree("launcher-shortcut");
         let mut app = app(&root);
         app.enter_list();
 
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
-        );
+        run_list_action(&mut app, &root, &GLOBAL_LAUNCHER);
 
         assert!(app.launcher.is_some());
     }
 
-    /// The grid takes `l` from the launcher to move right, Tab and Shift-Tab
-    /// cycle the tiles, `Enter` asks for the tile's interaction, `i` for its
-    /// message box, and `o` toggles the overview from both sides.
+    /// Moving right stays in the grid, whatever else shares its key; the next
+    /// and previous tile commands cycle the tiles, opening asks for the
+    /// tile's interaction, messaging for its message box, and the overview
+    /// toggles from both sides.
     #[test]
     fn the_overview_walks_its_grid_and_opens_the_chosen_tile() {
         use styra_protocol::InteractionActivity;
@@ -2186,56 +2150,54 @@ mod tests {
             crate::interactions::tests::interaction("2-left", InteractionActivity::Running),
             crate::interactions::tests::interaction("1-right", InteractionActivity::Pending),
         ]);
-        let press = |app: &mut App, code| {
-            press_list_key(app, &root, KeyEvent::new(code, KeyModifiers::NONE));
-        };
+        let run = |app: &mut App, command: &Binding| run_list_action(app, &root, command);
 
-        press(&mut app, KeyCode::Char('o'));
+        run(&mut app, &GLOBAL_OVERVIEW);
         assert_eq!(app.take_request(), Some(Request::Overview));
 
         app.view = View::Overview;
-        press(&mut app, KeyCode::Char('n'));
+        run(&mut app, &GLOBAL_NEXT_LIVE);
         assert_eq!(app.take_request(), Some(Request::NextLiveInteraction));
         assert_eq!(app.view, View::Overview);
-        press(&mut app, KeyCode::Char('l'));
-        assert!(app.launcher.is_none(), "`l` moves in the grid");
-        press(&mut app, KeyCode::Enter);
+        run(&mut app, &OVERVIEW_RIGHT);
+        assert!(app.launcher.is_none(), "moving right stays in the grid");
+        run(&mut app, &OVERVIEW_OPEN);
         assert_eq!(
             app.take_request(),
             Some(Request::ShowInteraction("1-right".into()))
         );
 
-        press(&mut app, KeyCode::BackTab);
-        press(&mut app, KeyCode::BackTab);
-        press(&mut app, KeyCode::Char('i'));
+        run(&mut app, &OVERVIEW_PREV);
+        run(&mut app, &OVERVIEW_PREV);
+        run(&mut app, &OVERVIEW_MESSAGE);
         assert_eq!(
             app.take_request(),
             Some(Request::MessageInteraction("1-right".into())),
-            "Shift-Tab wraps back to the last tile, and `i` messages it"
+            "the previous tile wraps back to the last, and messaging messages it"
         );
-        press(&mut app, KeyCode::Tab);
-        press(&mut app, KeyCode::Char('i'));
+        run(&mut app, &OVERVIEW_NEXT);
+        run(&mut app, &OVERVIEW_MESSAGE);
         assert_eq!(
             app.take_request(),
             Some(Request::MessageInteraction("2-left".into())),
-            "Tab wraps on to the first"
+            "the next tile wraps on to the first"
         );
 
-        press(&mut app, KeyCode::Char('r'));
+        run(&mut app, &OVERVIEW_RUNNING_ONLY);
         assert!(app.overview.running_only);
-        press(&mut app, KeyCode::Tab);
-        press(&mut app, KeyCode::Enter);
+        run(&mut app, &OVERVIEW_NEXT);
+        run(&mut app, &OVERVIEW_OPEN);
         assert_eq!(
             app.take_request(),
             Some(Request::ShowInteraction("2-left".into()))
         );
-        press(&mut app, KeyCode::Char('r'));
+        run(&mut app, &OVERVIEW_RUNNING_ONLY);
         assert!(!app.overview.running_only);
 
-        // `/` opens the search over the grid; the event loop then hands the
-        // typed keys to the prompt. Esc clears a standing term before a
-        // second one leaves the grid.
-        press(&mut app, KeyCode::Char('/'));
+        // Searching opens the prompt over the grid; the event loop then hands
+        // the typed keys to it. Esc clears a standing term before closing the
+        // overview leaves the grid.
+        run(&mut app, &OVERVIEW_SEARCH);
         assert!(app.search.typing());
         for character in "retry backoff".chars() {
             handle_search_key(&mut app, KeyEvent::from(KeyCode::Char(character)));
@@ -2249,11 +2211,11 @@ mod tests {
         handle_search_key(&mut app, KeyEvent::from(KeyCode::Backspace));
         handle_search_key(&mut app, KeyEvent::from(KeyCode::Enter));
         assert_eq!(app.search.query(), Some("retry"));
-        press(&mut app, KeyCode::Esc);
+        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Esc));
         assert_eq!(app.search.query(), None);
         assert_eq!(app.view, View::Overview);
 
-        press(&mut app, KeyCode::Char('o'));
+        run(&mut app, &OVERVIEW_CLOSE);
         assert_eq!(app.view, View::Events);
     }
 
@@ -2272,21 +2234,23 @@ mod tests {
         );
         app.view = View::Overview;
         app.overview.note_rows(&[2, 2]);
+        // Picking a tile by number takes the number from the digit pressed.
+        let nth = |digit| KeyEvent::from(KeyCode::Char(digit));
         for (key, target) in [
-            (KeyCode::Right, Some("two")),
-            (KeyCode::Down, Some("four")),
-            (KeyCode::Left, Some("three")),
-            (KeyCode::Up, None),
-            (KeyCode::Char('G'), Some("four")),
-            (KeyCode::Tab, None),
-            (KeyCode::BackTab, Some("four")),
-            (KeyCode::Char('g'), None),
-            (KeyCode::Char('3'), Some("three")),
-            (KeyCode::Char('9'), Some("three")),
-            (KeyCode::Char('2'), Some("two")),
-            (KeyCode::Char('1'), None),
+            (press(&OVERVIEW_RIGHT), Some("two")),
+            (press(&OVERVIEW_DOWN), Some("four")),
+            (press(&OVERVIEW_LEFT), Some("three")),
+            (press(&OVERVIEW_UP), None),
+            (press(&OVERVIEW_LAST), Some("four")),
+            (press(&OVERVIEW_NEXT), None),
+            (press(&OVERVIEW_PREV), Some("four")),
+            (press(&OVERVIEW_FIRST), None),
+            (nth('3'), Some("three")),
+            (nth('9'), Some("three")),
+            (nth('2'), Some("two")),
+            (nth('1'), None),
         ] {
-            assert!(handle_overview_key(&mut app, KeyEvent::from(key)));
+            assert!(handle_overview_key(&mut app, key));
             assert_eq!(
                 app.interactions.pending("one").map(|item| item.id.as_str()),
                 target,
@@ -2302,7 +2266,7 @@ mod tests {
     }
 
     #[test]
-    fn overview_scope_key_toggles_the_shared_interaction_scope() {
+    fn overview_scope_toggles_the_shared_interaction_scope() {
         let mut app = crate::app::App::new(
             styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
             "current",
@@ -2318,7 +2282,7 @@ mod tests {
         app.interactions.open(vec![current, other], vec![]);
         app.workspace.id = Some("here".into());
         app.view = View::Overview;
-        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
+        let key = press(&OVERVIEW_SCOPE);
         assert!(handle_overview_key(&mut app, key));
         assert!(app.interactions.only_current_workspace);
         assert_eq!(app.interactions.visible_indices("", Some("here")).len(), 1);
@@ -2342,35 +2306,22 @@ mod tests {
     }
 
     #[test]
-    fn global_view_shortcuts_open_and_close_their_views() {
-        for (name, code, modifiers, view, request) in [
-            (
-                "messages",
-                KeyCode::Char('M'),
-                KeyModifiers::SHIFT,
-                View::Messages,
-                None,
-            ),
+    fn global_view_commands_open_and_close_their_views() {
+        for (name, command, view, request) in [
+            ("messages", GLOBAL_MESSAGES, View::Messages, None),
             (
                 "processes",
-                KeyCode::Char('H'),
-                KeyModifiers::SHIFT,
+                GLOBAL_PROCESSES,
                 View::Processes,
                 Some(Request::Processes),
             ),
-            (
-                "log",
-                KeyCode::Char('l'),
-                KeyModifiers::CONTROL,
-                View::Log,
-                None,
-            ),
+            ("log", GLOBAL_LOG, View::Log, None),
         ] {
             let (_root_directory, root) = tree(name);
             let mut app = app(&root);
             app.enter_list();
             for expected in [view, View::Events] {
-                press_list_key(&mut app, &root, KeyEvent::new(code, modifiers));
+                run_list_action(&mut app, &root, &command);
                 assert_eq!(app.view, expected, "{name}");
                 assert_eq!(app.take_request(), request, "{name}: {expected:?}");
             }
@@ -2378,37 +2329,31 @@ mod tests {
     }
 
     #[test]
-    fn lowercase_h_opens_the_processes_pane_in_the_entry_logs_place() {
+    fn the_processes_pane_opens_in_the_entry_logs_place() {
         let (_root_directory, root) = tree("processes-pane-shortcut");
         let mut app = app(&root);
         app.enter_list();
         app.view = View::Quota;
         app.toggle_entry_log();
         assert!(app.entry_log.open);
-        let press = |app: &mut App| {
-            press_list_key(
-                app,
-                &root,
-                KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
-            )
-        };
+        let toggle = |app: &mut App| run_list_action(app, &root, &GLOBAL_PROCESSES_PANE);
         app.view = View::Quota;
-        press(&mut app);
+        toggle(&mut app);
         assert_eq!(app.view, View::Events);
         assert!(app.processes_pane && app.processes_visible());
         assert!(!app.entry_log.open);
         assert!(matches!(app.take_request(), Some(Request::Processes)));
 
-        press(&mut app);
+        toggle(&mut app);
         assert!(!app.processes_pane && !app.processes_visible());
 
-        press(&mut app);
+        toggle(&mut app);
         app.toggle_entry_log();
         assert!(app.entry_log.open && !app.processes_pane);
     }
 
     #[test]
-    fn esc_returns_to_the_event_list_from_every_other_view() {
+    fn going_back_returns_to_the_event_list_from_every_other_view() {
         let (_root_directory, root) = tree("esc-back");
         let mut app = app(&root);
         app.enter_list();
@@ -2427,20 +2372,19 @@ mod tests {
             View::Overview,
         ] {
             app.view = view;
-            press_list_key(
-                &mut app,
-                &root,
-                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-            );
-            assert_eq!(app.view, View::Events, "Esc from {view:?}");
+            run_list_action(&mut app, &root, &GLOBAL_BACK);
+            assert_eq!(app.view, View::Events, "back from {view:?}");
         }
     }
 
     #[test]
     fn link_highlight_temporarily_opens_the_file_preview() {
         let (_root_directory, root) = tree("links-preview-restore");
+        // Esc and Enter end the highlight on the event list itself; opening
+        // another view ends it too.
+        let enter = KeyEvent::from(KeyCode::Enter);
         for open in [false, true] {
-            for exit in [KeyCode::Esc, KeyCode::Enter, KeyCode::Char('M')] {
+            for exit in [KeyEvent::from(KeyCode::Esc), enter, press(&GLOBAL_MESSAGES)] {
                 let mut app = app(&root);
                 app.preview.open = open;
                 app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
@@ -2448,7 +2392,7 @@ mod tests {
                 });
                 // Re-entering link navigation must preserve the original choice.
                 for _ in 0..2 {
-                    press_list_key(&mut app, &root, KeyCode::Char('f').into());
+                    run_list_action(&mut app, &root, &EVENTS_LINKS);
                     assert!(app.link_highlight.is_some());
                     assert!(app.preview.open);
                 }
@@ -2456,23 +2400,23 @@ mod tests {
                     app.highlighted_link_target().unwrap().1,
                     Ok(root.join("notes.txt"))
                 );
-                press_list_key(&mut app, &root, KeyCode::Char('j').into());
+                run_list_action(&mut app, &root, &EVENTS_NEXT_LINE);
                 assert_eq!(
                     app.highlighted_link_target().unwrap().1,
                     Ok(root.join("reports/summary.md"))
                 );
                 assert!(app.preview.open);
-                press_list_key(&mut app, &root, KeyCode::Char('k').into());
+                run_list_action(&mut app, &root, &EVENTS_PREV_LINE);
                 // An initially open preview is restored even if hidden here;
                 // an initially closed one closes on exit without a manual toggle.
                 if open {
-                    press_list_key(&mut app, &root, KeyCode::Char('p').into());
+                    run_list_action(&mut app, &root, &EVENTS_PREVIEW_PANEL);
                 }
                 assert_eq!(app.preview.open, !open);
-                press_list_key(&mut app, &root, exit.into());
+                press_list_key(&mut app, &root, exit);
                 assert!(app.link_highlight.is_none());
                 assert_eq!(app.preview.open, open);
-                if exit == KeyCode::Enter {
+                if exit == enter {
                     assert_eq!(
                         app.take_request(),
                         Some(Request::OpenPath(root.join("notes.txt")))
@@ -2482,12 +2426,12 @@ mod tests {
         }
     }
 
-    /// With a preview open the arrows scroll it ten lines, as `j`/`k` do the
-    /// full-screen one, and `PgUp`/`PgDn` scroll it by half of what it shows.
-    /// Full-screen `J`/`K` still move between previews; in the event list they
-    /// scroll the interaction independently instead (covered below).
+    /// With a preview open, scrolling it moves ten lines, in the event list's
+    /// pane as in the full-screen preview, and paging moves it by half of what
+    /// it shows. The full-screen preview still steps between entries; the
+    /// event list scrolls the interaction independently instead.
     #[test]
-    fn arrows_scroll_an_open_preview_and_page_keys_move_half_of_it() {
+    fn an_open_preview_scrolls_by_lines_and_pages_by_half_of_it() {
         let (_root_directory, root) = tree("preview-arrows");
         let mut app = app(&root);
         app.enter_list();
@@ -2497,11 +2441,24 @@ mod tests {
             });
         }
         app.select_first();
-        let press = |app: &mut App, code: KeyCode| {
-            press_list_key(app, &root, KeyEvent::new(code, KeyModifiers::NONE))
-        };
+        let run = |app: &mut App, command: &Binding| run_list_action(app, &root, command);
 
         for view in [View::Events, View::Preview] {
+            let (down, up, page_down, page_up) = if view == View::Events {
+                (
+                    EVENTS_PREVIEW_SCROLL_DOWN,
+                    EVENTS_PREVIEW_SCROLL_UP,
+                    EVENTS_PAGE_DOWN,
+                    EVENTS_PAGE_UP,
+                )
+            } else {
+                (
+                    PREVIEW_SCROLL_DOWN,
+                    PREVIEW_SCROLL_UP,
+                    PREVIEW_PAGE_DOWN,
+                    PREVIEW_PAGE_UP,
+                )
+            };
             app.view = view;
             app.preview.show();
             app.preview.scroll.reset();
@@ -2509,62 +2466,66 @@ mod tests {
             app.preview.scroll.note_viewport(30);
             let selected = app.timeline.selected;
 
-            press(&mut app, KeyCode::Down);
-            assert_eq!(app.preview.scroll.offset, 10, "{view:?}: ↓ scrolls");
+            run(&mut app, &down);
+            assert_eq!(app.preview.scroll.offset, 10, "{view:?}: scrolls");
             assert_eq!(app.timeline.selected, selected, "{view:?}: and stays put");
-            press(&mut app, KeyCode::PageDown);
+            run(&mut app, &page_down);
             assert_eq!(app.preview.scroll.offset, 25, "{view:?}: half of 30");
-            press(&mut app, KeyCode::PageUp);
-            press(&mut app, KeyCode::Up);
+            run(&mut app, &page_up);
+            run(&mut app, &up);
             assert_eq!(app.preview.scroll.offset, 0, "{view:?}: back to the top");
 
-            press(&mut app, KeyCode::Char('J'));
             if view == View::Preview {
-                assert_ne!(app.timeline.selected, selected, "{view:?}: J moves");
+                run(&mut app, &PREVIEW_NEXT_ENTRY);
+                assert_ne!(app.timeline.selected, selected, "{view:?}: moves entry");
             } else {
-                assert_eq!(app.timeline.selected, selected, "{view:?}: J does not move");
-                assert_eq!(app.timeline.list_scroll_delta, 10, "{view:?}: J scrolls");
-                press(&mut app, KeyCode::Char('K'));
+                run(&mut app, &EVENTS_SCROLL_DOWN);
+                assert_eq!(app.timeline.selected, selected, "{view:?}: does not move");
+                assert_eq!(
+                    app.timeline.list_scroll_delta, 10,
+                    "{view:?}: scrolls the interaction"
+                );
+                run(&mut app, &EVENTS_SCROLL_UP);
                 assert_eq!(
                     app.timeline.list_scroll_delta, 0,
-                    "{view:?}: K scrolls back"
+                    "{view:?}: scrolls back"
                 );
             }
             app.select_first();
         }
     }
 
-    /// Only these presses are handed to the event loop to branch; every other
+    /// Only these sends are handed to the event loop to branch; every other
     /// send goes out from the message box as it is.
     #[test]
-    fn only_a_typed_message_sent_with_control_enter_branches() {
+    fn only_a_typed_message_sent_in_a_branch_branches() {
         let (_root_directory, root) = tree("creates-worktree");
         let mut app = app(&root);
-        let press = |modifiers| KeyEvent::new(KeyCode::Enter, modifiers);
+        let in_branch = press(&EDITOR_SEND_IN_BRANCH);
 
         app.composer.set("start here".into());
-        assert!(creates_worktree(&app, press(KeyModifiers::CONTROL)));
+        assert!(creates_worktree(&app, in_branch));
         assert!(
-            !creates_worktree(&app, press(KeyModifiers::NONE)),
-            "a plain Enter sends into the current workspace"
+            !creates_worktree(&app, press(&EDITOR_SEND)),
+            "a plain send goes into the current workspace"
         );
 
         app.composer.set("   ".into());
         assert!(
-            !creates_worktree(&app, press(KeyModifiers::CONTROL)),
+            !creates_worktree(&app, in_branch),
             "a blank box sends nothing, so it branches nothing"
         );
 
         app.composer.set("continue".into());
         app.session_id = "session-1".into();
         assert!(
-            creates_worktree(&app, press(KeyModifiers::CONTROL)),
+            creates_worktree(&app, in_branch),
             "a Session already under way can still be branched"
         );
     }
 
     #[test]
-    fn control_enter_carries_the_prompt_into_the_worktree() {
+    fn sending_in_a_branch_carries_the_prompt_into_the_worktree() {
         // Mid-turn included: whether the interaction can move is the
         // server's to say, and its refusal puts the message back.
         for (name, session_id, status, attachment, message) in [
@@ -2606,7 +2567,7 @@ mod tests {
                 &client,
                 "workspace-1",
                 &mut live,
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+                press(&EDITOR_SEND_IN_BRANCH),
             );
             assert_eq!(
                 app.take_request(),
@@ -2651,10 +2612,10 @@ mod tests {
         }
     }
 
-    /// `j` and `k` walk the branches drawn beneath a `branched to` marker as
-    /// rows of their own, and Enter opens the one the cursor is on.
+    /// Moving by line walks the branches drawn beneath a `branched to` marker
+    /// as rows of their own, and Enter opens the one the cursor is on.
     #[test]
-    fn j_and_k_select_a_markers_child_branches_and_enter_opens_one() {
+    fn moving_by_line_selects_a_markers_child_branches_and_enter_opens_one() {
         use styra_protocol::event::{AgentEvent, BranchDirection};
         use styra_protocol::{InteractionActivity, InteractionSummary};
 
@@ -2690,19 +2651,19 @@ mod tests {
         let marker = app.timeline.selected - 1;
 
         // Up onto the marker lands on its deepest branch, then on up.
-        press_list_key(&mut app, &root, KeyCode::Char('k').into());
+        run_list_action(&mut app, &root, &EVENTS_PREV_LINE);
         assert_eq!(
             (app.timeline.selected, app.selected_branch()),
             (marker, Some(1))
         );
-        press_list_key(&mut app, &root, KeyCode::Char('k').into());
+        run_list_action(&mut app, &root, &EVENTS_PREV_LINE);
         assert_eq!(app.selected_branch(), Some(0));
         press_list_key(&mut app, &root, KeyCode::Enter.into());
         assert_eq!(
             app.take_request(),
             Some(Request::OpenSession("child-3".into()))
         );
-        press_list_key(&mut app, &root, KeyCode::Char('k').into());
+        run_list_action(&mut app, &root, &EVENTS_PREV_LINE);
         assert_eq!(
             (app.timeline.selected, app.selected_branch()),
             (marker, None)
@@ -2715,7 +2676,7 @@ mod tests {
 
         // And back down through them and past.
         for expected in [Some(0), Some(1)] {
-            press_list_key(&mut app, &root, KeyCode::Char('j').into());
+            run_list_action(&mut app, &root, &EVENTS_NEXT_LINE);
             assert_eq!(
                 (app.timeline.selected, app.selected_branch()),
                 (marker, expected)
@@ -2726,15 +2687,16 @@ mod tests {
             app.take_request(),
             Some(Request::OpenSession("grandchild-4".into()))
         );
-        press_list_key(&mut app, &root, KeyCode::Char('j').into());
+        run_list_action(&mut app, &root, &EVENTS_NEXT_LINE);
         assert_eq!(
             (app.timeline.selected, app.selected_branch()),
             (marker + 1, None)
         );
     }
 
+    /// Unlike a branch marker, a regular event toggles its expansion.
     #[test]
-    fn enter_on_a_regular_event_still_toggles_its_expansion() {
+    fn a_regular_event_still_toggles_its_expansion() {
         let (_root_directory, root) = tree("regular-enter");
         let mut app = app(&root);
         app.enter_list();
@@ -2743,11 +2705,7 @@ mod tests {
         });
         app.select_last();
 
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        );
+        run_list_action(&mut app, &root, &EVENTS_TOGGLE_EXPAND);
 
         assert!(app.timeline.selected_entry().unwrap().expanded);
         assert!(app.take_request().is_none());
@@ -2767,12 +2725,23 @@ mod tests {
         );
     }
 
-    fn press_d(app: &mut App, root: &Path) {
-        press_list_key(
-            app,
-            root,
-            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
-        );
+    /// Run `binding`'s command from the list, with whatever keys the
+    /// configuration gives it — a chord's prefix included, the list carrying
+    /// the pending prefix from one key to the next as the event loop does.
+    fn run_list_action(app: &mut App, root: &Path, binding: &Binding) {
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+        for key in presses(binding) {
+            handle_list_key(
+                app,
+                &client,
+                &mut live,
+                key,
+                &mut pending_fold,
+                &root.join("preferences.toml"),
+            );
+        }
     }
 
     fn app_with_diffable_interaction(root: &Path) -> App {
@@ -2807,14 +2776,14 @@ mod tests {
     }
 
     #[test]
-    fn diff_keys_carry_the_selected_file_or_reference_location() {
+    fn the_diff_carries_the_selected_file_or_reference_location() {
         let (_root_directory, root) = tree("diff-selected-location");
         let mut app = app_with_diffable_interaction(&root);
         app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
             text: "see `notes.txt`".into(),
         });
         app.view = View::Files;
-        press_d(&mut app, &root);
+        run_list_action(&mut app, &root, &GLOBAL_DIFF);
         assert_eq!(
             app.take_request(),
             Some(Request::ShowDiffAt {
@@ -2830,7 +2799,7 @@ mod tests {
         });
         app.select_last();
         app.highlight_first_link();
-        press_d(&mut app, &root);
+        run_list_action(&mut app, &root, &GLOBAL_DIFF);
         assert_eq!(
             app.take_request(),
             Some(Request::ShowDiffAt {
@@ -2841,9 +2810,10 @@ mod tests {
         );
     }
 
-    /// `d` closes an open diff pane whichever side holds the keys.
+    /// The diff command closes an open diff pane from the log, as the diff's
+    /// own `d` does from the pane.
     #[test]
-    fn d_closes_the_diff_from_the_log_and_from_the_pane() {
+    fn the_diff_closes_from_the_log_and_from_the_pane() {
         let (_root_directory, root) = tree("diff-toggle");
         let mut app = app_with_diffable_interaction(&root);
         for log_focus in [true, false] {
@@ -2851,34 +2821,33 @@ mod tests {
             app.diff_preview = true;
             app.diff_interaction_focus = log_focus;
             assert_eq!(app.diff_focused(), !log_focus);
-            press_d(&mut app, &root);
+            if log_focus {
+                run_list_action(&mut app, &root, &GLOBAL_DIFF);
+            } else {
+                // The pane's keys are styra-diff's own.
+                press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('d')));
+            }
             assert!(!app.diff_visible(), "log focus: {log_focus}");
             assert_eq!(app.take_request(), None);
         }
-        press_d(&mut app, &root);
+        run_list_action(&mut app, &root, &GLOBAL_DIFF);
         assert_eq!(
             app.take_request(),
             Some(Request::ShowDiff("styra-7".into()))
         );
     }
 
-    /// `d` asks the event loop to resolve this Session's diff base; `D`
-    /// asks for nothing.
+    /// Opening the diff asks the event loop to resolve this Session's diff
+    /// base.
     #[test]
-    fn diff_keys_ask_for_the_checkout_diff() {
+    fn the_diff_asks_for_the_checkout_diff() {
         let (_root_directory, root) = tree("diff-checkout");
         let mut app = app_with_diffable_interaction(&root);
-        press_d(&mut app, &root);
+        run_list_action(&mut app, &root, &GLOBAL_DIFF);
         assert_eq!(
             app.take_request(),
             Some(Request::ShowDiff("styra-7".into()))
         );
-        press_list_key(
-            &mut app,
-            &root,
-            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
-        );
-        assert_eq!(app.take_request(), None);
     }
 
     #[test]
@@ -2918,11 +2887,11 @@ mod tests {
         assert!(app.preview.open);
     }
 
-    /// `u` swaps the diff between the checkout's and the selected turn's, the
-    /// diff keys then acting on the turn's; closing the diff leaves the next
-    /// one opened on the checkout's diff again.
+    /// Switching to the turn swaps the diff between the checkout's and the
+    /// selected turn's, the diff's keys then acting on the turn's; closing the
+    /// diff leaves the next one opened on the checkout's diff again.
     #[test]
-    fn t_switches_the_diff_to_the_turn_diff_and_back() {
+    fn the_turn_command_switches_the_diff_to_the_turn_diff_and_back() {
         let (_root_directory, root) = tree("diff-turn");
         let mut app = app_with_diffable_interaction(&root);
         app.push_event(styra_protocol::event::AgentEvent::UserMessage {
@@ -2938,9 +2907,11 @@ mod tests {
         app.select_first();
         app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
         app.diff_preview = true;
+        // The diff's own keys are styra-diff's; switching turns is Styra's.
         let press = |app: &mut App, code| press_list_key(app, &root, KeyEvent::from(code));
+        let switch_turn = |app: &mut App| run_list_action(app, &root, &DIFF_TURN);
 
-        press(&mut app, KeyCode::Char('u'));
+        switch_turn(&mut app);
         assert!(app.turn_diff_shown());
         let turn = app.shown_diff().unwrap();
         assert!(turn.target().is_none());
@@ -2951,10 +2922,10 @@ mod tests {
         press(&mut app, KeyCode::Char('E'));
         assert!(app.take_request().is_none(), "no report for a turn diff");
 
-        press(&mut app, KeyCode::Char('u'));
+        switch_turn(&mut app);
         assert!(!app.turn_diff_shown());
         assert!(app.shown_diff().unwrap().target().is_some());
-        press(&mut app, KeyCode::Char('u'));
+        switch_turn(&mut app);
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Esc);
         assert!(!app.diff_visible());
@@ -2962,7 +2933,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_diff_shortcuts_move_between_operator_turns() {
+    fn turn_diff_commands_move_between_operator_turns() {
         use styra_protocol::event::AgentEvent;
 
         let (_root_directory, root) = tree("diff-turn-navigation");
@@ -2982,13 +2953,21 @@ mod tests {
         app.select_first();
         app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
         app.diff_preview = true;
+        // The diff's own keys are styra-diff's; moving between turns is Styra's.
         let press = |app: &mut App, code| press_list_key(app, &root, KeyEvent::from(code));
+        let run = |app: &mut App, command: &Binding| run_list_action(app, &root, command);
 
-        press(&mut app, KeyCode::Char(']'));
+        run(&mut app, &DIFF_NEXT_TURN);
         assert_eq!(app.selected_turn(), Some(1), "full diff keeps its keys");
-        press(&mut app, KeyCode::Char('u'));
-        for (key, expected) in [('[', 1), (']', 2), (']', 3), (']', 3), ('[', 2)] {
-            press(&mut app, KeyCode::Char(key));
+        run(&mut app, &DIFF_TURN);
+        for (command, expected) in [
+            (DIFF_PREV_TURN, 1),
+            (DIFF_NEXT_TURN, 2),
+            (DIFF_NEXT_TURN, 3),
+            (DIFF_NEXT_TURN, 3),
+            (DIFF_PREV_TURN, 2),
+        ] {
+            run(&mut app, &command);
             assert_eq!(app.selected_turn(), Some(expected));
             assert!(app
                 .shown_diff()
@@ -3006,20 +2985,20 @@ mod tests {
         // From work inside a turn, previous skips to the previous operator message.
         app.timeline.selected += 1;
         assert_eq!(app.selected_turn(), Some(2));
-        press(&mut app, KeyCode::Char('['));
+        run(&mut app, &DIFF_PREV_TURN);
         assert_eq!(app.selected_turn(), Some(1));
 
-        // The file filter retains printable shortcut characters while typing.
+        // The file filter keeps the turn commands' keys while typing.
         press(&mut app, KeyCode::Char('l'));
         press(&mut app, KeyCode::Char('/'));
         assert!(app.shown_diff().unwrap().typing());
-        press(&mut app, KeyCode::Char(']'));
+        run(&mut app, &DIFF_NEXT_TURN);
         assert_eq!(app.selected_turn(), Some(1));
         press(&mut app, KeyCode::Esc);
 
-        press(&mut app, KeyCode::Char(']'));
+        run(&mut app, &DIFF_NEXT_TURN);
         assert_eq!(app.selected_turn(), Some(2));
-        press(&mut app, KeyCode::Char('['));
+        run(&mut app, &DIFF_PREV_TURN);
         assert_eq!(app.selected_turn(), Some(1));
     }
 
@@ -3063,8 +3042,9 @@ mod tests {
         assert!(app.diff_interaction_focus, "side pane returns keys to log");
     }
 
-    /// `i` starts a message about what the diff is on — the file it shows,
-    /// and the line cursor's line — and sending puts that under it.
+    /// Starting a message from the diff makes it about what the diff is on —
+    /// the file it shows, and the line cursor's line — and sending puts that
+    /// under it.
     #[test]
     fn a_message_started_from_the_diff_notes_its_file_and_line() {
         let (_root_directory, root) = tree("diff-message-source");
@@ -3076,11 +3056,13 @@ mod tests {
             .into());
         diff.scroll.note_limit(100);
         app.checkout_diff = Some(diff);
+        // The diff's own keys are styra-diff's; starting a message is Styra's.
         let press = |app: &mut App, character| {
             press_list_key(app, &root, KeyEvent::from(KeyCode::Char(character)))
         };
+        let start_message = |app: &mut App| run_list_action(app, &root, &GLOBAL_FOCUS_MESSAGE);
 
-        press(&mut app, 'i');
+        start_message(&mut app);
         assert_eq!(app.focus, crate::app::Focus::Input);
         assert_eq!(
             app.message_source, None,
@@ -3090,7 +3072,7 @@ mod tests {
 
         press(&mut app, 'l');
         press(&mut app, 'j');
-        press(&mut app, 'i');
+        start_message(&mut app);
         assert_eq!(app.message_source.as_deref(), Some("b.txt"));
         app.enter_list();
         assert_eq!(app.message_source, None, "leaving the box forgets it");
@@ -3099,7 +3081,7 @@ mod tests {
         press(&mut app, 'j');
         press(&mut app, 'j');
         assert_eq!(app.checkout_diff.as_ref().unwrap().selected_file, 1);
-        press(&mut app, 'i');
+        start_message(&mut app);
         assert_eq!(app.message_source.as_deref(), Some("b.txt:5"));
         app.composer.char('x');
         assert_eq!(app.take_message().as_deref(), Some("x\n\nSource: b.txt:5"));
@@ -3306,7 +3288,7 @@ mod tests {
             press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Tab));
             assert!(app.diff_visible());
             assert!(!app.diff_focused());
-            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Down));
+            run_list_action(&mut app, &root, &EVENTS_NEXT_ENTRY);
             assert_eq!(app.timeline.selected, 1);
             assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
             assert_eq!(app.preview.scroll.offset, 0);
@@ -3351,14 +3333,16 @@ mod tests {
         assert_eq!(app.take_request(), None);
     }
 
+    /// Starting a message from the diff keeps the diff in view, the keys
+    /// typed then being text, and leaving the message returns to the diff.
     #[test]
-    fn i_from_the_diff_focuses_the_message_and_esc_returns_to_the_diff() {
+    fn a_message_started_from_the_diff_returns_to_it_on_leaving() {
         let (_root_directory, root) = tree("diff-message-focus");
         for view in [View::Events, View::Files] {
             let mut app = app_with_diffable_interaction(&root);
             app.view = view;
             app.diff_preview = true;
-            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('i')));
+            run_list_action(&mut app, &root, &GLOBAL_FOCUS_MESSAGE);
             assert_eq!(app.focus, crate::app::Focus::Input);
             assert!(app.diff_visible());
             assert!(!app.diff_focused());
@@ -3379,61 +3363,72 @@ mod tests {
                 &client,
                 "workspace",
                 &mut live,
-                KeyEvent::from(KeyCode::Esc),
+                press(&GLOBAL_LEAVE_MESSAGE),
             );
             assert!(app.diff_focused());
             assert_eq!(app.view, view);
         }
     }
 
+    /// While the diff's filter is being typed, the keys for starting a
+    /// message and for quitting go to the filter rather than acting.
     #[test]
-    fn i_and_q_are_still_text_while_typing_the_diff_filter() {
+    fn starting_a_message_and_quitting_wait_while_typing_the_diff_filter() {
         let (_root_directory, root) = tree("diff-filter-i");
         let mut app = app_with_diffable_interaction(&root);
         app.diff_preview = true;
         let mut diff = styra_diff::CheckoutDiff::read(diffable_target());
         diff.search.open();
         app.checkout_diff = Some(diff);
-        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('i')));
-        press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('q')));
+        run_list_action(&mut app, &root, &GLOBAL_FOCUS_MESSAGE);
+        run_list_action(&mut app, &root, &GLOBAL_QUIT);
         press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Tab));
         assert!(app.diff_focused());
-        assert_eq!(
-            app.checkout_diff.as_ref().unwrap().search.query(),
-            Some("iq")
-        );
+        assert_eq!(app.focus, crate::app::Focus::List);
+        assert!(app.checkout_diff.as_ref().unwrap().search.typing());
         assert_eq!(app.take_request(), None);
     }
 
     #[test]
-    fn q_from_the_diff_quits_styra_in_either_view() {
+    fn quitting_from_the_diff_quits_styra_in_either_view() {
         let (_root_directory, root) = tree("diff-quit");
         for view in [View::Events, View::Files] {
             let mut app = app_with_diffable_interaction(&root);
             app.view = view;
             app.diff_preview = true;
             app.checkout_diff = Some(styra_diff::CheckoutDiff::read(diffable_target()));
-            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char('q')));
+            run_list_action(&mut app, &root, &GLOBAL_QUIT);
             assert_eq!(app.take_request(), Some(Request::Quit));
         }
     }
 
-    /// Apart from the message and quit shortcuts, global keys do nothing in the diff,
-    /// and d or Esc returns to events.
+    /// Apart from starting a message and quitting, global commands do nothing
+    /// in the diff, and the diff's own d or Esc returns to events.
     #[test]
     fn d_and_esc_close_the_diff_view() {
         let (_root_directory, root) = tree("diff-exclusive");
         let mut app = app_with_diffable_interaction(&root);
         app.diff_preview = true;
 
-        for character in "DlawnAQPXe".chars() {
-            press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Char(character)));
-            assert!(app.diff_focused(), "{character} left the diff");
-            assert_eq!(app.take_request(), None, "{character} asked for something");
+        for command in [
+            GLOBAL_LAUNCHER,
+            GLOBAL_INTERACTIONS,
+            GLOBAL_WORKTREES,
+            GLOBAL_NEXT_LIVE,
+            GLOBAL_SESSIONS,
+            GLOBAL_QUOTA,
+            GLOBAL_PREVIEW,
+            GLOBAL_ANSWER,
+            GLOBAL_ENTRY_LOG,
+        ] {
+            let action = command.action();
+            run_list_action(&mut app, &root, &command);
+            assert!(app.diff_focused(), "{action:?} left the diff");
+            assert_eq!(app.take_request(), None, "{action:?} asked for something");
             assert_eq!(
                 app.focus,
                 crate::app::Focus::List,
-                "{character} moved the focus"
+                "{action:?} moved the focus"
             );
         }
         for loaded in [false, true] {
@@ -3454,7 +3449,7 @@ mod tests {
 
     /// A Session needs no branch point to open its snapshot diff.
     #[test]
-    fn d_without_a_start_commit_requests_a_snapshot_diff() {
+    fn the_diff_without_a_start_commit_requests_a_snapshot_diff() {
         let (_root_directory, root) = tree("diff-no-branch-point");
         let mut app = app(&root);
         app.enter_list();
@@ -3470,7 +3465,7 @@ mod tests {
         });
         app.interactions.items = vec![interaction];
 
-        press_d(&mut app, &root);
+        run_list_action(&mut app, &root, &GLOBAL_DIFF);
 
         assert_eq!(
             app.take_request(),
@@ -3502,10 +3497,7 @@ mod tests {
         let host = outside.join("notes.txt");
 
         typed(&mut app, &host.display().to_string());
-        handle_insert_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
-        );
+        handle_insert_key(&mut app, press(&EDITOR_MOUNT_WRITABLE));
 
         assert!(app.insert.is_none());
         assert_eq!(
@@ -3536,17 +3528,19 @@ mod tests {
         app.open_link_menu();
     }
 
-    fn press(app: &mut App, code: KeyCode) {
-        handle_link_menu_key(app, KeyEvent::new(code, KeyModifiers::NONE));
+    fn run_link_menu_action(app: &mut App, binding: &Binding) {
+        handle_link_menu_key(app, press(binding));
     }
 
+    /// Confirming the menu's first action opens the link, as opening it from
+    /// the event list does.
     #[test]
-    fn the_link_menus_first_action_opens_the_link_as_enter_does() {
+    fn the_link_menus_first_action_opens_the_link() {
         let (_root_directory, root) = tree("link-open");
         let mut app = app(&root);
         link_menu_on(&mut app, &root.join("notes.txt").display().to_string());
 
-        press(&mut app, KeyCode::Enter);
+        run_link_menu_action(&mut app, &LINK_MENU_CONFIRM);
 
         assert!(app.link_menu.is_none());
         assert_eq!(
@@ -3563,9 +3557,9 @@ mod tests {
         let mut app = app(&root);
         link_menu_on(&mut app, &host.display().to_string());
 
-        press(&mut app, KeyCode::Char('j'));
-        press(&mut app, KeyCode::Char('j'));
-        press(&mut app, KeyCode::Enter);
+        run_link_menu_action(&mut app, &LINK_MENU_NEXT);
+        run_link_menu_action(&mut app, &LINK_MENU_NEXT);
+        run_link_menu_action(&mut app, &LINK_MENU_CONFIRM);
 
         assert!(app.link_menu.is_none());
         assert_eq!(
@@ -3594,8 +3588,8 @@ mod tests {
         let mut working = app(&root);
         link_menu_on(&mut working, &host.display().to_string());
         working.activity.status = crate::activity::Status::Running;
-        press(&mut working, KeyCode::Char('j'));
-        press(&mut working, KeyCode::Enter);
+        run_link_menu_action(&mut working, &LINK_MENU_NEXT);
+        run_link_menu_action(&mut working, &LINK_MENU_CONFIRM);
         assert!(working.launch.interaction.mounts.is_empty());
         assert!(!working.restart_for_mounts);
 
@@ -3604,8 +3598,8 @@ mod tests {
         idle.activity.status =
             crate::activity::Status::Idle(crate::activity::IdleReason::TurnComplete);
         assert!(!idle.can_edit_launch());
-        press(&mut idle, KeyCode::Char('j'));
-        press(&mut idle, KeyCode::Enter);
+        run_link_menu_action(&mut idle, &LINK_MENU_NEXT);
+        run_link_menu_action(&mut idle, &LINK_MENU_CONFIRM);
         assert_eq!(idle.launch.interaction.mounts.len(), 1);
         assert!(idle.restart_for_mounts);
         assert!(idle.notices.iter().any(|message| message
@@ -3619,8 +3613,8 @@ mod tests {
         let mut app = app(&root);
         link_menu_on(&mut app, "notes.txt");
 
-        press(&mut app, KeyCode::Char('j'));
-        press(&mut app, KeyCode::Enter);
+        run_link_menu_action(&mut app, &LINK_MENU_NEXT);
+        run_link_menu_action(&mut app, &LINK_MENU_CONFIRM);
 
         assert!(app.launch.interaction.mounts.is_empty());
         assert!(app.notices.iter().any(|message| message

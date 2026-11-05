@@ -100,6 +100,7 @@ pub fn run(terminal: &mut dyn Ui, rows: &Rows) -> Result<Option<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keybindings::press;
     use crossterm::event::{KeyCode, KeyEvent};
 
     fn history() -> InteractionHistory {
@@ -110,10 +111,19 @@ mod tests {
         history
     }
 
-    fn run_keys(rows: &Rows, keys: impl IntoIterator<Item = KeyCode>) -> Option<usize> {
+    fn run_keys(rows: &Rows, keys: impl IntoIterator<Item = KeyEvent>) -> Option<usize> {
         let mut terminal = crate::test_ui::TestUi::default();
-        terminal.script(keys.into_iter().map(|key| Event::Key(KeyEvent::from(key))));
+        terminal.script(keys.into_iter().map(Event::Key));
         run(&mut terminal, rows).unwrap()
+    }
+
+    /// The keypresses that type `query` and then open the row it found.
+    fn search_and_open(query: &str) -> Vec<KeyEvent> {
+        query
+            .chars()
+            .map(|character| KeyEvent::from(KeyCode::Char(character)))
+            .chain([press(&keys::ACTION_MENU_RUN)])
+            .collect()
     }
 
     #[test]
@@ -123,14 +133,8 @@ mod tests {
         interactions.note_name("session-b", Some("Fix retry timeout".into()));
         let rows = rows(&history, &interactions, &[], &[]);
         assert_eq!(rows.indices, [2, 1, 0]);
-        assert_eq!(run_keys(&rows, [KeyCode::Enter]), Some(2));
-        assert_eq!(
-            run_keys(
-                &rows,
-                "frt".chars().map(KeyCode::Char).chain([KeyCode::Enter])
-            ),
-            Some(1)
-        );
+        assert_eq!(run_keys(&rows, [press(&keys::ACTION_MENU_RUN)]), Some(2));
+        assert_eq!(run_keys(&rows, search_and_open("frt")), Some(1));
         assert_eq!(history.target("session-c", false), Some((1, "session-b")));
     }
 
@@ -173,37 +177,29 @@ mod tests {
             &sessions,
         );
         for query in ["cptl", "rpp", "session-a"] {
-            assert_eq!(
-                run_keys(
-                    &rows,
-                    query.chars().map(KeyCode::Char).chain([KeyCode::Enter])
-                ),
-                Some(0),
-                "{query}"
-            );
+            assert_eq!(run_keys(&rows, search_and_open(query)), Some(0), "{query}");
         }
         // Entries without server metadata are still selectable by stable id.
-        assert_eq!(
-            run_keys(
-                &rows,
-                "session-b"
-                    .chars()
-                    .map(KeyCode::Char)
-                    .chain([KeyCode::Enter])
-            ),
-            Some(1)
-        );
+        assert_eq!(run_keys(&rows, search_and_open("session-b")), Some(1));
     }
 
     #[test]
     fn cancel_and_empty_matches_do_not_choose_or_change_history() {
         let history = history();
         let rows = rows(&history, &LiveInteractions::default(), &[], &[]);
-        assert_eq!(run_keys(&rows, [KeyCode::Down, KeyCode::Esc]), None);
         assert_eq!(
-            run_keys(&rows, [KeyCode::Char('z'), KeyCode::Enter, KeyCode::Esc]),
+            run_keys(
+                &rows,
+                [
+                    press(&keys::ACTION_MENU_NEXT),
+                    press(&keys::ACTION_MENU_CANCEL)
+                ]
+            ),
             None
         );
+        let mut no_match = search_and_open("z");
+        no_match.push(press(&keys::ACTION_MENU_CANCEL));
+        assert_eq!(run_keys(&rows, no_match), None);
         assert_eq!(history.target("session-c", false), Some((1, "session-b")));
     }
 
@@ -211,7 +207,14 @@ mod tests {
     fn choosing_a_visit_keeps_the_forward_trail() {
         let mut history = history();
         let rows = rows(&history, &LiveInteractions::default(), &[], &[]);
-        let index = run_keys(&rows, [KeyCode::Down, KeyCode::Enter]).unwrap();
+        let index = run_keys(
+            &rows,
+            [
+                press(&keys::ACTION_MENU_NEXT),
+                press(&keys::ACTION_MENU_RUN),
+            ],
+        )
+        .unwrap();
         history.arrive(index);
         assert_eq!(history.target("session-b", true), Some((2, "session-c")));
         assert_eq!(history.entries().len(), 3);

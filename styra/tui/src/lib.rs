@@ -944,6 +944,7 @@ fn stop_daemon(socket: &Path) -> Result<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+    use crate::keybindings::{self as keys, press};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use styra_protocol::agent::Selection;
 
@@ -1122,13 +1123,13 @@ mod cli_tests {
         (directory, app, path)
     }
 
-    fn press_launcher(app: &mut App, path: &Path, code: KeyCode, modifiers: KeyModifiers) {
-        launcher::handle_key(app, KeyEvent::new(code, modifiers), path);
+    fn press_launcher(app: &mut App, path: &Path, key: KeyEvent) {
+        launcher::handle_key(app, key, path);
     }
 
     fn type_launcher(app: &mut App, path: &Path, text: &str) {
         for character in text.chars() {
-            press_launcher(app, path, KeyCode::Char(character), KeyModifiers::NONE);
+            press_launcher(app, path, KeyEvent::from(KeyCode::Char(character)));
         }
     }
 
@@ -1137,30 +1138,37 @@ mod cli_tests {
         let (_directory, mut app, path) = launcher_fixture("claude:claude-sonnet-5/max");
         let selection = app.selection.clone();
 
-        press_launcher(&mut app, &path, KeyCode::Enter, KeyModifiers::NONE);
+        press_launcher(&mut app, &path, press(&keys::LAUNCHER_SELECT));
 
         assert_eq!(app.selection, selection);
         assert!(!path.exists());
     }
 
-    /// The arrows move the picker and confirming remembers the model, so the
-    /// next picker lists it first — without touching the saved defaults, which
-    /// only ctrl-D writes.
+    /// Moving the picker and confirming remembers the model, so the next
+    /// picker lists it first — without touching the saved defaults, which only
+    /// saving a default writes.
     #[test]
-    fn the_arrows_move_the_launcher_and_confirming_remembers_the_model() {
+    fn moving_the_launcher_and_confirming_remembers_the_model() {
         let (_directory, mut app, path) = launcher_fixture("claude");
         let opened_on = app.launcher.as_ref().unwrap().selection();
 
         // Two rows down and one back up.
-        for code in [KeyCode::Down, KeyCode::Down, KeyCode::Up] {
-            launcher::handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE), &path);
+        for binding in [
+            &keys::LAUNCHER_NEXT,
+            &keys::LAUNCHER_NEXT,
+            &keys::LAUNCHER_PREV,
+        ] {
+            press_launcher(&mut app, &path, press(binding));
         }
         let moved_to = app.launcher.as_ref().unwrap().selection();
         assert_ne!(moved_to, opened_on, "the cursor moved");
 
-        press_launcher(&mut app, &path, KeyCode::Enter, KeyModifiers::NONE);
+        press_launcher(&mut app, &path, press(&keys::LAUNCHER_SELECT));
         assert_eq!(app.selection, moved_to);
-        assert!(!path.exists(), "Enter does not save a default selection");
+        assert!(
+            !path.exists(),
+            "confirming does not save a default selection"
+        );
         assert_eq!(
             preferences::load_recent_models(&path),
             vec![moved_to.model.clone()]
@@ -1180,17 +1188,17 @@ mod cli_tests {
     }
 
     /// The list is typed at directly — no key opens a query first, because
-    /// every printable key is already a letter of one. Enter then launches on
+    /// every printable key is already a letter of one. Selecting then launches on
     /// what the query found.
     #[test]
-    fn typing_at_the_launcher_narrows_it_and_enter_launches_on_the_row() {
+    fn typing_at_the_launcher_narrows_it_and_selecting_launches_on_the_row() {
         let (_directory, mut app, path) = launcher_fixture("claude");
 
         type_launcher(&mut app, &path, "haiku");
         let narrowed = app.launcher.as_ref().unwrap().selection().model;
         assert!(narrowed.contains("haiku"), "{narrowed}");
 
-        press_launcher(&mut app, &path, KeyCode::Enter, KeyModifiers::NONE);
+        press_launcher(&mut app, &path, press(&keys::LAUNCHER_SELECT));
         assert!(app.launcher.is_none());
         assert_eq!(app.selection.model, narrowed);
     }
@@ -1202,13 +1210,21 @@ mod cli_tests {
         let (_directory, mut app, path) = launcher_fixture("claude");
         type_launcher(&mut app, &path, "claude-opus-5-5/mox");
 
-        press_launcher(&mut app, &path, KeyCode::Char('w'), KeyModifiers::CONTROL);
+        press_launcher(
+            &mut app,
+            &path,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
         let launcher = app.launcher.as_ref().expect("still open");
         assert_eq!(launcher.list.query, "claude-opus-5-5/");
         assert_eq!(launcher.selection().model, "claude-opus-5-5");
 
         // A chord the picker has no command for types nothing.
-        press_launcher(&mut app, &path, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        press_launcher(
+            &mut app,
+            &path,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+        );
         assert_eq!(
             app.launcher.as_ref().unwrap().list.query,
             "claude-opus-5-5/",
@@ -1216,14 +1232,14 @@ mod cli_tests {
         );
     }
 
-    /// Esc widens an over-narrowed list before it abandons the picker: the
-    /// first press is the one the operator meant, the second closes.
+    /// Cancelling widens an over-narrowed list before it abandons the picker:
+    /// the first cancel is the one the operator meant, the second closes.
     #[test]
-    fn esc_clears_the_query_before_it_closes_the_launcher() {
+    fn cancelling_clears_the_query_before_it_closes_the_launcher() {
         let (_directory, mut app, path) = launcher_fixture("claude");
         type_launcher(&mut app, &path, "haiku");
 
-        press_launcher(&mut app, &path, KeyCode::Esc, KeyModifiers::NONE);
+        press_launcher(&mut app, &path, press(&keys::LAUNCHER_CANCEL));
         let launcher = app.launcher.as_ref().expect("still open");
         assert!(!launcher.is_filtering(), "the query is gone");
         assert!(
@@ -1231,8 +1247,8 @@ mod cli_tests {
             "and the row it found is still selected"
         );
 
-        press_launcher(&mut app, &path, KeyCode::Esc, KeyModifiers::NONE);
-        assert!(app.launcher.is_none(), "the second press closes it");
+        press_launcher(&mut app, &path, press(&keys::LAUNCHER_CANCEL));
+        assert!(app.launcher.is_none(), "the second cancel closes it");
     }
 
     #[test]
@@ -1240,7 +1256,7 @@ mod cli_tests {
         let (_directory, mut app, path) = launcher_fixture("claude:claude-sonnet-5/max");
         let selection = app.selection.clone();
 
-        press_launcher(&mut app, &path, KeyCode::Char('d'), KeyModifiers::CONTROL);
+        press_launcher(&mut app, &path, press(&keys::LAUNCHER_DEFAULT));
 
         assert_eq!(
             preferences::load_or_default(&path).unwrap().selection,
