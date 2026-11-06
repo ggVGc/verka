@@ -100,6 +100,7 @@ bindings! { EVENTS = "Events and previews";
     EVENTS_RENAME: [Key::alt_code(KeyCode::Char('r'))] => Action::EventsRename;
     EVENTS_RUN: [Key::ch('r')] => Action::EventsRun;
     EVENTS_TEST: [Key::ch('R')] => Action::EventsTest;
+    EVENTS_PARENT: [Key::ctrl('p')] => Action::EventsParent;
 }
 
 bindings! { READING = "Raw, messages, log, quota, processes, and transcript";

@@ -623,6 +623,7 @@ pub fn handle_list_key(
             }
             k if EVENTS_RUN.matches(k) => app.ask(Request::ProjectAction(ProjectAction::Run)),
             k if EVENTS_TEST.matches(k) => app.ask(Request::ProjectAction(ProjectAction::Test)),
+            k if EVENTS_PARENT.matches(k) => session::open_parent(app),
             k if EVENTS_LINKS.matches(k) => app.highlight_first_link(),
             k if EVENTS_SEARCH.matches(k) => app.search.open(),
             // A search that stands after the prompt has closed is cleared
@@ -2685,6 +2686,28 @@ mod tests {
             (app.timeline.selected, app.selected_branch()),
             (marker + 1, None)
         );
+    }
+
+    /// ctrl-p opens the Session this one was branched off, and only warns
+    /// when there is none.
+    #[test]
+    fn ctrl_p_opens_the_parent_branch() {
+        use crate::interactions::tests::branched;
+        use styra_protocol::InteractionActivity::Running;
+
+        let (_root_directory, root) = tree("open-parent");
+        let mut app = app(&root);
+        app.enter_list();
+        let source = app.session_id.clone();
+
+        run_list_action(&mut app, &root, &EVENTS_PARENT);
+        assert!(app.take_request().is_none());
+
+        app.interactions
+            .refresh(vec![branched("branch-2", Running, &source)]);
+        app.session_id = "branch-2".into();
+        run_list_action(&mut app, &root, &EVENTS_PARENT);
+        assert_eq!(app.take_request(), Some(Request::OpenSession(source)));
     }
 
     /// Unlike a branch marker, a regular event toggles its expansion.

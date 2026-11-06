@@ -1075,6 +1075,16 @@ pub fn follow_branch(app: &mut App) {
     app.ask(crate::app::Request::OpenSession(session_id));
 }
 
+/// Open the Session the current one was branched off, the way following its
+/// `branched from` marker would, without first finding the marker.
+pub fn open_parent(app: &mut App) {
+    let Some(parent) = app.interactions.parent(&app.session_id) else {
+        return app.show_warning("this Session was not branched off another");
+    };
+    let parent = parent.to_owned();
+    app.ask(crate::app::Request::OpenSession(parent));
+}
+
 /// Branch the current Session with the choice confirmed in the main view, and
 /// start the branch on `message` in the background. The view stays on the
 /// source: the branch joins the live list, where the operator can enter it

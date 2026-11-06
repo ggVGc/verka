@@ -25,6 +25,7 @@ pub(crate) enum Action {
     EventsRename,
     EventsRun,
     EventsTest,
+    EventsParent,
     GlobalDiff,
     DiffTurn,
     DiffNextTurn,
@@ -339,6 +340,7 @@ impl Action {
             Self::EventsRename => "rename the current interaction",
             Self::EventsRun => "run the project from the Workspace directory in a new terminal",
             Self::EventsTest => "test the project from the Workspace directory in a new terminal",
+            Self::EventsParent => "go to the interaction this one was branched off",
             Self::GlobalDiff => {
                 "open / close the checkout's diff pane, at the selected file or reference"
             }
