@@ -1069,7 +1069,8 @@ when its activity changes. Each row shows the latest received agent message
 on a subordinate line, updated along with those live summaries. All-Workspaces
 mode always groups the rows beneath
 Workspace headings; current-Workspace mode omits the one redundant heading.
-`w` switches between those scopes. In All-Workspaces mode `ctrl-j`/`ctrl-k`
+`w` switches between those scopes. Launching in a directory that is a
+Workspace's starts in current-Workspace mode. In All-Workspaces mode `ctrl-j`/`ctrl-k`
 move by Workspace instead of by row, landing on the first Interaction under the
 next or previous heading — with a long list of Workspaces that is one press per
 Workspace rather than one per Interaction. `ctrl-k` from the middle of a group

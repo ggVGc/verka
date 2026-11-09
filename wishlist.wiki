@@ -1,3 +1,4 @@
+- When working on something in one worktree owned by an interaction, standardize a way to break apart the changes into a new branch which can in turn be integrated separately
 - When opening styra in a manually created worktree, if the source repo of that worktree has an associated workspace, it should be possible to see this as part of the existing workspace instead of creating a new one. Similar to when styra itself creates a worktree for a new interaction.
 - Interaction branches, readonly:
   - Sometimes I branch an interaction into a new worktree only because I want to make sure it does not touch the current work.

@@ -372,10 +372,14 @@ pub fn run() -> Result<()> {
     // Set when the operator picks a Workspace with `n`: they asked for a new
     // interaction, so its live work is not joined on the way in.
     let mut start_fresh = false;
+    // Set when the current directory is itself a Workspace's: the operator
+    // came to work there, so the navigator starts scoped to it.
+    let mut in_directory_workspace = false;
     let mut active_workspace = if ordinary_launch {
         let current_directory = session::resolve_workspace(None)?;
         let mut workspaces = client.list_workspaces()?;
         if let Some(workspace) = session::find_workspace_for_host(&workspaces, &current_directory) {
+            in_directory_workspace = true;
             workspace
         } else if cli.skip_workspace_list {
             workspace_without_list(&client, &workspaces, &fleet, current_directory)?
@@ -515,6 +519,9 @@ pub fn run() -> Result<()> {
                 }
             }
         }
+    }
+    if in_directory_workspace {
+        app.interactions.only_current_workspace = true;
     }
     refresh_workspace_context(&mut app, &client, &active_workspace);
     // The footer's quota warning is about the account, not about this screen,
