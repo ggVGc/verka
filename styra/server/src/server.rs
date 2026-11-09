@@ -4127,6 +4127,36 @@ impl ServerState {
         anyhow::bail!("stored session {id:?} was not found")
     }
 
+    /// `query` with the rows descended from its
+    /// [`InteractionQuery::keep_branches_of`] added to what it keeps. Only
+    /// listed rows are walked, live and restored: a branch the roster no
+    /// longer holds cannot be listed, so the rows beneath it are not reached
+    /// through it either.
+    fn keeping_branches(&self, mut query: InteractionQuery) -> InteractionQuery {
+        if query.keep_branches_of.is_empty() {
+            return query;
+        }
+        let mut origins = self.inner.roster.origins();
+        // A live row's origin is not held in memory, but it is one small
+        // file per row, and only read while a client draws a branch tree.
+        let interactions = self
+            .inner
+            .interactions
+            .lock()
+            .expect("server interaction lock poisoned");
+        origins.extend(interactions.values().filter_map(|managed| {
+            let origin = journal::read_session_origin(&managed.session_path).ok()??;
+            Some((managed.interaction.session_id().to_owned(), origin))
+        }));
+        drop(interactions);
+        for branch in branches_of(&query.keep_branches_of, &origins) {
+            if !query.keep.contains(&branch) {
+                query.keep.push(branch);
+            }
+        }
+        query
+    }
+
     /// The two ends of the Workspace mount a stored Session ran under: the host
     /// directory bound into it, and where the agent saw it.
     ///
@@ -4836,7 +4866,7 @@ impl ServerState {
                 Ok(Response::Updates(Updates { updates, next }))
             }
             Request::ListInteractions(query) => {
-                let query = query.unwrap_or_default();
+                let query = self.keeping_branches(query.unwrap_or_default());
                 // Completion as reported depends on the Session's branches, so
                 // a row is held to `skip_done` only once that is derived.
                 let undecided = InteractionQuery {
@@ -5216,6 +5246,25 @@ fn find_native_session_file(
                 provider_session_id
             )
         })
+}
+
+/// The Sessions branched off any of `roots`, and off those in turn, given
+/// each branched Session's `(id, origin)`. A root is not its own branch, and a
+/// cycle in the origins ends where it comes back round.
+fn branches_of(roots: &[String], origins: &[(String, String)]) -> Vec<String> {
+    let mut reached: std::collections::HashSet<&str> =
+        roots.iter().map(String::as_str).collect();
+    let mut pending: Vec<&str> = roots.iter().map(String::as_str).collect();
+    let mut branches = Vec::new();
+    while let Some(parent) = pending.pop() {
+        for (id, origin) in origins {
+            if origin == parent && reached.insert(id) {
+                branches.push(id.clone());
+                pending.push(id);
+            }
+        }
+    }
+    branches
 }
 
 fn find_session_file(root: &Path, provider_session_id: &str) -> Option<PathBuf> {
@@ -8986,5 +9035,90 @@ mod tests {
         journal::store_session_completed(&grandchild_path, CompletionState::Abandoned).unwrap();
         assert_eq!(reported(&id), CompletionState::Completed);
         assert!(unfinished_rows().is_empty());
+    }
+
+    /// A client drawing the subtree beneath a branch marker is sent every
+    /// branch in it, finished or not, while other finished rows stay left
+    /// out.
+    #[test]
+    fn the_branches_of_a_kept_session_are_listed_finished_or_not() {
+        let StoredSession {
+            store,
+            host,
+            state,
+            workspace,
+            id,
+            session_path,
+            _directory,
+            ..
+        } = stored_session("finished-branches-kept");
+        drop(state);
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
+        let session = |parent: Option<&str>| {
+            let (journal, session) =
+                Journal::create_in_workspace(&store, &workspace.id, &profile, &selection, None)
+                    .unwrap();
+            let path = journal.path().parent().unwrap().to_path_buf();
+            if let Some(parent) = parent {
+                journal::store_session_origin(
+                    &path,
+                    SessionOrigin {
+                        session_id: parent.into(),
+                        provider: selection.provider,
+                        at_ms: None,
+                        history: Default::default(),
+                    },
+                )
+                .unwrap();
+            }
+            journal::store_session_completed(&path, CompletionState::Completed).unwrap();
+            (session, path)
+        };
+        let (child, child_path) = session(Some(&id));
+        let (grandchild, grandchild_path) = session(Some(&child));
+        let (unrelated, unrelated_path) = session(None);
+        let row = |id: &str, path: &Path| {
+            (
+                path.to_path_buf(),
+                listed_interaction(id, &workspace.id, &host, InteractionActivity::Stopped),
+                DrivaOptions::default(),
+            )
+        };
+        crate::roster::Roster::open(&store).publish(vec![
+            row(&id, &session_path),
+            row(&child, &child_path),
+            row(&grandchild, &grandchild_path),
+            row(&unrelated, &unrelated_path),
+        ]);
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        let Response::Interactions(rows) = state
+            .handle(Request::ListInteractions(Some(InteractionQuery {
+                skip_done: true,
+                keep_branches_of: vec![id.clone()],
+                ..Default::default()
+            })))
+            .unwrap()
+        else {
+            panic!("expected interactions");
+        };
+        let mut listed: Vec<_> = rows.into_iter().map(|row| row.id).collect();
+        listed.sort();
+        let mut expected = vec![id, child, grandchild];
+        expected.sort();
+        assert_eq!(listed, expected);
+    }
+
+    #[test]
+    fn branches_are_found_through_branches_and_a_cycle_ends() {
+        let origins = [
+            ("child".to_owned(), "root".to_owned()),
+            ("grandchild".to_owned(), "child".to_owned()),
+            ("other".to_owned(), "elsewhere".to_owned()),
+            ("root".to_owned(), "grandchild".to_owned()),
+        ];
+        let mut branches = branches_of(&["root".to_owned()], &origins);
+        branches.sort();
+        assert_eq!(branches, ["child", "grandchild"]);
     }
 }

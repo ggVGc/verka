@@ -818,6 +818,7 @@ M.types.InteractionQuery = {
     { name = "skip_done", required = false, type = { kind = "boolean" } },
     { name = "skip_stopped", required = false, type = { kind = "boolean" } },
     { name = "keep", required = false, type = { kind = "list", item = { kind = "string" } } },
+    { name = "keep_branches_of", required = false, type = { kind = "list", item = { kind = "string" } } },
   },
 }
 

@@ -1387,6 +1387,13 @@ pub struct InteractionQuery {
     /// [`Self::workspace_id`] still apply to them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub keep: Vec<String>,
+    /// Sessions whose branches, and the branches of those in turn, are
+    /// listed as if named in [`Self::keep`] — the subtree a client draws
+    /// beneath a `branched to` marker, which shows every branch whether
+    /// finished or not. The client cannot name them itself: a finished
+    /// branch it was never sent is one it does not know exists.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keep_branches_of: Vec<String>,
 }
 
 impl InteractionQuery {

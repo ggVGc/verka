@@ -117,6 +117,7 @@ fn main() -> Result<()> {
                 skip_done,
                 skip_stopped,
                 keep: Vec::new(),
+                keep_branches_of: Vec::new(),
             })),
         )?)?,
         // Resolved here rather than sent as typed: the server resolves what it

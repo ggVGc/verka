@@ -1157,6 +1157,13 @@ pub fn read_session_completed(path: &Path) -> Result<CompletionState> {
     Ok(read_stored_session_meta(path)?.completed)
 }
 
+/// The Session this one was branched off, if it was.
+pub fn read_session_origin(path: &Path) -> Result<Option<String>> {
+    Ok(read_stored_session_meta(path)?
+        .origin
+        .map(|origin| origin.session_id))
+}
+
 /// Record the operator's completion state for a Session. Kept with the
 /// Session, not the interaction, so it survives the interaction stopping and
 /// is what the stored-sessions picker filters on.

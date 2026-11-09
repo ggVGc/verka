@@ -175,6 +175,18 @@ impl Roster {
             .collect()
     }
 
+    /// Each restored row branched off another Session, with the Session it
+    /// was branched off. Read from the mirrored rows alone.
+    pub fn origins(&self) -> Vec<(String, String)> {
+        self.lock()
+            .values()
+            .filter_map(|entry| {
+                let origin = entry.summary.origin.as_ref()?;
+                Some((entry.summary.id.clone(), origin.session_id.clone()))
+            })
+            .collect()
+    }
+
     /// The restored row for `id`, the Driva policy its run was launched
     /// under, and the Session directory its history is in.
     pub fn restored_session(&self, id: &str) -> Option<Row> {

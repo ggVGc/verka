@@ -1233,13 +1233,26 @@ impl App {
     /// [`LiveInteractions::query`](crate::interactions::LiveInteractions::query).
     /// The interactions this Session's branch markers lead to are kept too,
     /// finished or not, since the markers are drawn by their name, state and
-    /// latest message. The navigator's own filters still leave them out.
+    /// latest message. So are the branches drawn beneath a `branched to`
+    /// marker, which this screen cannot name until the server has sent
+    /// them. The navigator's own filters still leave them out.
     pub fn interactions_query(&self) -> styra_protocol::InteractionQuery {
         let mut query = self.interactions.query(&self.session_id);
         for entry in &self.timeline.entries {
-            if let Some(id) = entry.event().branch_target() {
+            let event = entry.event();
+            if let Some(id) = event.branch_target() {
                 if !query.keep.iter().any(|kept| kept == id) {
                     query.keep.push(id.to_owned());
+                }
+                let leads_to_branch = matches!(
+                    event,
+                    AgentEvent::Branched {
+                        direction: styra_protocol::event::BranchDirection::To,
+                        ..
+                    }
+                );
+                if leads_to_branch && !query.keep_branches_of.iter().any(|kept| kept == id) {
+                    query.keep_branches_of.push(id.to_owned());
                 }
             }
         }
@@ -2251,6 +2264,11 @@ mod tests {
         let query = app.interactions_query();
         assert!(query.skip_done);
         assert_eq!(query.keep, ["session-1", "source", "branch"]);
+        assert_eq!(
+            query.keep_branches_of,
+            ["branch"],
+            "the subtree beneath a `branched to` marker, finished branches too"
+        );
     }
 
     #[test]

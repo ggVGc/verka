@@ -1012,7 +1012,10 @@ the top of the pane while the branch's own work scrolls beneath it. A
 `branched to` marker also shows, inside its band, the listed Sessions branched
 off where it leads — each drawn as a marker of its own with its last message
 beneath it, indented a step per generation — so a whole subtree reads from
-the Session it started in.
+the Session it started in. Finished branches are drawn too: the client asks
+the server to keep every row descended from where its markers lead
+(`keep_branches_of`), since it cannot name a finished branch it was never
+sent.
 
 The branch's Styra journal is seeded with the same chosen history as its native
 provider transcript, so opening the new Session shows its starting context

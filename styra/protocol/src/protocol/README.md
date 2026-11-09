@@ -56,6 +56,9 @@ the listing:
   (every restored row is one)
 - `keep`: Session ids listed even when `skip_done` or `skip_stopped` would
   drop them, such as the one on a client's screen
+- `keep_branches_of`: Session ids whose branches, and theirs in turn, are
+  listed as if named in `keep`, such as the subtree a client draws beneath a
+  branch marker
 
 ```json
 {"operation":"list_interactions","data":{"skip_done":true,"keep":["styra-1"]}}
