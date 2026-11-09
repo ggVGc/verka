@@ -18,6 +18,7 @@ mod app;
 mod audio;
 mod branch;
 mod branch_log;
+mod branch_picker;
 mod checkout_diff;
 mod cli;
 mod clipboard;

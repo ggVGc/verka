@@ -50,6 +50,7 @@ fn main() -> anyhow::Result<()> {
         launch: Default::default(),
         create_worktree: false,
         checkout_from: None,
+        base_branch: None,
         message: Some(prompt),
         name: None,
         // The server frames the seed message with the contract's instructions

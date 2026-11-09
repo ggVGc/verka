@@ -178,6 +178,9 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     if let Some(picker) = &view.overlays.diff_branches {
         overlays::render_centered_fuzzy_list(frame, picker, frame.area());
     }
+    if let Some(picker) = &view.overlays.branches {
+        overlays::render_centered_fuzzy_list(frame, picker, frame.area());
+    }
     if let Some(menu) = view.overlays.action_menu {
         overlays::render_action_menu(frame, menu, frame.area());
     }
@@ -429,9 +432,6 @@ fn render_reading_overlays(frame: &mut Frame, view: &ApplicationOverlays<'_>) {
         let prompt = crate::text_prompt::TextPrompt::new(" rename interaction ", name)
             .bottom(" Enter save · Ctrl-G generate · Ctrl-U clear · Esc cancel ");
         crate::text_prompt::render(frame, &prompt, frame.area());
-    }
-    if let Some((branch, restore)) = view.retarget_prompt {
-        overlays::render_retarget(frame, branch, restore);
     }
     if let Some(message) = view.integration_message {
         overlays::render_integration_message(frame, message, view.integration_target);

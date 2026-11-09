@@ -98,6 +98,7 @@ pub(super) fn load_cursored_interaction(
 pub(super) fn cursored_interaction_is_loadable(app: &App) -> bool {
     app.tag_picker.is_none()
         && app.diff_branch_picker.is_none()
+        && app.branch_picker.is_none()
         && app.interactions.due(&app.session_id).is_some()
 }
 

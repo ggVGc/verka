@@ -623,6 +623,7 @@ defmodule Styra.Protocol do
         %{name: "launch", required: false, type: %{kind: :ref, name: "LaunchPolicy"}},
         %{name: "create_worktree", required: false, type: %{kind: :boolean}},
         %{name: "checkout_from", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "base_branch", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "name", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "contract", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "Contract"}}},
@@ -2945,6 +2946,7 @@ defmodule Styra.Protocol do
       * `launch         `  LaunchPolicy  (optional)
       * `create_worktree`  boolean  (optional)
       * `checkout_from  `  string|null  (optional)
+      * `base_branch    `  string|null  (optional)
       * `message        `  string|null  (optional)
       * `name           `  string|null  (optional)
       * `contract       `  Contract|null  (optional)

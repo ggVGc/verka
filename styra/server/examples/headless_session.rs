@@ -35,6 +35,7 @@ fn main() -> anyhow::Result<()> {
         launch: Default::default(),
         create_worktree: false,
         checkout_from: None,
+        base_branch: None,
         message: Some(prompt),
         name: None,
         contract: None,

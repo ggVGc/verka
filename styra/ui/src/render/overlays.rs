@@ -76,17 +76,6 @@ impl<'a> StatusView<'a> {
 }
 
 /// Choose a new target or return to a saved branch.
-pub fn render_retarget(frame: &mut Frame, branch: &str, restore: bool) {
-    let title = if restore {
-        " return to saved branch "
-    } else {
-        " retarget onto local branch "
-    };
-    let prompt = TextPrompt::new(title, branch)
-        .bottom(" Enter apply · Tab previous branches · Ctrl-U clear · Esc cancel ");
-    text_prompt::render(frame, &prompt, frame.area());
-}
-
 /// The integration commit message being written, with the branch it will be
 /// committed to in the top-right corner when the interaction recorded one.
 pub fn render_integration_message(frame: &mut Frame, message: &str, target: Option<&str>) {

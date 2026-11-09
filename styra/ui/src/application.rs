@@ -83,7 +83,6 @@ pub struct ApplicationOverlays<'a> {
     /// across the bottom of the main panel, under the log the rebase's
     /// conflict-resolution turn is followed in.
     pub rebase_status: Option<&'a styra_protocol::RebaseStatus>,
-    pub retarget_prompt: Option<(&'a str, bool)>,
     pub rename_prompt: Option<&'a str>,
     pub integration_message: Option<&'a str>,
     /// The branch the integration commit will land on, named in the
@@ -101,6 +100,9 @@ pub struct ApplicationOverlays<'a> {
     /// The current window's actions, searchable, opened with Space.
     pub action_menu: Option<overlays::ActionMenuView<'a>>,
     pub diff_branches: Option<crate::fuzzy_list::FuzzyListView<'a>>,
+    /// The branch a new interaction's checkout starts from, or the one the
+    /// current interaction is retargeted onto, both opened with alt-b.
+    pub branches: Option<crate::fuzzy_list::FuzzyListView<'a>>,
     /// The Workspaces with live work, searchable, opened with `v`.
     pub workspace_jump: Option<overlays::WorkspaceJumpView<'a>>,
     pub tags: Option<overlays::TagPickerView<'a>>,

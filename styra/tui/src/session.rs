@@ -93,6 +93,14 @@ pub fn submit_message(
         Attachment::Detached => {
             let selection = app.selection.clone();
             let launch = app.launch.interaction.clone();
+            // A chosen base is a fresh checkout of that branch, so it asks
+            // for one even from plain Enter, and lends nothing.
+            let base_branch = app.base_branch.clone();
+            let create_worktree = create_worktree || base_branch.is_some();
+            let checkout_from = match base_branch {
+                Some(_) => None,
+                None => app.checkout_from.clone(),
+            };
             match create_session(
                 client,
                 &launch,
@@ -102,11 +110,13 @@ pub fn submit_message(
                 Start {
                     contract,
                     create_worktree,
-                    checkout_from: app.checkout_from.clone(),
+                    checkout_from,
+                    base_branch,
                 },
             ) {
                 Ok(info) => {
                     app.checkout_from = None;
+                    app.base_branch = None;
                     if create_worktree {
                         app.show_action_message(format!(
                             "new Git workspace ready: {}",
@@ -373,11 +383,13 @@ pub fn turn(message: &str, selection: &Selection, contract: Option<Contract>) ->
 /// directory": `create_worktree` is `Ctrl-Enter` asking for a branch of its
 /// own, and `checkout_from` names the source Session. Plain Enter shares its
 /// checkout; Ctrl-Enter branches from its current branch into a fresh one.
+/// `base_branch`, chosen with alt-b, names the branch to branch from instead.
 #[derive(Clone, Debug, Default)]
 pub struct Start {
     pub contract: Option<Contract>,
     pub create_worktree: bool,
     pub checkout_from: Option<String>,
+    pub base_branch: Option<String>,
 }
 
 pub fn create_session(
@@ -394,6 +406,7 @@ pub fn create_session(
         launch: launch.clone(),
         create_worktree: start.create_worktree,
         checkout_from: start.checkout_from,
+        base_branch: start.base_branch,
         message: seed.map(str::to_owned),
         name: None,
         contract: start.contract,

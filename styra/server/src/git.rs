@@ -806,7 +806,8 @@ impl FakeGit {
     /// is at. The fake knows no other commits, so it can name no others.
     fn resolve(&self, revision: &str) -> Option<String> {
         let branches = self.branches.lock().unwrap();
-        branches.get(revision).cloned().or_else(|| {
+        let named = revision.strip_prefix("refs/heads/").unwrap_or(revision);
+        branches.get(named).cloned().or_else(|| {
             branches
                 .values()
                 .find(|commit| *commit == revision)

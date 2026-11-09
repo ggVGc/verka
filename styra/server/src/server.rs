@@ -1886,8 +1886,9 @@ impl ServerState {
         Ok(source.with_worktree(path))
     }
 
-    /// Make a fresh checkout from the source Session's current branch, or the
-    /// Workspace checkout when the source has no linked checkout.
+    /// Make a fresh checkout from `base_branch` when the operator chose one,
+    /// else from the source Session's current branch, or the Workspace
+    /// checkout when the source has no linked checkout.
     fn new_session_worktree(
         &self,
         workspace_id: &str,
@@ -1895,7 +1896,11 @@ impl ServerState {
         id: &str,
         topic: Option<&str>,
         source_id: Option<&str>,
+        base_branch: Option<&str>,
     ) -> Result<crate::worktree::Checkout> {
+        if let Some(branch) = base_branch {
+            return worktrees.fork_branch(id, topic, branch);
+        }
         match self.inherited_checkout(workspace_id, source_id)? {
             Some(source) => worktrees.fork(id, topic, &source.branch),
             None => worktrees.checkout(id, topic),
@@ -2311,6 +2316,10 @@ impl ServerState {
     fn create_session(&self, request: CreateSession) -> Result<SessionInfo> {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
+        anyhow::ensure!(
+            request.base_branch.is_none() || request.create_worktree,
+            "a base branch is only used for a new Git worktree"
+        );
         // Plain Enter shares the source checkout; Ctrl-Enter makes a fresh
         // checkout from its branch below.
         let inherited_checkout = if request.create_worktree {
@@ -2391,6 +2400,7 @@ impl ServerState {
                             id,
                             topic.as_ref().map(Topic::branch),
                             request.checkout_from.as_deref(),
+                            request.base_branch.as_deref(),
                         )?;
                         // Written down here, while the name and the branch are known
                         // first-hand, rather than left to be recognised later from
@@ -7591,6 +7601,7 @@ mod tests {
                 "new-session",
                 Some("new-work"),
                 Some(&id),
+                None,
             )
             .unwrap();
         assert_ne!(fresh.path, source.path);
@@ -7618,20 +7629,68 @@ mod tests {
         worktrees.remove(source_path).unwrap();
         journal::clear_session_worktree(&session_path).unwrap();
         let restored_source = state
-            .new_session_worktree(&workspace.id, &worktrees, "after-cleanup", None, Some(&id))
+            .new_session_worktree(
+                &workspace.id,
+                &worktrees,
+                "after-cleanup",
+                None,
+                Some(&id),
+                None,
+            )
             .unwrap();
         assert_eq!(restored_source.branched_from, fresh.branched_from);
         assert!(!source_path.exists());
 
         // Without a linked source, use the Workspace's checked-out HEAD.
         let fallback = state
-            .new_session_worktree(&workspace.id, &worktrees, "from-workspace", None, None)
+            .new_session_worktree(
+                &workspace.id,
+                &worktrees,
+                "from-workspace",
+                None,
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!(
             fallback.branched_from.as_ref().unwrap().commit,
             git.commit(&host, "HEAD").unwrap().unwrap()
         );
         assert_ne!(fallback.branched_from, fresh.branched_from);
+
+        // A chosen base branch wins over the source Session's branch, and
+        // becomes what the new branch integrates into.
+        let based = state
+            .new_session_worktree(
+                &workspace.id,
+                &worktrees,
+                "from-base",
+                None,
+                Some(&id),
+                Some(&fresh.branch),
+            )
+            .unwrap();
+        assert_eq!(
+            based.branched_from,
+            Some(crate::worktree::BranchPoint {
+                branch: Some(fresh.branch.clone()),
+                commit: source_commit.clone(),
+            })
+        );
+        let error = state
+            .new_session_worktree(
+                &workspace.id,
+                &worktrees,
+                "from-nowhere",
+                None,
+                None,
+                Some("no-such-branch"),
+            )
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("base branch no-such-branch does not exist"),
+            "{error:#}"
+        );
     }
 
     #[test]

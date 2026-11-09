@@ -131,6 +131,7 @@ where `Space` keeps its own link menu.
 | `Enter` / `Ctrl+Enter` / `Alt+Enter` | send message / send it in a new Git workspace and branch (later in a Session, as `Ctrl+W` does, then sends; refused while the agent is mid-turn) / insert editor newline |
 | `Ctrl+R` (message editor) | start/stop recording and insert its transcript |
 | `Ctrl+W` (existing session) | create and associate a linked workspace and branch, then restart the interaction in it; reports when one already exists |
+| `Alt+B` (new interaction) | choose the local branch the new interaction's worktree starts from, newest commits first and typed at; sending then makes a fresh worktree of that branch with `Enter` or `Ctrl+Enter`. The header names it as `<branch> (base)`; the first row, `Default`, goes back to the usual starting point |
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `Ctrl+N` (message editor) | add another box to the message after the current one and type in it; the boxes are sent together, each as its own paragraph |
 | `Esc` (several boxes) | choose between the boxes: `j`/`k` move, `Enter`/`i` type in the chosen box, `d` deletes it, `Ctrl+N` adds one after it, `Esc` again leaves the editor with the boxes kept |
@@ -582,6 +583,13 @@ The repository worktrees are made from is discovered from the **Workspace host
 directory**, not from the optional checkout association, so the
 `Ctrl+Enter` action only has an effect when that directory is inside a Git working tree.
 
+A new worktree starts from the branch of the checkout carried over with `n`,
+or else from the Workspace checkout's. To start it somewhere else, press
+`Alt+B` on the blank new-interaction screen and pick a local branch: the
+branch is made at that branch's tip, and that branch is what it later rebases
+onto and integrates into. Picking a base always makes a fresh worktree, so plain
+`Enter` sends into one too.
+
 There is nothing to ask the agent for: before an interaction starts, Styra
 creates a branch named after the work and its Session
 (`styra/fix-flaky-checkout-test-<SESSION-ID>`), checks it out under the
@@ -635,16 +643,18 @@ jumps to the session you pick.
 
 ### Rebasing an interaction
 
-Press `Alt+B` to retarget an interaction onto another local branch. Enter the
-new target branch and press Enter. Styra creates a fresh branch from the
+Press `Alt+B` to retarget an interaction onto another local branch. It opens
+the same kind of branch list as choosing a new interaction's base: local
+branches newest commit first, typed at to narrow, without the branch the
+interaction is on. Pick the new target and press Enter. Styra creates a fresh branch from the
 interaction's current branch, then replays its commits onto the new target.
 Changes inherited from the old source branch are excluded. Conflicts use the
 same model-assisted resolution and progress display as the normal rebase action.
 Commit any outstanding changes and wait for the interaction to become idle first.
 
 The previous branch and its source are saved with the session, and its Git ref
-is kept intact. In the `Alt+B` prompt, press Tab to cycle through saved branches,
-then Enter to return to one without rebasing it. The branch you leave is saved
+is kept intact. The `Alt+B` list shows saved branches first, most recent first
+and marked `· previous branch`; Enter on one returns to it without rebasing it. The branch you leave is saved
 too, so you can switch back again. This history survives server restarts and
 worktree cleanup. If a retarget rebase stops, use `Ctrl+B` to retry it before
 switching branches.

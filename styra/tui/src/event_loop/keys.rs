@@ -45,7 +45,7 @@ pub(super) fn message_paste_active(app: &App) -> bool {
         && app.launcher.is_none()
         && app.template_picker.is_none()
         && app.rename_prompt.is_none()
-        && app.retarget_prompt.is_none()
+        && app.branch_picker.is_none()
         && app.integration_prompt.is_none()
         && app.link_menu.is_none()
         && app.action_menu.is_none()
@@ -67,7 +67,7 @@ fn action_menu_available(app: &App) -> bool {
         && app.launcher.is_none()
         && app.template_picker.is_none()
         && app.rename_prompt.is_none()
-        && app.retarget_prompt.is_none()
+        && app.branch_picker.is_none()
         && app.integration_prompt.is_none()
         && app.branch_prompt.is_none()
         && app.link_menu.is_none()
@@ -92,7 +92,7 @@ fn reference_available(app: &App) -> bool {
     app.insert.is_none()
         && app.git_repository_prompt.is_none()
         && app.rename_prompt.is_none()
-        && app.retarget_prompt.is_none()
+        && app.branch_picker.is_none()
         && app.integration_prompt.is_none()
         && (app.branch_prompt.is_none() || app.launcher.is_some())
         && app.launch.prompt.is_none()
@@ -176,6 +176,11 @@ impl Loop<'_> {
             app.help.open();
             return Ok(Handled::Done);
         }
+        // So does the base and retarget branch picker.
+        if app.branch_picker.is_some() {
+            input::handle_branch_picker_key(app, client, key);
+            return Ok(Handled::Done);
+        }
         // The comparison picker owns typed text and navigation while open.
         if app.diff_branch_picker.is_some() {
             self.diff_branch_picker_key(key);
@@ -215,12 +220,6 @@ impl Loop<'_> {
         }
         if app.rename_prompt.is_some() {
             self.rename_prompt_key(key)?;
-            return Ok(Handled::Done);
-        }
-        // The branching choice is modal and can replace the current Session
-        // on confirmation, so it owns the key before every underlying view.
-        if app.retarget_prompt.is_some() {
-            input::handle_retarget_prompt_key(app, client, key);
             return Ok(Handled::Done);
         }
         if app.integration_prompt.is_some() {
@@ -804,9 +803,14 @@ mod tests {
         assert!(!message_paste_active(&app));
         assert!(!reference_available(&app));
         app.rename_prompt = None;
-        app.retarget_prompt = Some((String::new(), Vec::new()));
+        app.branch_picker = Some(crate::branch_picker::BranchPicker::retarget(
+            &[],
+            vec!["main".into()],
+            None,
+        ));
         assert!(!message_paste_active(&app));
-        app.retarget_prompt = None;
+        assert!(!reference_available(&app));
+        app.branch_picker = None;
         app.integration_prompt = Some(String::new());
         assert!(!message_paste_active(&app));
         app.integration_prompt = None;

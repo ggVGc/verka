@@ -251,6 +251,16 @@ restoring require an idle interaction, committed changes, no queued messages,
 and a checkout that is not shared by another active interaction. Finish an
 ongoing rebase before changing branches. Sealed sessions cannot change branches.
 
+## Base branch of a new worktree
+
+`create_session` with `create_worktree: true` accepts an optional
+`base_branch`: a local branch name the new branch and linked worktree start
+from, in place of the `checkout_from` Session's branch or the Workspace HEAD.
+It becomes the new checkout's integration target. A name that is not a local
+branch is rejected, as is `base_branch` without `create_worktree`. The TUI
+offers it as a fuzzy picker (`Alt+B` on the blank screen) listing local
+branches newest commit first.
+
 ## Checkout comparison branches
 
 In an interaction’s diff view, `b` opens a fuzzy branch picker. Local branches

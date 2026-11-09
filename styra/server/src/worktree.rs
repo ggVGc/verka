@@ -199,6 +199,20 @@ impl Worktrees {
         })
     }
 
+    /// [`Self::fork`] from the local branch the operator chose as the base,
+    /// refusing anything that is not one — a tag, a remote branch, or
+    /// revision syntax such as `main~1` — so that what the new branch
+    /// integrates into is a branch.
+    pub fn fork_branch(&self, id: &str, topic: Option<&str>, branch: &str) -> Result<Checkout> {
+        if let Some(existing) = self.existing(id) {
+            return Ok(Checkout::at(existing));
+        }
+        self.git
+            .local_branch_commit(&self.repository.root, branch)?
+            .with_context(|| format!("base branch {branch} does not exist"))?;
+        self.fork(id, topic, branch)
+    }
+
     /// Check `branch` out again in a checkout of its own, for a Session whose
     /// worktree was cleaned up after it while the branch stayed.
     ///

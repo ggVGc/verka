@@ -72,6 +72,12 @@ pub struct CreateSession {
     /// linked checkout falls back to the Workspace checkout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout_from: Option<String>,
+    /// With `create_worktree`, the local branch the fresh checkout starts
+    /// from, and so the branch it integrates into. It takes the place of
+    /// `checkout_from`'s branch and of the Workspace checkout's. Must name a
+    /// branch under `refs/heads/`; revision syntax is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// Optional operator-facing name. When absent, the server derives one
@@ -949,6 +955,7 @@ mod tests {
                     launch: LaunchPolicy::default(),
                     create_worktree: false,
                     checkout_from: None,
+                    base_branch: None,
                     message: None,
                     name: None,
                     contract: None,

@@ -263,10 +263,20 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
     }
 }
 
-/// The branch a new interaction would start from: the linked checkout it was
-/// opened from, or else the Workspace's own, which is marked as such. `None`
-/// when that branch is unknown — a detached head, or no Git checkout at all.
+/// The branch a new interaction would start from: the base branch chosen for
+/// it, marked as such, or else [`default_source_branch`].
 fn source_branch(app: &App) -> Option<String> {
+    match &app.base_branch {
+        Some(branch) => Some(format!("{branch} (base)")),
+        None => default_source_branch(app),
+    }
+}
+
+/// The branch a new interaction would start from without a chosen base: the
+/// linked checkout it was opened from, or else the Workspace's own, which is
+/// marked as such. `None` when that branch is unknown — a detached head, or
+/// no Git checkout at all.
+pub(crate) fn default_source_branch(app: &App) -> Option<String> {
     let linked = app
         .checkout_from
         .as_deref()
@@ -815,12 +825,6 @@ fn draw_main(
         footer: &footer,
         overlays: styra_ui::application::ApplicationOverlays {
             rebase_status: app.shown_rebase(),
-            retarget_prompt: app.retarget_prompt.as_ref().map(|(text, history)| {
-                (
-                    text.as_str(),
-                    history.iter().any(|saved| saved.branch == text.trim()),
-                )
-            }),
             rename_prompt: app.rename_prompt.as_deref(),
             integration_message: app.integration_prompt.as_deref(),
             integration_target: app
@@ -837,6 +841,16 @@ fn draw_main(
             diff_branches: app.diff_branch_picker.as_ref().map(|picker| {
                 styra_ui::fuzzy_list::FuzzyListView {
                     title: " Comparison branch · newest commits first ",
+                    rows: &picker.rows,
+                    list: &picker.list,
+                    focused: true,
+                    empty_note: "no matching branches",
+                    hint: " type to narrow · ↑/↓ choose · Enter selects · Esc cancels ",
+                }
+            }),
+            branches: app.branch_picker.as_ref().map(|picker| {
+                styra_ui::fuzzy_list::FuzzyListView {
+                    title: picker.title(),
                     rows: &picker.rows,
                     list: &picker.list,
                     focused: true,
@@ -1447,6 +1461,18 @@ mod tests {
                 Some("main (Workspace)")
             );
         });
+        // A chosen base branch is what the launch starts from instead.
+        app.base_branch = Some("release".into());
+        inspect(&app, |v| {
+            let MainView::Events(e) = &v.main else {
+                panic!()
+            };
+            assert_eq!(
+                e.list.chrome.source_branch.as_deref(),
+                Some("release (base)")
+            );
+        });
+        app.base_branch = None;
         app.checkout_from = None;
         inspect(&app, |v| {
             let MainView::Events(e) = &v.main else {

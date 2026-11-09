@@ -238,7 +238,6 @@ pub struct App {
     pub integration_prompt: Option<String>,
     /// Commit-message drafts kept in this client, keyed by interaction.
     integration_drafts: std::collections::HashMap<String, String>,
-    pub retarget_prompt: Option<(String, Vec<styra_protocol::SavedBranch>)>,
     /// The last rebase this client started, and the interaction it is of.
     /// The server locks that interaction while it runs; this only follows it.
     pub rebase_status: Option<(String, styra_protocol::RebaseStatus)>,
@@ -259,6 +258,15 @@ pub struct App {
     /// starts from unless `checkout_from` lends a linked one. Read once when
     /// the blank screen opens rather than on every frame.
     pub workspace_branch: Option<String>,
+    /// The local branch a pending new Session's checkout is to start from,
+    /// chosen with alt-b. When set, the launch makes a fresh checkout of
+    /// that branch whichever way the message is sent, rather than sharing
+    /// or branching what `checkout_from` lends.
+    pub base_branch: Option<String>,
+    /// The branch list open over the screen: the base of a pending new
+    /// Session (alt-b before its first message), or the branch to retarget
+    /// the current one onto (alt-b after).
+    pub branch_picker: Option<crate::branch_picker::BranchPicker>,
     /// The sandbox policy: both of its layers, the sandbox they resolve to, and
     /// which layer the driva view's keys are editing. See [`Launch`].
     pub launch: Launch,
@@ -623,7 +631,6 @@ impl App {
             rename_prompt: None,
             integration_prompt: None,
             integration_drafts: std::collections::HashMap::new(),
-            retarget_prompt: None,
             rebase_status: None,
             pending_integration: None,
             tag_picker: None,
@@ -631,6 +638,8 @@ impl App {
             session_id: session_id.into(),
             checkout_from: None,
             workspace_branch: None,
+            base_branch: None,
+            branch_picker: None,
             launch: Launch::default(),
             raw: RawView::default(),
             messages: RawView::default(),

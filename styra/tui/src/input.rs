@@ -10,6 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 
 use crate::app::{App, Request, View};
+use crate::branch_picker::{BranchChoice, BranchPicker};
 use crate::insert;
 use crate::launch;
 use crate::link_menu::LinkAction;
@@ -67,37 +68,24 @@ pub fn handle_rename_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
     }
 }
 
-pub fn handle_retarget_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
-    let Some((text, history)) = app.retarget_prompt.as_mut() else {
+/// A key for the open branch picker. A base is only remembered for the
+/// launch; a retarget or a return to a previous branch is done at once.
+pub fn handle_branch_picker_key(app: &mut App, client: &Client, key: KeyEvent) {
+    let Some(picker) = app.branch_picker.as_mut() else {
         return;
     };
-    match key.code {
-        KeyCode::Esc => app.retarget_prompt = None,
-        KeyCode::Tab if !history.is_empty() => {
-            let index = history
-                .iter()
-                .position(|saved| saved.branch == *text)
-                .map(|index| (index + history.len() - 1) % history.len())
-                .unwrap_or(history.len() - 1);
-            *text = history[index].branch.clone();
-        }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
-        KeyCode::Enter if !text.trim().is_empty() => {
-            let branch = text.trim().to_owned();
-            let restore = history.iter().any(|saved| saved.branch == branch);
-            app.retarget_prompt = None;
-            if restore {
-                match client.restore_session_branch(&app.session_id, &branch) {
-                    Ok(()) => app.show_action_message(format!("Returned to {branch}")),
-                    Err(error) => app.show_warning(format!("Could not restore branch: {error:#}")),
-                }
-            } else {
-                app.ask(Request::Retarget(branch));
-            }
-        }
-        _ => {
-            if let Some(edit) = Edit::from_key(key) {
-                edit.apply(text);
+    let choice = picker.handle_key(key);
+    if !matches!(choice, BranchChoice::Stay) {
+        app.branch_picker = None;
+    }
+    match choice {
+        BranchChoice::Stay | BranchChoice::Cancel => {}
+        BranchChoice::Base(branch) => app.base_branch = branch,
+        BranchChoice::Retarget(branch) => app.ask(Request::Retarget(branch)),
+        BranchChoice::Restore(branch) => {
+            match client.restore_session_branch(&app.session_id, &branch) {
+                Ok(()) => app.show_action_message(format!("Returned to {branch}")),
+                Err(error) => app.show_warning(format!("Could not restore branch: {error:#}")),
             }
         }
     }
@@ -466,6 +454,54 @@ fn mount_highlighted_link(app: &mut App, writable: bool) {
     crate::launch::grant_interaction_mount(app, mount);
 }
 
+/// List the local branches of the repository the new interaction would launch
+/// in, for choosing the one its checkout starts from.
+fn open_base_branch_picker(app: &mut App) {
+    let Some(root) = app.workspace.root().map(Path::to_path_buf) else {
+        return app.show_warning("no Workspace directory to list branches in");
+    };
+    match crate::branch_picker::local_branches(&root) {
+        Ok(branches) if branches.is_empty() => {
+            app.show_warning("this Workspace's repository has no local branches")
+        }
+        Ok(branches) => {
+            let default = crate::presentation::default_source_branch(app);
+            app.branch_picker = Some(BranchPicker::base(
+                default.as_deref(),
+                branches,
+                app.base_branch.as_deref(),
+            ));
+        }
+        Err(error) => app.show_warning(format!("could not list branches: {error:#}")),
+    }
+}
+
+/// List the branches the current interaction can be moved to: those it
+/// worked on before, to return to, then every other local branch of its
+/// repository, to retarget onto. Both are the server's to read, since the
+/// interaction's checkout is.
+fn open_retarget_picker(app: &mut App, client: &Client) {
+    let history = match client.session_branch_history(&app.session_id) {
+        Ok(history) => history,
+        Err(error) => return app.show_warning(format!("Could not read branch history: {error:#}")),
+    };
+    let branches = match client.diff_branches(&app.session_id) {
+        Ok(branches) => branches,
+        Err(error) => return app.show_warning(format!("Could not list branches: {error:#}")),
+    };
+    let current = app
+        .interactions
+        .current(&app.session_id)
+        .and_then(|interaction| interaction.checkout.as_ref())
+        .and_then(|checkout| checkout.branch.clone());
+    let previous: Vec<String> = history.into_iter().map(|saved| saved.branch).collect();
+    let picker = BranchPicker::retarget(&previous, branches, current.as_deref());
+    if picker.rows.is_empty() {
+        return app.show_warning("no other branch to retarget onto");
+    }
+    app.branch_picker = Some(picker);
+}
+
 pub fn handle_list_key(
     app: &mut App,
     client: &Client,
@@ -516,12 +552,13 @@ pub fn handle_list_key(
         }
         k if GLOBAL_STOP.matches(k) => return session::pause_interaction(app, client, live),
         k if GLOBAL_BRANCH.matches(k) => return session::open_branch_prompt(app),
+        // The same key as retarget: before the first message there is no
+        // branch to move, only the one the checkout is going to start from.
+        k if GLOBAL_BASE_BRANCH.matches(k) && app.session_id.is_empty() => {
+            return open_base_branch_picker(app)
+        }
         k if GLOBAL_RETARGET.matches(k) && !app.session_id.is_empty() => {
-            match client.session_branch_history(&app.session_id) {
-                Ok(history) => app.retarget_prompt = Some((String::new(), history)),
-                Err(error) => app.show_warning(format!("Could not read branch history: {error:#}")),
-            }
-            return;
+            return open_retarget_picker(app, client)
         }
         k if GLOBAL_REBASE.matches(k) && !app.session_id.is_empty() => {
             return app.ask(Request::Rebase);
@@ -1610,45 +1647,33 @@ mod tests {
     }
 
     #[test]
-    fn retarget_prompt_cycles_saved_branches_and_submits_a_new_target() {
+    fn the_branch_picker_retargets_or_keeps_a_base() {
         let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
         let client = Client::new(PathBuf::from("/missing.sock"));
-        app.retarget_prompt = Some((
-            String::new(),
-            vec![
-                styra_protocol::SavedBranch {
-                    branch: "styra/first".into(),
-                    branched_from: None,
-                },
-                styra_protocol::SavedBranch {
-                    branch: "styra/second".into(),
-                    branched_from: None,
-                },
-            ],
+        app.branch_picker = Some(BranchPicker::retarget(
+            &["styra/first".into()],
+            vec!["main".into(), "release".into()],
+            None,
         ));
-        for expected in ["styra/second", "styra/first", "styra/second"] {
-            handle_retarget_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Tab));
-            assert_eq!(app.retarget_prompt.as_ref().unwrap().0, expected);
-        }
-        handle_retarget_prompt_key(
-            &mut app,
-            &client,
-            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
-        );
         for c in "release".chars() {
-            handle_retarget_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Char(c)));
+            handle_branch_picker_key(&mut app, &client, KeyEvent::from(KeyCode::Char(c)));
         }
-        handle_retarget_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
-        assert!(app.retarget_prompt.is_none());
+        handle_branch_picker_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
+        assert!(app.branch_picker.is_none());
         assert!(
             matches!(app.take_request(), Some(Request::Retarget(target)) if target == "release")
         );
-        app.retarget_prompt = Some((String::new(), Vec::new()));
-        handle_retarget_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
-        assert!(app.retarget_prompt.is_some());
-        handle_retarget_prompt_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
-        assert!(app.retarget_prompt.is_none());
+
+        app.branch_picker = Some(BranchPicker::base(None, vec!["main".into()], None));
+        handle_branch_picker_key(&mut app, &client, KeyEvent::from(KeyCode::Down));
+        handle_branch_picker_key(&mut app, &client, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.base_branch.as_deref(), Some("main"));
         assert!(app.take_request().is_none());
+
+        app.branch_picker = Some(BranchPicker::base(None, vec!["main".into()], None));
+        handle_branch_picker_key(&mut app, &client, KeyEvent::from(KeyCode::Esc));
+        assert!(app.branch_picker.is_none());
+        assert_eq!(app.base_branch.as_deref(), Some("main"));
     }
 
     #[test]
@@ -2739,6 +2764,40 @@ mod tests {
         app.session_id = "branch-2".into();
         run_list_action(&mut app, &root, &EVENTS_PARENT);
         assert_eq!(app.take_request(), Some(Request::OpenSession(source)));
+    }
+
+    /// On the blank screen alt-b lists the repository's branches to start
+    /// from; once there is a Session the same key is retarget's.
+    #[test]
+    fn alt_b_on_the_blank_screen_lists_base_branches() {
+        let (_root_directory, root) = tree("base-branch");
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "start"]);
+        git(&["branch", "release"]);
+        let mut app = app(&root);
+        app.enter_list();
+        app.workspace_branch = Some("main".into());
+
+        run_list_action(&mut app, &root, &GLOBAL_BASE_BRANCH);
+        let picker = app.branch_picker.take().expect("the picker opens");
+        assert_eq!(picker.rows[0], "Default (main (Workspace))");
+        let mut branches = picker.rows[1..].to_vec();
+        branches.sort();
+        assert_eq!(branches, vec!["main", "release"]);
+
+        app.session_id = "styra-7".into();
+        run_list_action(&mut app, &root, &GLOBAL_BASE_BRANCH);
+        assert!(app.branch_picker.is_none());
     }
 
     /// Unlike a branch marker, a regular event toggles its expansion.
