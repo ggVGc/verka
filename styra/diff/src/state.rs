@@ -69,6 +69,10 @@ pub(crate) enum Action {
     FindPrevious,
     /// Switch between the combined diff and one file's patch at a time.
     ToggleFiles,
+    /// Move the per-file view's file list between the side and bottom.
+    ToggleFilesBelow,
+    /// Hide or show the per-file view's file list.
+    ToggleFileList,
     ToggleRemoved,
     ToggleLayout,
     PanLeft,
@@ -162,6 +166,10 @@ pub struct CheckoutDiff {
     /// change in the meantime.
     pub file_tops: HashMap<String, usize>,
     pub file_list_offset: usize,
+    /// Whether the per-file view lists files below the patch.
+    pub files_below: bool,
+    /// Whether the per-file view's file list is hidden.
+    pub file_list_hidden: bool,
     pub search: Search,
     /// What each file was edited for, once the host has had it described.
     pub report: ReportState,
@@ -212,6 +220,8 @@ impl Default for CheckoutDiff {
             selected_file: 0,
             file_tops: HashMap::new(),
             file_list_offset: 0,
+            files_below: false,
+            file_list_hidden: false,
             search: Search::default(),
             report: ReportState::default(),
             report_page: None,
@@ -511,6 +521,8 @@ impl CheckoutDiff {
             involved_layers: self.involved_layers.as_deref(),
             selected_file: self.selected_file,
             file_list_offset: self.file_list_offset,
+            files_below: self.files_below,
+            file_list_hidden: self.file_list_hidden,
             search: self.search.view(),
             report: (self.commits.selected == 0).then_some(&self.report),
             report_page: self.report_page,
@@ -649,6 +661,11 @@ impl CheckoutDiff {
                 self.move_cursor_over(0, false);
             }
             Action::ToggleLayout => self.side_by_side = !self.side_by_side,
+            Action::ToggleFilesBelow => self.files_below = !self.files_below,
+            Action::ToggleFileList if self.per_file => {
+                self.file_list_hidden = !self.file_list_hidden
+            }
+            Action::ToggleFileList => {}
             Action::PanLeft => self.horizontal_scroll = self.horizontal_scroll.saturating_sub(8),
             Action::PanRight => self.horizontal_scroll = self.horizontal_scroll.saturating_add(8),
             // The selected file stays selected, and the list keeps it in view.

@@ -108,6 +108,18 @@ pub const BINDINGS: &[Binding] = &[
         Command::View(Action::ToggleFiles),
     ),
     bind(
+        &[KeyCode::Char('b')],
+        "b (per-file view)",
+        "move the file list between the side and bottom",
+        Command::View(Action::ToggleFilesBelow),
+    ),
+    bind(
+        &[KeyCode::Char('B')],
+        "B (per-file view)",
+        "hide / show the file list",
+        Command::View(Action::ToggleFileList),
+    ),
+    bind(
         &[KeyCode::Char('w')],
         "w",
         "toggle word highlights",
@@ -510,6 +522,42 @@ mod tests {
         press(&mut diff, KeyCode::Char('?'));
         press(&mut diff, KeyCode::Char('?'));
         assert_eq!(diff.help, None);
+    }
+
+    #[test]
+    fn file_list_position_toggles_without_changing_the_selected_file() {
+        let mut diff = diff();
+        press(&mut diff, KeyCode::Char('l'));
+        press(&mut diff, KeyCode::Char('j'));
+        assert_eq!(diff.selected_file, 1);
+        assert!(!diff.files_below);
+
+        assert_eq!(press(&mut diff, KeyCode::Char('b')), Outcome::Handled);
+        assert!(diff.files_below);
+        assert_eq!(diff.selected_file, 1);
+
+        press(&mut diff, KeyCode::Char('b'));
+        assert!(!diff.files_below);
+        assert_eq!(diff.selected_file, 1);
+    }
+
+    #[test]
+    fn file_list_visibility_toggles_without_changing_the_selected_file() {
+        let mut diff = diff();
+        assert_eq!(press(&mut diff, KeyCode::Char('B')), Outcome::Handled);
+        assert!(!diff.file_list_hidden);
+        press(&mut diff, KeyCode::Char('l'));
+        press(&mut diff, KeyCode::Char('j'));
+        assert_eq!(diff.selected_file, 1);
+
+        press(&mut diff, KeyCode::Char('B'));
+        assert!(diff.file_list_hidden);
+        press(&mut diff, KeyCode::Char('k'));
+        assert_eq!(diff.selected_file, 0);
+
+        press(&mut diff, KeyCode::Char('B'));
+        assert!(!diff.file_list_hidden);
+        assert_eq!(diff.selected_file, 0);
     }
 
     /// The report page is modal like the legend: j/k pick a file on it,

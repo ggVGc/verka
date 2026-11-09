@@ -65,8 +65,9 @@ fn main() -> anyhow::Result<()> {
             (CheckoutDiff::read(target), Some(watch))
         }
     };
+    diff.files_below = cli.files_below;
     let mut terminal = init().context("taking over the terminal")?;
-    let result = run(&mut terminal, &mut diff, watch, cli.files_below);
+    let result = run(&mut terminal, &mut diff, watch);
     restore();
     result
 }
@@ -127,7 +128,6 @@ fn run(
     terminal: &mut DefaultTerminal,
     diff: &mut CheckoutDiff,
     mut watch: Option<Watch>,
-    files_below: bool,
 ) -> anyhow::Result<()> {
     // Why the last key did nothing — a `v` that opened no file, say — until
     // the next key.
@@ -141,7 +141,6 @@ fn run(
             .draw(|frame| {
                 let mut view = diff.view(block(notice.as_deref()));
                 view.thumbnail = true;
-                view.files_below = files_below;
                 // There is no agent here to write an edit report with.
                 view.report = None;
                 measured = render(frame, &view, frame.area());

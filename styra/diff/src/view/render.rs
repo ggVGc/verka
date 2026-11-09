@@ -320,7 +320,7 @@ fn render_inside(
     };
     let mut thumbnail_area = None;
     let mut file_list_offset = view.file_list_offset;
-    let body = if view.per_file {
+    let body = if view.per_file && !view.file_list_hidden {
         let mut rows = file_tree_rows(&files, view.compact_dirs);
         for (index, line) in &mut rows {
             if index
@@ -3663,6 +3663,33 @@ index 1111111..2222222 100644
             "not in the header too: {output}"
         );
         assert_eq!(viewport, 12, "shortcut rows leave room for the patch");
+    }
+
+    #[test]
+    fn hidden_file_list_gives_the_patch_the_full_body_in_both_positions() {
+        let text =
+            format!("{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old second\n+new second\n");
+        for files_below in [false, true] {
+            let buffer = draw_frame(80, 18, |frame| {
+                let mut view = CheckoutDiffView::unread(Block::bordered());
+                view.diff = Ok(&text);
+                view.per_file = true;
+                view.selected_file = 1;
+                view.files_below = files_below;
+                view.file_list_hidden = true;
+                render(frame, &view, frame.area());
+            });
+            let rows = buffer_rows(&buffer);
+            let output = rows.join("\n");
+            assert!(output.contains("b.txt [M]"), "{output}");
+            assert!(output.contains("new second"), "{output}");
+            assert!(!output.contains("files changed"), "{output}");
+            assert!(!output.contains("▾ src/"), "{output}");
+            assert!(
+                rows.iter().any(|row| row.starts_with("│ b.txt [M]")),
+                "{output}"
+            );
+        }
     }
 
     /// Below the patch, the files take the full width and no more rows than

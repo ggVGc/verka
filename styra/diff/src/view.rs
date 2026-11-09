@@ -70,6 +70,8 @@ pub struct CheckoutDiffView<'a> {
     /// Whether the per-file view lists its files in a strip under the patch,
     /// as in a side panel too narrow to give them a column of their own.
     pub files_below: bool,
+    /// Whether the per-file view's file list is hidden.
+    pub file_list_hidden: bool,
     pub tint: Tint,
     pub word_highlights: bool,
     /// While changes are tinted by the commits that made them, those
@@ -156,6 +158,7 @@ impl Default for CheckoutDiffView<'_> {
             hide_removed: false,
             compact_dirs: true,
             files_below: false,
+            file_list_hidden: false,
             tint: Tint::Full,
             word_highlights: true,
             layers: None,
