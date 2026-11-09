@@ -66,10 +66,8 @@ bindings! { EVENTS = "Events and previews";
         => Action::EventsPreviewScrollDown;
     EVENTS_PREVIEW_SCROLL_UP: [Key::code(KeyCode::Up)] ("preview open")
         => Action::EventsPreviewScrollUp;
-    EVENTS_SCROLL_DOWN: [Key::ch('J')] => Action::EventsScrollDown;
-    EVENTS_SCROLL_UP: [Key::ch('K')] => Action::EventsScrollUp;
-    EVENTS_NEXT_ENTRY: [Key::code(KeyCode::Down)] => Action::EventsNextEntry;
-    EVENTS_PREV_ENTRY: [Key::code(KeyCode::Up)] => Action::EventsPrevEntry;
+    EVENTS_SCROLL_DOWN: [Key::ch('J'), Key::code(KeyCode::Down)] => Action::EventsScrollDown;
+    EVENTS_SCROLL_UP: [Key::ch('K'), Key::code(KeyCode::Up)] => Action::EventsScrollUp;
     EVENTS_NEXT_LINE: [Key::ch('j')] => Action::EventsNextLine;
     EVENTS_PREV_LINE: [Key::ch('k')] => Action::EventsPrevLine;
     EVENTS_FIRST: [Key::ch('g')] => Action::EventsFirst;

@@ -657,12 +657,12 @@ pub fn handle_list_key(
             // With the pane holding the keys, the movement keys walk its
             // entries and the preview follows them. The list stands still, so
             // the operator keeps their place in it.
-            k if (EVENTS_NEXT_ENTRY.matches(k) || EVENTS_NEXT_LINE.matches(k))
+            k if (EVENTS_NEXT_LINE.matches(k) || k.code == KeyCode::Down)
                 && app.entry_log.focused() =>
             {
                 app.entry_log_select_next()
             }
-            k if (EVENTS_PREV_ENTRY.matches(k) || EVENTS_PREV_LINE.matches(k))
+            k if (EVENTS_PREV_LINE.matches(k) || k.code == KeyCode::Up)
                 && app.entry_log.focused() =>
             {
                 app.entry_log_select_prev()
@@ -683,7 +683,7 @@ pub fn handle_list_key(
                 app.preview.scroll.half_page_up()
             }
             // With the preview open the arrows read it, the way `j`/`k` do the
-            // full-screen one; `J`/`K` still step between entries.
+            // full-screen one; `j`/`k` still step through the list.
             k if EVENTS_PREVIEW_SCROLL_DOWN.matches(k)
                 && app.preview.open
                 && !app.diff_visible() =>
@@ -699,8 +699,6 @@ pub fn handle_list_key(
             k if EVENTS_PAGE_UP.matches(k) && app.entry_log.open => app.entry_log.scroll.page_up(),
             k if EVENTS_SCROLL_DOWN.matches(k) => app.scroll_interaction_down(),
             k if EVENTS_SCROLL_UP.matches(k) => app.scroll_interaction_up(),
-            k if EVENTS_NEXT_ENTRY.matches(k) => app.select_next(),
-            k if EVENTS_PREV_ENTRY.matches(k) => app.select_prev(),
             k if EVENTS_NEXT_LINE.matches(k) && app.link_highlight.is_some() => {
                 app.highlight_next_link()
             }
@@ -3304,7 +3302,7 @@ mod tests {
             press_list_key(&mut app, &root, KeyEvent::from(KeyCode::Tab));
             assert!(app.diff_visible());
             assert!(!app.diff_focused());
-            run_list_action(&mut app, &root, &EVENTS_NEXT_ENTRY);
+            run_list_action(&mut app, &root, &EVENTS_NEXT_LINE);
             assert_eq!(app.timeline.selected, 1);
             assert_eq!(app.checkout_diff.as_ref().unwrap().scroll.offset, 10);
             assert_eq!(app.preview.scroll.offset, 0);

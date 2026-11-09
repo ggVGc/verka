@@ -47,7 +47,7 @@ use crate::preview::{self, Preview};
 use crate::raw::{ProviderRawView, RawView};
 use crate::tag_picker::TagPicker;
 use crate::tail::Tail;
-use crate::timeline::{Entry, Step, Timeline};
+use crate::timeline::{Entry, Timeline};
 use crate::workspace::Location;
 
 /// Which region receives keys, like vim's normal/insert split.
@@ -1375,23 +1375,7 @@ impl App {
         }
     }
 
-    /// Move to the next entry with an arrow (something beyond its bare
-    /// summary), skipping over ones with nothing else to show. See
-    /// [`Self::select_next_line`] to instead step one entry at a time.
-    pub fn select_next(&mut self) {
-        let moved = self.timeline.select_forward(Step::WithDetail);
-        self.moved(moved);
-    }
-
-    /// Move to the previous entry with an arrow; see [`Self::select_next`].
-    pub fn select_prev(&mut self) {
-        let moved = self.timeline.select_backward(Step::WithDetail);
-        self.moved(moved);
-    }
-
-    /// Move to the next visible entry regardless of whether it has anything
-    /// beyond its summary — a finer-grained step than [`Self::select_next`],
-    /// which skips entries with no arrow.
+    /// Move to the next visible entry.
     ///
     /// A `branched to` marker's branches are rows of their own here: the step
     /// walks down through them before leaving the marker.
@@ -1402,7 +1386,7 @@ impl App {
             self.branch_cursor = Some((self.timeline.selected, next));
             return;
         }
-        let moved = self.timeline.select_forward(Step::Line);
+        let moved = self.timeline.select_forward();
         self.moved(moved);
     }
 
@@ -1414,7 +1398,7 @@ impl App {
             self.branch_cursor = at.checked_sub(1).map(|at| (self.timeline.selected, at));
             return;
         }
-        let moved = self.timeline.select_backward(Step::Line);
+        let moved = self.timeline.select_backward();
         self.moved(moved);
         if moved {
             self.branch_cursor = self
@@ -2382,35 +2366,24 @@ mod tests {
 
     #[test]
     fn moving_up_pins_the_view_and_reaching_the_tail_resumes_follow() {
-        // Entry navigation requires detail; line navigation reaches every
-        // visible entry. Both must preserve the same pin/follow behavior.
-        for (text, select_prev, select_next) in [
-            (
-                "x\nmore x",
-                App::select_prev as fn(&mut App),
-                App::select_next as fn(&mut App),
-            ),
-            ("x", App::select_prev_line, App::select_next_line),
-        ] {
-            let mut app = app();
-            for _ in 0..3 {
-                app.push_event(AgentEvent::AgentMessage { text: text.into() });
-            }
-            select_prev(&mut app);
-            assert!(!app.timeline.follow);
-            assert_eq!(app.timeline.selected, 1);
-
-            // New events no longer move the selection while pinned.
-            app.push_event(AgentEvent::AgentMessage { text: text.into() });
-            assert_eq!(app.timeline.selected, 1);
-
-            // Walking back down to the tail re-enables follow.
-            select_next(&mut app);
-            select_next(&mut app);
-            select_next(&mut app);
-            assert!(app.timeline.follow);
-            assert_eq!(app.timeline.selected, app.timeline.entries.len() - 1);
+        let mut app = app();
+        for _ in 0..3 {
+            app.push_event(AgentEvent::AgentMessage { text: "x".into() });
         }
+        app.select_prev_line();
+        assert!(!app.timeline.follow);
+        assert_eq!(app.timeline.selected, 1);
+
+        // New events no longer move the selection while pinned.
+        app.push_event(AgentEvent::AgentMessage { text: "x".into() });
+        assert_eq!(app.timeline.selected, 1);
+
+        // Walking back down to the tail re-enables follow.
+        app.select_next_line();
+        app.select_next_line();
+        app.select_next_line();
+        assert!(app.timeline.follow);
+        assert_eq!(app.timeline.selected, app.timeline.entries.len() - 1);
     }
 
     #[test]
@@ -3855,7 +3828,7 @@ mod tests {
             }
         );
 
-        app.select_next();
+        app.select_next_line();
         assert_eq!(
             *app.timeline.entries[app.timeline.selected].event(),
             AgentEvent::AgentMessage {
@@ -3863,8 +3836,8 @@ mod tests {
             }
         );
 
-        // No more visible entries after "b"; select_next is a no-op.
-        app.select_next();
+        // No more visible entries after "b"; select_next_line is a no-op.
+        app.select_next_line();
         assert_eq!(
             *app.timeline.entries[app.timeline.selected].event(),
             AgentEvent::AgentMessage {
@@ -3872,7 +3845,7 @@ mod tests {
             }
         );
 
-        app.select_prev();
+        app.select_prev_line();
         assert_eq!(
             *app.timeline.entries[app.timeline.selected].event(),
             AgentEvent::AgentMessage {
@@ -3882,78 +3855,6 @@ mod tests {
 
         app.toggle_minor();
         assert!(app.timeline.show_minor);
-    }
-
-    #[test]
-    fn select_next_and_prev_skip_entries_with_no_detail_beyond_their_summary() {
-        let mut app = app();
-        // A single line of text is entirely a restatement of the summary, so
-        // this entry has no arrow and should not be a stop for J/K.
-        app.push_event(AgentEvent::AgentMessage {
-            text: "no detail here".into(),
-        });
-        app.push_event(AgentEvent::AgentMessage {
-            text: "has detail\nsecond line".into(),
-        });
-        app.push_event(AgentEvent::AgentMessage {
-            text: "also no detail".into(),
-        });
-        assert!(!app.timeline.entries[0].has_detail());
-        assert!(app.timeline.entries[1].has_detail());
-        assert!(!app.timeline.entries[2].has_detail());
-
-        // `select_first` (bound to `g`) is unaffected by the has-detail
-        // restriction: it lands on the very first visible entry regardless.
-        app.select_first();
-        assert_eq!(app.timeline.selected, 0);
-
-        // The only entry with detail is index 1; select_next skips index 0's
-        // lack of detail to land there, then has nothing further to skip to.
-        app.select_next();
-        assert_eq!(app.timeline.selected, 1);
-        app.select_next();
-        assert_eq!(app.timeline.selected, 1);
-        // Equally, there is no navigable entry before it to skip back to.
-        app.select_prev();
-        assert_eq!(app.timeline.selected, 1);
-
-        // j/k ignore the has-detail restriction and move one line at a time.
-        app.select_next_line();
-        assert_eq!(app.timeline.selected, 2);
-        app.select_next_line();
-        assert_eq!(
-            app.timeline.selected, 2,
-            "already at the last visible entry"
-        );
-        app.select_prev_line();
-        assert_eq!(app.timeline.selected, 1);
-        app.select_prev_line();
-        assert_eq!(app.timeline.selected, 0);
-    }
-
-    #[test]
-    fn file_events_are_navigable_even_without_fold_detail() {
-        let mut app = app();
-        app.push_event(AgentEvent::AgentMessage {
-            text: "plain summary".into(),
-        });
-        app.push_event(AgentEvent::FileChanged {
-            id: String::new(),
-            paths: vec!["notes.txt".into()],
-            diff: None,
-            checkpoint: None,
-            checkpoint_error: None,
-        });
-        app.push_event(AgentEvent::AgentMessage {
-            text: "another plain summary".into(),
-        });
-        assert!(!app.timeline.entries[1].has_detail());
-
-        app.select_first();
-        app.select_next();
-        assert_eq!(app.timeline.selected, 1);
-        app.select_next();
-        assert_eq!(app.timeline.selected, 1);
     }
 
     #[test]
@@ -3970,7 +3871,7 @@ mod tests {
         app.preview.scroll.page_down();
         assert_eq!(app.preview.scroll.offset, 10);
 
-        app.select_next();
+        app.select_next_line();
         assert_eq!(app.timeline.selected, 1);
         assert_eq!(app.preview.scroll.offset, 0);
     }

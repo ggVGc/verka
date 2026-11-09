@@ -8,7 +8,6 @@
 
 use crate::activity::{EndReason, Status, StopReason};
 use crate::app::App;
-use crate::timeline::Step;
 use styra_protocol::agent::Effort;
 use styra_protocol::contract;
 use styra_protocol::event::{AgentEvent, TurnOutcome};
@@ -242,7 +241,7 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
             .is_some_and(|entry| entry.expanded)
         && app
             .timeline
-            .seek_forward(app.timeline.selected + 1, Step::Line)
+            .seek_forward(app.timeline.selected + 1)
             .is_none();
     if transfer_expansion {
         app.timeline.entries[app.timeline.selected].expanded = false;

@@ -67,8 +67,6 @@ pub(crate) enum Action {
     EventsPreviewScrollUp,
     EventsScrollDown,
     EventsScrollUp,
-    EventsNextEntry,
-    EventsPrevEntry,
     EventsNextLine,
     EventsPrevLine,
     EventsFirst,
@@ -394,8 +392,6 @@ impl Action {
             Self::EventsScrollUp => {
                 "scroll the interaction 10 lines up without moving the selection"
             }
-            Self::EventsNextEntry => "next entry",
-            Self::EventsPrevEntry => "previous entry",
             Self::EventsNextLine => "next line, or next link while links are highlighted",
             Self::EventsPrevLine => "previous line, or previous link",
             Self::EventsFirst => "first entry",

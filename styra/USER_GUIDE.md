@@ -398,9 +398,9 @@ one closes the other), while the event list keeps the keys. `H` shows it full
 screen: select with `j`/`k`, jump with `g`/`G`, and copy a command line with `y`.
 A stopped interaction has no sandbox, and says so.
 
-In the event list: `j`/`k` moves the selection by line, the arrows (while no
-preview is open) move it between events with details, and `J`/`K` scroll the
-interaction ten text lines without changing the selection.
+In the event list: `j`/`k` moves the selection by line, and `J`/`K` (or the
+arrows, while no preview is open) scroll the interaction ten text lines without
+changing the selection.
 At the bottom, at least the final five interaction lines remain visible (or
 all of them when the interaction is shorter).
 `g`/`G` jumps first/last, and `Enter` on a `branch` marker opens the linked

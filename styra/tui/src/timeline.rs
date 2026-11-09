@@ -2,9 +2,7 @@
 //! current filters show.
 //!
 //! Navigation is the whole of it. Every move is expressed as "the nearest
-//! index a [`Step`] can land on", so the two step sizes (`j`/`k` over
-//! everything visible, `J`/`K` over rows with something to preview) share one
-//! implementation, and neither can land on a row the filters are hiding.
+//! visible index", so no move can land on a row the filters are hiding.
 //!
 //! Moves report whether the selection actually changed, because what follows
 //! from that — resetting the preview scroll — belongs to state this module
@@ -172,16 +170,6 @@ fn detail_line_count(event: &AgentEvent) -> usize {
     count.saturating_sub(1)
 }
 
-/// How far one navigation key moves: the two step sizes the event list offers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Step {
-    /// Every visible entry, one at a time (`J`/`K`).
-    Line,
-    /// Only entries with something past their summary, so the keys that drive
-    /// the preview never stop on a row with nothing to preview (`j`/`k`).
-    WithDetail,
-}
-
 /// The list of what the agent has done, and the operator's place in it.
 pub struct Timeline {
     pub entries: Vec<Entry>,
@@ -308,23 +296,6 @@ impl Timeline {
             && self.event_is_visible(self.entries[idx].event())
     }
 
-    /// Whether an entry is one `j`/`k` should land on: visible, and carrying
-    /// content worth previewing. Usually that means a fold arrow, but file
-    /// events are always navigable because their preview includes the current
-    /// file contents even when their event detail is only one line.
-    fn is_navigable(&self, idx: usize) -> bool {
-        self.is_visible(idx)
-            && (self.entries[idx].has_detail()
-                || matches!(*self.entries[idx].event(), AgentEvent::FileChanged { .. }))
-    }
-
-    fn reaches(&self, idx: usize, step: Step) -> bool {
-        match step {
-            Step::Line => self.is_visible(idx),
-            Step::WithDetail => self.is_navigable(idx),
-        }
-    }
-
     /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
     /// Returns whether the selection had to move to stay on a visible row.
     pub fn toggle_minor(&mut self) -> bool {
@@ -346,8 +317,8 @@ impl Timeline {
             return false;
         }
         match self
-            .seek_back(self.selected, Step::Line)
-            .or_else(|| self.seek_forward(self.selected, Step::Line))
+            .seek_back(self.selected)
+            .or_else(|| self.seek_forward(self.selected))
         {
             Some(idx) => {
                 self.selected = idx;
@@ -362,37 +333,36 @@ impl Timeline {
     // Each of these returns whether the selection moved, which is what tells
     // the caller to reset the preview scroll.
 
-    /// The nearest index `step` can land on at or after `from`, if any.
-    pub(crate) fn seek_forward(&self, from: usize, step: Step) -> Option<usize> {
-        (from..self.entries.len()).find(|&i| self.reaches(i, step))
+    /// The nearest visible index at or after `from`, if any.
+    pub(crate) fn seek_forward(&self, from: usize) -> Option<usize> {
+        (from..self.entries.len()).find(|&i| self.is_visible(i))
     }
 
-    /// The nearest index `step` can land on at or before `from`, if any.
-    fn seek_back(&self, from: usize, step: Step) -> Option<usize> {
-        (0..=from).rev().find(|&i| self.reaches(i, step))
+    /// The nearest visible index at or before `from`, if any.
+    fn seek_back(&self, from: usize) -> Option<usize> {
+        (0..=from).rev().find(|&i| self.is_visible(i))
     }
 
     /// Move towards the tail, re-enabling follow only once the selection
-    /// reaches the last entry this step can land on.
-    pub(crate) fn select_forward(&mut self, step: Step) -> bool {
-        let moved = match self.seek_forward(self.selected + 1, step) {
+    /// reaches the last visible entry.
+    pub(crate) fn select_forward(&mut self) -> bool {
+        let moved = match self.seek_forward(self.selected + 1) {
             Some(next) => {
                 self.selected = next;
                 true
             }
             None => false,
         };
-        self.follow =
-            !self.entries.is_empty() && self.seek_forward(self.selected + 1, step).is_none();
+        self.follow = !self.entries.is_empty() && self.seek_forward(self.selected + 1).is_none();
         moved
     }
 
     /// Move towards the start. Leaving the tail always pins the view.
-    pub(crate) fn select_backward(&mut self, step: Step) -> bool {
+    pub(crate) fn select_backward(&mut self) -> bool {
         let moved = match self
             .selected
             .checked_sub(1)
-            .and_then(|from| self.seek_back(from, step))
+            .and_then(|from| self.seek_back(from))
         {
             Some(prev) => {
                 self.selected = prev;
@@ -405,15 +375,14 @@ impl Timeline {
     }
 
     pub fn select_first(&mut self) -> bool {
-        let moved = match self.seek_forward(0, Step::Line) {
+        let moved = match self.seek_forward(0) {
             Some(first) => {
                 self.selected = first;
                 true
             }
             None => false,
         };
-        self.follow =
-            !self.entries.is_empty() && self.seek_forward(self.selected + 1, Step::Line).is_none();
+        self.follow = !self.entries.is_empty() && self.seek_forward(self.selected + 1).is_none();
         moved
     }
 
@@ -421,7 +390,7 @@ impl Timeline {
         if self.entries.is_empty() {
             return false;
         }
-        let moved = match self.seek_back(self.entries.len() - 1, Step::Line) {
+        let moved = match self.seek_back(self.entries.len() - 1) {
             Some(last) => {
                 self.selected = last;
                 true
@@ -675,7 +644,7 @@ mod tests {
         assert!(list.select_first());
         assert_eq!(list.selected, 3);
         assert!(!list.follow);
-        assert!(!list.select_backward(Step::Line));
+        assert!(!list.select_backward());
         assert_eq!(list.selected, 3);
 
         let mut list = timeline(vec![message("first"), message("last")]);
@@ -691,17 +660,17 @@ mod tests {
     fn a_move_reports_whether_the_selection_actually_changed() {
         let mut list = timeline(vec![message("one"), message("two")]);
         list.selected = 0;
-        assert!(list.select_forward(Step::Line));
+        assert!(list.select_forward());
         assert_eq!(list.selected, 1);
         // At the tail there is nowhere to go, and following resumes.
-        assert!(!list.select_forward(Step::Line));
+        assert!(!list.select_forward());
         assert!(list.follow);
 
-        assert!(list.select_backward(Step::Line));
+        assert!(list.select_backward());
         assert_eq!(list.selected, 0);
         // Leaving the tail pins the view whether or not the move landed.
         assert!(!list.follow);
-        assert!(!list.select_backward(Step::Line));
+        assert!(!list.select_backward());
     }
 
     fn shell(command: &str) -> AgentEvent {
