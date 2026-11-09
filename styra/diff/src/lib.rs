@@ -22,6 +22,7 @@ mod split;
 pub use prompt::Prompt;
 mod state;
 mod view;
+pub mod watch;
 
 #[cfg(test)]
 mod test_support;

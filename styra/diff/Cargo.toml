@@ -25,5 +25,8 @@ ratatui = { workspace = true, optional = true, features = ["unstable-rendered-li
 styra-ui.workspace = true
 tempfile.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+inotify.workspace = true
+
 [dev-dependencies]
 protocol.workspace = true

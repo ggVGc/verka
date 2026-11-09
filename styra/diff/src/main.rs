@@ -4,6 +4,7 @@
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
@@ -20,7 +21,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Block;
 use ratatui::DefaultTerminal;
-use styra_diff::{git, render, CheckoutDiff, CheckoutDiffFeedback, Outcome, Supplied};
+use styra_diff::watch::Watch;
+use styra_diff::{files, git, render, CheckoutDiff, CheckoutDiffFeedback, Outcome, Supplied};
 use styra_ui::theme;
 
 /// Browse a Git working tree's changes, or a patch, as Styra's diff view
@@ -51,16 +53,20 @@ fn main() -> anyhow::Result<()> {
     // Resolved before the terminal is taken over, so a mistyped base, a
     // directory outside any repository, or a patch that cannot be read is an
     // ordinary error message.
-    let mut diff = match &cli.patch {
-        Some(patch) => supplied(patch, &cli.directory)?,
+    let (mut diff, watch) = match &cli.patch {
+        // A patch is shown as given; there is nothing to read it again from.
+        Some(patch) => (supplied(patch, &cli.directory)?, None),
         None => {
             let target =
                 git::target(&cli.directory, cli.base.as_deref()).map_err(anyhow::Error::msg)?;
-            CheckoutDiff::read(target)
+            // Watching first, so nothing changed while the diff is read is
+            // missed.
+            let watch = Watch::new(&target.worktree);
+            (CheckoutDiff::read(target), Some(watch))
         }
     };
     let mut terminal = init().context("taking over the terminal")?;
-    let result = run(&mut terminal, &mut diff, cli.files_below);
+    let result = run(&mut terminal, &mut diff, watch, cli.files_below);
     restore();
     result
 }
@@ -113,14 +119,22 @@ fn supplied(path: &Path, directory: &Path) -> anyhow::Result<CheckoutDiff> {
     ))
 }
 
+/// How long the terminal is waited on for a key before the working tree is
+/// looked at for changes again.
+const WATCH_TICK: Duration = Duration::from_millis(200);
+
 fn run(
     terminal: &mut DefaultTerminal,
     diff: &mut CheckoutDiff,
+    mut watch: Option<Watch>,
     files_below: bool,
 ) -> anyhow::Result<()> {
     // Why the last key did nothing — a `v` that opened no file, say — until
     // the next key.
     let mut notice: Option<String> = None;
+    if let Some(watch) = &mut watch {
+        follow(watch, diff);
+    }
     loop {
         let mut measured = CheckoutDiffFeedback::default();
         terminal
@@ -134,7 +148,10 @@ fn run(
             })
             .context("drawing the diff")?;
         diff.note(measured);
-        let Event::Key(key) = event::read().context("reading the terminal")? else {
+        let Some(event) = next_event(diff, watch.as_mut())? else {
+            continue;
+        };
+        let Event::Key(key) = event else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
@@ -153,6 +170,33 @@ fn run(
             }
         }
     }
+}
+
+/// The next thing to happen at the terminal; or `None` once the diff has
+/// been read again, a file it shows or the working tree's status having
+/// changed, and wants drawing afresh.
+fn next_event(diff: &mut CheckoutDiff, watch: Option<&mut Watch>) -> anyhow::Result<Option<Event>> {
+    let Some(watch) = watch else {
+        return Ok(Some(event::read().context("reading the terminal")?));
+    };
+    loop {
+        if event::poll(WATCH_TICK).context("reading the terminal")? {
+            return Ok(Some(event::read().context("reading the terminal")?));
+        }
+        if watch.changed() {
+            let changed = diff.refresh();
+            follow(watch, diff);
+            if changed {
+                return Ok(None);
+            }
+        }
+    }
+}
+
+/// Watch the files the diff shows now.
+fn follow(watch: &mut Watch, diff: &CheckoutDiff) {
+    let text = diff.diff.as_deref().unwrap_or_default();
+    watch.follow(files::file_diffs(text).iter().map(|file| file.path));
 }
 
 /// The frame around the view, saying how to leave it — there is no Styra
