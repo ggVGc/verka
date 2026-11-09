@@ -2686,6 +2686,39 @@ mod tests {
         );
     }
 
+    /// Moving down past a final marker's last branch stays on that branch
+    /// instead of jumping back up to the marker's own row.
+    #[test]
+    fn moving_down_past_the_last_branch_of_a_final_marker_stays_put() {
+        use crate::interactions::tests::branched;
+        use styra_protocol::event::{AgentEvent, BranchDirection};
+        use styra_protocol::InteractionActivity::Running;
+
+        let (_root_directory, root) = tree("last-child-branch");
+        let mut app = app(&root);
+        app.enter_list();
+        let source = app.session_id.clone();
+        app.interactions.refresh(vec![
+            branched("branch-2", Running, &source),
+            branched("child-3", Running, "branch-2"),
+        ]);
+        app.push_event(AgentEvent::Branched {
+            direction: BranchDirection::To,
+            session: "branch-2".into(),
+            name: None,
+        });
+        app.select_last();
+        let marker = app.timeline.selected;
+
+        run_list_action(&mut app, &root, &EVENTS_NEXT_LINE);
+        assert_eq!(app.selected_branch(), Some(0));
+        run_list_action(&mut app, &root, &EVENTS_NEXT_LINE);
+        assert_eq!(
+            (app.timeline.selected, app.selected_branch()),
+            (marker, Some(0))
+        );
+    }
+
     /// ctrl-p opens the Session this one was branched off, and only warns
     /// when there is none.
     #[test]

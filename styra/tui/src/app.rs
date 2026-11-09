@@ -1399,8 +1399,14 @@ impl App {
             self.branch_cursor = Some((self.timeline.selected, next));
             return;
         }
+        let branch_cursor = self.branch_cursor;
         let moved = self.timeline.select_forward();
         self.moved(moved);
+        if !moved {
+            // At the end of the list, stay on the last branch rather than
+            // dropping back up to the marker's own row.
+            self.branch_cursor = branch_cursor;
+        }
     }
 
     /// Move to the previous visible entry; see [`Self::select_next_line`].
