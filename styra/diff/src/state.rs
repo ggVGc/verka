@@ -5,6 +5,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 #[cfg(feature = "renderer")]
 use ratatui::widgets::Block;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use styra_ui::query::Edit;
 use styra_ui::scroll::Scroll;
@@ -155,6 +156,11 @@ pub struct CheckoutDiff {
     /// Commits pinned when the involved-files filter was enabled.
     pub involved_layers: Option<Vec<u16>>,
     pub selected_file: usize,
+    /// The line of its patch each file the per-file view has left was
+    /// scrolled to, by path, so going back to a file returns to it. A line
+    /// rather than a row, so it holds when removed lines or the layout
+    /// change in the meantime.
+    pub file_tops: HashMap<String, usize>,
     pub file_list_offset: usize,
     pub search: Search,
     /// What each file was edited for, once the host has had it described.
@@ -204,6 +210,7 @@ impl Default for CheckoutDiff {
             layers: None,
             involved_layers: None,
             selected_file: 0,
+            file_tops: HashMap::new(),
             file_list_offset: 0,
             search: Search::default(),
             report: ReportState::default(),
@@ -260,7 +267,9 @@ impl CheckoutDiff {
                 .iter()
                 .position(|shown| matches!(shown, Row::Line(index) if *index == row))
                 .unwrap_or(0);
-        if !self.per_file {
+        if self.per_file {
+            self.keep_file_top();
+        } else {
             std::mem::swap(&mut self.scroll, &mut self.combined_scroll);
             self.combined_side = self.rendered_side;
         }
@@ -327,6 +336,7 @@ impl CheckoutDiff {
         self.line_cursor = None;
         self.replace(patch);
         self.selected_file = 0;
+        self.file_tops.clear();
         self.file_list_offset = 0;
         self.scroll.reset();
         self.combined_scroll.reset();
@@ -417,7 +427,7 @@ impl CheckoutDiff {
             Some(next) => {
                 self.selected_file = next;
                 if kept.is_none() {
-                    self.scroll.reset();
+                    self.restore_file_top();
                 }
             }
             None => self.selected_file = 0,
@@ -526,15 +536,16 @@ impl CheckoutDiff {
         }
     }
 
-    /// Show file `index` of the whole diff in the per-file view, from the
-    /// top of its patch, clearing a file filter that would hide it.
+    /// Show file `index` of the whole diff in the per-file view, where it
+    /// was left, clearing a file filter that would hide it.
     pub(crate) fn open_file(&mut self, index: usize) {
         self.leave_lines();
         self.show_files();
+        self.keep_file_top();
         self.search.cancel();
         self.selected_file = index;
         self.file_list_offset = 0;
-        self.scroll.reset();
+        self.restore_file_top();
     }
 
     pub(crate) fn apply(&mut self, action: Action) {
@@ -551,15 +562,16 @@ impl CheckoutDiff {
                 self.search.open();
                 self.update_search();
             }
-            // Each file's patch opens at its top; the combined diff opens
-            // where it was left. A line cursor goes along to the same line.
+            // Each file's patch and the combined diff open where they were
+            // left. A line cursor goes along to the same line.
             Action::ToggleFiles => {
                 let cursor = self.cursor_in_diff();
+                self.keep_file_top();
                 self.per_file = !self.per_file;
                 std::mem::swap(&mut self.rendered_side, &mut self.combined_side);
                 std::mem::swap(&mut self.scroll, &mut self.combined_scroll);
                 if self.per_file {
-                    self.scroll.reset();
+                    self.restore_file_top();
                 }
                 self.line_cursor = None;
                 if let Some((file, line)) = cursor {
@@ -1003,10 +1015,11 @@ impl CheckoutDiff {
             return;
         }
         let next = files.first().map(|(index, _)| *index);
+        drop(files);
         if let Some(next) = next {
             self.selected_file = next;
         }
-        self.scroll.reset();
+        self.restore_file_top();
     }
 
     fn select_file(&mut self, down: bool, count: usize) {
@@ -1023,10 +1036,53 @@ impl CheckoutDiff {
             position.saturating_sub(count)
         };
         let next = files.get(next).map(|(index, _)| *index);
+        drop(files);
         if let Some(next) = next.filter(|next| *next != self.selected_file) {
+            self.keep_file_top();
             self.selected_file = next;
-            self.scroll.reset();
+            self.restore_file_top();
         }
+    }
+
+    /// Put by the line the per-file view's file is scrolled to, for
+    /// [`Self::restore_file_top`] to return to. Nothing in the combined diff.
+    fn keep_file_top(&mut self) {
+        if !self.per_file {
+            return;
+        }
+        let Some((_, file)) = self.shown_file() else {
+            return;
+        };
+        let path = file.path.to_owned();
+        let top = self.scroll.clamped();
+        let line = (top > 0)
+            .then(|| {
+                let rows = crate::split::source_rows(
+                    file.patch,
+                    self.hide_removed,
+                    self.rendered_side,
+                    true,
+                );
+                line_at(&rows, usize::from(top))
+            })
+            .flatten();
+        match line {
+            Some(line) => self.file_tops.insert(path, line),
+            None => self.file_tops.remove(&path),
+        };
+    }
+
+    /// Scroll the per-file view's file to where it was left, or its top.
+    fn restore_file_top(&mut self) {
+        let offset = self.shown_file().and_then(|(_, file)| {
+            let line = *self.file_tops.get(file.path)?;
+            crate::split::source_rows(file.patch, self.hide_removed, self.rendered_side, true)
+                .iter()
+                .position(|row| matches!(row, Row::Line(index) if *index >= line))
+        });
+        self.scroll.offset = offset.map_or(0, |offset| u16::try_from(offset).unwrap_or(u16::MAX));
+        // The limit measured belongs to the patch shown before.
+        self.scroll.note_limit(u16::MAX);
     }
 }
 
@@ -1578,6 +1634,64 @@ mod tests {
         diff.apply(Action::ToggleRemoved);
         diff.apply(Action::ToggleFiles);
         assert_eq!(diff.scroll.offset, 10);
+    }
+
+    /// Each file of the per-file view opens where it was left, by line, so
+    /// hiding removed lines in between keeps it on the same one.
+    #[test]
+    fn each_file_keeps_its_place_in_the_per_file_view() {
+        let mut diff = CheckoutDiff::supplied(
+            "diff --git a/a.txt b/a.txt\n@@ -1,3 +1,3 @@\n-a\n-b\n-c\n+d\n+e\n+f\n\
+             diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-c\n+d\n"
+                .into(),
+            Supplied {
+                label: String::new(),
+                root: None,
+            },
+        );
+        diff.apply(Action::ToggleFiles);
+        diff.scroll.note_limit(100);
+        let rows = crate::split::source_rows(diff.shown_text().unwrap(), false, false, true);
+        let plus_e = rows
+            .iter()
+            .position(|row| matches!(row, Row::Line(index) if diff.shown_text().unwrap().lines().nth(*index) == Some("+e")))
+            .unwrap();
+        diff.scroll.offset = u16::try_from(plus_e).unwrap();
+        diff.apply(Action::Down);
+        assert_eq!(
+            (diff.selected_file, diff.scroll.offset),
+            (1, 0),
+            "a new file opens at its top"
+        );
+        diff.scroll.offset = 1;
+        diff.apply(Action::Up);
+        assert_eq!(diff.scroll.offset, u16::try_from(plus_e).unwrap());
+        diff.apply(Action::Down);
+        assert_eq!(diff.scroll.offset, 1);
+
+        diff.apply(Action::ToggleRemoved);
+        diff.apply(Action::Up);
+        let text = diff.shown_text().unwrap();
+        let rows = crate::split::source_rows(text, true, false, true);
+        let top = line_at(&rows, usize::from(diff.scroll.offset)).unwrap();
+        assert_eq!(text.lines().nth(top), Some("+e"));
+
+        diff.apply(Action::ToggleFiles);
+        diff.apply(Action::ToggleFiles);
+        assert_eq!(
+            text_at_top(&diff),
+            Some("+e"),
+            "and across the combined diff"
+        );
+        diff.open_file(1);
+        assert_eq!(diff.scroll.offset, 1);
+    }
+
+    fn text_at_top(diff: &CheckoutDiff) -> Option<&str> {
+        let text = diff.shown_text()?;
+        let rows = crate::split::source_rows(text, diff.hide_removed, diff.rendered_side, true);
+        text.lines()
+            .nth(line_at(&rows, usize::from(diff.scroll.offset))?)
     }
 
     /// The line cursor starts on the line at the top, moves a drawn line at
