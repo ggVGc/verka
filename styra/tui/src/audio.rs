@@ -384,9 +384,9 @@ impl AudioInput {
                 self.recording = Some(recording);
                 app.recording = Some(Recorded::new());
                 if let Err(error) = client.audio_recording_started() {
-                    app.push_log(LogEntry::error(format!(
+                    app.report_error(format!(
                         "could not report started audio recording: {error:#}"
-                    )));
+                    ));
                 }
             }
             Err(error) => {
@@ -518,9 +518,9 @@ impl AudioInput {
 
     fn report_stopped(&self, app: &mut App, client: &Client) {
         if let Err(error) = client.audio_recording_stopped() {
-            app.push_log(LogEntry::error(format!(
+            app.report_error(format!(
                 "could not report stopped audio recording: {error:#}"
-            )));
+            ));
         }
     }
 
@@ -1237,9 +1237,12 @@ mod tests {
         assert!(audio.recording.is_none());
         assert!(app.recording.is_none());
         assert!(audio.receive.try_recv().is_err());
-        assert_eq!(
-            app.notices.iter().map(|notice| &notice.text).next(),
-            Some(&"recording cancelled".to_owned())
-        );
+        let notices = app.notices.iter().collect::<Vec<_>>();
+        assert_eq!(notices.len(), 2);
+        assert_eq!(notices[0].level, styra_protocol::LogLevel::Error);
+        assert!(notices[0]
+            .text
+            .contains("could not report stopped audio recording"));
+        assert_eq!(notices[1].text, "recording cancelled");
     }
 }

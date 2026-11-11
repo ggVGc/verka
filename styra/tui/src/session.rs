@@ -51,9 +51,9 @@ pub fn submit_message(
         }
         match client.set_interaction_working_directory(&app.session_id, directory.trim().into()) {
             Ok(()) => app.show_action_message(format!("working directory: {}", directory.trim())),
-            Err(error) => app.push_log(LogEntry::error(format!(
-                "could not change working directory: {error:#}"
-            ))),
+            Err(error) => {
+                app.report_error(format!("could not change working directory: {error:#}"))
+            }
         }
         return;
     }
@@ -72,9 +72,9 @@ pub fn submit_message(
                         app.outbox.queued_count()
                     )));
                 }
-                Err(error) => app.push_log(LogEntry::error(format!(
-                    "could not persist queued message: {error:#}"
-                ))),
+                Err(error) => {
+                    app.report_error(format!("could not persist queued message: {error:#}"))
+                }
             }
         }
         Attachment::Attached { .. }
@@ -83,7 +83,7 @@ pub fn submit_message(
             let turn = turn(&message, &app.selection, contract);
             match client.send_turn(&app.session_id, turn) {
                 Ok(()) => app.activity.status = Status::Running,
-                Err(error) => app.push_log(LogEntry::error(format!("send failed: {error:#}"))),
+                Err(error) => app.report_error(format!("send failed: {error:#}")),
             }
         }
         Attachment::Attached { .. } => resume_and_send(app, client, live, message, contract),
@@ -128,9 +128,7 @@ pub fn submit_message(
                     app.activity.status = Status::Running;
                 }
                 Err(error) => {
-                    app.push_log(LogEntry::error(format!(
-                        "could not launch the agent: {error:#}"
-                    )));
+                    app.report_error(format!("could not launch the agent: {error:#}"));
                     app.set_input(message);
                     app.enter_input();
                 }
@@ -562,10 +560,10 @@ pub fn attach_live_interaction(
     // itself is no less usable, so it still opens.
     match client.interaction_driva(&interaction.id) {
         Ok(driva) => app.launch.record(driva),
-        Err(error) => app.push_log(LogEntry::error(format!(
+        Err(error) => app.report_error(format!(
             "could not read the sandbox policy of {}: {error:#}",
             interaction.id
-        ))),
+        )),
     }
     // Whether a rate limit will be waited out is the server's answer, kept
     // with the Session, so it is adopted from the interaction rather than
@@ -655,9 +653,7 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment
 fn restore_composer(client: &Client, app: &mut App) {
     match client.session_composer(&app.session_id) {
         Ok(state) => app.composer = crate::composer::Composer::restore(state),
-        Err(error) => app.push_log(LogEntry::error(format!(
-            "could not restore the message box: {error:#}"
-        ))),
+        Err(error) => app.report_error(format!("could not restore the message box: {error:#}")),
     }
 }
 
@@ -682,9 +678,7 @@ pub fn save_composer(app: &mut App, client: &Client, now: bool) {
     }
     app.composer_saved_at = Instant::now();
     if let Err(error) = client.set_session_composer(&app.session_id, state.clone()) {
-        app.push_log(LogEntry::error(format!(
-            "could not store the message box: {error:#}"
-        )));
+        app.report_error(format!("could not store the message box: {error:#}"));
     }
     // Marked either way: a server that refused it would refuse it again every
     // round, and the next edit tries afresh.
@@ -836,14 +830,14 @@ pub fn resume_and_send(
             if let Err(error) =
                 client.send_turn(&app.session_id, turn(&message, &app.selection, contract))
             {
-                app.push_log(LogEntry::error(format!("send failed: {error:#}")));
+                app.report_error(format!("send failed: {error:#}"));
             }
         }
         Err(error) => {
-            app.push_log(LogEntry::error(format!(
+            app.report_error(format!(
                 "could not resume Session {}: {error:#}",
                 app.session_id
-            )));
+            ));
             app.set_input(message);
         }
     }
@@ -884,9 +878,9 @@ pub fn restart_and_send(
 ) -> bool {
     if let Attachment::Attached { .. } = live {
         if let Err(error) = client.stop_interaction(&app.session_id) {
-            app.push_log(LogEntry::error(format!(
+            app.report_error(format!(
                 "could not stop the interaction to move it: {error:#}"
-            )));
+            ));
             app.set_input(message);
             return false;
         }
@@ -965,7 +959,7 @@ fn accepting(client: &Client, session_id: &str) -> bool {
 pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) {
     if let Attachment::Attached { .. } = live {
         if let Err(error) = client.stop_interaction(&app.session_id) {
-            app.push_log(LogEntry::error(format!("pause failed: {error:#}")));
+            app.report_error(format!("pause failed: {error:#}"));
         } else {
             let cleared = match client.clear_queued_messages(&app.session_id) {
                 Ok(cleared) => {
@@ -973,9 +967,9 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) 
                     cleared
                 }
                 Err(error) => {
-                    app.push_log(LogEntry::error(format!(
+                    app.report_error(format!(
                         "could not clear the durable message queue: {error:#}"
-                    )));
+                    ));
                     app.outbox.queued_count()
                 }
             };
@@ -996,7 +990,7 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) 
         // `S` is still an explicit operator stop. The server records that on
         // its roster so every client sees the ordinary paused state.
         if let Err(error) = client.stop_interaction(&app.session_id) {
-            app.push_log(LogEntry::error(format!("pause failed: {error:#}")));
+            app.report_error(format!("pause failed: {error:#}"));
         } else {
             app.push_log(LogEntry::info(
                 "interaction paused; send a new message to start again",
@@ -1128,7 +1122,7 @@ pub fn branch_session(
     ) {
         Ok(branched) => branched,
         Err(error) => {
-            return app.push_log(LogEntry::error(format!("branch failed: {error:#}")));
+            return app.report_error(format!("branch failed: {error:#}"));
         }
     };
     app.branch_prompt = None;
@@ -1159,9 +1153,9 @@ pub fn branch_session(
         .and_then(|_| client.send_turn(&branched.id, turn(&message, &selection, contract)));
     match started {
         Ok(()) => app.push_log(LogEntry::info(format!("branched to session {name}"))),
-        Err(error) => app.push_log(LogEntry::error(format!(
+        Err(error) => app.report_error(format!(
             "branched to session {name}, but could not start it: {error:#}"
-        ))),
+        )),
     }
 }
 
@@ -1176,7 +1170,7 @@ pub fn interrupt_interaction(app: &mut App, client: &Client, live: &Attachment) 
             app.activity.note_interrupt_requested();
             app.push_log(LogEntry::info("interrupt requested"));
         }
-        Err(error) => app.push_log(LogEntry::error(format!("interrupt failed: {error:#}"))),
+        Err(error) => app.report_error(format!("interrupt failed: {error:#}")),
     }
 }
 
@@ -1247,6 +1241,101 @@ mod tests {
     use crate::activity::RateLimit;
     use styra_protocol::agent::{Provider, Selection};
     use styra_protocol::{Direction, RawLine};
+
+    #[test]
+    fn submission_failures_are_visible_and_keep_the_full_error_in_the_log() {
+        use crate::activity::IdleReason;
+        use styra_protocol::{LogLevel, Request, Response};
+
+        struct FailingServer(&'static str);
+        impl styra_server::InProcessServer for FailingServer {
+            fn handle(&self, request: Request) -> anyhow::Result<Response> {
+                let operation = match request {
+                    Request::CreateSession(_) => "create",
+                    Request::ResumeSession(_) => "resume",
+                    Request::SendMessage { .. } => "send",
+                    Request::QueueMessage { .. } => "queue",
+                    _ => panic!("unexpected request: {request:?}"),
+                };
+                assert_eq!(operation, self.0);
+                Err(
+                    anyhow::anyhow!("fatal: unable to generate diff for all.csv")
+                        .context("snapshot failed"),
+                )
+            }
+
+            fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        for (operation, session_id, status, mut live) in [
+            ("create", "", Status::Pending, Attachment::Detached),
+            (
+                "resume",
+                "session",
+                Status::Stopped(StopReason::Paused),
+                Attachment::Detached,
+            ),
+            (
+                "resume",
+                "session",
+                Status::Stopped(StopReason::Paused),
+                Attachment::Attached { cursor: 0 },
+            ),
+            (
+                "send",
+                "session",
+                Status::Idle(IdleReason::TurnComplete),
+                Attachment::Attached { cursor: 0 },
+            ),
+            (
+                "queue",
+                "session",
+                Status::Running,
+                Attachment::Attached { cursor: 0 },
+            ),
+        ] {
+            let client = Client::in_process(std::sync::Arc::new(FailingServer(operation)));
+            let mut app = App::new(Selection::new(Provider::Codex), session_id);
+            app.activity.status = status;
+
+            submit_message(
+                &mut app,
+                &client,
+                "workspace",
+                &mut live,
+                "hello".into(),
+                false,
+            );
+
+            let notices = app.notices.iter().collect::<Vec<_>>();
+            assert_eq!(notices.len(), 1, "{operation}");
+            assert_eq!(notices[0].level, LogLevel::Error);
+            assert!(notices[0].text.contains("snapshot failed"));
+            assert!(notices[0]
+                .text
+                .contains("fatal: unable to generate diff for all.csv"));
+            let entries = app.log.iter().collect::<Vec<_>>();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].level, LogLevel::Error);
+            assert_eq!(entries[0].message, notices[0].text);
+            if matches!(operation, "create" | "resume") {
+                assert_eq!(app.composer.message(), "hello");
+            }
+        }
+    }
+
+    #[test]
+    fn replayed_diagnostic_errors_do_not_raise_new_notices() {
+        let mut app = App::new(Selection::new(Provider::Codex), "session");
+        apply_update(
+            &mut app,
+            InteractionUpdate::Log(LogEntry::error("old failure")),
+        );
+        assert!(app.notices.is_empty());
+        assert_eq!(app.log.iter().count(), 1);
+    }
 
     fn workspace(id: &str, host_path: &str) -> WorkspaceSummary {
         WorkspaceSummary {

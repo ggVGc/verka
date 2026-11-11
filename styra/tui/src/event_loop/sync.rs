@@ -95,7 +95,7 @@ impl Loop<'_> {
                     "update poll failed"
                 );
                 self.app
-                    .push_log(LogEntry::error(format!("update poll failed: {error:#}")));
+                    .report_error(format!("update poll failed: {error:#}"));
                 self.app.on_ended(styra_protocol::InteractionEnd {
                     exit_code: None,
                     error: Some(error.to_string()),
@@ -240,7 +240,7 @@ impl Loop<'_> {
             }
             Ok((None, queued)) => app.outbox.replace_queued(queued),
             Err(error) => {
-                app.push_log(LogEntry::error(format!("queued send failed: {error:#}")));
+                app.report_error(format!("queued send failed: {error:#}"));
             }
         }
     }
@@ -305,9 +305,7 @@ fn poll_integration(app: &mut App, client: &Client) -> bool {
 pub fn refresh_quota(app: &mut App, client: &Client) {
     match client.quota_log() {
         Ok(readings) => app.quota.replace(readings),
-        Err(error) => app.push_log(LogEntry::error(format!(
-            "could not read the quota log: {error:#}"
-        ))),
+        Err(error) => app.report_error(format!("could not read the quota log: {error:#}")),
     }
 }
 

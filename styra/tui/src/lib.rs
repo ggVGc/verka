@@ -69,8 +69,6 @@ use cli::{Cli, CliCommand};
 use config::Defaults;
 use event_loop::RunOutcome;
 use session::Attachment;
-#[cfg(feature = "renderer")]
-use styra_protocol::LogEntry;
 use styra_protocol::{
     CompletionState, InteractionQuery, InteractionSummary, WorkspaceSummary, WorktreeCleanup,
 };
@@ -508,10 +506,10 @@ pub fn run() -> Result<()> {
                                 fleet.clone(),
                             );
                         }
-                        Err(error) => app.push_log(LogEntry::error(format!(
+                        Err(error) => app.report_error(format!(
                             "could not open live interaction {}: {error:#}",
                             interaction.id
-                        ))),
+                        )),
                     }
                 } else if cli.skip_workspace_list && interactions::first_live(&fleet).is_some() {
                     // Nothing live here, but there is elsewhere: the operator
@@ -692,9 +690,7 @@ fn open_session_view(
             true
         }
         Err(error) => {
-            app.push_log(LogEntry::error(format!(
-                "could not open Session {session_id}: {error:#}"
-            )));
+            app.report_error(format!("could not open Session {session_id}: {error:#}"));
             false
         }
     }

@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use crate::app::{App, Focus, LaunchPolicy, View};
 use crate::session::{self, Attachment};
-use styra_protocol::{InteractionSummary, LogEntry};
+use styra_protocol::InteractionSummary;
 use styra_server::Client;
 
 /// Narrow an open navigator to the Workspace highlighted in the jump — none,
@@ -151,9 +151,9 @@ pub(super) fn make_interaction_current(
             // cannot answer for one interaction is reported once rather than
             // re-asked on every frame.
             app.interactions.rest();
-            app.push_log(LogEntry::error(format!(
+            app.report_error(format!(
                 "could not make interaction {id} current: {error:#}"
-            )));
+            ));
         }
     }
 }

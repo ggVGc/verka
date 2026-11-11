@@ -1001,6 +1001,14 @@ impl App {
             .show_level(message, styra_protocol::LogLevel::Warn);
     }
 
+    /// Show a failed operation immediately and retain its full details in the log.
+    /// Keep this separate from `push_log`, which also receives replayed history.
+    pub fn report_error(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        self.show_error(message.clone());
+        self.push_log(LogEntry::error(message));
+    }
+
     /// Replace the message box's contents outright, used to restore a message
     /// that failed to launch so it isn't lost.
     pub fn set_input(&mut self, text: String) {

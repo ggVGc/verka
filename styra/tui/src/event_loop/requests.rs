@@ -111,10 +111,10 @@ impl Loop<'_> {
                 let selection = app.selection.clone();
                 match client.set_session_selection(&app.session_id, &selection) {
                     Ok(()) => app.show_action_message(format!("model set to {}", selection.model)),
-                    Err(error) => app.push_log(LogEntry::error(format!(
+                    Err(error) => app.report_error(format!(
                         "could not switch to {}: {error:#}",
                         selection.model
-                    ))),
+                    )),
                 }
             }
             Request::ConvertProvider(selection) => {
@@ -236,9 +236,9 @@ impl Loop<'_> {
             Request::OpenShell => {
                 match crate::terminal::open_shell(client, &app.session_id, self.config) {
                     Ok(program) => app.show_action_message(format!("opened shell in {program}")),
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not open session shell: {error:#}"
-                    ))),
+                    Err(error) => {
+                        app.report_error(format!("could not open session shell: {error:#}"))
+                    }
                 }
             }
         }
@@ -404,9 +404,8 @@ impl Loop<'_> {
         let worktrees = match client.list_worktrees(Some(workspace_id)) {
             Ok(worktrees) => worktrees,
             Err(error) => {
-                self.app.push_log(LogEntry::error(format!(
-                    "could not list worktrees: {error:#}"
-                )));
+                self.app
+                    .report_error(format!("could not list worktrees: {error:#}"));
                 return Ok(None);
             }
         };
@@ -815,10 +814,7 @@ fn open_path(app: &mut App, config: &dyn Configuration, path: &Path, line: Optio
     let described = crate::terminal::describe(&command);
     match crate::terminal::spawn_detached(&mut command) {
         Ok(()) => app.show_action_message(format!("opened {described}")),
-        Err(error) => app.push_log(LogEntry::error(format!(
-            "could not open {}: {error:#}",
-            path.display()
-        ))),
+        Err(error) => app.report_error(format!("could not open {}: {error:#}", path.display())),
     }
 }
 
@@ -829,7 +825,7 @@ fn open_url(app: &mut App, config: &dyn Configuration, url: &str) {
     let described = crate::terminal::describe(&command);
     match crate::terminal::spawn_detached(&mut command) {
         Ok(()) => app.show_action_message(format!("opened {described}")),
-        Err(error) => app.push_log(LogEntry::error(format!("could not open {url}: {error:#}"))),
+        Err(error) => app.report_error(format!("could not open {url}: {error:#}")),
     }
 }
 
@@ -843,9 +839,9 @@ fn open_directory(app: &mut App, config: &dyn Configuration) {
         Ok(program) => {
             app.show_action_message(format!("opened {program} in {}", directory.display()))
         }
-        Err(error) => app.push_log(LogEntry::error(format!(
+        Err(error) => app.report_error(format!(
             "could not open a terminal in {}: {error:#}",
             directory.display()
-        ))),
+        )),
     }
 }

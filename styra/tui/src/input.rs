@@ -17,7 +17,7 @@ use crate::link_menu::LinkAction;
 use crate::preferences;
 use crate::session::{self, Attachment};
 use styra_diff::Outcome;
-use styra_protocol::{CompletionState, Contract, LogEntry, ProjectAction};
+use styra_protocol::{CompletionState, Contract, ProjectAction};
 use styra_server::Client;
 use styra_ui::fuzzy_list::FuzzyList;
 use styra_ui::query::{Edit, Words};
@@ -899,9 +899,9 @@ pub fn handle_list_key(
                         Ok(()) => app.show_action_message(
                             "saved this interaction's settings as the default for new clients",
                         ),
-                        Err(error) => app.push_log(LogEntry::error(format!(
+                        Err(error) => app.report_error(format!(
                             "could not save the default launch policy: {error:#}"
-                        ))),
+                        )),
                     }
                 }
             }
@@ -1206,9 +1206,7 @@ fn copy_conversation(app: &mut App) {
 fn copy(app: &mut App, text: String, done: &str) {
     match crate::clipboard::copy(&text) {
         Ok(()) => app.show_action_message(done),
-        Err(error) => app.push_log(LogEntry::error(format!(
-            "could not copy to clipboard: {error:#}"
-        ))),
+        Err(error) => app.report_error(format!("could not copy to clipboard: {error:#}")),
     }
 }
 

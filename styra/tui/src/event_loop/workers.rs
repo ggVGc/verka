@@ -165,9 +165,7 @@ impl LaunchEffects {
                         }
                         Err(error) => {
                             app.template_picker = None;
-                            app.push_log(LogEntry::error(format!(
-                                "could not list Driva templates: {error}"
-                            )));
+                            app.report_error(format!("could not list Driva templates: {error}"));
                         }
                     }
                 }

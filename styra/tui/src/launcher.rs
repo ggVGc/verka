@@ -13,7 +13,6 @@
 use crossterm::event::KeyEvent;
 use std::path::Path;
 use styra_protocol::agent::{Effort, Provider, Selection, PROVIDERS};
-use styra_protocol::LogEntry;
 use styra_ui::fuzzy_list::FuzzyList;
 use styra_ui::query::Edit;
 
@@ -92,9 +91,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
             if let Err(error) =
                 preferences::save_selection(preferences_path, app.editor_selection())
             {
-                app.push_log(LogEntry::error(format!(
-                    "could not save launch defaults: {error:#}"
-                )));
+                app.report_error(format!("could not save launch defaults: {error:#}"));
             }
         }
         k if keys::LAUNCHER_CANCEL.matches(k) => {
@@ -126,9 +123,7 @@ fn confirm(app: &mut App, preferences_path: &Path) {
     let model = launcher.selection().model;
     app.confirm_launcher();
     if let Err(error) = preferences::record_recent_model(preferences_path, &model) {
-        app.push_log(LogEntry::error(format!(
-            "could not save the model ordering: {error:#}"
-        )));
+        app.report_error(format!("could not save the model ordering: {error:#}"));
     }
     app.recent_models = preferences::load_recent_models(preferences_path);
 }
