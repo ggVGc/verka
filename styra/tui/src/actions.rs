@@ -394,8 +394,12 @@ impl Action {
             Self::EventsScrollUp => {
                 "scroll the interaction 10 lines up without moving the selection"
             }
-            Self::EventsNextLine => "next line, or next link while links are highlighted",
-            Self::EventsPrevLine => "previous line, or previous link",
+            Self::EventsNextLine => {
+                "next line (scrolling a cut-off entry into view first), or next link while links are highlighted"
+            }
+            Self::EventsPrevLine => {
+                "previous line (scrolling a cut-off entry into view first), or previous link"
+            }
             Self::EventsFirst => "first entry",
             Self::EventsLast => "last entry",
             Self::EventsToggleExpand => "toggle selected entry",

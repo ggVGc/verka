@@ -1401,6 +1401,9 @@ impl App {
     ///
     /// A `branched to` marker's branches are rows of their own here: the step
     /// walks down through them before leaving the marker.
+    ///
+    /// An entry running past the foot of the view is scrolled through, ten
+    /// rows at a time, until all of it shows; only then does the step leave it.
     pub fn select_next_line(&mut self) {
         let next = self.selected_branch().map_or(0, |at| at + 1);
         if next < self.marker_branches().len() {
@@ -1408,8 +1411,16 @@ impl App {
             self.branch_cursor = Some((self.timeline.selected, next));
             return;
         }
+        if self.timeline.reveal_selection_down() {
+            return;
+        }
         let branch_cursor = self.branch_cursor;
         let moved = self.timeline.select_forward();
+        if !moved && self.timeline.selection_in_view() {
+            // Re-anchoring would put a tall last entry back at its first
+            // rows, undoing the scroll that just reached its end.
+            return;
+        }
         self.moved(moved);
         if !moved {
             // At the end of the list, stay on the last branch rather than
@@ -1419,14 +1430,21 @@ impl App {
     }
 
     /// Move to the previous visible entry; see [`Self::select_next_line`].
-    /// Stepping up onto a marker lands on the last of its branches.
+    /// Stepping up onto a marker lands on the last of its branches, and an
+    /// entry cut off at the top of the view is first scrolled up into it.
     pub fn select_prev_line(&mut self) {
         if let Some(at) = self.selected_branch() {
             self.moved(true);
             self.branch_cursor = at.checked_sub(1).map(|at| (self.timeline.selected, at));
             return;
         }
+        if self.timeline.reveal_selection_up() {
+            return;
+        }
         let moved = self.timeline.select_backward();
+        if !moved && self.timeline.selection_in_view() {
+            return;
+        }
         self.moved(moved);
         if moved {
             self.branch_cursor = self
@@ -2462,12 +2480,57 @@ mod tests {
         assert_eq!(app.timeline.list_scroll_delta, 0);
         assert_eq!(app.timeline.selected, selected);
 
+        // While the selection is cut off, `j`/`k` scroll it as `J`/`K` do,
+        // but no further than its edge, even before the next frame.
+        app.timeline.rendered_selection = Some(selected);
+        app.timeline.selection_overflow = Some(styra_ui::event_list::SelectionOverflow {
+            above: 0,
+            below: 14,
+        });
+        app.select_next_line();
+        app.select_next_line();
+        assert_eq!(app.timeline.list_scroll_delta, 14);
+        app.select_prev_line();
+        app.select_prev_line();
+        assert_eq!(app.timeline.list_scroll_delta, 0);
+        assert_eq!(app.timeline.selected, selected);
+
+        // All of it shows, so this step leaves it.
         app.select_prev_line();
         assert_ne!(
             app.timeline.list_anchor,
             ListAnchor::Free,
             "selection navigation reanchors"
         );
+    }
+
+    #[test]
+    fn a_line_step_past_the_end_leaves_a_scrolled_last_entry_where_it_is() {
+        let mut app = app();
+        for n in 0..3 {
+            app.push_event(AgentEvent::AgentMessage {
+                text: format!("message {n}"),
+            });
+        }
+        let last = app.timeline.selected;
+        // Scrolled down to the end of the last entry, past its first rows.
+        app.timeline.list_anchor = ListAnchor::Free;
+        app.timeline.rendered_selection = Some(last);
+        app.timeline.selection_overflow = Some(styra_ui::event_list::SelectionOverflow {
+            above: 14,
+            below: 0,
+        });
+
+        app.select_next_line();
+        assert_eq!(app.timeline.selected, last);
+        assert_eq!(app.timeline.list_anchor, ListAnchor::Free);
+        assert_eq!(app.timeline.list_scroll_delta, 0);
+
+        // Scrolled away from the selection entirely, the step still brings
+        // the view back to it.
+        app.timeline.selection_overflow = None;
+        app.select_next_line();
+        assert_eq!(app.timeline.list_anchor, ListAnchor::Kept);
     }
 
     #[test]

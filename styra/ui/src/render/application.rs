@@ -5,7 +5,7 @@ use crate::{
     ScrollFeedback,
 };
 use crate::{markdown, theme};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Modifier;
 use ratatui::Frame;
 
@@ -71,15 +71,13 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
     }
     let message_height =
         messages::height(view.notices.len()).min(frame.area().height.saturating_sub(2));
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(message_height),
-            Constraint::Length(1),
-        ])
-        .split(frame.area());
-    let (main_area, status_area) = split_status(chunks[0], status.as_ref());
+    let [main_area, messages_area, footer_area] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(message_height),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
+    let (main_area, status_area) = split_status(main_area, status.as_ref());
     match &view.main {
         MainView::Events(events) => {
             render_events(frame, events, view.session_id, main_area, &mut feedback)
@@ -150,14 +148,14 @@ pub fn render(frame: &mut Frame, view: &ApplicationView<'_>) -> RenderFeedback {
         status.render(frame, area);
     }
     if message_height > 0 {
-        messages::render(frame, view.notices, chunks[1]);
+        messages::render(frame, view.notices, messages_area);
     }
     let interaction = match &view.main {
         MainView::Events(events) => Some(&events.list.chrome),
         MainView::Files(files) => Some(&files.list.chrome),
         _ => None,
     };
-    footer::render(frame, view.footer, interaction, chunks[2]);
+    footer::render(frame, view.footer, interaction, footer_area);
     if view.overlays.busy.is_some() {
         // The bottom status replaces the input while the call runs.
     } else if let Some(capture) = view.overlays.recording {
@@ -211,98 +209,90 @@ fn render_events(
         return;
     }
     let bottom_pane = view.entry_log.is_some() || view.processes.is_some();
-    let interaction_area = if let (Some(preview), true) = (side_preview, bottom_pane) {
-        let panes = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
-        tint_area.width = panes[0].width;
-        render_side_preview(frame, preview, session_id, panes[1], feedback);
-        panes[0]
-    } else {
-        area
+    // With a pane below the list, the preview goes beside both of them;
+    // otherwise beside the list alone.
+    let interaction_area = match side_preview.filter(|_| bottom_pane) {
+        Some(preview) => beside_preview(frame, preview, session_id, area, &mut tint_area, feedback),
+        None => area,
     };
     let event_area = if let Some(navigator) = view.navigator {
-        let panes = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(interactions::height(interaction_area.height)),
-            ])
-            .split(interaction_area);
-        feedback.navigator_offset = Some(interactions::render(frame, navigator, panes[1]));
-        panes[0]
+        let [events, navigator_area] = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(interactions::height(interaction_area.height)),
+        ])
+        .areas(interaction_area);
+        feedback.navigator_offset = Some(interactions::render(frame, navigator, navigator_area));
+        events
     } else {
         interaction_area
     };
     let event_area = if let Some(diff) = diff {
-        let panes = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(event_area);
-        tint_area.height = panes[0].bottom() - tint_area.y;
-        render_side_preview(frame, diff, session_id, panes[1], feedback);
-        panes[0]
+        let [events, diff_area] =
+            Layout::vertical([Constraint::Percentage(30), Constraint::Percentage(70)])
+                .areas(event_area);
+        tint_area.height = events.bottom() - tint_area.y;
+        render_side_preview(frame, diff, session_id, diff_area, feedback);
+        events
     } else {
         event_area
     };
-    if let Some(entry_log) = view.entry_log {
-        let panes = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(event_area);
-        let list = event_list::render(frame, view.list, panes[0]);
-        feedback.list_offset = Some(list.effective_offset);
-        feedback.list_row_offset = Some(list.effective_row_offset);
-        feedback.list_selection_row = list.selection_row;
-        let measured = event_list::render_entry_log(frame, entry_log, panes[1]);
-        note_scroll(
+    let list_area = if bottom_pane {
+        let list_share = if view.entry_log.is_some() { 60 } else { 50 };
+        let [list, below] = Layout::vertical([
+            Constraint::Percentage(list_share),
+            Constraint::Percentage(100 - list_share),
+        ])
+        .areas(event_area);
+        if let Some(entry_log) = view.entry_log {
+            let measured = event_list::render_entry_log(frame, entry_log, below);
+            note_scroll(
+                feedback,
+                PanelId::EntryLog,
+                measured.limit,
+                measured.effective_scroll,
+            );
+        } else if let Some(processes) = view.processes {
+            crate::processes::render(frame, processes, below);
+        }
+        if view.navigator.is_some() {
+            fade_log_border(frame, below);
+        }
+        list
+    } else if let Some(preview) = side_preview {
+        beside_preview(
+            frame,
+            preview,
+            session_id,
+            event_area,
+            &mut tint_area,
             feedback,
-            PanelId::EntryLog,
-            measured.limit,
-            measured.effective_scroll,
-        );
-        if view.navigator.is_some() {
-            fade_log_border(frame, panes[0]);
-            fade_log_border(frame, panes[1]);
-        }
-    } else if let Some(processes) = view.processes {
-        let panes = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(event_area);
-        let list = event_list::render(frame, view.list, panes[0]);
-        feedback.list_offset = Some(list.effective_offset);
-        feedback.list_row_offset = Some(list.effective_row_offset);
-        feedback.list_selection_row = list.selection_row;
-        crate::processes::render(frame, processes, panes[1]);
-        if view.navigator.is_some() {
-            fade_log_border(frame, panes[0]);
-            fade_log_border(frame, panes[1]);
-        }
+        )
     } else {
-        let list_area = if let Some(preview_view) = side_preview {
-            let panes = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(event_area);
-            tint_area.width = panes[0].width;
-            render_side_preview(frame, preview_view, session_id, panes[1], feedback);
-            panes[0]
-        } else {
-            event_area
-        };
-        let list = event_list::render(frame, view.list, list_area);
-        feedback.list_offset = Some(list.effective_offset);
-        feedback.list_row_offset = Some(list.effective_row_offset);
-        feedback.list_selection_row = list.selection_row;
-        if view.navigator.is_some() {
-            fade_log_border(frame, list_area);
-        }
+        event_area
+    };
+    render_list(frame, view.list, list_area, feedback);
+    if view.navigator.is_some() {
+        fade_log_border(frame, list_area);
     }
     if view.link_mode {
         tint_all_but_entries(frame, tint_area);
     }
+}
+
+/// Halve `area`, draw `preview` in its right half and hand back the left for
+/// the log, narrowing the link-mode wash to it.
+fn beside_preview(
+    frame: &mut Frame,
+    preview: SidePreview<'_>,
+    session_id: &str,
+    area: Rect,
+    tint_area: &mut Rect,
+    feedback: &mut RenderFeedback,
+) -> Rect {
+    let [log, preview_area] = Layout::horizontal([Constraint::Percentage(50); 2]).areas(area);
+    tint_area.width = log.width;
+    render_side_preview(frame, preview, session_id, preview_area, feedback);
+    log
 }
 
 /// Reserve the status box below the main panel, above notices and the footer.
@@ -363,29 +353,18 @@ fn render_files(
     area: Rect,
     feedback: &mut RenderFeedback,
 ) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
-    let left = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(columns[0]);
-    let list = event_list::render(frame, view.list, left[0]);
-    feedback.list_offset = Some(list.effective_offset);
-    feedback.list_row_offset = Some(list.effective_row_offset);
-    feedback.list_selection_row = list.selection_row;
+    let halves = [Constraint::Percentage(50); 2];
+    let [left, right] = Layout::horizontal(halves).areas(area);
+    let [list_area, tree_area] = Layout::vertical(halves).areas(left);
+    render_list(frame, view.list, list_area, feedback);
     let content_area = if let Some(preview_view) = view.preview {
-        let right = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(columns[1]);
-        render_side_preview(frame, preview_view, session_id, right[0], feedback);
-        right[1]
+        let [preview_area, content_area] = Layout::vertical(halves).areas(right);
+        render_side_preview(frame, preview_view, session_id, preview_area, feedback);
+        content_area
     } else {
-        columns[1]
+        right
     };
-    files::render_tree(frame, view.files, view.selected, view.scope, left[1]);
+    files::render_tree(frame, view.files, view.selected, view.scope, tree_area);
     files::render_content(
         frame,
         view.selected_name,
@@ -401,6 +380,20 @@ fn preview_panel(view: &preview::PreviewView<'_>) -> crate::PreviewPanel {
         preview::PreviewTarget::Selection => crate::PreviewPanel::Selection,
         preview::PreviewTarget::Command => crate::PreviewPanel::Command,
     }
+}
+
+/// Draw the event list and record where it was drawn from.
+fn render_list(
+    frame: &mut Frame,
+    view: &event_list::EventListView<'_>,
+    area: Rect,
+    feedback: &mut RenderFeedback,
+) {
+    let list = event_list::render(frame, view, area);
+    feedback.list_offset = Some(list.effective_offset);
+    feedback.list_row_offset = Some(list.effective_row_offset);
+    feedback.list_selection_row = list.selection_row;
+    feedback.list_selection_overflow = list.selection_overflow;
 }
 
 fn note_scroll(feedback: &mut RenderFeedback, panel: PanelId, limit: u16, effective_offset: u16) {

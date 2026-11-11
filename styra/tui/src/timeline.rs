@@ -205,6 +205,9 @@ pub struct Timeline {
     /// Where that selection was drawn, and at what width — see
     /// [`styra_ui::event_list::EventListView::rendered_selection_row`].
     pub rendered_selection_row: Option<styra_ui::event_list::SelectionRow>,
+    /// How much of that selection the viewport cut off, less any scroll
+    /// toward it requested since; see [`Self::reveal_selection_down`].
+    pub selection_overflow: Option<styra_ui::event_list::SelectionOverflow>,
     /// Where a branched Session's own history begins: the index of its last
     /// `branched from` marker. The server writes one at the top of a branch
     /// and another after the history it copied, so everything before the last
@@ -232,6 +235,7 @@ impl Default for Timeline {
             list_anchor: ListAnchor::Selection,
             rendered_selection: None,
             rendered_selection_row: None,
+            selection_overflow: None,
             branch_point: None,
         }
     }
@@ -250,6 +254,55 @@ impl Timeline {
     pub fn scroll_view_up(&mut self) {
         self.list_scroll_delta = self.list_scroll_delta.saturating_sub(10);
         self.list_anchor = ListAnchor::Free;
+    }
+
+    /// Scroll up to ten text rows toward the part of the selected entry
+    /// hidden below the viewport, as `J` would. False — scrolling nothing —
+    /// once the whole of it shows, or when none of it is in view.
+    pub fn reveal_selection_down(&mut self) -> bool {
+        let Some(overflow) = self.current_overflow() else {
+            return false;
+        };
+        let rows = overflow.below.min(10);
+        if rows == 0 {
+            return false;
+        }
+        // Counted off now, so keys arriving before the next frame do not
+        // scroll past the entry's end.
+        overflow.below -= rows;
+        overflow.above += rows;
+        self.list_scroll_delta = self.list_scroll_delta.saturating_add(rows as i32);
+        self.list_anchor = ListAnchor::Free;
+        true
+    }
+
+    /// As [`Self::reveal_selection_down`], toward the part hidden above.
+    pub fn reveal_selection_up(&mut self) -> bool {
+        let Some(overflow) = self.current_overflow() else {
+            return false;
+        };
+        let rows = overflow.above.min(10);
+        if rows == 0 {
+            return false;
+        }
+        overflow.above -= rows;
+        overflow.below += rows;
+        self.list_scroll_delta = self.list_scroll_delta.saturating_sub(rows as i32);
+        self.list_anchor = ListAnchor::Free;
+        true
+    }
+
+    /// Whether the last frame drew any of the selected entry.
+    pub fn selection_in_view(&self) -> bool {
+        self.rendered_selection == Some(self.selected) && self.selection_overflow.is_some()
+    }
+
+    /// The last frame's overflow, if it was measured for this selection.
+    fn current_overflow(&mut self) -> Option<&mut styra_ui::event_list::SelectionOverflow> {
+        if self.rendered_selection != Some(self.selected) {
+            return None;
+        }
+        self.selection_overflow.as_mut()
     }
 
     /// Append a row, giving it an identity no other row has or will have.

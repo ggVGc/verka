@@ -344,6 +344,9 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
             width,
             row: usize::from(pinned_rows) + rows,
         });
+    let selection_overflow = selected.and_then(|selected| {
+        selection_overflow(offset, row_offset, selected, &mut items, viewport_height)
+    });
     // Only what the viewport can show is built, and only that is handed over.
     // A session of any length therefore costs one screen of rendering per
     // frame rather than its whole history — see [`LazyItems::into_window`].
@@ -397,7 +400,35 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         effective_offset: offset + state.offset() + skipped,
         effective_row_offset: row_offset,
         selection_row,
+        selection_overflow,
     }
+}
+
+/// How far the selected entry runs past each edge of the viewport drawn from
+/// `offset`. `None` when none of it is in view.
+fn selection_overflow(
+    offset: usize,
+    row_offset: usize,
+    selected: usize,
+    heights: &mut impl Heights,
+    viewport_height: usize,
+) -> Option<SelectionOverflow> {
+    if selected >= heights.len() {
+        return None;
+    }
+    let height = heights.height(selected);
+    if selected == offset {
+        let row_offset = row_offset.min(height.saturating_sub(1));
+        return Some(SelectionOverflow {
+            above: row_offset,
+            below: (height - row_offset).saturating_sub(viewport_height),
+        });
+    }
+    let top = rows_above_selection(offset, row_offset, selected, heights, viewport_height)?;
+    Some(SelectionOverflow {
+        above: 0,
+        below: (top + height).saturating_sub(viewport_height),
+    })
 }
 
 /// The requested anchor, as long as the whole selected entry is visible from
@@ -3802,22 +3833,28 @@ mod tests {
                 }])
             };
             let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+            let mut feedback = EventListFeedback::default();
             terminal
-                .draw(|frame| {
-                    render(frame, &view, frame.area());
-                })
+                .draw(|frame| feedback = render(frame, &view, frame.area()))
                 .unwrap();
-            buffer_rows(terminal.backend().buffer()).join("\n")
+            let text = buffer_rows(terminal.backend().buffer()).join("\n");
+            (text, feedback.selection_overflow.unwrap())
         };
 
-        let top = screen(ListAnchor::Selection, 0);
+        // The overflow is what `j`/`k` scroll through before leaving it.
+        let (top, overflow) = screen(ListAnchor::Selection, 0);
         assert!(top.contains("more rows"), "{top}");
-        let half = screen(ListAnchor::Free, 10);
+        assert_eq!(overflow.above, 0);
+        let hidden = overflow.below;
+        assert!(hidden > 10, "{overflow:?}");
+        let (half, overflow) = screen(ListAnchor::Free, 10);
         assert!(half.contains("line 12"), "{half}");
         assert!(half.contains("more rows"), "{half}");
-        let end = screen(ListAnchor::Free, 100);
+        assert_eq!((overflow.above, overflow.below), (10, hidden - 10));
+        let (end, overflow) = screen(ListAnchor::Free, 100);
         assert!(end.contains("line 29"), "{end}");
         assert!(!end.contains("more rows"), "{end}");
+        assert_eq!(overflow.below, 0);
     }
 
     #[test]

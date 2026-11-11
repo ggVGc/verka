@@ -191,6 +191,17 @@ pub struct EventListFeedback {
     pub effective_row_offset: usize,
     /// Where the selected entry was drawn, when it was in view.
     pub selection_row: Option<SelectionRow>,
+    /// How much of the selected entry the viewport cut off, when any of it
+    /// was in view.
+    pub selection_overflow: Option<SelectionOverflow>,
+}
+
+/// Rendered rows of the selected entry beyond the top and the foot of the
+/// viewport.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SelectionOverflow {
+    pub above: usize,
+    pub below: usize,
 }
 
 /// The screen row the selected entry's first line was drawn on, counted from
