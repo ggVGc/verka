@@ -343,7 +343,9 @@ impl Action {
             Self::GlobalDiff => {
                 "open / close the checkout's diff pane, at the selected file or reference"
             }
-            Self::DiffBranch => "choose and save the interaction’s comparison branch",
+            Self::DiffBranch => {
+                "choose and save the interaction’s comparison branch (any local branch before it starts)"
+            }
             Self::DiffTurnHighlight => "toggle highlighting the selected turn in the full diff",
             Self::DiffNextTurn => "show the next turn’s diff",
             Self::DiffPrevTurn => "show the previous turn’s diff",

@@ -640,4 +640,100 @@ mod tests {
         }
         assert!(asked(), "E asked the server for an edit report");
     }
+
+    /// A screen with no interaction yet diffs the checkout it will start in
+    /// against a local branch the operator picks, read on this host, and `i`
+    /// from that diff goes to the message box that starts the interaction.
+    #[test]
+    fn a_new_interaction_diffs_its_checkout_against_a_chosen_branch() {
+        let checkout = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(checkout.path())
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        std::fs::write(checkout.path().join("a.txt"), "a\n").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "--quiet", "-m", "first"]);
+        git(&["switch", "--quiet", "-c", "topic"]);
+        std::fs::write(checkout.path().join("b.txt"), "b\n").unwrap();
+        git(&["add", "b.txt"]);
+        git(&["commit", "--quiet", "-m", "second"]);
+        std::fs::write(checkout.path().join("c.txt"), "c\n").unwrap();
+
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
+        app.workspace.enter(checkout.path().to_owned());
+        let mut terminal = crate::test_ui::TestUi::default();
+        let server = std::sync::Arc::new(Unreachable::default());
+        let client = Client::in_process(server.clone());
+        let mut live = Attachment::Detached;
+        let mut history = InteractionHistory::default();
+        let launch = LaunchPolicy::default();
+        let preferences = checkout.path().join("preferences.toml");
+        let mut event_loop = Loop::new(
+            &mut terminal,
+            &mut app,
+            &client,
+            &mut live,
+            RunContext {
+                standing_launch: &launch,
+                preferences_path: &preferences,
+                config: &crate::config::Defaults,
+                history: &mut history,
+            },
+        )
+        .unwrap();
+        let press = |event_loop: &mut Loop, key: KeyCode| {
+            event_loop.handle_key(key.into(), "").unwrap();
+            event_loop.carry_out_requests("").unwrap();
+        };
+
+        press(&mut event_loop, KeyCode::Char('d'));
+        let picker = event_loop.app.diff_branch_picker.as_ref().unwrap();
+        let mut branches = picker.rows[1..].to_vec();
+        branches.sort();
+        assert_eq!(branches, ["main", "topic"]);
+        assert!(!event_loop.app.diff_visible());
+        for key in "main".chars() {
+            press(&mut event_loop, KeyCode::Char(key));
+        }
+        press(&mut event_loop, KeyCode::Enter);
+        assert!(event_loop.app.diff_branch_picker.is_none());
+        assert!(event_loop.app.diff_focused());
+        let diff = event_loop.app.checkout_diff.as_ref().unwrap();
+        assert_eq!(diff.target().unwrap().base_branch.as_deref(), Some("main"));
+        let text = diff.diff.as_ref().unwrap();
+        assert!(
+            text.contains("b/b.txt") && text.contains("b/c.txt"),
+            "{text}"
+        );
+        assert!(!text.contains("a.txt"), "{text}");
+
+        // `b` offers the branches again; the first row is the head alone.
+        press(&mut event_loop, KeyCode::Char('b'));
+        press(&mut event_loop, KeyCode::Enter);
+        let diff = event_loop.app.checkout_diff.as_ref().unwrap();
+        let text = diff.diff.as_ref().unwrap();
+        assert!(
+            text.contains("b/c.txt") && !text.contains("b.txt"),
+            "{text}"
+        );
+
+        // Closed and opened again, the same comparison is read once more.
+        press(&mut event_loop, KeyCode::Char('d'));
+        assert!(!event_loop.app.diff_visible());
+        press(&mut event_loop, KeyCode::Char('d'));
+        assert!(event_loop.app.diff_branch_picker.is_none());
+        assert!(event_loop.app.diff_focused());
+
+        press(&mut event_loop, KeyCode::Char('i'));
+        assert_eq!(event_loop.app.focus, crate::app::Focus::Input);
+        assert!(server.asked.lock().unwrap().is_empty());
+    }
 }

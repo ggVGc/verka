@@ -430,6 +430,11 @@ from this one, and a source in full. It opens as an overview tile shows a
 conversation: on the latest entry, from its start if it is taller than the
 preview. A live interaction's log keeps growing
 while it is shown.
+On the blank screen of a new interaction, `d` offers the local branches of the
+checkout it will start in, and opens the diff against where the chosen one
+meets the current branch (the first row, `HEAD`, shows uncommitted changes
+only); `b` in the diff chooses again. `i` from that diff starts the new
+interaction's message, noting the file and line it was started from.
 Diffs mark additions and removals with a green `+` and a red `-` and highlight
 the code in the language of each file's extension, with each line's number in
 the file beside it; only the changed lines are shown. Claude's edits carry no line numbers, so they are found in

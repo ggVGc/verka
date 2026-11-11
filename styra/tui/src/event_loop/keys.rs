@@ -365,6 +365,20 @@ impl Loop<'_> {
         match picker.handle_key(key) {
             crate::checkout_diff::BranchChoice::Stay => {}
             crate::checkout_diff::BranchChoice::Cancel => app.diff_branch_picker = None,
+            crate::checkout_diff::BranchChoice::Select(branch) if picker.id.is_empty() => {
+                let Some(directory) = app.workspace.root() else {
+                    return app.show_warning("no checkout to diff yet");
+                };
+                match crate::checkout_diff::new_interaction_target(directory, branch.as_deref()) {
+                    Ok(target) => {
+                        app.checkout_diff = Some(crate::checkout_diff::read(target));
+                        app.diff_branch_picker = None;
+                        let reopened = app.diff_visible();
+                        super::requests::open_diff_pane(app, reopened);
+                    }
+                    Err(error) => app.show_error(format!("could not open the diff: {error:#}")),
+                }
+            }
             crate::checkout_diff::BranchChoice::Select(branch) => {
                 let id = picker.id.clone();
                 let result = client.set_diff_branch(&id, branch).and_then(|()| {
@@ -543,6 +557,9 @@ impl Loop<'_> {
                 .shown_diff()
                 .is_some_and(|diff| diff.typing() || diff.commits.focused)
         {
+            if app.session_id.is_empty() {
+                return super::requests::pick_new_interaction_base(app);
+            }
             match self.client.diff_branches(&app.session_id) {
                 Ok(branches) => {
                     app.diff_branch_picker = Some(crate::checkout_diff::BranchPicker::new(

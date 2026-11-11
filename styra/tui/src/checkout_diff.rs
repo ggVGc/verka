@@ -46,8 +46,22 @@ pub fn read(target: DiffTarget) -> CheckoutDiff {
     diff
 }
 
+/// The checkout a new interaction is about to start in — the Workspace's own,
+/// or the linked one it is carried over from — diffed against where its
+/// history left `base`, or with none against `HEAD`. Read on this host, there
+/// being no Session yet for the server to resolve a baseline for.
+pub fn new_interaction_target(
+    directory: &std::path::Path,
+    base: Option<&str>,
+) -> anyhow::Result<DiffTarget> {
+    styra_diff::git::target(directory, base).map_err(anyhow::Error::msg)
+}
+
 /// A comparison preference belonging to the interaction, independent of its
 /// integration target. The first row restores the automatic baseline.
+///
+/// With an empty `id` it is instead a choice for the new interaction not yet
+/// started, kept only by the diff it opens; its first row is then `HEAD`.
 pub struct BranchPicker {
     pub id: String,
     pub rows: Vec<String>,
@@ -62,7 +76,12 @@ pub enum BranchChoice {
 
 impl BranchPicker {
     pub fn new(id: String, branches: Vec<String>) -> Self {
-        let mut rows = vec!["Automatic (integration target or first snapshot)".into()];
+        let first = if id.is_empty() {
+            "HEAD (uncommitted changes only)"
+        } else {
+            "Automatic (integration target or first snapshot)"
+        };
+        let mut rows = vec![first.into()];
         rows.extend(branches);
         Self {
             id,

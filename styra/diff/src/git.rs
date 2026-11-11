@@ -215,6 +215,24 @@ pub fn target(directory: &Path, base: Option<&str>) -> Result<DiffTarget, String
     })
 }
 
+/// The local branches of the repository `directory` is in, newest tip first,
+/// to offer as a [`target`]'s base.
+pub fn branches(directory: &Path) -> Result<Vec<String>, String> {
+    Ok(git(
+        directory,
+        &[
+            "for-each-ref",
+            "--sort=refname",
+            "--sort=-committerdate",
+            "--format=%(refname:strip=2)",
+            "refs/heads/",
+        ],
+    )?
+    .lines()
+    .map(str::to_owned)
+    .collect())
+}
+
 /// The branch checked out in the repository `directory` is in. `None` for a
 /// detached head, or when `directory` is not in a repository at all.
 fn branch(directory: &Path) -> Option<String> {

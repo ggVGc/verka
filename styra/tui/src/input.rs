@@ -1295,7 +1295,12 @@ fn open_diff_file(app: &mut App) {
 }
 
 /// Ask the event loop to open the checkout against where it will be integrated.
+/// An interaction not yet started is diffed against a branch the operator
+/// picks, from the checkout it will start in.
 pub(crate) fn ask_for_diff(app: &mut App) {
+    if app.session_id.is_empty() {
+        return app.ask(Request::ShowDiff(String::new()));
+    }
     let Some(interaction) = app.interactions.current(&app.session_id) else {
         return app.show_warning("no interaction to diff");
     };

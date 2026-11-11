@@ -633,6 +633,9 @@ impl Loop<'_> {
     /// and left as it was if the file is not among its changes; without, the
     /// diff on screen is reopened against the checkout.
     fn show_diff(&mut self, id: &str, at: Option<(PathBuf, Option<u32>)>) {
+        if id.is_empty() {
+            return self.show_new_interaction_diff();
+        }
         let app = &mut *self.app;
         let Some(interaction) = app.interactions.items.iter().find(|row| row.id == id) else {
             app.show_error("no interaction to diff");
@@ -645,8 +648,6 @@ impl Loop<'_> {
                 return;
             }
         };
-        // Reopening the pane already open, as a switch of interaction does,
-        // leaves the keys with whichever side had them.
         let reopened = at.is_none() && app.diff_preview;
         let diff = match at {
             Some((path, line)) => {
@@ -662,15 +663,56 @@ impl Loop<'_> {
         app.checkout_diff = Some(diff);
         self.edit_reports.load(app, self.client);
         self.diff_refreshed = Instant::now();
-        if !reopened {
-            app.diff_interaction_focus = app.interactions.open;
-            app.diff_maximized = false;
+        open_diff_pane(app, reopened);
+    }
+
+    /// The screen of an interaction not yet started has no Session to ask
+    /// for a baseline, so the operator names one: the diff already chosen is
+    /// read again, and otherwise the local branches are offered for it.
+    fn show_new_interaction_diff(&mut self) {
+        let app = &mut *self.app;
+        let Some(diff) = app
+            .checkout_diff
+            .as_mut()
+            .filter(|diff| diff.target().is_some())
+        else {
+            return pick_new_interaction_base(app);
+        };
+        diff.refresh();
+        self.diff_refreshed = Instant::now();
+        let reopened = app.diff_preview;
+        open_diff_pane(app, reopened);
+    }
+}
+
+/// Put the diff pane on screen. Reopening the pane already open, as a switch
+/// of interaction does, leaves the keys with whichever side had them.
+pub(super) fn open_diff_pane(app: &mut App, reopened: bool) {
+    if !reopened {
+        app.diff_interaction_focus = app.interactions.open;
+        app.diff_maximized = false;
+    }
+    app.diff_preview = true;
+    app.diff_turn = false;
+    if !matches!(app.view, View::Events | View::Files) {
+        app.set_view(View::Events);
+    }
+}
+
+/// Offer the local branches of the checkout a new interaction will start in,
+/// to diff it against.
+pub(super) fn pick_new_interaction_base(app: &mut App) {
+    let Some(directory) = app.workspace.root() else {
+        return app.show_warning("no checkout to diff yet");
+    };
+    match styra_diff::git::branches(directory) {
+        Ok(branches) => {
+            app.diff_branch_picker = Some(crate::checkout_diff::BranchPicker::new(
+                String::new(),
+                branches,
+            ))
         }
-        app.diff_preview = true;
-        app.diff_turn = false;
-        if !matches!(app.view, View::Events | View::Files) {
-            app.set_view(View::Events);
-        }
+        Err(error) => app.show_error(format!("could not list comparison branches: {error}")),
     }
 }
 
