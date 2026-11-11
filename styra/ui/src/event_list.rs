@@ -77,6 +77,8 @@ pub struct BranchLink<'a> {
     /// not the worktree of the interaction the marker sits in. `None` when
     /// the two share one, and when either checkout is unknown.
     pub worktree: Option<&'a str>,
+    /// The operator's `#tags` on it, as its navigator row lists them.
+    pub tags: &'a [String],
     /// The sessions branched off this one in turn, each drawn beneath the
     /// marker as a marker of its own, indented a step per generation. Empty
     /// for a `branched from` marker: what was branched off its source is the

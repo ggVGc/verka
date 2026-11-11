@@ -1124,6 +1124,7 @@ struct BranchKey {
     state: Option<crate::interactions::InteractionState>,
     message: Option<String>,
     worktree: Option<String>,
+    tags: Vec<String>,
     children: Vec<BranchKey>,
 }
 
@@ -1134,6 +1135,7 @@ impl BranchKey {
             state: branch.state.clone(),
             message: branch.message.map(str::to_owned),
             worktree: branch.worktree.map(str::to_owned),
+            tags: branch.tags.to_vec(),
             children: branch.children.iter().map(Self::of).collect(),
         }
     }
@@ -2060,6 +2062,12 @@ pub fn summary_line(
                     summary_style,
                 ));
             }
+            if !entry.branch.tags.is_empty() {
+                branch_tail.push(Span::styled(
+                    format!("  #{}", entry.branch.tags.join(" #")),
+                    Style::default().fg(theme::INTERACTION_TAG),
+                ));
+            }
             // Only a worktree other than this one is named: most branches
             // share their source's checkout, and saying so on each is noise.
             if let Some(worktree) = entry.branch.worktree {
@@ -2841,6 +2849,60 @@ mod tests {
         assert_eq!(marked, ["    • Cap"]);
     }
 
+    /// A marker and the branches beneath it carry their `#tags` after the
+    /// name, as the navigator's rows do.
+    #[test]
+    fn a_branch_marker_shows_the_tags_of_where_it_leads() {
+        use styra_protocol::event::BranchDirection;
+        let event = AgentEvent::Branched {
+            direction: BranchDirection::To,
+            session: "4f1c-session-id".into(),
+            name: None,
+        };
+        let tags = ["retries".to_owned(), "infra".to_owned()];
+        let child_tags = ["cap".to_owned()];
+        let entry = EventEntry {
+            has_detail: false,
+            branch: BranchLink {
+                name: Some("Retry backoff"),
+                tags: &tags,
+                children: vec![
+                    BranchLink {
+                        name: Some("Cap"),
+                        tags: &child_tags,
+                        ..Default::default()
+                    },
+                    BranchLink {
+                        name: Some("Untagged"),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            ..entry_of(&event, version())
+        };
+        let rows = entry_rows_with_max_rows(&entry, 40, 20, render_of());
+        let text = rows
+            .iter()
+            .map(|row| row.to_string().trim_end().to_owned())
+            .filter(|row| !row.starts_with('─'))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            text,
+            [
+                "▌ Retry backoff  #retries #infra",
+                "  ▌ Cap  #cap",
+                "  ▌ Untagged",
+            ]
+        );
+        let tag = rows[1]
+            .spans
+            .iter()
+            .find(|span| span.content.contains('#'))
+            .unwrap();
+        assert_eq!(tag.style.fg, Some(theme::INTERACTION_TAG));
+    }
+
     #[test]
     fn a_branch_marker_names_a_worktree_only_when_it_is_another_one() {
         use styra_protocol::event::BranchDirection;
@@ -2904,6 +2966,7 @@ mod tests {
                 state: Some(paused),
                 message: Some(&long),
                 worktree: None,
+                tags: &[],
                 children: Vec::new(),
             },
             ..entry_of(&event, version())
@@ -3030,6 +3093,7 @@ mod tests {
                     }),
                     message: Some("Latest message"),
                     worktree: None,
+                    tags: &[],
                     children: Vec::new(),
                 },
                 ..entry_of(&event, version())

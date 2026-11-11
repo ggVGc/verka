@@ -1012,7 +1012,8 @@ the top of the pane while the branch's own work scrolls beneath it. A
 `branched to` marker also shows, inside its band, the listed Sessions branched
 off where it leads — each drawn as a marker of its own with its last message
 beneath it, indented a step per generation — so a whole subtree reads from
-the Session it started in. Finished branches are drawn too: the client asks
+the Session it started in. Each marker carries the `#tags` of the Session it
+names after its name, as that Session's navigator row does. Finished branches are drawn too: the client asks
 the server to keep every row descended from where its markers lead
 (`keep_branches_of`), since it cannot name a finished branch it was never
 sent.

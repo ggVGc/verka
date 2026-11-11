@@ -25,7 +25,7 @@ pub(crate) fn ui_link_display(value: crate::app::LinkDisplay) -> LinkDisplay {
 }
 
 /// For a branch marker in `owner`'s conversation, the other session's current
-/// name, state, latest message, and worktree when it is not `owner`'s,
+/// name, tags, state, latest message, and worktree when it is not `owner`'s,
 /// resolved live from the roster rather than trusted from the event itself:
 /// the event's own `name` is a snapshot taken when the marker was written,
 /// and a rename since would leave it stale — as would a worktree made for
@@ -89,6 +89,7 @@ fn session_link<'a>(app: &'a App, owner: &str, id: &str) -> styra_ui::event_list
             let here = app.interactions.current(owner)?.checkout.as_ref()?;
             other_worktree(here, interaction.checkout.as_ref()?)
         }),
+        tags: interaction.map_or(&[], |interaction| &interaction.tags),
         children: Vec::new(),
     }
 }

@@ -928,6 +928,7 @@ mod tests {
                     }),
                     message: Some("Backoff now doubles."),
                     worktree: None,
+                    tags: &[],
                     children: Vec::new(),
                 },
             },
