@@ -1411,16 +1411,20 @@ fn handle_editor_controls(app: &mut App, key: KeyEvent) {
         }
         k if EDITOR_LAUNCHER.matches(k) => app.open_launcher(),
         k if EDITOR_CYCLE_PROVIDER.matches(k) => app.open_provider_picker(),
-        k if EDITOR_CYCLE_MODEL.matches(k) => app.open_model_picker(),
-        k if EDITOR_CYCLE_EFFORT.matches(k) => {
-            app.open_model_picker();
-            if let Some(picker) = app.launcher.as_mut() {
-                picker.active = crate::launcher::Field::Effort;
-            }
-        }
+        k if EDITOR_CYCLE_MODEL.matches(k) => open_cycling(app, crate::launcher::Field::Model),
+        k if EDITOR_CYCLE_EFFORT.matches(k) => open_cycling(app, crate::launcher::Field::Effort),
         k if EDITOR_INSERT_PATH.matches(k) => open_insert(app),
         k if EDITOR_AUTO_COMMIT.matches(k) => toggle_auto_commit(app),
         _ => {}
+    }
+}
+
+/// Open the model picker already one step along `field`, so a cycling
+/// shortcut changes the choice on its first press like on every later one.
+fn open_cycling(app: &mut App, field: crate::launcher::Field) {
+    app.open_model_picker();
+    if let Some(picker) = app.launcher.as_mut() {
+        picker.cycle(field);
     }
 }
 
@@ -1835,9 +1839,14 @@ mod tests {
             assert_eq!(app.selection, original);
             assert!(app.take_request().is_none());
 
-            // The same command advances, even where its key is also one the
-            // picker otherwise moves up with.
-            launcher::handle_key(&mut app, key, &preferences);
+            // Model and effort take their first step as they open; the
+            // provider command only opens, and then the same command
+            // advances, even where its key is also one the picker otherwise
+            // moves up with.
+            if command == EDITOR_CYCLE_PROVIDER {
+                assert_eq!(app.launcher.as_ref().unwrap().selection(), original);
+                launcher::handle_key(&mut app, key, &preferences);
+            }
             let picker = app.launcher.as_ref().unwrap();
             let chosen = picker.selection();
             assert_ne!(chosen, original);

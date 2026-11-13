@@ -73,12 +73,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
     };
     match key {
         k if launcher.choice == Choice::ModelEffort && keys::EDITOR_CYCLE_MODEL.matches(k) => {
-            launcher.active = Field::Model;
-            launcher.cycle_next();
+            launcher.cycle(Field::Model);
         }
         k if launcher.choice == Choice::ModelEffort && keys::EDITOR_CYCLE_EFFORT.matches(k) => {
-            launcher.active = Field::Effort;
-            launcher.cycle_next();
+            launcher.cycle(Field::Effort);
         }
         k if launcher.choice.repeats(k) => launcher.cycle_next(),
         k if keys::LAUNCHER_NEXT.matches(k) => launcher.next(),
@@ -401,6 +399,12 @@ impl Launcher {
 
     pub fn next(&mut self) {
         self.edit_active(|list, labels| list.next(labels));
+    }
+
+    /// Focus `field` and advance it one step, as its cycling shortcut does.
+    pub fn cycle(&mut self, field: Field) {
+        self.active = field;
+        self.cycle_next();
     }
 
     fn cycle_next(&mut self) {
