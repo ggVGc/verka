@@ -1263,7 +1263,10 @@ pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
 /// request `Ctrl+W` makes for a Session that already exists: branching blocks long
 /// enough to need the notice only the loop can paint.
 fn creates_worktree(app: &App, key: KeyEvent) -> bool {
-    EDITOR_SEND_IN_BRANCH.matches(key)
+    // A base chosen with alt-b is a fresh checkout of that branch, so the
+    // first message launches into a worktree from plain Enter too.
+    let chosen_base = app.base_branch.is_some() && app.session_id.is_empty();
+    (EDITOR_SEND_IN_BRANCH.matches(key) || chosen_base)
         // Nothing is sent, and so nothing is branched, for a blank box.
         && !app.composer.message().is_empty()
 }
@@ -2558,6 +2561,35 @@ mod tests {
             creates_worktree(&app, in_branch),
             "a Session already under way can still be branched"
         );
+    }
+
+    #[test]
+    fn sending_from_a_chosen_base_creates_its_worktree_like_ctrl_enter() {
+        let (_root_directory, root) = tree("chosen-base-send");
+        let mut app = app(&root);
+        app.base_branch = Some("release".into());
+        app.enter_input();
+        app.composer.set("start on release".into());
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+
+        handle_input_key(
+            &mut app,
+            &client,
+            "workspace-1",
+            &mut live,
+            press(&EDITOR_SEND),
+        );
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::CreateWorktree {
+                message: Some("start on release".into()),
+            }),
+            "plain Enter goes through the same worktree creation, and its notice"
+        );
+        assert_eq!(live, Attachment::Detached, "nothing launches from the box");
+        assert_eq!(app.base_branch.as_deref(), Some("release"));
     }
 
     #[test]
