@@ -1512,6 +1512,30 @@ impl App {
         self.moved(moved);
     }
 
+    /// Select the `branched to` marker leading to `branch`, centered in the
+    /// viewport, so returning to a source lands where the branch left it.
+    /// The newest marker wins should the journal carry several; a hidden one
+    /// leaves the selection alone. Reports whether one was selected.
+    pub(crate) fn select_branch_marker(&mut self, branch: &str) -> bool {
+        let marker = (0..self.timeline.entries.len()).rev().find(|&at| {
+            self.timeline.is_visible(at)
+                && matches!(
+                    self.timeline.entries[at].event(),
+                    AgentEvent::Branched {
+                        direction: styra_protocol::event::BranchDirection::To,
+                        session,
+                        ..
+                    } if session == branch
+                )
+        });
+        let Some(marker) = marker else { return false };
+        self.timeline.selected = marker;
+        self.timeline.follow = false;
+        self.moved(true);
+        self.timeline.list_anchor = ListAnchor::Centered;
+        true
+    }
+
     /// Select the newest entry of an interaction just opened from the live
     /// roster, centered in the viewport.
     pub(crate) fn select_last_on_interaction_open(&mut self) {
@@ -2390,6 +2414,35 @@ mod tests {
             assert!(!app.timeline.entries[first].expanded);
             assert!(app.timeline.entries[first + 1].expanded);
         }
+    }
+
+    /// Returning to a source selects the marker of the branch just left,
+    /// whichever other markers the journal carries.
+    #[test]
+    fn the_marker_of_the_branch_left_is_selected_on_return() {
+        use styra_protocol::event::BranchDirection;
+
+        let mut app = app();
+        let marker = |session: &str| AgentEvent::Branched {
+            direction: BranchDirection::To,
+            session: session.into(),
+            name: None,
+        };
+        app.push_event(marker("branch-2"));
+        app.push_event(marker("branch-3"));
+        app.push_event(AgentEvent::AgentMessage {
+            text: "after".into(),
+        });
+        app.select_last();
+
+        assert!(app.select_branch_marker("branch-2"));
+        assert_eq!(app.timeline.selected, 0);
+        assert!(!app.timeline.follow);
+        assert_eq!(app.timeline.list_anchor, ListAnchor::Centered);
+        assert_eq!(app.selected_branch_target().as_deref(), Some("branch-2"));
+
+        assert!(!app.select_branch_marker("elsewhere"));
+        assert_eq!(app.timeline.selected, 0);
     }
 
     #[test]

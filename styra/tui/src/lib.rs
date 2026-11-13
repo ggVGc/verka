@@ -610,7 +610,13 @@ pub fn run() -> Result<()> {
             // interaction for the Session being left remains server-owned.
             RunOutcome::OpenSession(session_id) => {
                 let left = app.session_id.clone();
+                let to_parent = app.interactions.parent(&left) == Some(session_id.as_str());
                 if open_session_view(&client, &launch, &fleet, &mut app, &mut live, &session_id) {
+                    // Back on the source, the cursor rests on the marker of
+                    // the branch just left rather than the newest entry.
+                    if to_parent {
+                        app.select_branch_marker(&left);
+                    }
                     history.record(&left);
                     history.record(&session_id);
                 }
