@@ -336,7 +336,7 @@ impl ServerState {
         };
         if !rebased {
             status.message =
-                "Conflicts found. Launching the interaction's current model to resolve them…"
+                "Conflicts found. Launching a conversation branch in the same worktree to resolve them…"
                     .into();
             store_status(record, status)?;
             resolve(id, path, status)?;

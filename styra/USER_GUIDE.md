@@ -682,8 +682,12 @@ checkout — from any client, naming the action it is applying. Reading the
 interaction stays open.
 The interaction must be idle, with its changes committed and no queued messages.
 
-If conflicts occur, Styra resumes the interaction using its current model and
-asks it to resolve the conflicts and finish the rebase. On success, Styra records
+If conflicts occur, Styra creates a conversation branch using the interaction’s
+current model and history, sharing the same worktree, and asks that branch to
+resolve the conflicts and finish the rebase. The resolution prompt and agent work
+stay in the branch’s conversation, leaving the original context unchanged. Styra
+stops the branch afterward, marking it Completed on success or Abandoned on failure;
+its transcript remains available. On success, Styra records
 the new source commit as the interaction's base for future diffs. The branch,
 checkout, and conversation remain available. On failure, the previous base stays
 recorded; press `Ctrl+B` again to retry.
@@ -696,7 +700,8 @@ or press `Ctrl+G` to ask an errand to generate one and edit the result. `Alt+Ent
 adds a newline, `Enter` starts integration, and `Esc` cancels the prompt.
 
 Integration rebases onto the source branch first. If it encounters conflicts,
-Styra asks the same interaction to resolve them and finish the rebase. After a
+Styra asks a conversation branch sharing the same worktree to resolve them and
+finish the rebase, keeping that work out of the original conversation. After a
 successful resolution it squash-commits into the source branch, removes the
 interaction's worktree, and marks the interaction Sealed. Its branch and
 conversation remain available. Progress and failures appear in the interaction

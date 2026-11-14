@@ -582,30 +582,21 @@ impl ServerState {
         integrate: bool,
         mut progress: impl FnMut(String) -> Result<()>,
     ) -> Result<()> {
-        if let Ok(interaction) = self.interaction(id) {
-            if interaction.activity.activity().accepting() && interaction.workspace != path {
-                interaction.kill()?;
-            }
-        }
-        if self
-            .interaction(id)
-            .map(|interaction| !interaction.activity.activity().accepting())
-            .unwrap_or(true)
-        {
+        self.with_rebase_conversation(id, |branch| {
             self.resume_session(ResumeSession {
-                id: id.into(),
-                launch: Default::default(),
+                id: branch.id.clone(),
+                launch: self
+                    .interaction(id)
+                    .map(|source| source.launch.clone())
+                    .unwrap_or_default(),
                 selection: None,
             })?;
-        }
-        let interaction = self.interaction(id)?;
-        let auto_commit = interaction.auto_commit.swap(false, Ordering::AcqRel);
-        let next = if integrate {
-            "Styra will integrate when the rebase succeeds."
-        } else {
-            "Styra will record the new base when the rebase succeeds. Keep the interaction branch and checkout."
-        };
-        let resolution = (|| -> Result<()> {
+            let interaction = self.interaction(&branch.id)?;
+            let next = if integrate {
+                "Styra will integrate when the rebase succeeds."
+            } else {
+                "Styra will record the new base when the rebase succeeds. Keep the interaction branch and checkout."
+            };
             let mut cursor = interaction.updates.lock().unwrap().len();
             let mut events = Vec::new();
             interaction.send_message(SendMessage {
@@ -666,10 +657,40 @@ impl ServerState {
                 "the conflict-resolution turn did not finish the rebase onto the source branch"
             );
             Ok(())
+        })
+    }
+
+    /// Run conflict resolution in a copy of the conversation, sharing its
+    /// checkout. Only a branch marker is appended to the source conversation.
+    /// Close the branch on either outcome so retries and integration can use
+    /// the checkout again, while keeping the resolver's transcript available.
+    fn with_rebase_conversation(
+        &self,
+        id: &str,
+        resolve: impl FnOnce(&SessionSummary) -> Result<()>,
+    ) -> Result<()> {
+        let branch = self.branch_session(
+            id,
+            None,
+            crate::protocol::BranchHistory::ThroughSelected,
+            None,
+            None,
+            Some(crate::protocol::BranchCheckout::ShareSource),
+        )?;
+        let resolution = (|| {
+            // The resolver continues Git's rebase itself. Disable automatic
+            // commits before launch, including on failure or later resume.
+            journal::store_session_auto_commit(&branch.path, false)?;
+            resolve(&branch)
         })();
-        interaction
-            .auto_commit
-            .store(auto_commit, Ordering::Release);
+        self.set_session_completion(
+            &branch.id,
+            if resolution.is_ok() {
+                CompletionState::Completed
+            } else {
+                CompletionState::Abandoned
+            },
+        )?;
         resolution
     }
 }
@@ -679,6 +700,143 @@ mod tests {
     use super::*;
     use crate::git::{Git, SystemGit};
     use std::process::Command;
+
+    #[test]
+    fn rebase_resolution_branches_share_the_checkout_and_leave_the_source_context_untouched() {
+        use super::super::native_transcripts::MemoryTranscripts;
+        use genta::session::{Message, Role, Session};
+
+        let mut fixture = Fixture::new();
+        fixture.conflict();
+        let transcripts = Arc::new(MemoryTranscripts::default());
+        fixture.state = ServerState::with_backends(
+            SystemGit::shared(),
+            transcripts.clone(),
+            fixture.state.store_root().to_path_buf(),
+            None,
+            None,
+            None,
+        );
+        let provider = crate::agent::Provider::Codex;
+        let native = genta::session::serialize(
+            &Session {
+                id: "original".into(),
+                cwd: fixture.path().display().to_string(),
+                timestamp: "2026-11-11T10:00:00Z".into(),
+                messages: vec![Message {
+                    role: Role::User,
+                    text: "Implement the feature".into(),
+                    timestamp: Some("2026-11-11T10:00:00Z".into()),
+                }],
+            },
+            native_session_format(provider),
+        );
+        transcripts
+            .write(provider, "original", fixture.path(), &native)
+            .unwrap();
+        journal::store_provider_session_id(&fixture.session, "original").unwrap();
+        let mut parent = Journal::open(&fixture.session).unwrap();
+        parent.record_user_message("Implement the feature").unwrap();
+        let parent_journal = parent.path().to_path_buf();
+        drop(parent);
+        let selection = fixture.state.stored_summary(&fixture.id).unwrap().selection;
+        let source = git(&fixture.host, &["rev-parse", "main"]);
+        let mut status = pending_rebase(source.clone());
+        let record = fixture.session.join("rebase.json");
+        let mut branches = Vec::new();
+
+        // An unsuccessful attempt must release the checkout as well, so a
+        // retry forks the original context rather than the failed resolver.
+        for succeed in [false, true] {
+            let result = fixture.state.run_rebase_with_resolver(
+                &fixture.id,
+                fixture.checkout.clone(),
+                &mut status,
+                &record,
+                |id, path, _| {
+                    fixture.state.with_rebase_conversation(id, |branch| {
+                        branches.push(branch.id.clone());
+                        assert_ne!(branch.id, fixture.id);
+                        assert_eq!(branch.selection, selection);
+                        assert_eq!(branch.origin.as_ref().unwrap().session_id, fixture.id);
+                        assert_eq!(
+                            journal::read_session_checkout(&branch.path)?,
+                            Some(fixture.checkout.clone())
+                        );
+                        assert_eq!(
+                            journal::read_session_auto_commit(&branch.path)?,
+                            Some(false)
+                        );
+                        let native_id = journal::read_provider_session_id(&branch.path)?.unwrap();
+                        assert_ne!(native_id, "original");
+                        let history = transcripts.read(provider, &native_id)?;
+                        assert!(history.contains("Implement the feature"));
+                        assert!(!history.contains("Resolve conflicts"));
+                        Journal::open(&branch.path)?.record_user_message("Resolve conflicts")?;
+                        transcripts.write(provider, &native_id, path, "resolver-only work")?;
+                        if !succeed {
+                            anyhow::bail!("resolver failed");
+                        }
+                        std::fs::write(path.join("file"), "source and feature\n")?;
+                        git(path, &["add", "file"]);
+                        continue_rebase(path)
+                    })
+                },
+            );
+            assert_eq!(result.is_ok(), succeed);
+            let branch = fixture
+                .state
+                .stored_summary(branches.last().unwrap())
+                .unwrap();
+            assert_eq!(
+                branch.completed,
+                if succeed {
+                    CompletionState::Completed
+                } else {
+                    CompletionState::Abandoned
+                }
+            );
+            assert_eq!(transcripts.read(provider, "original").unwrap(), native);
+            let parent = std::fs::read_to_string(&parent_journal).unwrap();
+            assert!(!parent.contains("Resolve conflicts"));
+            assert!(!parent.contains("resolver-only work"));
+            assert_eq!(
+                journal::read_provider_session_id(&fixture.session)
+                    .unwrap()
+                    .as_deref(),
+                Some("original")
+            );
+            fixture
+                .state
+                .ensure_branches_closed(&fixture.state.stored_summary(&fixture.id).unwrap())
+                .unwrap();
+            let sessions =
+                journal::list_workspace_sessions(fixture.state.store_root(), &branch.workspace_id)
+                    .unwrap();
+            assert_eq!(
+                fixture
+                    .state
+                    .checkouts_in_use(&sessions, &branch.workspace_id)
+                    .unwrap(),
+                vec![(fixture.id.clone(), fixture.path().to_path_buf())]
+            );
+        }
+        assert_ne!(branches[0], branches[1]);
+        assert_eq!(
+            journal::read_session_checkout(&fixture.session)
+                .unwrap()
+                .unwrap()
+                .branched_from
+                .unwrap()
+                .commit,
+            source
+        );
+        fixture
+            .state
+            .run_integration(&fixture.id, fixture.progress())
+            .unwrap();
+        assert!(!fixture.path().exists());
+    }
 
     #[test]
     fn completion_checks_older_checkout_records_without_a_base() {
