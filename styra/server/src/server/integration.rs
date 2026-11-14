@@ -1513,7 +1513,7 @@ mod tests {
     }
 
     #[test]
-    fn retarget_forks_only_interaction_commits_and_can_restore_saved_branches() {
+    fn retarget_keeps_the_branch_name_moves_only_interaction_commits_and_can_restore_copies() {
         let fixture = Fixture::new();
         let initial = git(&fixture.host, &["rev-parse", "HEAD"]);
         git(&fixture.host, &["branch", "other", &initial]);
@@ -1540,7 +1540,11 @@ mod tests {
         let retargeted = journal::read_session_checkout(&fixture.session)
             .unwrap()
             .unwrap();
-        assert_ne!(retargeted.branch, fixture.checkout.branch);
+        assert_eq!(retargeted.branch, fixture.checkout.branch);
+        assert_eq!(
+            git(fixture.path(), &["branch", "--show-current"]),
+            fixture.checkout.branch
+        );
         assert_eq!(retargeted.path, fixture.checkout.path);
         assert_eq!(
             retargeted.branched_from.as_ref().unwrap(),
@@ -1555,10 +1559,7 @@ mod tests {
         );
         assert!(!fixture.path().join("old-source").exists());
         assert!(fixture.path().join("new-source").exists());
-        assert_eq!(
-            git(&fixture.host, &["rev-parse", &fixture.checkout.branch]),
-            old_head
-        );
+        let retargeted_head = git(fixture.path(), &["rev-parse", "HEAD"]);
         let Response::SessionBranchHistory(history) = fixture
             .state
             .handle(Request::SessionBranchHistory {
@@ -1569,7 +1570,9 @@ mod tests {
             panic!("expected history")
         };
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].branch, fixture.checkout.branch);
+        assert_ne!(history[0].branch, fixture.checkout.branch);
+        // The copy keeps the commits the branch had before retargeting.
+        assert_eq!(git(&fixture.host, &["rev-parse", &history[0].branch]), old_head);
         assert_eq!(
             history[0].branched_from.as_ref().unwrap().branch.as_deref(),
             Some("main")
@@ -1584,6 +1587,10 @@ mod tests {
             })
             .unwrap();
         assert_eq!(git(fixture.path(), &["rev-parse", "HEAD"]), old_head);
+        assert_eq!(
+            git(fixture.path(), &["branch", "--show-current"]),
+            fixture.checkout.branch
+        );
         assert!(fixture.path().join("old-source").exists());
         assert!(!fixture.path().join("new-source").exists());
         assert_eq!(
@@ -1596,12 +1603,20 @@ mod tests {
                 .as_deref(),
             Some("main")
         );
+        // Restoring saved the retargeted commits as a new copy in place of the restored one.
+        let history = journal::read_session_branch_history(&fixture.session).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            git(&fixture.host, &["rev-parse", &history[0].branch]),
+            retargeted_head
+        );
         restarted
             .handle(Request::RestoreSessionBranch {
                 id: fixture.id.clone(),
-                branch: retargeted.branch.clone(),
+                branch: history[0].branch.clone(),
             })
             .unwrap();
+        assert_eq!(git(fixture.path(), &["rev-parse", "HEAD"]), retargeted_head);
         assert_eq!(
             journal::read_session_checkout(&fixture.session).unwrap(),
             Some(retargeted)
@@ -1618,16 +1633,17 @@ mod tests {
             .start_checkout_change(&fixture.id, Some("other"), None)
             .unwrap();
         assert!(wait_for_rebase(&fixture).succeeded);
-        let retargeted = journal::read_session_checkout(&fixture.session)
-            .unwrap()
-            .unwrap();
+        let retargeted_head = git(fixture.path(), &["rev-parse", "HEAD"]);
+        let saved = journal::read_session_branch_history(&fixture.session).unwrap()[0]
+            .branch
+            .clone();
         SystemGit
             .remove_worktree(&fixture.host, fixture.path())
             .unwrap();
         journal::clear_session_worktree(&fixture.session).unwrap();
         fixture
             .state
-            .start_checkout_change(&fixture.id, None, Some(&fixture.checkout.branch))
+            .start_checkout_change(&fixture.id, None, Some(&saved))
             .unwrap();
         let restored = journal::read_session_checkout(&fixture.session)
             .unwrap()
@@ -1646,9 +1662,11 @@ mod tests {
                 .len(),
             1
         );
+        let history = journal::read_session_branch_history(&fixture.session).unwrap();
+        assert_ne!(history[0].branch, saved);
         assert_eq!(
-            journal::read_session_branch_history(&fixture.session).unwrap()[0].branch,
-            retargeted.branch
+            git(&fixture.host, &["rev-parse", &history[0].branch]),
+            retargeted_head
         );
     }
 
@@ -1694,7 +1712,7 @@ mod tests {
     }
 
     #[test]
-    fn retarget_conflicts_use_the_rebase_resolver_and_retain_the_original_branch() {
+    fn retarget_conflicts_use_the_rebase_resolver_and_retain_a_copy_of_the_branch() {
         let fixture = Fixture::new();
         std::fs::write(fixture.path().join("file"), "feature\n").unwrap();
         SystemGit.commit_all(fixture.path(), "feature").unwrap();
@@ -1705,12 +1723,22 @@ mod tests {
         let target = git(&fixture.host, &["rev-parse", "HEAD"]);
         // Prepare the fork without launching a real provider; supply a resolver below.
         let mut checkout = fixture.checkout.clone();
-        checkout.branch = "styra/test-retarget".into();
         checkout.branched_from.as_mut().unwrap().branch = Some("other".into());
+        let saved = crate::protocol::SavedBranch {
+            branch: "styra/test-saved".into(),
+            branched_from: fixture.checkout.branched_from.clone(),
+        };
         SystemGit
-            .switch_branch(fixture.path(), &checkout.branch, true)
+            .create_branch(fixture.path(), &saved.branch, "HEAD")
             .unwrap();
-        journal::store_retargeted_checkout(&fixture.session, &fixture.checkout, &checkout).unwrap();
+        journal::store_retargeted_checkout(
+            &fixture.session,
+            &fixture.checkout,
+            saved,
+            &checkout,
+            None,
+        )
+        .unwrap();
         std::fs::write(
             fixture.session.join("retarget.json"),
             serde_json::to_vec(&serde_json::json!({
@@ -1756,7 +1784,7 @@ mod tests {
             .unwrap();
         assert!(resolved);
         assert_eq!(
-            git(&fixture.host, &["rev-parse", &fixture.checkout.branch]),
+            git(&fixture.host, &["rev-parse", "styra/test-saved"]),
             original_head
         );
         assert_eq!(

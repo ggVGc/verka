@@ -178,12 +178,32 @@ impl ServerState {
             if target.is_some() || restored.is_some() {
                 let previous = checkout.clone();
                 let mut next = checkout.clone();
-                if let Some(saved) = &restored {
-                    next.branch = saved.branch.clone();
-                    next.branched_from = saved.branched_from.clone();
+                let head = self
+                    .inner
+                    .git
+                    .commit(&path, "HEAD")?
+                    .context("the interaction branch has no commits")?;
+                // The active branch keeps its name; what it pointed at is saved
+                // under a new one, so changing branches never loses a commit.
+                let saved = crate::protocol::SavedBranch {
+                    branch: format!(
+                        "{}-saved-{}",
+                        previous.branch,
+                        &uuid::Uuid::new_v4().simple().to_string()[..8]
+                    ),
+                    branched_from: previous.branched_from.clone(),
+                };
+                let marker = session.path.join("retarget.json");
+                if let Some(restored) = &restored {
+                    let commit = self
+                        .inner
+                        .git
+                        .local_branch_commit(&path, &restored.branch)?
+                        .context("the saved branch no longer exists")?;
+                    next.branched_from = restored.branched_from.clone();
+                    self.inner.git.create_branch(&path, &saved.branch, &head)?;
+                    self.inner.git.reset_hard(&path, &commit)?;
                 } else {
-                    // Always fork, so retargeting never rewrites the previous branch.
-                    next.branch = format!("styra/retarget-{}", uuid::Uuid::new_v4());
                     let upstream = previous
                         .branched_from
                         .as_ref()
@@ -194,22 +214,29 @@ impl ServerState {
                         branch: next.branch.clone(),
                         upstream,
                     };
-                    store_json(&session.path.join("retarget.json"), &retarget)?;
+                    store_json(&marker, &retarget)?;
                     next.branched_from.as_mut().unwrap().branch = Some(source.clone());
+                    self.inner.git.create_branch(&path, &saved.branch, &head)?;
                 }
-                self.inner
-                    .git
-                    .switch_branch(&path, &next.branch, restored.is_none())?;
-                if let Err(error) =
-                    journal::store_retargeted_checkout(&session.path, &previous, &next)
-                {
-                    self.inner
-                        .git
-                        .switch_branch(&path, &previous.branch, false)
-                        .context(
-                            "could not restore the previous branch after a metadata write failed",
+                if let Err(error) = journal::store_retargeted_checkout(
+                    &session.path,
+                    &previous,
+                    saved,
+                    &next,
+                    restored.as_ref().map(|saved| saved.branch.as_str()),
+                ) {
+                    if restored.is_some() {
+                        self.inner.git.reset_hard(&path, &head).context(
+                            "could not restore the previous commit after a metadata write failed",
                         )?;
+                    } else {
+                        let _ = std::fs::remove_file(&marker);
+                    }
                     return Err(error);
+                }
+                if restored.is_some() && marker.exists() {
+                    // A retarget left unfinished must not resume on restored contents.
+                    std::fs::remove_file(&marker)?;
                 }
                 checkout = next;
             }

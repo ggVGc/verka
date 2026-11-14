@@ -380,16 +380,17 @@ pub enum Request {
     RebaseSession {
         id: String,
     },
-    /// Fork the interaction branch and replay its commits onto another local branch.
+    /// Save a copy of the interaction branch, then replay its commits onto another
+    /// local branch, keeping the branch name.
     RetargetSession {
         id: String,
         target: String,
     },
-    /// Previous branches, oldest first. Their Git refs are retained.
+    /// Saved copies of the interaction branch, oldest first. Their Git refs are retained.
     SessionBranchHistory {
         id: String,
     },
-    /// Return the worktree to a branch saved by retargeting, without rebasing it.
+    /// Return the interaction branch to a copy saved by retargeting, without rebasing it.
     RestoreSessionBranch {
         id: String,
         branch: String,

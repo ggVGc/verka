@@ -652,16 +652,18 @@ jumps to the session you pick.
 Press `Alt+B` to retarget an interaction onto another local branch. It opens
 the same kind of branch list as choosing a new interaction's base: local
 branches newest commit first, typed at to narrow, without the branch the
-interaction is on. Pick the new target and press Enter. Styra creates a fresh branch from the
-interaction's current branch, then replays its commits onto the new target.
+interaction is on. Pick the new target and press Enter. Styra saves a copy of the interaction's
+branch under a new name, then replays its commits onto the new target. The
+interaction stays on its branch; its name does not change.
 Changes inherited from the old source branch are excluded. Conflicts use the
 same model-assisted resolution and progress display as the normal rebase action.
 Commit any outstanding changes and wait for the interaction to become idle first.
 
-The previous branch and its source are saved with the session, and its Git ref
-is kept intact. The `Alt+B` list shows saved branches first, most recent first
-and marked `· previous branch`; Enter on one returns to it without rebasing it. The branch you leave is saved
-too, so you can switch back again. This history survives server restarts and
+The copy and its source are saved with the session as a Git branch. The `Alt+B`
+list shows saved copies first, most recent first and marked `· previous branch`;
+Enter on one moves the interaction's branch back to it without rebasing, again
+keeping the branch name. What you leave is saved as a copy too, so you can
+switch back again. This history survives server restarts and
 worktree cleanup. If a retarget rebase stops, use `Ctrl+B` to retry it before
 switching branches.
 

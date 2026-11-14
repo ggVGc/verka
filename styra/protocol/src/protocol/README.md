@@ -233,20 +233,23 @@ stopped, or still starting. It is a snapshot; a client showing it polls.
 
 ### Retargeting an interaction
 
-`retarget_session` takes `id` and `target` (an existing local branch). It creates
-a new branch from the interaction's branch and rebases its own commits onto the
-new target. It returns `rebase_started`; poll `session_rebase_status` for progress
+`retarget_session` takes `id` and `target` (an existing local branch). It saves
+a copy of the interaction's branch under a new name, then rebases the
+interaction's own commits onto the new target. The interaction keeps its branch
+name. It returns `rebase_started`; poll `session_rebase_status` for progress
 and the result, as with `rebase_session`. Conflict resolution uses the same model
 as a normal rebase. Retry a stopped rebase with `rebase_session`.
 
 `session_branch_history` takes `id` and returns `session_branch_history` containing
-saved branches, oldest first. Each entry has `branch` and `branched_from` (the
+saved copies of the interaction's branch, oldest first. Each entry has `branch` and `branched_from` (the
 original target branch and base commit). Branch refs remain in Git. History is
 stored with the session and survives server restarts and worktree cleanup.
 
 `restore_session_branch` takes `id` and `branch` from that history and returns
-`accepted` after switching the worktree back without rebasing. It restores the
-saved target/base and saves the branch being left in history. Retargeting and
+`accepted` after moving the interaction's branch back to that copy's commit
+without rebasing; the branch name does not change. It restores the saved
+target/base, saves a copy of the commit being left in history, and drops the
+restored copy from history (its Git ref is kept). Retargeting and
 restoring require an idle interaction, committed changes, no queued messages,
 and a checkout that is not shared by another active interaction. Finish an
 ongoing rebase before changing branches. Sealed sessions cannot change branches.

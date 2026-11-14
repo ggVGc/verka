@@ -2948,7 +2948,8 @@ function M.request.rebase_session(data)
   return M.build("rebase_session", data)
 end
 
---- Fork the interaction branch and replay its commits onto another local branch.
+--- Save a copy of the interaction branch, then replay its commits onto another
+--- local branch, keeping the branch name.
 ---
 --- Fields of `data`:
 ---   id      string
@@ -2957,7 +2958,7 @@ function M.request.retarget_session(data)
   return M.build("retarget_session", data)
 end
 
---- Previous branches, oldest first. Their Git refs are retained.
+--- Saved copies of the interaction branch, oldest first. Their Git refs are retained.
 ---
 --- Fields of `data`:
 ---   id  string
@@ -2965,7 +2966,7 @@ function M.request.session_branch_history(data)
   return M.build("session_branch_history", data)
 end
 
---- Return the worktree to a branch saved by retargeting, without rebasing it.
+--- Return the interaction branch to a copy saved by retargeting, without rebasing it.
 ---
 --- Fields of `data`:
 ---   id      string

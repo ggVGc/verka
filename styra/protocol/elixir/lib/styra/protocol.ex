@@ -2755,7 +2755,8 @@ defmodule Styra.Protocol do
     def rebase_session!(data), do: Styra.Protocol.build!("rebase_session", data)
 
     @doc ~S"""
-    Fork the interaction branch and replay its commits onto another local branch.
+    Save a copy of the interaction branch, then replay its commits onto another
+    local branch, keeping the branch name.
 
     Fields of `data`:
 
@@ -2768,7 +2769,7 @@ defmodule Styra.Protocol do
     def retarget_session!(data), do: Styra.Protocol.build!("retarget_session", data)
 
     @doc ~S"""
-    Previous branches, oldest first. Their Git refs are retained.
+    Saved copies of the interaction branch, oldest first. Their Git refs are retained.
 
     Fields of `data`:
 
@@ -2780,7 +2781,7 @@ defmodule Styra.Protocol do
     def session_branch_history!(data), do: Styra.Protocol.build!("session_branch_history", data)
 
     @doc ~S"""
-    Return the worktree to a branch saved by retargeting, without rebasing it.
+    Return the interaction branch to a copy saved by retargeting, without rebasing it.
 
     Fields of `data`:
 

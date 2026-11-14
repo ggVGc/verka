@@ -87,8 +87,13 @@ pub trait Git: Send + Sync {
     fn rebase_onto(&self, _checkout: &Path, _source: &str, _upstream: &str) -> Result<bool> {
         anyhow::bail!("this Git backend does not support retargeting")
     }
-    fn switch_branch(&self, _checkout: &Path, _branch: &str, _create: bool) -> Result<()> {
-        anyhow::bail!("this Git backend does not support switching branches")
+    /// Create `branch` at `start` without checking it out.
+    fn create_branch(&self, _checkout: &Path, _branch: &str, _start: &str) -> Result<()> {
+        anyhow::bail!("this Git backend does not support creating branches")
+    }
+    /// Move the checked-out branch, its index and working tree to `commit`.
+    fn reset_hard(&self, _checkout: &Path, _commit: &str) -> Result<()> {
+        anyhow::bail!("this Git backend does not support resetting branches")
     }
     fn rebase_in_progress(&self, _checkout: &Path) -> Result<bool> {
         anyhow::bail!("this Git backend does not support rebasing")
@@ -373,13 +378,16 @@ impl Git for SystemGit {
         }
     }
 
-    fn switch_branch(&self, checkout: &Path, branch: &str, create: bool) -> Result<()> {
-        let invocation = Invocation::new(checkout, "switch the interaction branch");
-        if create {
-            invocation.args(["switch", "-c", branch]).succeed()
-        } else {
-            invocation.args(["switch", "--", branch]).succeed()
-        }
+    fn create_branch(&self, checkout: &Path, branch: &str, start: &str) -> Result<()> {
+        Invocation::new(checkout, "save a copy of the interaction branch")
+            .args(["branch", "--no-track", branch, start])
+            .succeed()
+    }
+
+    fn reset_hard(&self, checkout: &Path, commit: &str) -> Result<()> {
+        Invocation::new(checkout, "move the interaction branch")
+            .args(["reset", "--hard", commit])
+            .succeed()
     }
 
     fn branch_worktree(&self, checkout: &Path, branch: &str) -> Result<Option<PathBuf>> {

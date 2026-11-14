@@ -990,24 +990,27 @@ pub fn read_session_branch_history(path: &Path) -> Result<Vec<crate::protocol::S
     Ok(read_stored_session_meta(path)?.previous_branches)
 }
 
-/// Save the old branch and replace the checkout in one metadata write.
+/// Save a copy of the branch being left and replace the checkout in one
+/// metadata write. `restored`, when returning to a saved copy, leaves the
+/// history: its contents are now the checkout's own.
 pub fn store_retargeted_checkout(
     path: &Path,
     previous: &Checkout,
+    saved: crate::protocol::SavedBranch,
     checkout: &Checkout,
+    restored: Option<&str>,
 ) -> Result<()> {
     let mut stored = read_stored_session_meta(path)?;
     anyhow::ensure!(
         stored.checkout.as_ref() == Some(previous),
         "the session checkout changed during retargeting"
     );
-    stored
-        .previous_branches
-        .retain(|saved| saved.branch != previous.branch && saved.branch != checkout.branch);
-    stored.previous_branches.push(crate::protocol::SavedBranch {
-        branch: previous.branch.clone(),
-        branched_from: previous.branched_from.clone(),
+    stored.previous_branches.retain(|entry| {
+        entry.branch != saved.branch
+            && entry.branch != checkout.branch
+            && Some(entry.branch.as_str()) != restored
     });
+    stored.previous_branches.push(saved);
     stored.checkout = Some(checkout.clone());
     write_stored_session_meta(path, &stored)
 }
