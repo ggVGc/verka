@@ -319,6 +319,21 @@ impl LiveInteractions {
             .map(|(parent, _, _)| parent.as_str())
     }
 
+    /// The Session at the top of `id`'s branch ancestry: `id` itself when it
+    /// was not branched off another. Walks the persisted origins, so siblings
+    /// whose shared source has left the listing still share a root. Bounded
+    /// so malformed cyclic origins end.
+    pub fn branch_root<'a>(&'a self, id: &'a str) -> &'a str {
+        let mut root = id;
+        for _ in 0..self.branch_origins.len() {
+            match self.parent(root) {
+                Some(parent) => root = parent,
+                None => break,
+            }
+        }
+        root
+    }
+
     /// The listed Sessions branched off `id`, and off those in turn, as a
     /// `branched to` marker leading to `id` in `owner`'s conversation draws
     /// them: in listing order, each followed by its own, with how many
@@ -470,7 +485,7 @@ impl LiveInteractions {
     pub fn lists(&self, interaction: &InteractionSummary) -> bool {
         (self.show_completed || !interaction.completed.is_done())
             && (!self.hide_stopped || interaction.open())
-            && self.time_filter.includes(interaction)
+            && self.in_time_window(interaction)
             && self.matches_tag_filter(interaction)
     }
 
@@ -489,7 +504,7 @@ impl LiveInteractions {
             .filter(|(_, interaction)| {
                 interaction.open()
                     && !interaction.completed.is_done()
-                    && self.time_filter.includes(interaction)
+                    && self.in_time_window(interaction)
                     && self.in_workspace_scope(interaction, workspace_id)
             })
             .map(|(index, _)| index)

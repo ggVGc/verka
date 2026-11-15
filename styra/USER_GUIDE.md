@@ -178,7 +178,9 @@ leaving only those still taking messages; the list's title says
 quoting its last response; these lines are hidden by default.
 `t` cycles the time filter through past day, past 3 days, past week, and disabled
 (the default). The rolling window uses the latest user message, falling back to
-creation time before any message is sent. The current interaction stays visible.
+creation time before any message is sent. Branched interactions are filtered
+as a group: when any interaction in a branch family is inside the window, the
+whole family is shown. The current interaction stays visible.
 The setting appears in the list's title and is retained when reopening the list
 or switching interactions.
 `d` toggles the selected interaction's diff pane while keeping the list open

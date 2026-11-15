@@ -49,17 +49,32 @@ impl Window {
     }
 }
 
-impl TimeFilter {
-    pub(super) fn includes(&self, interaction: &InteractionSummary) -> bool {
+impl LiveInteractions {
+    /// Whether `interaction` falls inside the window, which a branch group
+    /// does whole: every listed Session sharing its branch root is in when any
+    /// one of them is, so a recent branch keeps the work it came from — and
+    /// its siblings — in view, and an old one stays beside a recent source.
+    pub(super) fn in_time_window(&self, interaction: &InteractionSummary) -> bool {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        self.window.includes_at(interaction, now_ms)
+        self.in_time_window_at(interaction, now_ms)
     }
-}
 
-impl LiveInteractions {
+    fn in_time_window_at(&self, interaction: &InteractionSummary, now_ms: u64) -> bool {
+        let window = self.time_filter.window;
+        if window.includes_at(interaction, now_ms) {
+            return true;
+        }
+        let root = self.branch_root(&interaction.id);
+        self.items.iter().any(|other| {
+            other.id != interaction.id
+                && self.branch_root(&other.id) == root
+                && window.includes_at(other, now_ms)
+        })
+    }
+
     pub(crate) fn time_filter_label(&self) -> &'static str {
         self.time_filter.window.label()
     }
@@ -149,5 +164,46 @@ mod tests {
         assert_eq!(live.overview_indices(None).len(), 2);
         live.cycle_time_filter("1-0-0", None);
         assert_eq!(live.overview_indices(None), [0]);
+    }
+
+    #[test]
+    fn a_branch_group_is_shown_whole_when_any_of_it_is_in_the_window() {
+        const DAY: u64 = 86_400_000;
+        let now = 20 * DAY;
+        let branch = |id: &str, from: &str| {
+            let mut item = interaction(id, InteractionActivity::Pending);
+            item.origin = Some(styra_protocol::SessionOrigin {
+                session_id: from.into(),
+                provider: item.selection.provider,
+                at_ms: None,
+                history: Default::default(),
+            });
+            item
+        };
+        let source = interaction("1-0-0", InteractionActivity::Pending);
+        let mut recent = branch("2-0-0", "1-0-0");
+        recent.last_user_message_at_ms = now;
+        let sibling = branch("3-0-0", "1-0-0");
+        let nephew = branch("4-0-0", "3-0-0");
+        let unrelated = interaction("5-0-0", InteractionActivity::Pending);
+        let mut live = LiveInteractions::default();
+        live.open(vec![source, recent, sibling, nephew, unrelated], vec![]);
+        live.time_filter.window = Window::PastDay;
+        fn included(live: &LiveInteractions, now: u64) -> Vec<&str> {
+            let mut ids: Vec<&str> = live
+                .items
+                .iter()
+                .filter(|item| live.in_time_window_at(item, now))
+                .map(|item| item.id.as_str())
+                .collect();
+            ids.sort();
+            ids
+        }
+        assert_eq!(included(&live, now), ["1-0-0", "2-0-0", "3-0-0", "4-0-0"]);
+        // Siblings stay grouped once their source has left the listing.
+        live.items.retain(|item| item.id != "1-0-0");
+        assert_eq!(included(&live, now), ["2-0-0", "3-0-0", "4-0-0"]);
+        live.items.retain(|item| item.id != "2-0-0");
+        assert!(included(&live, now).is_empty());
     }
 }
