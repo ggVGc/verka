@@ -1,3 +1,8 @@
+- Merging a branched interaction back into parent:
+  - Brings in the conversation content, but none of the work context
+  - Rely on the soon-added pending messages feature
+  - Followup:
+    - Allow user to edit/trim down the branched interaction before merge
 - Some way of bringing in results from another interaction into current one:
   - Essentially a link between interactions which is not branching
 - When working on something in one worktree owned by an interaction, standardize a way to break apart the changes into a new branch which can in turn be integrated separately
