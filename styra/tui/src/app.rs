@@ -2199,10 +2199,19 @@ impl App {
     /// the buffer holds only whitespace.
     pub fn take_message(&mut self) -> Option<String> {
         let message = self.composer.take()?;
-        Some(match self.message_source.take() {
+        let message = self.with_message_source(message);
+        self.message_source = None;
+        Some(message)
+    }
+
+    /// `message` with a note under it of what it was started from in the
+    /// diff, if it was. The source is kept, so a send that fails can be
+    /// tried again with it.
+    pub fn with_message_source(&self, message: String) -> String {
+        match &self.message_source {
             Some(source) => format!("{message}\n\nSource: {source}"),
             None => message,
-        })
+        }
     }
 
     /// The rebase being followed, when it is of the interaction on screen.

@@ -359,6 +359,13 @@ pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
         }
         let at_ms = prompt.at_ms();
         let history = prompt.history();
+        // A message carried over from the main box keeps what it was started
+        // from in the diff.
+        let message = if prompt.from_input {
+            app.with_message_source(message)
+        } else {
+            message
+        };
         let checkout = if EDITOR_SEND_IN_BRANCH.matches(key) {
             styra_protocol::BranchCheckout::NewWorktree
         } else {

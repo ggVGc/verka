@@ -1501,6 +1501,93 @@ mod tests {
         }
     }
 
+    /// A message started from the diff and carried over to a branch with
+    /// ctrl-b is still about the diff's file and line when the branch sends it.
+    #[test]
+    fn a_message_carried_to_a_branch_keeps_its_diff_source() {
+        use crate::keybindings::{press, EDITOR_BRANCH, EDITOR_SEND};
+        use std::sync::Mutex;
+        use styra_protocol::{Request, Response};
+
+        #[derive(Default)]
+        struct SentServer {
+            sent: Mutex<Vec<String>>,
+        }
+        impl styra_server::InProcessServer for SentServer {
+            fn handle(&self, request: Request) -> anyhow::Result<Response> {
+                match request {
+                    Request::BranchSession { .. } => {
+                        Ok(Response::SessionBranched(summary("branched", 1, None)))
+                    }
+                    Request::RenameSession(rename) => {
+                        let mut renamed = summary("branched", 1, None);
+                        renamed.name = rename.name;
+                        Ok(Response::SessionRenamed(renamed))
+                    }
+                    Request::ResumeSession(resume) => Ok(Response::SessionResumed(SessionInfo {
+                        id: resume.id,
+                        name: None,
+                        workspace_id: "workspace".into(),
+                        selection: resume.selection.unwrap(),
+                        workspace: "/workspace".into(),
+                        journal_path: "/journal".into(),
+                        driva: Default::default(),
+                        updates_after: 0,
+                        queued: Vec::new(),
+                    })),
+                    Request::SendMessage { message, .. } => {
+                        self.sent.lock().unwrap().push(message.text);
+                        Ok(Response::Accepted)
+                    }
+                    _ => anyhow::bail!("unexpected request"),
+                }
+            }
+            fn shutdown(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let server = std::sync::Arc::new(SentServer::default());
+        let client = Client::in_process(server.clone());
+        let mut app = App::new(Selection::new(Provider::Codex), "source");
+        apply_update(
+            &mut app,
+            styra_protocol::InteractionUpdate::Event(
+                styra_protocol::event::AgentEvent::UserMessage {
+                    text: "question".into(),
+                },
+            ),
+        );
+        apply_update(
+            &mut app,
+            styra_protocol::InteractionUpdate::Raw(styra_protocol::RawLine {
+                direction: styra_protocol::Direction::ToAgent,
+                text: "question".into(),
+                at_ms: 42,
+            }),
+        );
+        app.enter_input();
+        app.message_source = Some("b.txt:5".into());
+        app.composer.set("look here".into());
+
+        crate::input::handle_input_key(
+            &mut app,
+            &client,
+            "workspace",
+            &mut Attachment::Detached,
+            press(&EDITOR_BRANCH),
+        );
+        assert!(app.branch_prompt.is_some());
+        crate::input::handle_branch_prompt_key(&mut app, &client, press(&EDITOR_SEND));
+
+        assert!(app.branch_prompt.is_none());
+        assert_eq!(
+            *server.sent.lock().unwrap(),
+            ["look here\n\nSource: b.txt:5"]
+        );
+        assert_eq!(app.message_source, None);
+    }
+
     #[test]
     fn sessions_order_by_last_activity_or_by_creation() {
         let mut sessions = vec![

@@ -479,10 +479,9 @@ fn modal_input(app: &App) -> styra_ui::modal_input::ModalInput<'_> {
         parts: composer.parts(),
         focused: composer.focused(),
         choosing: composer.choosing(),
-        source: if branch.is_some() {
-            None
-        } else {
-            app.message_source.clone()
+        source: match branch {
+            Some(prompt) if !prompt.from_input => None,
+            _ => app.message_source.clone(),
         },
         placeholder: if app.session_id.is_empty() {
             "Enter to send · Ctrl+Enter to send in a new Git workspace"
