@@ -113,6 +113,8 @@ pub const STOP_FAILED: Color = ERROR;
 pub const STOP_EXITED: Color = SPECIAL;
 /// The server run that owned it went down.
 pub const STOP_SERVER_RESTARTED: Color = palette::MAUVE;
+/// The server run that owned it went down partway through a turn.
+pub const STOP_SERVER_RESTARTED_MID_TURN: Color = palette::ROSE;
 /// Stopped without saying why.
 pub const STOP_UNKNOWN: Color = INACTIVE;
 

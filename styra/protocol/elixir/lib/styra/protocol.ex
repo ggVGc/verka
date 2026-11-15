@@ -1557,6 +1557,7 @@ defmodule Styra.Protocol do
           ]
         }},
         %{name: "server_restarted", payload: %{kind: :unit}},
+        %{name: "server_restarted_mid_turn", payload: %{kind: :unit}},
         %{name: "branched", payload: %{kind: :unit}}
       ]
     },
@@ -4580,6 +4581,7 @@ defmodule Styra.Protocol.InteractionActivityReason do
     {:paused, "paused"},
     {:exited, "exited"},
     {:server_restarted, "server_restarted"},
+    {:server_restarted_mid_turn, "server_restarted_mid_turn"},
     {:branched, "branched"}
   ]
 
@@ -4658,6 +4660,15 @@ defmodule Styra.Protocol.InteractionActivityReason do
   Session is what brings an agent back.
   """
   def server_restarted, do: "server_restarted"
+
+  @doc ~S"""
+  As `Self::ServerRestarted`, but the server went down partway through
+  a turn: the operator's last message, or a turn the agent started, never
+  reached its end. The work that turn was doing was cut off rather than
+  finished, so the operator may want to look at where it got to before
+  asking for more.
+  """
+  def server_restarted_mid_turn, do: "server_restarted_mid_turn"
 
   @doc ~S"""
   The Session was just branched from another one and nothing has run it

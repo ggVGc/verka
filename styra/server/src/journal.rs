@@ -851,6 +851,37 @@ pub(crate) fn last_user_message_at_ms(directory: &Path) -> Result<u64> {
     Ok(latest)
 }
 
+/// Whether the Session's journal stops partway through a turn: the operator's
+/// last message, or the last turn the agent started, has no ending after it.
+///
+/// Read when a restart restores a row that was still live. The mirrored row
+/// cannot answer this — it is written when the list changes, not each time a
+/// turn starts or ends, and a killed server never writes it at all — but the
+/// journal is appended as each line arrives, so it says how far the turn got
+/// whatever took the server down.
+pub(crate) fn ends_mid_turn(directory: &Path) -> Result<bool> {
+    let protocol = read_session_meta(directory)?.protocol;
+    let file = File::open(directory.join(JOURNAL_FILE))
+        .context("opening journal for the last turn's ending")?;
+    let mut mid_turn = false;
+    for line in BufReader::new(file).lines() {
+        match serde_json::from_str::<Record>(&line?) {
+            Ok(Record::User { .. }) => mid_turn = true,
+            Ok(Record::Agent {
+                raw,
+                protocol: record_protocol,
+                ..
+            }) => match decode_line(record_protocol.unwrap_or(protocol), &raw) {
+                AgentEvent::TurnStarted => mid_turn = true,
+                AgentEvent::TurnCompleted { .. } => mid_turn = false,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    Ok(mid_turn)
+}
+
 fn sort_newest_first(sessions: &mut [SessionSummary]) {
     sessions.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
 }
@@ -1768,6 +1799,31 @@ mod tests {
         drop(journal);
         let _reopened = Journal::open(&dir).unwrap();
         assert_eq!(last_user_message_at_ms(&dir).unwrap(), 200);
+    }
+
+    #[test]
+    fn a_journal_ends_mid_turn_until_the_turn_it_started_completes() {
+        let dir = temp_dir("mid-turn");
+        std::fs::write(
+            dir.join(SESSION_META_FILE),
+            r#"{"workspace_id":"w-1","protocol":"claude-jsonl","command":"claude",
+                "selection":{"provider":"claude","model":"sonnet","effort":"medium"}}"#,
+        )
+        .unwrap();
+        let mut journal = Journal::create(&dir).unwrap();
+        assert!(!ends_mid_turn(&dir).unwrap(), "nothing has been sent");
+        journal.record_user_message("first").unwrap();
+        assert!(ends_mid_turn(&dir).unwrap(), "the message started a turn");
+        journal
+            .record_agent_line(r#"{"type":"assistant","message":{"content":[]}}"#)
+            .unwrap();
+        assert!(ends_mid_turn(&dir).unwrap(), "output is not an ending");
+        journal
+            .record_agent_line(r#"{"type":"result","subtype":"success","usage":{}}"#)
+            .unwrap();
+        assert!(!ends_mid_turn(&dir).unwrap(), "the turn completed");
+        journal.record_user_message("second").unwrap();
+        assert!(ends_mid_turn(&dir).unwrap(), "the next turn has no ending");
     }
 
     /// Keeps existing path-based fixtures convenient while owning their cleanup.

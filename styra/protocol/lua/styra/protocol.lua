@@ -1547,6 +1547,7 @@ M.types.InteractionActivityReason = {
       },
     } },
     { name = "server_restarted", payload = { kind = "unit" } },
+    { name = "server_restarted_mid_turn", payload = { kind = "unit" } },
     { name = "branched", payload = { kind = "unit" } },
   },
 }
@@ -2350,7 +2351,7 @@ M.InteractionActivity = {
   STOPPED = "stopped",
 }
 
-M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "exited", "server_restarted", "branched" }
+M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "exited", "server_restarted", "server_restarted_mid_turn", "branched" }
 --- Wire spellings of `InteractionActivityReason`.
 M.InteractionActivityReason = {
   TURN_COMPLETED = "turn_completed",
@@ -2361,6 +2362,7 @@ M.InteractionActivityReason = {
   PAUSED = "paused",
   EXITED = "exited",
   SERVER_RESTARTED = "server_restarted",
+  SERVER_RESTARTED_MID_TURN = "server_restarted_mid_turn",
   BRANCHED = "branched",
 }
 

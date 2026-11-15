@@ -126,6 +126,7 @@ pub(crate) fn stop_tone(reason: &crate::activity::StopReason) -> styra_ui::chrom
         StopReason::Failed { .. } => StopTone::Failed,
         StopReason::Exited { .. } => StopTone::Exited,
         StopReason::ServerRestarted => StopTone::ServerRestarted,
+        StopReason::ServerRestartedMidTurn => StopTone::ServerRestartedMidTurn,
         StopReason::NotAccepting => StopTone::Unknown,
     }
 }

@@ -920,6 +920,12 @@ pub enum InteractionActivityReason {
     /// but nothing of the previous run's process survived: resuming the
     /// Session is what brings an agent back.
     ServerRestarted,
+    /// As [`Self::ServerRestarted`], but the server went down partway through
+    /// a turn: the operator's last message, or a turn the agent started, never
+    /// reached its end. The work that turn was doing was cut off rather than
+    /// finished, so the operator may want to look at where it got to before
+    /// asking for more.
+    ServerRestartedMidTurn,
     /// The Session was just branched from another one and nothing has run it
     /// yet: it is listed so the operator can find the branch beside its
     /// source, and resuming it is what starts its first agent.
@@ -953,7 +959,9 @@ impl InteractionActivityReason {
     pub fn leaves_dormant(&self) -> bool {
         matches!(
             self,
-            InteractionActivityReason::ServerRestarted | InteractionActivityReason::Branched
+            InteractionActivityReason::ServerRestarted
+                | InteractionActivityReason::ServerRestartedMidTurn
+                | InteractionActivityReason::Branched
         )
     }
 }
@@ -1806,6 +1814,10 @@ mod tests {
         summary.activity = InteractionActivity::Stopped;
         for (reason, dormant) in [
             (Some(InteractionActivityReason::ServerRestarted), true),
+            (
+                Some(InteractionActivityReason::ServerRestartedMidTurn),
+                true,
+            ),
             (Some(InteractionActivityReason::Branched), true),
             (Some(InteractionActivityReason::Paused), false),
             (

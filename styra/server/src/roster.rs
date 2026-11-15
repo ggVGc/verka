@@ -14,7 +14,8 @@
 //! restored row that was still live is therefore [`InteractionActivity::Stopped`]
 //! with [`InteractionActivityReason::ServerRestarted`] — which is both what is
 //! true and what tells the operator that resuming the Session is what would
-//! bring the agent back. A row that had already stopped keeps its own reason:
+//! bring the agent back — or [`InteractionActivityReason::ServerRestartedMidTurn`]
+//! when its journal shows the restart cut a turn off. A row that had already stopped keeps its own reason:
 //! the restart took nothing from it.
 //! Completion is not one of the things a restart can overwrite this way: it is
 //! a property of the Session (see [`crate::protocol::SessionSummary::completed`]),
@@ -106,11 +107,20 @@ impl Roster {
                     }
                 }
                 // A row already stopped lost no agent to the restart, so it
-                // keeps the reason it stopped for.
+                // keeps the reason it stopped for. One that was live is asked
+                // of its journal whether a turn was cut off: the mirrored
+                // activity is as stale as the row's last publish. A journal
+                // that cannot be read is taken as idle — the restart is
+                // still the true reason, only less specific.
                 if entry.summary.activity != InteractionActivity::Stopped {
                     entry.summary.activity = InteractionActivity::Stopped;
-                    entry.summary.activity_reason =
-                        Some(InteractionActivityReason::ServerRestarted);
+                    entry.summary.activity_reason = Some(
+                        if crate::journal::ends_mid_turn(&entry.session_path).unwrap_or(false) {
+                            InteractionActivityReason::ServerRestartedMidTurn
+                        } else {
+                            InteractionActivityReason::ServerRestarted
+                        },
+                    );
                 }
                 entry.summary.restored = true;
                 // Deliberately not restored, for the reason the quota log does
@@ -669,6 +679,60 @@ mod tests {
             .collect();
         ids.sort();
         assert_eq!(ids, vec!["session-c", "session-d"]);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// A restart that lands partway through a turn says so, while one that
+    /// finds the agent between turns does not — whatever the mirrored row
+    /// last recorded, since it is not rewritten as turns start and end.
+    #[test]
+    fn a_restart_mid_turn_is_told_apart_from_one_between_turns() {
+        let root = store("mid-turn");
+        let row = |name: &str, lines: &[&str]| {
+            let session = root.join(name);
+            std::fs::create_dir_all(&session).unwrap();
+            std::fs::write(
+                session.join("session.json"),
+                r#"{"workspace_id":"w-1","protocol":"claude-jsonl","command":"claude",
+                    "selection":{"provider":"claude","model":"sonnet","effort":"medium"}}"#,
+            )
+            .unwrap();
+            let mut journal = crate::journal::Journal::create(&session).unwrap();
+            journal.record_user_message("do the thing").unwrap();
+            for line in lines {
+                journal.record_agent_line(line).unwrap();
+            }
+            let mut summary = summary(name);
+            summary.activity = InteractionActivity::Pending;
+            (session, summary, Default::default())
+        };
+        Roster::open(&root).publish(vec![
+            row("session-cut", &[]),
+            row(
+                "session-idle",
+                &[r#"{"type":"result","subtype":"success","usage":{}}"#],
+            ),
+        ]);
+
+        let mut restored = Roster::open(&root).restored(&InteractionQuery::default());
+        restored.sort_by(|a, b| a.id.cmp(&b.id));
+        let reasons: Vec<_> = restored
+            .iter()
+            .map(|row| (row.id.as_str(), row.activity_reason.clone()))
+            .collect();
+        assert_eq!(
+            reasons,
+            vec![
+                (
+                    "session-cut",
+                    Some(InteractionActivityReason::ServerRestartedMidTurn)
+                ),
+                (
+                    "session-idle",
+                    Some(InteractionActivityReason::ServerRestarted)
+                ),
+            ]
+        );
         std::fs::remove_dir_all(root).ok();
     }
 

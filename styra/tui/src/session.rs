@@ -984,7 +984,7 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) 
         }
     } else if matches!(
         &app.activity.status,
-        Status::Stopped(StopReason::ServerRestarted)
+        Status::Stopped(StopReason::ServerRestarted | StopReason::ServerRestartedMidTurn)
     ) {
         // A row restored after a server restart has no process to stop, but
         // `S` is still an explicit operator stop. The server records that on

@@ -25,6 +25,7 @@ pub enum StopTone {
     Failed,
     Exited,
     ServerRestarted,
+    ServerRestartedMidTurn,
     Unknown,
 }
 

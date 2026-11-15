@@ -115,6 +115,7 @@ impl IdleReason {
             Some(InteractionActivityReason::Paused)
             | Some(InteractionActivityReason::Exited { .. })
             | Some(InteractionActivityReason::ServerRestarted)
+            | Some(InteractionActivityReason::ServerRestartedMidTurn)
             | Some(InteractionActivityReason::Branched)
             | None => IdleReason::Reported,
         }
@@ -171,6 +172,9 @@ pub enum StopReason {
     /// again because it was never closed, but its agent went down with that
     /// run and resuming the Session is what brings one back.
     ServerRestarted,
+    /// As [`StopReason::ServerRestarted`], but the run went down partway
+    /// through a turn, so that turn's work was cut off rather than finished.
+    ServerRestartedMidTurn,
     /// The interaction is a branch just taken from another one: listed beside
     /// its source, with no agent started for it yet.
     Branched,
@@ -223,6 +227,9 @@ impl StopReason {
                 resets_at_ms: *resets_at_ms,
             }),
             Some(InteractionActivityReason::ServerRestarted) => StopReason::ServerRestarted,
+            Some(InteractionActivityReason::ServerRestartedMidTurn) => {
+                StopReason::ServerRestartedMidTurn
+            }
             Some(InteractionActivityReason::Branched) => StopReason::Branched,
             _ => StopReason::NotAccepting,
         }
@@ -243,7 +250,10 @@ impl StopReason {
     /// is idle with no agent behind it, and the next message resumes one. See
     /// [`InteractionActivityReason::leaves_dormant`].
     pub fn is_dormant(&self) -> bool {
-        matches!(self, StopReason::ServerRestarted | StopReason::Branched)
+        matches!(
+            self,
+            StopReason::ServerRestarted | StopReason::ServerRestartedMidTurn | StopReason::Branched
+        )
     }
 
     /// The reason as a status-line fragment. Always worth naming — unlike
@@ -272,6 +282,7 @@ impl StopReason {
             } => format!("exited ({code})"),
             StopReason::Exited { exit_code: None } => "exited".into(),
             StopReason::ServerRestarted => "no agent since server restart".into(),
+            StopReason::ServerRestartedMidTurn => "interrupted".into(),
             StopReason::Branched => "branched, not started".into(),
             StopReason::NotAccepting => "not accepting messages".into(),
         }
@@ -896,6 +907,10 @@ mod tests {
         assert_eq!(
             Status::Stopped(StopReason::ServerRestarted).label(),
             "idle · no agent since server restart"
+        );
+        assert_eq!(
+            Status::Stopped(StopReason::ServerRestartedMidTurn).label(),
+            "idle · interrupted"
         );
         assert_eq!(
             Status::Stopped(StopReason::Branched).label(),

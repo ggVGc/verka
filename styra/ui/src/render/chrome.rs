@@ -17,6 +17,7 @@ impl StopTone {
             StopTone::Failed => theme::STOP_FAILED,
             StopTone::Exited => theme::STOP_EXITED,
             StopTone::ServerRestarted => theme::STOP_SERVER_RESTARTED,
+            StopTone::ServerRestartedMidTurn => theme::STOP_SERVER_RESTARTED_MID_TURN,
             StopTone::Unknown => theme::STOP_UNKNOWN,
         }
     }
@@ -290,6 +291,7 @@ mod tests {
             StopTone::Failed,
             StopTone::Exited,
             StopTone::ServerRestarted,
+            StopTone::ServerRestartedMidTurn,
             StopTone::Unknown,
         ];
         for (i, a) in tones.iter().enumerate() {
