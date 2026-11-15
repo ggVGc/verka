@@ -264,6 +264,7 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
 /// The first line to draw. The view stays where it was while the cursor moves
 /// inside it, and scrolls only as far as it takes to keep [`SCROLL_MARGIN`]
 /// rows showing past the cursor, fewer where the pane is too short for them.
+/// A view scrolled on its own stays where it was put, cursor or not.
 fn scroll_offset(
     view: &InteractionNavigator<'_>,
     selected: Option<usize>,
@@ -273,7 +274,7 @@ fn scroll_offset(
     // The foot of the pane is never left empty while there is list to fill it.
     let last = total.saturating_sub(viewport);
     let mut offset = view.requested_offset.unwrap_or(0).min(last);
-    let Some(selected) = selected else {
+    let Some(selected) = selected.filter(|_| !view.scrolled_away) else {
         return offset;
     };
     let lines = |rows: &[InteractionRow<'_>]| rows.iter().map(row_height).sum::<usize>();
@@ -1122,6 +1123,7 @@ mod tests {
             filter: None,
             typing_filter: false,
             requested_offset: Some(0),
+            scrolled_away: false,
             rows: vec![
                 InteractionRow::Workspace("Payments".into()),
                 InteractionRow::Interaction {
@@ -1627,6 +1629,7 @@ mod tests {
             filter: None,
             typing_filter: false,
             requested_offset: Some(0),
+            scrolled_away: false,
             rows: (0..8)
                 .map(|index| InteractionRow::Interaction {
                     name: format!("task {index}").into(),
@@ -1718,6 +1721,17 @@ mod tests {
         assert_eq!(scroll_offset(&view, None, 10, 4), 0);
         view.rows.clear();
         assert_eq!(scroll_offset(&view, None, 10, 0), 0);
+    }
+
+    #[test]
+    fn a_view_scrolled_away_leaves_the_cursor_behind() {
+        let mut view = many_rows(0);
+        view.scrolled_away = true;
+        view.requested_offset = Some(6);
+        assert_eq!(scroll_offset(&view, Some(0), 10, 16), 6);
+        // It still cannot scroll past the foot of the list.
+        view.requested_offset = Some(100);
+        assert_eq!(scroll_offset(&view, Some(0), 10, 16), 6);
     }
 
     /// The line [`render`] draws [`many_rows`] from, in a pane ten lines tall

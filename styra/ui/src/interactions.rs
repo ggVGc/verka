@@ -132,6 +132,10 @@ pub struct InteractionNavigator<'a> {
     /// comes within [`SCROLL_MARGIN`] rows of an edge, and returns the line it
     /// actually drew from. `None` starts at the top on the first draw.
     pub requested_offset: Option<usize>,
+    /// Set once the view has been scrolled on its own, without moving the
+    /// cursor: `requested_offset` is then kept even where it leaves the
+    /// cursor out of sight, until the cursor next moves.
+    pub scrolled_away: bool,
     pub rows: Vec<InteractionRow<'a>>,
 }
 

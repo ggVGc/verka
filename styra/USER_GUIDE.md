@@ -166,8 +166,9 @@ from it becomes the first history entry of the Session it starts.
 Sending a message to a stopped or viewed Session automatically attempts native
 provider resume. In the main interaction view, `T` edits the current
 interaction's tags. `a` opens the live-interaction list; there, `w` switches
-current/all-Workspace scope, `j`/`k` selects, `PgUp`/`PgDn` moves ten interactions
-at a time, `g`/`G` jumps to the first/last
+current/all-Workspace scope, `j`/`k` selects, `↑`/`↓` scroll the list ten
+lines without moving the selection (the next `j`/`k` brings it back into view),
+`PgUp`/`PgDn` moves ten interactions at a time, `g`/`G` jumps to the first/last
 visible interaction, `T` edits the selected
 interaction's tags, `C` / `Z` marks it completed / abandoned and stops it (also
 available directly in the event view), and `c` shows or hides those rows

@@ -182,6 +182,8 @@ pub(crate) enum Action {
     EditorMountNeither,
     InteractionsNext,
     InteractionsPrev,
+    InteractionsScrollDown,
+    InteractionsScrollUp,
     InteractionsPageDown,
     InteractionsPageUp,
     InteractionsFirst,
@@ -524,6 +526,8 @@ impl Action {
                 "move the cursor down; the rested-on interaction becomes current"
             }
             Self::InteractionsPrev => "move the cursor up",
+            Self::InteractionsScrollDown => "scroll the list 10 lines down without moving the cursor",
+            Self::InteractionsScrollUp => "scroll the list 10 lines up without moving the cursor",
             Self::InteractionsPageDown => "move the cursor a page down",
             Self::InteractionsPageUp => "move the cursor a page up",
             Self::InteractionsFirst => "move the cursor to the first visible interaction",

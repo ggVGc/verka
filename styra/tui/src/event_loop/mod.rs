@@ -368,9 +368,9 @@ mod tests {
         event_loop.carry_out_requests("").unwrap();
         for id in ["s2", "s1"] {
             let key = if id == "s2" {
-                KeyCode::Down
+                KeyCode::Char('j')
             } else {
-                KeyCode::Up
+                KeyCode::Char('k')
             };
             event_loop.handle_key(key.into(), "").unwrap();
             assert_eq!(

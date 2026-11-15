@@ -137,6 +137,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             .or(app.interactions.typing_filter().then_some("")),
         typing_filter: app.interactions.typing_filter(),
         requested_offset: app.interactions.scroll_offset,
+        scrolled_away: app.interactions.scrolled_away,
         rows,
     }
 }

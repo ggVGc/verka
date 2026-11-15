@@ -101,6 +101,9 @@ pub struct LiveInteractions {
     /// view sits has to be remembered between frames. `None` starts a fresh
     /// client at the top before keeping the current interaction in view.
     pub scroll_offset: Option<usize>,
+    /// Set while the view has been scrolled with the arrows, away from where
+    /// the cursor would keep it; any cursor move brings it back.
+    pub scrolled_away: bool,
 }
 
 /// The event list's tally of listed Interactions by activity, rendered on the
@@ -146,6 +149,20 @@ impl LiveInteractions {
         // again is a fresh look at all of it.
         self.filter = None;
         self.typing_filter = false;
+        self.scrolled_away = false;
+    }
+
+    /// Scroll the list ten lines down without moving the cursor. The
+    /// renderer stops it at the foot of the list.
+    pub fn scroll_view_down(&mut self) {
+        self.scroll_offset = Some(self.scroll_offset.unwrap_or(0).saturating_add(10));
+        self.scrolled_away = true;
+    }
+
+    /// Scroll the list ten lines up without moving the cursor.
+    pub fn scroll_view_up(&mut self) {
+        self.scroll_offset = Some(self.scroll_offset.unwrap_or(0).saturating_sub(10));
+        self.scrolled_away = true;
     }
 
     /// Incorporate a periodic server snapshot. Idle acknowledgement belongs to
@@ -803,6 +820,8 @@ impl LiveInteractions {
     /// walking off the end of the list, or straight back to where it started —
     /// has nothing to load, so it cancels the move rather than timing one out.
     pub(crate) fn move_cursor_to(&mut self, id: String, current: &str) {
+        // Wherever the view was scrolled to, it goes back to the cursor.
+        self.scrolled_away = false;
         if id == current {
             self.rest();
             return;
@@ -2657,6 +2676,33 @@ pub(crate) mod tests {
         live.cursor_last("three", scope);
         assert_eq!(live.cursor("three"), "three");
         assert!(live.pending("three").is_none());
+    }
+
+    /// The arrows move the view and leave the cursor, and nothing is due to
+    /// load; the next cursor move takes the view back to the cursor.
+    #[test]
+    fn scrolling_the_view_leaves_the_cursor_until_it_moves() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("one", InteractionActivity::Pending),
+                interaction("two", InteractionActivity::Pending),
+            ],
+            vec![],
+        );
+
+        live.scroll_view_down();
+        assert_eq!(live.scroll_offset, Some(10));
+        assert!(live.scrolled_away);
+        live.scroll_view_up();
+        live.scroll_view_up();
+        assert_eq!(live.scroll_offset, Some(0), "stops at the top");
+        assert_eq!(live.cursor("one"), "one");
+        assert!(live.pending("one").is_none());
+
+        live.cursor_next("one", None);
+        assert!(!live.scrolled_away);
+        assert_eq!(live.cursor("one"), "two");
     }
 
     #[test]

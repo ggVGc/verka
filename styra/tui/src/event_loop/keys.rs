@@ -788,6 +788,9 @@ fn navigator_cursor_key(app: &mut App, key: KeyEvent) -> bool {
         k if keys::INTERACTIONS_PREV.matches(k) => {
             interactions.cursor_previous(&session_id, workspace_id)
         }
+        // Only the view moves, so nothing is due to load.
+        k if keys::INTERACTIONS_SCROLL_DOWN.matches(k) => interactions.scroll_view_down(),
+        k if keys::INTERACTIONS_SCROLL_UP.matches(k) => interactions.scroll_view_up(),
         k if keys::INTERACTIONS_FIRST.matches(k) => {
             interactions.cursor_first(&session_id, workspace_id)
         }

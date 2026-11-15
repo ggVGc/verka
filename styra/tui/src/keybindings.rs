@@ -244,9 +244,10 @@ bindings! { MESSAGE_EDITOR = "Message editor";
 }
 
 bindings! { INTERACTIONS = "Interactions";
-    INTERACTIONS_NEXT: [Key::ch('j'), Key::code(KeyCode::Down)]
-        => Action::InteractionsNext;
-    INTERACTIONS_PREV: [Key::ch('k'), Key::code(KeyCode::Up)] => Action::InteractionsPrev;
+    INTERACTIONS_NEXT: [Key::ch('j')] => Action::InteractionsNext;
+    INTERACTIONS_PREV: [Key::ch('k')] => Action::InteractionsPrev;
+    INTERACTIONS_SCROLL_DOWN: [Key::code(KeyCode::Down)] => Action::InteractionsScrollDown;
+    INTERACTIONS_SCROLL_UP: [Key::code(KeyCode::Up)] => Action::InteractionsScrollUp;
     INTERACTIONS_PAGE_DOWN: [Key::code(KeyCode::PageDown)] => Action::InteractionsPageDown;
     INTERACTIONS_PAGE_UP: [Key::code(KeyCode::PageUp)] => Action::InteractionsPageUp;
     INTERACTIONS_FIRST: [Key::ch('g')] => Action::InteractionsFirst;
