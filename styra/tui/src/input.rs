@@ -1052,17 +1052,23 @@ fn handle_overview_key(app: &mut App, key: KeyEvent) -> bool {
             app.overview
                 .prev(&app.interactions, &current, app.workspace.id.as_deref())
         }
-        k if OVERVIEW_FIRST.matches(k) => app
-            .overview
-            .first(&app.interactions, app.workspace.id.as_deref()),
-        k if OVERVIEW_LAST.matches(k) => app
-            .overview
-            .last(&app.interactions, app.workspace.id.as_deref()),
+        k if OVERVIEW_FIRST.matches(k) => {
+            app.overview
+                .first(&app.interactions, &current, app.workspace.id.as_deref())
+        }
+        k if OVERVIEW_LAST.matches(k) => {
+            app.overview
+                .last(&app.interactions, &current, app.workspace.id.as_deref())
+        }
         k if OVERVIEW_NTH.matches(k) => {
             if let KeyCode::Char(digit @ '1'..='9') = k.code {
                 let position = digit as usize - '1' as usize;
-                app.overview
-                    .nth(&app.interactions, position, app.workspace.id.as_deref())
+                app.overview.nth(
+                    &app.interactions,
+                    position,
+                    &current,
+                    app.workspace.id.as_deref(),
+                )
             }
         }
         // Loading another interaction is a server round-trip the event loop
@@ -2333,7 +2339,9 @@ mod tests {
         assert!(app.interactions.only_current_workspace);
         assert_eq!(app.interactions.visible_indices("", Some("here")).len(), 1);
         assert_eq!(
-            app.overview.indices(&app.interactions, Some("here")).len(),
+            app.overview
+                .indices(&app.interactions, "current", Some("here"))
+                .len(),
             1
         );
         assert!(app
@@ -2343,7 +2351,9 @@ mod tests {
         // Changing scope in the live list is immediately reflected in the grid.
         app.interactions.toggle_workspace_scope();
         assert_eq!(
-            app.overview.indices(&app.interactions, Some("here")).len(),
+            app.overview
+                .indices(&app.interactions, "current", Some("here"))
+                .len(),
             2
         );
         assert!(handle_overview_key(&mut app, key));

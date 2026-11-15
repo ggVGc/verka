@@ -44,22 +44,29 @@ impl Overview {
         self.rows.clear();
     }
 
-    /// The visible tiles, shared by drawing and cursor navigation.
+    /// The visible tiles, shared by drawing and cursor navigation. Running
+    /// only still keeps what needs attention: newly idle work, and `current`,
+    /// the interaction on screen.
     pub fn indices(
         &self,
         interactions: &LiveInteractions,
+        current: &str,
         workspace_id: Option<&str>,
     ) -> Vec<usize> {
         interactions
             .overview_indices(self.scope(workspace_id))
             .into_iter()
             .filter(|index| {
+                let interaction = &interactions.items[*index];
                 !self.running_only
+                    || interaction.id == current
                     || matches!(
-                        interactions.items[*index].activity,
+                        interaction.activity,
                         styra_protocol::InteractionActivity::Running
                             | styra_protocol::InteractionActivity::Background
                     )
+                    || (interaction.activity == styra_protocol::InteractionActivity::Pending
+                        && interaction.idle_unseen)
             })
             .collect()
     }
@@ -77,7 +84,7 @@ impl Overview {
         current: &str,
         workspace_id: Option<&str>,
     ) -> usize {
-        let tiles = self.indices(interactions, workspace_id);
+        let tiles = self.indices(interactions, current, workspace_id);
         let position = |id: &str| {
             tiles
                 .iter()
@@ -97,7 +104,7 @@ impl Overview {
         current: &str,
         workspace_id: Option<&str>,
     ) -> Option<&'a str> {
-        let tiles = self.indices(interactions, workspace_id);
+        let tiles = self.indices(interactions, current, workspace_id);
         tiles
             .get(self.selected(interactions, current, workspace_id))
             .map(|index| interactions.items[*index].id.as_str())
@@ -133,7 +140,7 @@ impl Overview {
         workspace_id: Option<&str>,
     ) {
         let at = self.selected(interactions, current, workspace_id);
-        self.select(interactions, at.saturating_sub(1), workspace_id);
+        self.select(interactions, at.saturating_sub(1), current, workspace_id);
     }
 
     pub fn right(
@@ -143,7 +150,7 @@ impl Overview {
         workspace_id: Option<&str>,
     ) {
         let at = self.selected(interactions, current, workspace_id);
-        self.select(interactions, at + 1, workspace_id);
+        self.select(interactions, at + 1, current, workspace_id);
     }
 
     /// Onto the tile in the row below that sits most nearly under this one.
@@ -157,7 +164,7 @@ impl Overview {
     ) {
         let at = self.selected(interactions, current, workspace_id);
         if let Some(position) = self.vertical(at, 1) {
-            self.select(interactions, position, workspace_id);
+            self.select(interactions, position, current, workspace_id);
         }
     }
 
@@ -169,7 +176,7 @@ impl Overview {
     ) {
         let at = self.selected(interactions, current, workspace_id);
         if let Some(position) = self.vertical(at, -1) {
-            self.select(interactions, position, workspace_id);
+            self.select(interactions, position, current, workspace_id);
         }
     }
 
@@ -205,9 +212,12 @@ impl Overview {
         current: &str,
         workspace_id: Option<&str>,
     ) {
-        let tiles = self.indices(interactions, workspace_id).len().max(1);
+        let tiles = self
+            .indices(interactions, current, workspace_id)
+            .len()
+            .max(1);
         let at = self.selected(interactions, current, workspace_id);
-        self.select(interactions, (at + 1) % tiles, workspace_id);
+        self.select(interactions, (at + 1) % tiles, current, workspace_id);
     }
 
     /// The previous tile, wrapping from the first to the last.
@@ -217,17 +227,35 @@ impl Overview {
         current: &str,
         workspace_id: Option<&str>,
     ) {
-        let tiles = self.indices(interactions, workspace_id).len().max(1);
+        let tiles = self
+            .indices(interactions, current, workspace_id)
+            .len()
+            .max(1);
         let at = self.selected(interactions, current, workspace_id);
-        self.select(interactions, (at + tiles - 1) % tiles, workspace_id);
+        self.select(
+            interactions,
+            (at + tiles - 1) % tiles,
+            current,
+            workspace_id,
+        );
     }
 
-    pub fn first(&mut self, interactions: &LiveInteractions, workspace_id: Option<&str>) {
-        self.select(interactions, 0, workspace_id);
+    pub fn first(
+        &mut self,
+        interactions: &LiveInteractions,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) {
+        self.select(interactions, 0, current, workspace_id);
     }
 
-    pub fn last(&mut self, interactions: &LiveInteractions, workspace_id: Option<&str>) {
-        self.select(interactions, usize::MAX, workspace_id);
+    pub fn last(
+        &mut self,
+        interactions: &LiveInteractions,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) {
+        self.select(interactions, usize::MAX, current, workspace_id);
     }
 
     /// Onto tile `position` in reading order, counted from zero. A position
@@ -237,10 +265,11 @@ impl Overview {
         &mut self,
         interactions: &LiveInteractions,
         position: usize,
+        current: &str,
         workspace_id: Option<&str>,
     ) {
-        if position < self.indices(interactions, workspace_id).len() {
-            self.select(interactions, position, workspace_id);
+        if position < self.indices(interactions, current, workspace_id).len() {
+            self.select(interactions, position, current, workspace_id);
         }
     }
 
@@ -250,10 +279,11 @@ impl Overview {
         &mut self,
         interactions: &LiveInteractions,
         target: &str,
+        current: &str,
         workspace_id: Option<&str>,
     ) -> bool {
         let Some(index) = self
-            .indices(interactions, workspace_id)
+            .indices(interactions, current, workspace_id)
             .into_iter()
             .find(|index| interactions.items[*index].workspace_id == target)
         else {
@@ -268,9 +298,10 @@ impl Overview {
         &mut self,
         interactions: &LiveInteractions,
         position: usize,
+        current: &str,
         workspace_id: Option<&str>,
     ) {
-        let tiles = self.indices(interactions, workspace_id);
+        let tiles = self.indices(interactions, current, workspace_id);
         if let Some(index) = tiles.get(position).or(tiles.last()) {
             self.cursor = Some(interactions.items[*index].id.clone());
         }
@@ -354,7 +385,7 @@ mod tests {
                 .id,
             "98-tile"
         );
-        overview.last(&interactions, None);
+        overview.last(&interactions, current, None);
         assert_eq!(
             overview
                 .next_attention_or_live(&interactions, current, None)
@@ -371,13 +402,14 @@ mod tests {
             "97-tile"
         );
 
+        // Newly idle tiles survive running only, so the cursor stays put.
         overview.toggle_running_only();
         assert_eq!(
             overview
                 .next_attention_or_live(&interactions, current, None)
                 .unwrap()
                 .id,
-            "98-tile"
+            "97-tile"
         );
         interactions.items[2].idle_unseen = false;
         interactions.items[3].idle_unseen = false;
@@ -403,7 +435,7 @@ mod tests {
         let mut overview = Overview::default();
         let scope = Some("workspace");
         let current = "100-tile";
-        assert_eq!(overview.indices(&interactions, scope).len(), 3);
+        assert_eq!(overview.indices(&interactions, current, scope).len(), 3);
         assert_eq!(
             overview
                 .next_attention_or_live(&interactions, current, scope)
@@ -411,9 +443,9 @@ mod tests {
                 .id,
             "98-tile"
         );
-        overview.last(&interactions, scope);
+        overview.last(&interactions, current, scope);
         interactions.toggle_workspace_scope();
-        assert_eq!(overview.indices(&interactions, scope), vec![0]);
+        assert_eq!(overview.indices(&interactions, current, scope), vec![0]);
         assert_eq!(
             overview.selected_id(&interactions, current, scope),
             Some(current)
@@ -431,10 +463,10 @@ mod tests {
             .next_attention_or_live(current, scope)
             .is_none());
         assert!(interactions.next_active(current, scope).is_none());
-        assert!(overview.indices(&interactions, None).is_empty());
+        assert!(overview.indices(&interactions, current, None).is_empty());
 
         interactions.toggle_workspace_scope();
-        assert_eq!(overview.indices(&interactions, scope).len(), 3);
+        assert_eq!(overview.indices(&interactions, current, scope).len(), 3);
         assert_eq!(
             overview
                 .next_attention_or_live(&interactions, current, scope)
@@ -456,9 +488,9 @@ mod tests {
             InteractionActivity::Background,
         ]);
         let mut overview = Overview::default();
-        let current = "100-tile";
+        let current = "elsewhere";
         overview.toggle_running_only();
-        assert_eq!(overview.indices(&interactions, None).len(), 2);
+        assert_eq!(overview.indices(&interactions, current, None).len(), 2);
         assert_eq!(
             overview.selected_id(&interactions, current, None),
             Some("99-tile")
@@ -477,15 +509,55 @@ mod tests {
         for item in &mut interactions.items {
             item.activity = InteractionActivity::Pending;
         }
-        assert!(overview.indices(&interactions, None).is_empty());
+        assert!(overview.indices(&interactions, current, None).is_empty());
         assert_eq!(overview.selected_id(&interactions, current, None), None);
         overview.next(&interactions, current, None);
         overview.prev(&interactions, current, None);
         overview.toggle_running_only();
-        assert_eq!(overview.indices(&interactions, None).len(), 3);
+        assert_eq!(overview.indices(&interactions, current, None).len(), 3);
         assert_eq!(
             overview.selected_id(&interactions, current, None),
             Some("99-tile")
+        );
+    }
+
+    /// Running only must not lose what needs the operator: newly idle work,
+    /// and the interaction on screen, stay on the grid.
+    #[test]
+    fn running_only_keeps_newly_idle_work_and_the_interaction_on_screen() {
+        let mut interactions = fleet(&[
+            InteractionActivity::Pending,
+            InteractionActivity::Pending,
+            InteractionActivity::Running,
+            InteractionActivity::Pending,
+        ]);
+        interactions.items[1].idle_unseen = true;
+        let mut overview = Overview::default();
+        overview.toggle_running_only();
+        let tiles = |overview: &Overview, interactions: &LiveInteractions, current| {
+            overview
+                .indices(interactions, current, None)
+                .into_iter()
+                .map(|index| interactions.items[index].id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            tiles(&overview, &interactions, "100-tile"),
+            vec!["100-tile", "99-tile", "98-tile"]
+        );
+        assert_eq!(
+            tiles(&overview, &interactions, "elsewhere"),
+            vec!["99-tile", "98-tile"]
+        );
+        // Once seen it is no longer newly idle, and goes unless it is on screen.
+        interactions.items[1].idle_unseen = false;
+        assert_eq!(
+            tiles(&overview, &interactions, "99-tile"),
+            vec!["99-tile", "98-tile"]
+        );
+        assert_eq!(
+            tiles(&overview, &interactions, "100-tile"),
+            vec!["100-tile", "98-tile"]
         );
     }
 
@@ -544,12 +616,12 @@ mod tests {
             "at the end"
         );
 
-        overview.first(&interactions, None);
+        overview.first(&interactions, current, None);
         assert_eq!(
             overview.selected_id(&interactions, current, None),
             Some("100-tile")
         );
-        overview.last(&interactions, None);
+        overview.last(&interactions, current, None);
         assert_eq!(
             overview.selected_id(&interactions, current, None),
             Some("96-tile")
@@ -590,7 +662,7 @@ mod tests {
         let interactions = fleet(&[InteractionActivity::Pending; 5]);
         let mut overview = Overview::default();
         overview.note_rows(&[2, 2, 1]);
-        overview.last(&interactions, None);
+        overview.last(&interactions, "100-tile", None);
         overview.up(&interactions, "100-tile", None);
         assert_eq!(overview.selected(&interactions, "100-tile", None), 2);
         overview.down(&interactions, "100-tile", None);

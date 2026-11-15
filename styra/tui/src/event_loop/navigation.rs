@@ -66,8 +66,12 @@ pub(super) fn select_workspace_in_grid(app: &mut App, target: &str) -> bool {
     app.interactions.only_current_workspace = true;
     app.overview.workspace =
         (app.workspace.id.as_deref() != Some(target)).then(|| target.to_owned());
-    app.overview
-        .select_workspace(&app.interactions, target, app.workspace.id.as_deref())
+    app.overview.select_workspace(
+        &app.interactions,
+        target,
+        &app.session_id,
+        app.workspace.id.as_deref(),
+    )
 }
 
 /// Load the interaction the list or grid cursor has moved onto, if it is not
@@ -286,7 +290,7 @@ mod tests {
         assert!(app.interactions.only_current_workspace);
         assert_eq!(
             app.overview
-                .indices(&app.interactions, Some("workspace"))
+                .indices(&app.interactions, &app.session_id, Some("workspace"))
                 .len(),
             1,
             "only the highlighted Workspace's tiles are shown"

@@ -12,7 +12,11 @@ pub(crate) fn view(app: &App) -> OverviewView<'_> {
     let now_ms = super::quota::now_ms();
     let tiles = app
         .overview
-        .indices(&app.interactions, app.workspace.id.as_deref())
+        .indices(
+            &app.interactions,
+            &app.session_id,
+            app.workspace.id.as_deref(),
+        )
         .into_iter()
         .map(|index| tile(app, &app.interactions.items[index], now_ms))
         .collect();
@@ -160,9 +164,11 @@ fn elapsed(interaction: &InteractionSummary, now_ms: u64) -> Option<String> {
 /// Every figure on the grid the clock moves, for [`super::clock_reading`].
 pub(crate) fn clock_reading(app: &App) -> String {
     let now_ms = super::quota::now_ms();
-    let indices = app
-        .overview
-        .indices(&app.interactions, app.workspace.id.as_deref());
+    let indices = app.overview.indices(
+        &app.interactions,
+        &app.session_id,
+        app.workspace.id.as_deref(),
+    );
     // The attached tile's tail is timed by this client's clock, as its event
     // list's is, rather than the server's.
     let attached = indices

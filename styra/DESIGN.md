@@ -1106,7 +1106,9 @@ some of it, with nothing on screen to say so, would be worse than none. Stopped
 and completed Interactions are not in flight and are left out. Running and
 background work sorts before idle work, preserving Workspace order within
 each group. `r` toggles a separate running-only filter, shown in the title,
-which applies to both drawing and navigation.
+which applies to both drawing and navigation. It still keeps what needs
+attention — newly idle Interactions and the one on screen — so filtering
+never hides work waiting on the operator.
 
 The renderer chooses the number of columns from the terminal's width and
 reports it back with the frame, which is how `j`/`k` know how far a column

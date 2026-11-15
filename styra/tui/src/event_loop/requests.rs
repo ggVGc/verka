@@ -545,15 +545,9 @@ impl Loop<'_> {
             return;
         };
         let app = &mut *self.app;
+        // Running only keeps the interaction on screen, so the one loaded
+        // has its tile whatever its activity.
         if app.session_id == target_id {
-            if overview.running_only
-                && overview
-                    .indices(&app.interactions, app.workspace.id.as_deref())
-                    .iter()
-                    .all(|index| app.interactions.items[*index].id != app.session_id)
-            {
-                overview.toggle_running_only();
-            }
             overview.open();
         }
         app.overview = overview;
