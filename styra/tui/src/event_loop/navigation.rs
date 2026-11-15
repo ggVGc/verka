@@ -258,6 +258,51 @@ mod tests {
         assert_eq!(app.interactions.visible_indices("", None), vec![0, 1]);
     }
 
+    /// In Workspace scope the jump's highlight is the current Workspace, so
+    /// highlighting another Workspace lists that one's rows rather than none.
+    #[test]
+    fn the_workspace_jump_lists_its_highlight_in_workspace_scope() {
+        let mut app = App::new(
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+            "one",
+        );
+        app.workspace.id = Some("workspace".into());
+        let mut other =
+            crate::interactions::tests::interaction("two", InteractionActivity::Running);
+        other.workspace_id = "other".into();
+        let interactions = vec![
+            crate::interactions::tests::interaction("one", InteractionActivity::Running),
+            other,
+        ];
+        let workspaces = workspaces(&["workspace", "other"]);
+        let jump = WorkspaceJump::new(&workspaces, &interactions);
+        app.interactions.open(interactions, workspaces);
+        app.interactions.only_current_workspace = true;
+        app.workspace_jump = Some(jump);
+        narrow_navigator_to_jump(&mut app);
+        assert_eq!(
+            app.interactions.visible_indices("one", Some("workspace")),
+            vec![0]
+        );
+
+        app.workspace_jump
+            .as_mut()
+            .unwrap()
+            .handle_key(crossterm::event::KeyEvent::from(KeyCode::Down));
+        narrow_navigator_to_jump(&mut app);
+        assert_eq!(
+            app.interactions.visible_indices("one", Some("workspace")),
+            vec![1]
+        );
+
+        app.workspace_jump = None;
+        narrow_navigator_to_jump(&mut app);
+        assert_eq!(
+            app.interactions.visible_indices("one", Some("workspace")),
+            vec![0]
+        );
+    }
+
     /// Over the grid, the jump narrows the grid to its highlighted Workspace
     /// and moves only the grid's cursor; nothing is scheduled to load.
     #[test]

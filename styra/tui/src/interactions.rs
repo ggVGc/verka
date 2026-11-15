@@ -85,7 +85,8 @@ pub struct LiveInteractions {
     typing_filter: bool,
     /// While the Workspace jump is open over the navigator, the Workspace it
     /// highlights (none if its query leaves nothing): only its rows are
-    /// listed. `None` otherwise.
+    /// listed, and it stands in for the current Workspace — see
+    /// [`Self::scope`]. `None` otherwise.
     pub jump_workspaces: Option<Vec<String>>,
     /// Whether a listing has been taken yet. The first one is what was already
     /// running when this client arrived, so nothing in it is newly arrived.
@@ -457,11 +458,23 @@ impl LiveInteractions {
             || workspace_id.is_some_and(|id| interaction.workspace_id == id)
     }
 
+    /// The Workspace the navigator's Workspace scope shows: the one the
+    /// Workspace jump highlights while it is open, else `workspace_id`, the
+    /// one on screen. Without this a Workspace scope would leave the jump
+    /// nothing to show for any Workspace but the one on screen.
+    fn scope<'a>(&'a self, workspace_id: Option<&'a str>) -> Option<&'a str> {
+        match &self.jump_workspaces {
+            Some(ids) => ids.first().map(String::as_str),
+            None => workspace_id,
+        }
+    }
+
     /// The rows the navigator lists, in item order. `current`, the
     /// Interaction on screen, is listed whatever its state: completing,
     /// integrating or stopping it must not take it, and with it its place
     /// among its branches, out of the list while it is still being looked at.
     pub fn visible_indices(&self, current: &str, workspace_id: Option<&str>) -> Vec<usize> {
+        let workspace_id = self.scope(workspace_id);
         self.items
             .iter()
             .enumerate()

@@ -16,6 +16,19 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
     let all_workspaces = !app.interactions.only_current_workspace;
     let scope = if all_workspaces {
         Cow::Borrowed("All")
+    } else if let Some(jump) = app.interactions.jump_workspaces.as_ref() {
+        // The Workspace jump's highlight stands in for the one on screen.
+        jump.first()
+            .map(|id| {
+                app.interactions
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == *id)
+                    .map(crate::workspace::display_name)
+                    .map(Cow::Owned)
+                    .unwrap_or(Cow::Borrowed(id.as_str()))
+            })
+            .unwrap_or(Cow::Borrowed("no Workspace"))
     } else {
         Cow::Borrowed(
             app.workspace
