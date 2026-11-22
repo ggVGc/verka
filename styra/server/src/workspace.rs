@@ -599,7 +599,7 @@ mod tests {
             WorkspaceLaunchChange::SetWritableWorkspace(Some(false)),
         )
         .unwrap();
-        assert!(!stored.grants_writable_workspace());
+        assert!(!stored.grants_writable_workspace(true));
         assert_eq!(stored.templates, launch.templates, "the rest is untouched");
 
         let stored = change_launch(

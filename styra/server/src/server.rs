@@ -1731,6 +1731,27 @@ impl ServerState {
         .map(Some)
     }
 
+    /// Whether `checkout` — the directory a launch binds as its workspace —
+    /// lies in its repository's main worktree, where the workspace mount is
+    /// read-only unless a policy layer says otherwise (see
+    /// [`LaunchPolicy::grants_writable_workspace`]).
+    ///
+    /// A directory that does not exist yet is a worktree a plan names before
+    /// the launch makes it, and so never the main one. Outside a repository
+    /// there is no main worktree to protect.
+    fn in_main_worktree(&self, checkout: &Path) -> Result<bool> {
+        if !checkout.exists() {
+            return Ok(false);
+        }
+        let Some(repository) = self.inner.git.discover(checkout)? else {
+            return Ok(false);
+        };
+        // Only a linked worktree has a metadata directory of its own apart from
+        // the one every checkout of the repository shares.
+        let directories = self.inner.git.directories(&repository.root)?;
+        Ok(directories.git_dir == directories.common_dir)
+    }
+
     /// The checkout Session `id` works in, or `None` when it works in its
     /// Workspace directory.
     ///
@@ -2413,6 +2434,7 @@ impl ServerState {
                 Ok(checkout)
             },
         )?;
+        let main_worktree = self.in_main_worktree(&checkout)?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = journal_path
             .parent()
@@ -2425,7 +2447,7 @@ impl ServerState {
             workspace: MountSpec {
                 source: checkout.clone(),
                 destination: layout.workspace.clone(),
-                writable: launch.grants_writable_workspace(),
+                writable: launch.grants_writable_workspace(!main_worktree),
             },
             repository_mounts,
             automatic_mounts,
@@ -2442,7 +2464,10 @@ impl ServerState {
             rootfs: None,
             base,
         };
-        let driva = capture_driva_options(&spec, &backend)?;
+        let driva = DrivaOptions {
+            workspace_read_only_by_default: main_worktree,
+            ..capture_driva_options(&spec, &backend)?
+        };
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
         let shell = ShellInfo {
             tmux: prepared_broker.tmux.clone(),
@@ -2823,6 +2848,7 @@ impl ServerState {
             .context("tmux is required for Styra session shells")?;
         let base = launch_base(&workspace, template.as_ref())?;
         let tooling_mounts = tooling_mounts(&profile, &tmux, &base)?;
+        let main_worktree = self.in_main_worktree(&checkout)?;
         let spec = InteractionSpec {
             profile,
             resume_provider_session_id: None,
@@ -2830,7 +2856,7 @@ impl ServerState {
             workspace: MountSpec {
                 source: checkout,
                 destination: layout.workspace.clone(),
-                writable: launch.grants_writable_workspace(),
+                writable: launch.grants_writable_workspace(!main_worktree),
             },
             repository_mounts,
             automatic_mounts,
@@ -2842,14 +2868,17 @@ impl ServerState {
             template,
             broker: Some(self.describe_broker(PENDING_SESSION_ID, tmux)),
         };
-        let options = capture_driva_options(
-            &spec,
-            &driva::BwrapIsolation {
-                executable: "bwrap".into(),
-                rootfs: None,
-                base,
-            },
-        )?;
+        let options = DrivaOptions {
+            workspace_read_only_by_default: main_worktree,
+            ..capture_driva_options(
+                &spec,
+                &driva::BwrapIsolation {
+                    executable: "bwrap".into(),
+                    rootfs: None,
+                    base,
+                },
+            )?
+        };
         // Planning is also where a policy gets checked: an operator editing
         // mounts before launch learns that two of them collide now, from the
         // view they are editing, rather than from a failed launch later.
@@ -3001,6 +3030,7 @@ impl ServerState {
                 (selection.effort != previous.effort).then_some(selection.effort.as_str()),
             )?;
         }
+        let main_worktree = self.in_main_worktree(&checkout)?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = summary.path.join("diagnostics.log");
         let spec = InteractionSpec {
@@ -3010,7 +3040,7 @@ impl ServerState {
             workspace: MountSpec {
                 source: checkout.clone(),
                 destination: layout.workspace.clone(),
-                writable: launch.grants_writable_workspace(),
+                writable: launch.grants_writable_workspace(!main_worktree),
             },
             repository_mounts,
             automatic_mounts,
@@ -3027,7 +3057,10 @@ impl ServerState {
             rootfs: None,
             base,
         };
-        let driva = capture_driva_options(&spec, &backend)?;
+        let driva = DrivaOptions {
+            workspace_read_only_by_default: main_worktree,
+            ..capture_driva_options(&spec, &backend)?
+        };
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
         let shell = ShellInfo {
             tmux: prepared_broker.tmux.clone(),
@@ -8014,6 +8047,71 @@ mod tests {
         assert_eq!(
             access_at_workspace(LaunchPolicy::default()),
             MountAccess::ReadOnly
+        );
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// A launch in the repository's main worktree works in the operator's own
+    /// checkout, so its workspace mount is read-only until a layer grants it;
+    /// a worktree of the launch's own is writable as before. The plan says
+    /// which default applied, for the view to name what an unstated answer means.
+    #[test]
+    fn the_main_worktree_is_planned_read_only_unless_a_layer_grants_it() {
+        let store = temp_path("main-worktree-read-only-store");
+        let host = temp_path("main-worktree-read-only-host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let git = Arc::new(crate::git::FakeGit::new());
+        git.init(&host);
+        let state = ServerState::with_git(git, store.clone());
+        let workspace = crate::workspace::create(&store, &host, None).unwrap();
+        let plan = |launch: LaunchPolicy, create_worktree: bool| {
+            state
+                .plan_session(crate::protocol::PlanSession {
+                    workspace_id: workspace.id.clone(),
+                    selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
+                    launch,
+                    create_worktree,
+                    checkout_from: None,
+                })
+                .unwrap()
+        };
+        let access_of = |plan: &DrivaOptions, checkout: &Path| {
+            plan.mounts
+                .iter()
+                .find_map(|attributed| match &attributed.mount {
+                    Mount::Bind { source, access, .. } if source == checkout => Some(*access),
+                    _ => None,
+                })
+                .expect("the checkout is always mounted")
+        };
+        let canonical = host.canonicalize().unwrap();
+
+        let in_main = plan(LaunchPolicy::default(), false);
+        assert!(in_main.workspace_read_only_by_default);
+        assert_eq!(access_of(&in_main, &canonical), MountAccess::ReadOnly);
+
+        let granted = plan(
+            LaunchPolicy {
+                writable_workspace: Some(true),
+                ..LaunchPolicy::default()
+            },
+            false,
+        );
+        assert_eq!(access_of(&granted, &canonical), MountAccess::ReadWrite);
+
+        let worktrees = state
+            .workspace_worktrees(&workspace, true)
+            .unwrap()
+            .unwrap();
+        let in_worktree = plan(LaunchPolicy::default(), true);
+        assert!(!in_worktree.workspace_read_only_by_default);
+        assert_eq!(
+            access_of(&in_worktree, &worktrees.path(PENDING_SESSION_ID)),
+            MountAccess::ReadWrite
         );
 
         std::fs::remove_dir_all(store).ok();

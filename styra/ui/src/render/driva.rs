@@ -1440,22 +1440,31 @@ fn scope_network_label(app: &DrivaView, scope: LaunchScope) -> String {
 ///
 /// The Workspace's is a plain read-write/read-only, with the default named as
 /// such: nothing sits under it to inherit from, and an unstated answer there
-/// still means writable. This interaction's has the third answer, saying
+/// means writable — or read-only, where the launch works in the repository's
+/// main worktree. This interaction's has the third answer, saying
 /// nothing, and what that resolves to is printed next to it for the same reason
 /// the network row does it.
 fn scope_workspace_label(app: &DrivaView, scope: LaunchScope) -> String {
+    let default = !app
+        .launch
+        .driva
+        .is_some_and(|options| options.workspace_read_only_by_default);
     match scope {
         LaunchScope::Workspace => match app.launch.workspace.writable_workspace {
             Some(true) => "read-write".to_owned(),
             Some(false) => "read-only".to_owned(),
-            None => "read-write — not stated".to_owned(),
+            None if default => "read-write — not stated".to_owned(),
+            None => "read-only — not stated, in the main worktree".to_owned(),
         },
         LaunchScope::Interaction => match app.launch.interaction.writable_workspace {
             Some(true) => "read-write".to_owned(),
             Some(false) => "read-only — withdrawn here".to_owned(),
             None => {
-                let inherited = app.launch.interaction.ignore_workspace
-                    || app.launch.workspace.grants_writable_workspace();
+                let inherited = if app.launch.interaction.ignore_workspace {
+                    default
+                } else {
+                    app.launch.workspace.grants_writable_workspace(default)
+                };
                 format!(
                     "not stated — inherits {}",
                     if inherited { "read-write" } else { "read-only" }

@@ -992,6 +992,7 @@ M.types.DrivaOptions = {
     { name = "writable_mounts", required = false, type = { kind = "ref", name = "WritableMountMode" } },
     { name = "template_run", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "template_test", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "workspace_read_only_by_default", required = false, type = { kind = "boolean" } },
   },
 }
 

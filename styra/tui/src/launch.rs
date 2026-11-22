@@ -131,6 +131,15 @@ impl Launch {
         LaunchPolicy::merge(&self.workspace, &self.interaction)
     }
 
+    /// What the workspace mount is when no layer says: writable, except where
+    /// the server has planned a launch in its repository's main worktree.
+    pub fn writable_workspace_by_default(&self) -> bool {
+        !self
+            .driva
+            .as_ref()
+            .is_some_and(|options| options.workspace_read_only_by_default)
+    }
+
     /// Which mount of `scope`'s layer the cursor is on, clamped to the list as
     /// it stands — mounts come and go under it from both this client's keys and
     /// (for the Workspace's) another client's edit.
@@ -294,13 +303,15 @@ impl Launch {
     /// What `R` means on the layer being edited, as the new state and the words
     /// for it.
     ///
-    /// The same two-state shape as [`Self::cycle_network`], around the opposite
-    /// default: nothing stated means the workspace is bound writable, which is
-    /// what a launch does when no layer says otherwise. So the first press
-    /// always changes the effective answer and the second always returns to
-    /// inheriting.
+    /// The same two-state shape as [`Self::cycle_network`], around a default
+    /// that is usually the opposite one: nothing stated means the workspace is
+    /// bound writable, except in a repository's main worktree. Either way the
+    /// first press always changes the effective answer and the second always
+    /// returns to inheriting.
     fn cycle_writable_workspace(&mut self) -> String {
-        let inherited = self.workspace.grants_writable_workspace();
+        let inherited = self
+            .workspace
+            .grants_writable_workspace(self.writable_workspace_by_default());
         self.interaction.writable_workspace = match self.interaction.writable_workspace {
             None => Some(!inherited),
             Some(_) => None,
@@ -451,7 +462,10 @@ pub fn cycle_workspace_access(app: &mut App) {
         return;
     }
     if app.launch.scope == LaunchScope::Workspace {
-        let writable = !app.launch.workspace.grants_writable_workspace();
+        let writable = !app
+            .launch
+            .workspace
+            .grants_writable_workspace(app.launch.writable_workspace_by_default());
         workspace_change(
             app,
             WorkspaceLaunchChange::SetWritableWorkspace(Some(writable)),
@@ -940,17 +954,17 @@ mod tests {
     #[test]
     fn the_workspace_mount_is_made_read_only_against_what_would_be_inherited() {
         let mut app = pending();
-        assert!(app.launch.effective().grants_writable_workspace());
+        assert!(app.launch.effective().grants_writable_workspace(true));
 
         cycle_workspace_access(&mut app);
         assert_eq!(app.launch.interaction.writable_workspace, Some(false));
-        assert!(!app.launch.effective().grants_writable_workspace());
+        assert!(!app.launch.effective().grants_writable_workspace(true));
         // Changing it changes what would be launched, so the plan is re-asked.
         assert!(wants_plan(&app));
 
         cycle_workspace_access(&mut app);
         assert_eq!(app.launch.interaction.writable_workspace, None);
-        assert!(app.launch.effective().grants_writable_workspace());
+        assert!(app.launch.effective().grants_writable_workspace(true));
 
         // Against a Workspace that has already withdrawn it, the first press is
         // the one that grants it back.
@@ -958,10 +972,45 @@ mod tests {
             writable_workspace: Some(false),
             ..LaunchPolicy::default()
         });
-        assert!(!app.launch.effective().grants_writable_workspace());
+        assert!(!app.launch.effective().grants_writable_workspace(true));
         cycle_workspace_access(&mut app);
         assert_eq!(app.launch.interaction.writable_workspace, Some(true));
-        assert!(app.launch.effective().grants_writable_workspace());
+        assert!(app.launch.effective().grants_writable_workspace(true));
+    }
+
+    /// In the repository's main worktree the server plans the unstated answer
+    /// as read-only, so there the first press is the one that grants write
+    /// access, on either layer.
+    #[test]
+    fn in_the_main_worktree_the_first_press_grants_write_access() {
+        let mut app = pending();
+        let effective = app.launch.effective();
+        app.launch.plan(
+            app.selection.clone(),
+            effective,
+            Some(DrivaOptions {
+                workspace_read_only_by_default: true,
+                ..options("planned")
+            }),
+        );
+        assert!(!app.launch.writable_workspace_by_default());
+
+        let message = app.launch.cycle_writable_workspace();
+        assert_eq!(app.launch.interaction.writable_workspace, Some(true));
+        assert!(message.contains("read-write"), "{message}");
+        let message = app.launch.cycle_writable_workspace();
+        assert_eq!(app.launch.interaction.writable_workspace, None);
+        assert!(message.ends_with("(ro)"), "{message}");
+
+        toggle_scope(&mut app);
+        cycle_workspace_access(&mut app);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ChangeWorkspaceLaunch {
+                change: WorkspaceLaunchChange::SetWritableWorkspace(Some(true)),
+                clear_interaction: false,
+            })
+        );
     }
 
     /// The Workspace's own answer is the server's to keep, so `R` on that pane

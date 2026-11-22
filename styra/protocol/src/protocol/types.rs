@@ -418,6 +418,13 @@ pub struct DrivaOptions {
     /// The templates' default command for the "test" [`ProjectAction`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template_test: Option<String>,
+    /// Whether the workspace mount is read-only when no policy layer says
+    /// otherwise, because the launch works in its repository's main worktree
+    /// (see [`LaunchPolicy::grants_writable_workspace`]). A server that
+    /// predates the field always defaulted to writable, which is what its
+    /// absence says.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub workspace_read_only_by_default: bool,
 }
 
 impl DrivaOptions {
@@ -614,7 +621,8 @@ pub struct LaunchPolicy {
     pub network: Option<bool>,
     /// Whether the Workspace directory itself is bound writable. `None`
     /// inherits — from the Workspace's policy on an overlay, and from nothing
-    /// at all on the Workspace's own, where it means the default: writable.
+    /// at all on the Workspace's own, where it means the default: writable,
+    /// except in a repository's main worktree, where it is read-only.
     ///
     /// Unlike `network` this is a real veto: the workspace mount is the
     /// server's own, assembled from this one answer, so `Some(false)` binds
@@ -737,12 +745,18 @@ impl LaunchPolicy {
         self.network.unwrap_or(false)
     }
 
-    /// Whether the workspace mount is writable. An absent answer is "yes":
-    /// binding the directory the agent works in read-write is what a launch
-    /// does unless someone says otherwise, so this is the one policy question
-    /// whose default is the permissive one.
-    pub fn grants_writable_workspace(&self) -> bool {
-        self.writable_workspace.unwrap_or(true)
+    /// Whether the workspace mount is writable, where `default` answers for a
+    /// policy that says nothing.
+    ///
+    /// The default is the permissive one — binding the directory the agent
+    /// works in read-write is what a launch does unless someone says otherwise
+    /// — except where the launch works in its repository's main worktree. That
+    /// checkout is the operator's own, usually on the main branch, and changes
+    /// belong on a worktree of their own; so there it is read-only until a
+    /// layer states otherwise. The server decides which default applies (see
+    /// [`DrivaOptions::workspace_read_only_by_default`]).
+    pub fn grants_writable_workspace(&self, default: bool) -> bool {
+        self.writable_workspace.unwrap_or(default)
     }
 }
 
@@ -2003,7 +2017,9 @@ mod tests {
     /// nothing and be overridable from both sides.
     #[test]
     fn the_workspace_mount_is_writable_until_a_layer_says_otherwise() {
-        assert!(LaunchPolicy::default().grants_writable_workspace());
+        assert!(LaunchPolicy::default().grants_writable_workspace(true));
+        // In a main worktree the unstated answer is read-only instead.
+        assert!(!LaunchPolicy::default().grants_writable_workspace(false));
         // Stating it is asking for something, so the Workspace that holds it is
         // not one with no policy at all.
         assert!(!LaunchPolicy {
@@ -2019,7 +2035,7 @@ mod tests {
         // Stated by the Workspace, inherited by a launch that says nothing.
         let merged = LaunchPolicy::merge(&read_only, &LaunchPolicy::default());
         assert_eq!(merged.writable_workspace, Some(false));
-        assert!(!merged.grants_writable_workspace());
+        assert!(!merged.grants_writable_workspace(true));
 
         // And taken back by one that does say something.
         let merged = LaunchPolicy::merge(
@@ -2029,11 +2045,13 @@ mod tests {
                 ..LaunchPolicy::default()
             },
         );
-        assert!(merged.grants_writable_workspace());
+        assert!(merged.grants_writable_workspace(true));
+        // Stated, it holds over the main worktree's read-only default too.
+        assert!(merged.grants_writable_workspace(false));
 
         // Stated by the launch alone, over a Workspace with no answer.
         let merged = LaunchPolicy::merge(&LaunchPolicy::default(), &read_only);
-        assert!(!merged.grants_writable_workspace());
+        assert!(!merged.grants_writable_workspace(true));
 
         // An ignore-workspace launch carries its own answer and nothing else's.
         let merged = LaunchPolicy::merge(
@@ -2046,6 +2064,6 @@ mod tests {
                 ..LaunchPolicy::default()
             },
         );
-        assert!(merged.grants_writable_workspace());
+        assert!(merged.grants_writable_workspace(true));
     }
 }

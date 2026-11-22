@@ -187,6 +187,9 @@ pub fn capture_driva_options(
             .template
             .as_ref()
             .and_then(|template| template.test.clone()),
+        // Not the spec's to say: which default the workspace mount fell back
+        // on is the server's decision, made from where the launch works.
+        workspace_read_only_by_default: false,
     })
 }
 

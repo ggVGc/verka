@@ -155,8 +155,9 @@ the Workspace and current interaction metadata alongside the effective
 sandbox. Before launch it also shows the two policy layers as panes and edits
 either one: `Tab` moves the keys between them, and the
 focused pane is the one `w`, `R`, `T`, `m` and `x` change. The workspace
-directory itself is mounted read-write unless a layer says otherwise, which is
-what `R` says: it is the one mount `m` and `x` cannot reach, since the server
+directory itself is mounted read-write unless a layer says otherwise — or,
+when the launch works in its repository's main worktree rather than a linked
+one, read-only unless a layer grants it — which is what `R` says: it is the one mount `m` and `x` cannot reach, since the server
 assembles it from the Workspace's host path — or, with worktrees on, from the
 interaction's own checkout — rather than from a policy row. A read-only
 workspace still leaves a Git checkout's `.git` metadata writable, so
