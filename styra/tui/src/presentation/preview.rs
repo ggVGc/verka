@@ -35,13 +35,10 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
             has_detail: entry.has_detail(),
             contract: entry.contract.as_ref(),
             selected: false,
-            link_highlight: app
-                .link_highlight
-                .filter(|highlight| highlight.entry == app.timeline.selected)
-                .map(|highlight| highlight.link),
+            link_highlight: None,
             branch: branch_link(app, &app.session_id, entry.event()),
             branch_provider_switch: branch_provider_switch(app, entry.event()),
-            // The preview is for reading the entry in full, wherever it sits.
+            // The preview shows the entry on its own, wherever it sits.
             branch_follows_marker: false,
             selected_branch: None,
         });
@@ -58,10 +55,6 @@ pub(crate) fn view(app: &App, fullscreen: bool) -> styra_ui::preview::PreviewVie
             PreviewTarget::Command => styra_ui::preview::PreviewTarget::Command,
         },
         links: ui_link_display(app.link_display),
-        link_highlight: app
-            .link_highlight
-            .filter(|highlight| highlight.entry == app.timeline.selected)
-            .map(|highlight| highlight.link),
         branch_log,
         file_target,
         answer_target: app.highlighted_answer(),

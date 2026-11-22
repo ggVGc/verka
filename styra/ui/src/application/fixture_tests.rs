@@ -94,7 +94,6 @@ fn preview() -> preview::PreviewView<'static> {
         protocol: Protocol::default(),
         target: preview::PreviewTarget::Selection,
         links: LinkDisplay::Compact,
-        link_highlight: None,
         branch_log: None,
         file_target: None,
         answer_target: None,

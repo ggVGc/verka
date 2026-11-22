@@ -2,14 +2,12 @@ use super::*;
 
 use crate::code::code_block_lines;
 use crate::diff::diff_block_lines;
-use crate::event_list::{
-    summary_line, suspicious_shell_success, wrap_rendered, EventEntry, SummaryContext,
-};
+use crate::event_list::{summary_line, wrap_rendered, EventEntry, SummaryContext};
 use crate::footer::message_text_color;
-use crate::markdown::{markdown_block_render, EntryIndex, LinkDisplay};
+use crate::markdown::{markdown_block_render, LinkDisplay};
 use crate::theme;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
@@ -129,34 +127,54 @@ pub fn preview_lines(view: &PreviewView<'_>, width: usize) -> Vec<Line<'static>>
         lines.extend(branch_log_lines(log, width, view.links));
         return lines;
     }
-    let suspicious = suspicious_shell_success(entry.event);
-    lines.extend(detail_lines(
-        entry.event,
-        view.protocol,
-        view.links,
-        suspicious,
-        view.link_highlight,
-        &entry.branch,
-    ));
+    // The list row already shows the entry's content; what the preview adds
+    // for it is still to be decided.
+    lines.push(Line::from(Span::styled(
+        format!("{DETAIL_INDENT}{ENTRY_PLACEHOLDER}"),
+        Style::default().fg(theme::MUTED_TEXT),
+    )));
     lines
 }
 
-/// An event's text as the preview shows it in full — a message's Markdown,
-/// say — for a host to show elsewhere, as the diff panel shows the message
-/// that started the turn it is the diff of.
+/// What the preview shows for an entry that is neither a file change, a
+/// branch marker nor an answer.
+pub const ENTRY_PLACEHOLDER: &str = "nothing more to preview for this entry yet";
+
+/// An event's text in full — a message's Markdown, say — for a host to show
+/// elsewhere, as the diff panel shows the message that started the turn it is
+/// the diff of.
 pub fn message_lines(
     event: &AgentEvent,
     protocol: Protocol,
     links: LinkDisplay,
 ) -> Vec<Line<'static>> {
-    detail_lines(
+    let color = message_text_color(event.tag());
+    let mut lines = Vec::new();
+    let blocks = crate::event_list::without_branch_snapshot(
         event,
-        protocol,
-        links,
-        false,
-        None,
-        &crate::event_list::BranchLink::default(),
-    )
+        crate::answer::presented_detail(event, protocol),
+    );
+    for (index, block) in blocks.into_iter().enumerate() {
+        if index > 0 {
+            lines.push(Line::from(""));
+        }
+        lines.extend(match block {
+            DetailBlock::Text(text) => {
+                markdown_block_render(
+                    &text,
+                    Style::default().fg(color),
+                    DETAIL_INDENT,
+                    links,
+                    None,
+                )
+                .lines
+            }
+            DetailBlock::Code { language, text } => {
+                code_block_lines(&text, language.as_deref(), color, false, DETAIL_INDENT)
+            }
+        });
+    }
+    lines
 }
 
 /// The linked Session's conversation, oldest first, each entry drawn as its
@@ -252,64 +270,6 @@ fn changed_path_line(path: &str, workspace_roots: &[String]) -> Line<'static> {
         ]),
         None => Line::from(Span::styled(path.to_owned(), style)),
     }
-}
-
-/// One event's presented detail blocks, a blank line between each.
-fn detail_lines(
-    event: &AgentEvent,
-    protocol: Protocol,
-    links: LinkDisplay,
-    suspicious: bool,
-    highlight: Option<EntryIndex>,
-    branch: &crate::event_list::BranchLink<'_>,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    let mut entries_before = 0;
-    let blocks = crate::event_list::without_branch_snapshot(
-        event,
-        crate::answer::presented_detail(event, protocol),
-    );
-    for (index, block) in blocks.into_iter().enumerate() {
-        if index > 0 {
-            lines.push(Line::from(""));
-        }
-        lines.extend(presented_block_lines(
-            block,
-            message_text_color(event.tag()),
-            suspicious,
-            links,
-            highlight,
-            &mut entries_before,
-        ));
-    }
-    lines.extend(crate::event_list::branch_message_line(branch));
-    lines
-}
-
-fn presented_block_lines(
-    block: DetailBlock,
-    color: Color,
-    suspicious: bool,
-    links: LinkDisplay,
-    highlight: Option<EntryIndex>,
-    entries_before: &mut EntryIndex,
-) -> Vec<Line<'static>> {
-    if let DetailBlock::Text(text) = &block {
-        let rendered = markdown_block_render(
-            text,
-            Style::default().fg(color),
-            DETAIL_INDENT,
-            links,
-            highlight.and_then(|index| index.checked_sub(*entries_before)),
-        );
-        *entries_before += rendered.entries;
-        return rendered.lines;
-    }
-    let (text, language) = match block {
-        DetailBlock::Text(text) => (text, None),
-        DetailBlock::Code { language, text } => (text, language),
-    };
-    code_block_lines(&text, language.as_deref(), color, suspicious, DETAIL_INDENT)
 }
 
 fn summary_indent(entry: Option<&EventEntry<'_>>) -> usize {

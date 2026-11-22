@@ -1,9 +1,6 @@
 //! Side-panel and full-screen previews for one timeline entry.
 
-use crate::{
-    event_list::EventEntry,
-    markdown::{EntryIndex, LinkDisplay},
-};
+use crate::{event_list::EventEntry, markdown::LinkDisplay};
 use std::borrow::Cow;
 use styra_protocol::event::{AgentEvent, Protocol};
 
@@ -28,7 +25,6 @@ pub struct PreviewView<'a> {
     pub protocol: Protocol,
     pub target: PreviewTarget,
     pub links: LinkDisplay,
-    pub link_highlight: Option<EntryIndex>,
     /// The log of the Session a `branch` marker names, shown under the marker
     /// in place of its own detail: the marker only says where the other side
     /// is, and what happened there is what the operator wants to read.
