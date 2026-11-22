@@ -773,6 +773,14 @@ fn navigator_cursor_key(app: &mut App, key: KeyEvent) -> bool {
                 app.show_warning("no other interaction is actively working");
             }
         }
+        k if keys::INTERACTIONS_NEXT_IN_WORKTREE.matches(k) => {
+            if interactions
+                .cursor_to_next_in_worktree(&session_id, workspace_id)
+                .is_none()
+            {
+                app.show_warning("no other listed interaction works in this worktree");
+            }
+        }
         // Only how the rows are drawn changes, so the cursor's pending move
         // need not be loaded first.
         k if keys::INTERACTIONS_RESPONSES.matches(k) => interactions.toggle_responses(),

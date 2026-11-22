@@ -320,6 +320,20 @@ impl LiveInteractions {
             .map(|(parent, _, _)| parent.as_str())
     }
 
+    /// Whether `id` was branched, directly or through branches between, off
+    /// `ancestor`. Bounded so malformed cyclic origins end.
+    pub fn descends_from(&self, id: &str, ancestor: &str) -> bool {
+        let mut at = id;
+        for _ in 0..self.branch_origins.len() {
+            match self.parent(at) {
+                Some(parent) if parent == ancestor => return true,
+                Some(parent) => at = parent,
+                None => return false,
+            }
+        }
+        false
+    }
+
     /// The Session at the top of `id`'s branch ancestry: `id` itself when it
     /// was not branched off another. Walks the persisted origins, so siblings
     /// whose shared source has left the listing still share a root. Bounded
@@ -528,8 +542,7 @@ impl LiveInteractions {
 
     /// The visible indices in the order [`crate::presentation::interactions`] draws
     /// them: in All scope the entries are grouped under their Workspace
-    /// heading, and in either scope those sharing a directory under its, so
-    /// j/k has to walk that order rather than the raw item order.
+    /// heading, so j/k has to walk that order rather than the raw item order.
     ///
     /// A stopped entry stays where it belongs, in its own Workspace's group and
     /// in item order: its row says that it stopped and why, which is enough to
@@ -546,13 +559,9 @@ impl LiveInteractions {
 
     /// [`Self::display_indices`], each placed as the navigator draws it — see
     /// [`DisplayRow`]. A branch whose source is not shown — closed, hidden as
-    /// completed, or out of scope — stands at the root of its checkout.
+    /// completed, or out of scope — stands at the root.
     pub fn display_rows(&self, current: &str, workspace_id: Option<&str>) -> Vec<DisplayRow> {
-        display_tree(
-            &self.items,
-            &self.workspaces,
-            self.visible_indices(current, workspace_id),
-        )
+        display_tree(&self.items, self.visible_indices(current, workspace_id))
     }
 
     /// Every Interaction the `n`/`N` steps may visit, in display order. In
@@ -567,7 +576,7 @@ impl LiveInteractions {
         let candidates = (0..self.items.len())
             .filter(|index| self.in_workspace_scope(&self.items[*index], workspace_id))
             .collect();
-        display_tree(&self.items, &self.workspaces, candidates)
+        display_tree(&self.items, candidates)
             .into_iter()
             .map(|row| row.index)
             .collect()
@@ -819,6 +828,32 @@ impl LiveInteractions {
         if let Some(previous) = self.previous_workspace(&from, current, workspace_id) {
             self.move_cursor_to(previous.id, current);
         }
+    }
+
+    /// Move the cursor onto the next listed Interaction working in the same
+    /// linked worktree as the cursor's, in display order, wrapping past the
+    /// end so repeated presses cycle through them all. Its sources and
+    /// branches count as any other. Nothing to land on — the cursor's in the
+    /// main checkout, or alone in its worktree — leaves it where it is.
+    pub fn cursor_to_next_in_worktree(
+        &mut self,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        let from = self.cursor(current).to_owned();
+        let at = self
+            .items
+            .iter()
+            .find(|interaction| interaction.id == from)
+            .filter(|interaction| !in_main_checkout(interaction, &self.workspaces))?
+            .clone();
+        let next = self.step_from(
+            &self.display_indices(current, workspace_id),
+            &from,
+            |interaction| same_checkout(interaction, &at, &self.workspaces),
+        )?;
+        self.move_cursor_to(next.id.clone(), current);
+        Some(next)
     }
 
     /// Move the cursor to the first entry of `target`'s Workspace group, for
@@ -1122,7 +1157,7 @@ impl LiveInteractions {
             shown.push(hidden);
             shown.sort_unstable();
         }
-        let order = display_tree(&self.items, &self.workspaces, shown)
+        let order = display_tree(&self.items, shown)
             .into_iter()
             .map(|row| row.index)
             .collect::<Vec<_>>();
@@ -1253,33 +1288,23 @@ fn first_live_where(
 }
 
 /// `visible` re-ordered so each Workspace's entries are contiguous, in the
-/// order the Workspaces themselves first appear. Within a Workspace they are
-/// kept together by the checkout they work in — the main checkout counting as
-/// one, like any worktree — in the order the checkouts first appear: the
-/// groups [`display_tree`] lays out under the navigator's Workspace and
-/// worktree headings, rather than the message-sorted item order.
-fn grouped_by_workspace(
-    interactions: &[InteractionSummary],
-    workspaces: &[WorkspaceSummary],
-    visible: Vec<usize>,
-) -> Vec<usize> {
-    let first = |same: &dyn Fn(&InteractionSummary) -> bool| {
-        visible.iter().position(|index| same(&interactions[*index]))
-    };
+/// order the Workspaces themselves first appear, each group keeping the item
+/// order: the groups the navigator lays out under its Workspace headings.
+fn grouped_by_workspace(interactions: &[InteractionSummary], visible: Vec<usize>) -> Vec<usize> {
     let mut ordered = visible.clone();
     // The sort is stable, so each group keeps the item order.
     ordered.sort_by_cached_key(|index| {
-        let interaction = &interactions[*index];
-        let workspace = first(&|other| other.workspace_id == interaction.workspace_id);
-        let checkout = first(&|other| same_checkout(interaction, other, workspaces));
-        (workspace, checkout)
+        let workspace_id = &interactions[*index].workspace_id;
+        visible
+            .iter()
+            .position(|other| &interactions[*other].workspace_id == workspace_id)
     });
     ordered
 }
 
 /// Whether `left` and `right` work in the same checkout of their Workspace:
 /// both in its main checkout, or both in the same worktree.
-fn same_checkout(
+pub(crate) fn same_checkout(
     left: &InteractionSummary,
     right: &InteractionSummary,
     workspaces: &[WorkspaceSummary],
@@ -1295,337 +1320,116 @@ fn same_checkout(
         }
 }
 
-/// One entry of the list, placed where the navigator draws it.
-///
-/// Two relations are drawn, each its own way. Where the work goes is the
-/// structure: entries sharing a worktree sit under its heading, and a worktree
-/// made from another one's branch — which is what it is integrated back into —
-/// is headed beneath that one's heading. Where the conversation came from is
-/// told within that: a branch working in the same checkout as its source hangs
-/// beneath it, and one working anywhere else names its source instead, its
-/// checkout following the source's — see [`follow_sources`].
+/// One entry of the list, placed where the navigator draws it: a branch
+/// hangs beneath the entry it was branched from, whichever checkout either
+/// works in. Rows name their worktree themselves, so where the work goes is
+/// not part of the layout.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DisplayRow {
     /// The entry's index in [`LiveInteractions::items`].
     pub index: usize,
-    /// How many sources deep it hangs beneath the entry it was branched from,
-    /// in the checkout they both work in.
+    /// How many sources deep it hangs beneath the entry it was branched from.
     pub depth: usize,
-    /// How many worktree headings it sits beneath: none in the main checkout
-    /// and in a worktree drawn without a heading, one under its worktree's,
-    /// and one more for each worktree that one is integrated into in turn.
-    pub level: usize,
-    /// The heading of the worktree this entry is the first of, drawn just
-    /// above it one level further out.
-    pub heading: Option<WorktreeHeading>,
     /// The Session this entry was branched from, when it does not hang beneath
-    /// it: one working in another checkout, or not shown at all.
+    /// it because that one is not shown.
     pub branched_from: Option<String>,
 }
 
-/// A worktree heading, over the entries working in it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WorktreeHeading {
-    /// The branch the worktree was made from, which integrating its work
-    /// merges it back into. `None` when no entry in it recorded one.
-    pub into: Option<String>,
-}
-
 /// `visible` laid out as [`DisplayRow`]s, in the order the navigator draws
-/// them: each Workspace's entries together, each checkout in the order it
-/// first appears — the main checkout unheaded, each worktree followed by the
-/// worktrees integrated into it, or following the entry it was branched from
-/// — see [`follow_sources`] — and within each checkout the branch tree — see
-/// [`branch_tree`].
+/// them: each Workspace's entries together, and within each the branch tree,
+/// each branch directly beneath the entry it was branched from, siblings in
+/// the order they already had — the same tree the Session picker draws.
 ///
-/// A worktree is headed when it holds more than one shown entry, or is
-/// integrated into, or integrates into, another worktree: an entry drawn among
-/// another worktree's rows has to say which one it works in, and one whose
-/// target is not shown has to say where its work goes. A
-/// worktree is integrated into another when the branch it was made from is
-/// the one that other worktree has checked out. A malformed loop of those has
-/// no root, so its worktrees are headed at the root rather than lost.
-fn display_tree(
-    interactions: &[InteractionSummary],
-    workspaces: &[WorkspaceSummary],
-    visible: Vec<usize>,
-) -> Vec<DisplayRow> {
-    let ordered = grouped_by_workspace(interactions, workspaces, visible);
+/// A source counts wherever it works in the Workspace. A branch of one not
+/// shown — closed, hidden as completed, or out of scope — stands at the root
+/// and names its source instead. A malformed loop of origins has no root, so
+/// its entries are placed at the root in their existing order rather than
+/// lost.
+fn display_tree(interactions: &[InteractionSummary], visible: Vec<usize>) -> Vec<DisplayRow> {
+    let ordered = grouped_by_workspace(interactions, visible);
     let mut out = Vec::with_capacity(ordered.len());
-    for group in ordered.chunk_by(|left, right| {
+    for rows in ordered.chunk_by(|left, right| {
         interactions[*left].workspace_id == interactions[*right].workspace_id
     }) {
-        // `grouped_by_workspace` keeps each checkout's entries together.
-        let worktrees: Vec<&[usize]> = group
-            .chunk_by(|left, right| {
-                same_checkout(&interactions[*left], &interactions[*right], workspaces)
-            })
-            .collect();
-        let main: Vec<bool> = worktrees
-            .iter()
-            .map(|rows| in_main_checkout(&interactions[rows[0]], workspaces))
-            .collect();
-        let branch = |rows: &[usize]| {
-            rows.iter()
-                .find_map(|index| interactions[*index].checkout.as_ref()?.branch.clone())
-        };
-        let into = |rows: &[usize]| {
-            rows.iter()
-                .find_map(|index| interactions[*index].branched_from.as_ref()?.branch.clone())
-        };
-        let parents: Vec<Option<usize>> = worktrees
+        let parents: Vec<Option<usize>> = rows
             .iter()
             .enumerate()
-            .map(|(at, rows)| {
-                if main[at] {
-                    return None;
-                }
-                let into = into(rows)?;
-                (0..worktrees.len()).find(|other| {
-                    *other != at
-                        && !main[*other]
-                        && branch(worktrees[*other]).as_ref() == Some(&into)
-                })
+            .map(|(at, index)| {
+                let origin = interactions[*index].origin.as_ref()?;
+                rows.iter()
+                    .position(|other| interactions[*other].id == origin.session_id)
+                    .filter(|parent| *parent != at)
             })
             .collect();
-        let mut children = vec![Vec::new(); worktrees.len()];
+        let mut children = vec![Vec::new(); rows.len()];
         for (at, parent) in parents.iter().enumerate() {
             if let Some(parent) = parent {
                 children[*parent].push(at);
             }
         }
-        // Whether the worktree was made from another one, shown or not: one
-        // whose source is hidden — completed, or filtered out — stands at the
-        // root, but keeps the heading that says where its work goes.
-        let integrates_into_worktree = |rows: &[usize]| {
-            let workspace_id = &interactions[rows[0]].workspace_id;
-            into(rows).is_some_and(|into| {
-                interactions.iter().any(|other| {
-                    &other.workspace_id == workspace_id
-                        && !in_main_checkout(other, workspaces)
-                        && other
-                            .checkout
-                            .as_ref()
-                            .is_some_and(|checkout| checkout.branch.as_ref() == Some(&into))
-                })
-            })
-        };
-        let roots = (0..worktrees.len())
-            .filter(|at| parents[*at].is_none())
-            .chain(0..worktrees.len());
-        let mut placed = vec![false; worktrees.len()];
-        // Each root worktree with the worktrees nested beneath it.
-        let mut blocks = Vec::new();
-        for root in roots {
-            let mut block = Vec::new();
-            let mut stack = vec![(root, 0)];
-            while let Some((at, nesting)) = stack.pop() {
-                if placed[at] {
-                    continue;
-                }
-                placed[at] = true;
-                let rows = worktrees[at];
-                // The main checkout is never headed: its entries stand at the root.
-                let headed = !main[at]
-                    && (rows.len() > 1
-                        || !children[at].is_empty()
-                        || integrates_into_worktree(rows));
-                let (level, heading) = if headed {
-                    (nesting + 1, Some(WorktreeHeading { into: into(rows) }))
-                } else {
-                    (0, None)
-                };
-                branch_tree(interactions, rows, level, heading, &mut block);
-                stack.extend(children[at].iter().rev().map(|child| (*child, nesting + 1)));
+
+        fn walk(
+            at: usize,
+            depth: usize,
+            children: &[Vec<usize>],
+            placed: &mut [bool],
+            out: &mut Vec<(usize, usize)>,
+        ) {
+            if placed[at] {
+                return;
             }
-            if !block.is_empty() {
-                blocks.push(block);
+            placed[at] = true;
+            out.push((at, depth));
+            for child in &children[at] {
+                walk(*child, depth + 1, children, placed, out);
             }
         }
-        follow_sources(interactions, blocks, &mut out);
-    }
-    out
-}
 
-/// `blocks`, one Workspace's root worktrees each with those nested beneath it,
-/// appended to `out` in their order, except that one whose first branched entry
-/// came from an entry shown in another block is moved to follow that source:
-/// directly after it and its branches when it stands unheaded at the root, as
-/// the branch would hang beneath it in a shared checkout, and after its whole
-/// block when it is headed, rather than splitting its worktree's rows. A
-/// malformed loop of those sources has no root, so its blocks are placed in
-/// their existing order rather than lost.
-fn follow_sources(
-    interactions: &[InteractionSummary],
-    blocks: Vec<Vec<DisplayRow>>,
-    out: &mut Vec<DisplayRow>,
-) {
-    let block_of = |id: &str| {
-        blocks
-            .iter()
-            .position(|block| block.iter().any(|row| interactions[row.index].id == id))
-    };
-    let sources: Vec<Option<(usize, String)>> = blocks
-        .iter()
-        .enumerate()
-        .map(|(at, block)| {
-            block.iter().find_map(|row| {
-                let source = row.branched_from.as_ref()?;
-                block_of(source)
-                    .filter(|other| *other != at)
-                    .map(|other| (other, source.clone()))
-            })
-        })
-        .collect();
-
-    fn place(
-        at: usize,
-        blocks: &[Vec<DisplayRow>],
-        sources: &[Option<(usize, String)>],
-        interactions: &[InteractionSummary],
-        placed: &mut [bool],
-        out: &mut Vec<DisplayRow>,
-    ) {
-        if placed[at] {
-            return;
-        }
-        placed[at] = true;
-        let rows = &blocks[at];
-        let following = |id: &str| -> Vec<usize> {
-            (0..blocks.len())
-                .filter(|other| {
-                    sources[*other]
-                        .as_ref()
-                        .is_some_and(|(block, source)| *block == at && source == id)
-                })
-                .collect()
-        };
-        // The rows the source's followers come after, by their source.
-        let mut pending: Vec<(usize, &str)> = Vec::new();
-        for (row_at, row) in rows.iter().enumerate() {
-            let id = interactions[row.index].id.as_str();
-            let end = if row.level == 0 {
-                row_at
-                    + rows[row_at + 1..]
-                        .iter()
-                        .take_while(|after| after.level == 0 && after.depth > row.depth)
-                        .count()
-            } else {
-                rows.len() - 1
-            };
-            pending.push((end, id));
-            out.push(row.clone());
-            let due: Vec<&str> = pending
-                .iter()
-                .filter(|(end, _)| *end == row_at)
-                .map(|(_, id)| *id)
-                .collect();
-            pending.retain(|(end, _)| *end != row_at);
-            for id in due {
-                for follower in following(id) {
-                    place(follower, blocks, sources, interactions, placed, out);
-                }
+        let mut placed = vec![false; rows.len()];
+        let mut tree = Vec::with_capacity(rows.len());
+        for (at, parent) in parents.iter().enumerate() {
+            if parent.is_none() {
+                walk(at, 0, &children, &mut placed, &mut tree);
             }
         }
-    }
-
-    let mut placed = vec![false; blocks.len()];
-    let roots = (0..blocks.len())
-        .filter(|at| sources[*at].is_none())
-        .chain(0..blocks.len());
-    for at in roots {
-        place(at, &blocks, &sources, interactions, &mut placed, out);
-    }
-}
-
-/// `rows`, the entries working in one checkout, laid out so each branch sits
-/// directly beneath the entry it was branched from, siblings in the order they
-/// already had — the same tree the Session picker draws — and appended to
-/// `out` at `level`, the first of them under `heading`.
-///
-/// Only a source in the same checkout counts: one working elsewhere is drawn
-/// elsewhere, under its own checkout, and moving the branch out from under
-/// its own would put it among work it does not share. Those, and branches of
-/// a source not shown, stand at the root and name their source instead. A
-/// malformed loop of origins has no root, so its entries are placed at the
-/// root in their existing order rather than lost.
-fn branch_tree(
-    interactions: &[InteractionSummary],
-    rows: &[usize],
-    level: usize,
-    mut heading: Option<WorktreeHeading>,
-    out: &mut Vec<DisplayRow>,
-) {
-    let parents: Vec<Option<usize>> = rows
-        .iter()
-        .enumerate()
-        .map(|(at, index)| {
-            let origin = interactions[*index].origin.as_ref()?;
-            rows.iter()
-                .position(|other| interactions[*other].id == origin.session_id)
-                .filter(|parent| *parent != at)
-        })
-        .collect();
-    let mut children = vec![Vec::new(); rows.len()];
-    for (at, parent) in parents.iter().enumerate() {
-        if let Some(parent) = parent {
-            children[*parent].push(at);
-        }
-    }
-
-    fn walk(
-        at: usize,
-        depth: usize,
-        children: &[Vec<usize>],
-        placed: &mut [bool],
-        out: &mut Vec<(usize, usize)>,
-    ) {
-        if placed[at] {
-            return;
-        }
-        placed[at] = true;
-        out.push((at, depth));
-        for child in &children[at] {
-            walk(*child, depth + 1, children, placed, out);
-        }
-    }
-
-    let mut placed = vec![false; rows.len()];
-    let mut tree = Vec::with_capacity(rows.len());
-    for (at, parent) in parents.iter().enumerate() {
-        if parent.is_none() {
+        for at in 0..rows.len() {
             walk(at, 0, &children, &mut placed, &mut tree);
         }
+        out.extend(tree.into_iter().map(|(at, depth)| {
+            let index = rows[at];
+            DisplayRow {
+                index,
+                depth,
+                branched_from: interactions[index]
+                    .origin
+                    .as_ref()
+                    .filter(|_| depth == 0)
+                    .map(|origin| origin.session_id.clone()),
+            }
+        }));
     }
-    for at in 0..rows.len() {
-        walk(at, 0, &children, &mut placed, &mut tree);
-    }
-    out.extend(tree.into_iter().map(|(at, depth)| {
-        let index = rows[at];
-        DisplayRow {
-            index,
-            depth,
-            level,
-            heading: heading.take(),
-            branched_from: interactions[index]
-                .origin
-                .as_ref()
-                .filter(|_| depth == 0)
-                .map(|origin| origin.session_id.clone()),
-        }
-    }));
+    out
 }
 
 /// Whether `interaction` works in its Workspace's own checkout — on its main
 /// branch, typically — rather than in a worktree made for it. Before Git has
 /// been asked where it works, that is whether it works in the Workspace
-/// directory: Styra makes its worktrees outside it.
+/// directory: Styra makes its worktrees outside it. A Workspace whose own
+/// directory is a linked worktree of a clone elsewhere still has that
+/// checkout as its main one: it is the one the Workspace heading names.
 pub fn in_main_checkout(interaction: &InteractionSummary, workspaces: &[WorkspaceSummary]) -> bool {
+    let workspace = workspaces
+        .iter()
+        .find(|workspace| workspace.id == interaction.workspace_id);
     match &interaction.checkout {
-        Some(checkout) => !checkout.linked(),
-        None => workspaces
-            .iter()
-            .find(|workspace| workspace.id == interaction.workspace_id)
+        Some(checkout) => {
+            !checkout.linked()
+                || workspace.is_some_and(|workspace| {
+                    workspace.git_repository.as_ref() == Some(&checkout.worktree)
+                        || workspace.host_path.starts_with(&checkout.worktree)
+                })
+        }
+        None => workspace
             .is_none_or(|workspace| interaction.workspace.starts_with(&workspace.host_path)),
     }
 }
@@ -2283,39 +2087,28 @@ pub(crate) mod tests {
         );
     }
 
-    /// Nearest is where the navigator draws the rows — grouped by worktree —
-    /// not the order they were created in.
+    /// Nearest is where the navigator draws the rows — branches beneath
+    /// their source — not the order they were created in.
     #[test]
     fn completing_an_interaction_moves_to_the_nearest_row_as_drawn() {
-        let in_worktree = |id: &str, activity, name: &str| {
-            let mut interaction = interaction(id, activity);
-            let path = PathBuf::from(format!("/worktrees/{name}"));
-            interaction.workspace = path.clone();
-            interaction.checkout = Some(styra_protocol::CheckoutState {
-                worktree: path,
-                repository: PathBuf::from("/workspace"),
-                branch: Some(name.into()),
-            });
-            interaction
-        };
-        let mut finished = in_worktree("finished", InteractionActivity::Stopped, "second");
+        let mut finished = branched("finished", InteractionActivity::Stopped, "source");
         finished.completed = CompletionState::Completed;
         let mut live = LiveInteractions::default();
-        // Drawn as: first-1, first-2, main, second (finished); in creation
-        // order first-2 would be the row just before the finished one.
+        // Drawn as: source, finished, other, later; in creation order later
+        // would be the row just after the finished one.
         live.open(
             vec![
-                in_worktree("first-1", InteractionActivity::Pending, "first"),
-                interaction("main", InteractionActivity::Pending),
-                in_worktree("first-2", InteractionActivity::Pending, "first"),
+                interaction("source", InteractionActivity::Pending),
+                interaction("other", InteractionActivity::Pending),
                 finished,
+                interaction("later", InteractionActivity::Pending),
             ],
             vec![],
         );
 
         let next = live.select_past_hidden("finished", None).unwrap();
 
-        assert_eq!(next.id, "main");
+        assert_eq!(next.id, "other");
     }
 
     /// A focus request is answered when its interaction first arrives, and
@@ -2797,11 +2590,11 @@ pub(crate) mod tests {
         assert_eq!(live.visible_indices("", Some("workspace")), vec![0, 1, 2]);
     }
 
-    /// Interactions working in the same checkout are drawn together, each
-    /// checkout where its newest entry falls — the main checkout no different
-    /// from a worktree — so j/k walks them in that order too, in either scope.
+    /// Interactions are grouped by Workspace only, not by the checkout they
+    /// work in, so j/k walks them in item order within each Workspace, in
+    /// either scope.
     #[test]
-    fn navigation_follows_the_directory_grouped_display_order() {
+    fn navigation_follows_the_workspace_grouped_display_order() {
         let in_worktree = |id: &str| {
             let mut interaction = interaction(id, InteractionActivity::Pending);
             interaction.workspace = PathBuf::from("/worktrees/feature");
@@ -2828,14 +2621,14 @@ pub(crate) mod tests {
         let workspace = Some("workspace");
         assert_eq!(
             shown(&live, workspace),
-            ["feature-1", "feature-2", "main-1", "main-2", "other"]
+            ["feature-1", "main-1", "feature-2", "main-2", "other"]
         );
         assert_walk_follows_display(&live, workspace);
 
         live.toggle_workspace_scope();
         assert_eq!(
             shown(&live, workspace),
-            ["feature-1", "feature-2", "main-1", "main-2"]
+            ["feature-1", "main-1", "feature-2", "main-2"]
         );
         assert_walk_follows_display(&live, workspace);
     }
@@ -2906,6 +2699,30 @@ pub(crate) mod tests {
         }
     }
 
+    /// Only a direct line of branches counts: a source's source, a branch's
+    /// branch, but not a sibling or a cousin.
+    #[test]
+    fn descent_follows_only_the_direct_line() {
+        use InteractionActivity::Pending;
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("root", Pending),
+                branched("child", Pending, "root"),
+                branched("grandchild", Pending, "child"),
+                branched("sibling", Pending, "root"),
+                branched("cousin", Pending, "sibling"),
+            ],
+            vec![],
+        );
+        assert!(live.descends_from("child", "root"));
+        assert!(live.descends_from("grandchild", "root"));
+        assert!(!live.descends_from("root", "child"));
+        assert!(!live.descends_from("sibling", "child"));
+        assert!(!live.descends_from("cousin", "child"));
+        assert!(!live.descends_from("child", "child"));
+    }
+
     /// A branch whose source is not shown has nothing to hang from, so it
     /// stands at the root rather than disappearing with its source.
     #[test]
@@ -2951,14 +2768,8 @@ pub(crate) mod tests {
         interaction
     }
 
-    /// A row as `(id, depth, level, heading's target, named source)`.
-    type Placement<'a> = (
-        &'a str,
-        usize,
-        usize,
-        Option<Option<String>>,
-        Option<String>,
-    );
+    /// A row as `(id, depth, named source)`.
+    type Placement<'a> = (&'a str, usize, Option<String>);
 
     fn placements(live: &LiveInteractions) -> Vec<Placement<'_>> {
         live.display_rows("", Some("workspace"))
@@ -2967,19 +2778,16 @@ pub(crate) mod tests {
                 (
                     live.items[row.index].id.as_str(),
                     row.depth,
-                    row.level,
-                    row.heading.map(|heading| heading.into),
                     row.branched_from,
                 )
             })
             .collect()
     }
 
-    /// Where the work goes is the structure — a worktree made from another's
-    /// branch is headed beneath it — and where the conversation came from is
-    /// told within that: nested in the same checkout, named from any other.
+    /// Worktrees do not group the list: entries keep the item order, and a
+    /// branch hangs beneath its source whichever checkout either works in.
     #[test]
-    fn worktrees_nest_by_integration_and_branches_by_checkout() {
+    fn branches_nest_by_source_whatever_their_checkout() {
         use InteractionActivity::Pending;
         let mut live = LiveInteractions::default();
         live.open(
@@ -2992,8 +2800,10 @@ pub(crate) mod tests {
                 worktree(branched("jwt", Pending, "rework"), "auth", "main"),
                 // Not branched, in the same worktree.
                 worktree(interaction("review", Pending), "auth", "main"),
-                // Not branched, in a worktree made from that one.
+                // Not branched, two side by side in a worktree made from
+                // that one.
                 worktree(interaction("tests", Pending), "tests", "auth"),
+                worktree(interaction("fixtures", Pending), "tests", "auth"),
                 // Branched, into a worktree made from the source's.
                 worktree(branched("spike", Pending, "rework"), "spike", "auth"),
                 // Branched, into an unrelated worktree.
@@ -3001,28 +2811,58 @@ pub(crate) mod tests {
             ],
             vec![],
         );
-        let into = |branch: &str| Some(Some(branch.to_owned()));
-        let rework = Some("rework".to_owned());
         assert_eq!(
             placements(&live),
             [
-                ("tidy", 0, 0, None, None),
-                ("tidy-more", 1, 0, None, None),
-                ("rework", 0, 1, into("main"), None),
-                ("jwt", 1, 1, None, None),
-                ("review", 0, 1, None, None),
-                ("tests", 0, 2, into("auth"), None),
-                ("spike", 0, 2, into("auth"), rework.clone()),
-                // Follows its source's worktree rather than splitting it.
-                ("docs", 0, 0, None, rework),
+                ("tidy", 0, None),
+                ("tidy-more", 1, None),
+                ("rework", 0, None),
+                ("jwt", 1, None),
+                ("spike", 1, None),
+                ("docs", 1, None),
+                ("review", 0, None),
+                ("tests", 0, None),
+                ("fixtures", 0, None),
             ]
         );
         assert_walk_follows_display(&live, Some("workspace"));
     }
 
-    /// A branch working in a worktree of its own still follows the entry it
-    /// came from, past that entry's branches in its own checkout, rather than
-    /// sorting wherever its worktree would on its own.
+    /// `W` walks the cursor's worktree in display order, wrapping, past rows
+    /// in other checkouts; from the main checkout or a worktree of its own
+    /// it stays put.
+    #[test]
+    fn the_worktree_jump_cycles_through_the_cursors_worktree() {
+        use InteractionActivity::Pending;
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("tidy", Pending),
+                branched("tidy-more", Pending, "tidy"),
+                worktree(interaction("rework", Pending), "auth", "main"),
+                worktree(branched("jwt", Pending, "rework"), "auth", "main"),
+                worktree(branched("spike", Pending, "rework"), "spike", "auth"),
+                worktree(interaction("review", Pending), "auth", "main"),
+            ],
+            vec![],
+        );
+        let scope = Some("workspace");
+        let mut walk = Vec::new();
+        for _ in 0..4 {
+            let landed = live.cursor_to_next_in_worktree("rework", scope).unwrap();
+            walk.push(landed.id);
+        }
+        assert_eq!(walk, ["jwt", "review", "rework", "jwt"]);
+
+        live.rest();
+        assert!(live.cursor_to_next_in_worktree("tidy", scope).is_none());
+        assert!(live.cursor_to_next_in_worktree("spike", scope).is_none());
+        assert_eq!(live.cursor("spike"), "spike");
+    }
+
+    /// A branch working in a worktree of its own hangs beneath the entry it
+    /// came from, after that entry's earlier branches, rather than sorting
+    /// wherever its own place in the item order would put it.
     #[test]
     fn a_branch_in_another_worktree_follows_its_source() {
         use InteractionActivity::Pending;
@@ -3038,73 +2878,61 @@ pub(crate) mod tests {
             ],
             vec![],
         );
-        let source = |id: &str| Some(id.to_owned());
         assert_eq!(
             placements(&live),
             [
-                ("newest", 0, 0, None, None),
-                ("source", 0, 0, None, None),
-                ("nested", 1, 0, None, None),
-                ("spike", 0, 0, None, source("source")),
-                ("twig", 0, 0, None, source("spike")),
-                ("oldest", 0, 0, None, None),
+                ("newest", 0, None),
+                ("source", 0, None),
+                ("spike", 1, None),
+                ("twig", 2, None),
+                ("nested", 1, None),
+                ("oldest", 0, None),
             ]
         );
         assert_walk_follows_display(&live, Some("workspace"));
     }
 
-    /// A worktree made from one whose interactions are all hidden has no
-    /// heading to sit beneath, so it stands at the root, but is still headed
-    /// with where its work goes.
+    /// Entries working in one worktree are not gathered together: each keeps
+    /// its own place in the item order.
     #[test]
-    fn a_worktree_made_from_a_hidden_one_keeps_its_heading() {
+    fn entries_sharing_a_worktree_keep_their_own_places() {
+        use InteractionActivity::Pending;
         let mut live = LiveInteractions::default();
-        let mut source = worktree(completed("rework"), "auth", "main");
-        source.activity = InteractionActivity::Stopped;
         live.open(
             vec![
-                source,
-                worktree(
-                    interaction("tests", InteractionActivity::Pending),
-                    "tests",
-                    "auth",
-                ),
+                worktree(interaction("rework", Pending), "auth", "main"),
+                interaction("tidy", Pending),
+                worktree(interaction("review", Pending), "auth", "main"),
             ],
             vec![],
         );
         assert_eq!(
             placements(&live),
-            [("tests", 0, 1, Some(Some("auth".to_owned())), None)]
+            [("rework", 0, None), ("tidy", 0, None), ("review", 0, None)]
         );
+        assert_walk_follows_display(&live, Some("workspace"));
     }
 
-    /// Interactions sharing a worktree stay together under its heading: a
-    /// branch working elsewhere is not nested beneath a source among them,
-    /// which would put it between them, but follows the whole worktree.
+    /// A Workspace whose own folder is a linked worktree of a clone elsewhere
+    /// is still the Workspace's main checkout, so its rows do not name the
+    /// folder the Workspace heading already names.
     #[test]
-    fn a_branch_does_not_break_up_a_shared_worktree() {
-        let in_worktree = |mut interaction: InteractionSummary| {
-            interaction.workspace = PathBuf::from("/worktrees/feature");
-            interaction.checkout = Some(styra_protocol::CheckoutState {
-                worktree: PathBuf::from("/worktrees/feature"),
-                repository: PathBuf::from("/workspace"),
-                branch: Some("feature".into()),
-            });
-            interaction
-        };
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                in_worktree(interaction("source", InteractionActivity::Pending)),
-                branched("branch", InteractionActivity::Stopped, "source"),
-                in_worktree(interaction("sibling", InteractionActivity::Pending)),
-            ],
-            vec![],
-        );
-
-        assert_eq!(
-            display(&live, Some("workspace")),
-            [("source", 0), ("sibling", 0), ("branch", 0)]
+    fn a_workspace_that_is_itself_a_linked_worktree_is_its_main_checkout() {
+        use InteractionActivity::Pending;
+        let mut review = interaction("review", Pending);
+        review.checkout = Some(styra_protocol::CheckoutState {
+            worktree: PathBuf::from("/workspace"),
+            repository: PathBuf::from("/clone"),
+            branch: Some("rdfstore-introduction".into()),
+        });
+        let workspaces = vec![crate::workspace::tests::workspace(
+            "workspace",
+            None,
+            "/workspace",
+        )];
+        assert!(
+            in_main_checkout(&review, &workspaces),
+            "the Workspace folder is its main checkout"
         );
     }
 

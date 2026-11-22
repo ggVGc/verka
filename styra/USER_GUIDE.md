@@ -216,10 +216,20 @@ on it as soon as it arrives. When an interaction is associated with a Git
 checkout, its row also names the checked-out branch (or says `detached head`).
 For live interactions, the branch is checked at most once every two seconds
 while the client polls. If it differs from the branch assigned to the Session,
-the row's branch column highlights `actual (≠ assigned)`, including beneath a
-worktree heading. Switching back clears the warning.
+the row's branch column highlights `actual (≠ assigned)`. Switching back clears
+the warning. The list is not grouped by worktree: an interaction in a linked
+worktree names it in the branch column instead, as `[worktree] branch`, or
+just `[worktree]` when the branch has the worktree's name, alone or after a
+prefix such as `styra/`. Either is followed by `→ target`, the branch the
+worktree's work is integrated into. A branch in the same worktree and on the
+same branch as its source shows just `↑` in the branch column, pointing at the
+source's. When the cursor is on an interaction in a linked worktree, the worktree's
+name (or `↑`) on the other rows working there is lifted as on the cursor's own
+row — except on the cursor's own sources and branches, which the tree already
+ties to it. `W` moves the cursor to the next listed interaction in the cursor's
+linked worktree, sources and branches included, wrapping at the end of the list.
 A branched interaction is listed beneath the one it was branched from, as in
-the session picker. Branching (`B`) lists the new interaction straight away,
+the session picker, whichever checkout either works in. Branching (`B`) lists the new interaction straight away,
 stopped as `branched, not started`, until a message resumes it. A branch's
 event list starts at its `branch` marker: the history it copied is not shown
 again, since its source still has it — follow the marker to read it there, or

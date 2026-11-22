@@ -261,6 +261,7 @@ bindings! { INTERACTIONS = "Interactions";
     INTERACTIONS_PREV_WORKING: [Key::code(KeyCode::BackTab)]
         => Action::InteractionsPrevWorking;
     INTERACTIONS_NEXT_IDLE: [Key::ctrl('a')] => Action::InteractionsNextIdle;
+    INTERACTIONS_NEXT_IN_WORKTREE: [Key::ch('W')] => Action::InteractionsNextInWorktree;
     INTERACTIONS_SCOPE: [Key::ch('w')] => Action::InteractionsScope;
     INTERACTIONS_COMPLETED: [Key::ch('c')] => Action::InteractionsCompleted;
     INTERACTIONS_STOPPED: [Key::ch('s')] => Action::InteractionsStopped;

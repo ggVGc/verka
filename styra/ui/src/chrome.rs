@@ -43,6 +43,9 @@ pub struct PanelChrome {
     /// Workspace's own checkout. `None` for a plain checkout, so the bar does
     /// not repeat what the Workspace name already said.
     pub worktree: Option<String>,
+    /// The branch the worktree's work goes into, named after the worktree.
+    /// `None` when there is no worktree to name it after.
+    pub into: Option<String>,
     /// The branch a new interaction would fork, shown before it starts.
     pub source_branch: Option<String>,
     pub agent: String,

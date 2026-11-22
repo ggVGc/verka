@@ -165,11 +165,15 @@ fn titled_block(chrome: &PanelChrome, launch_and_status: bool) -> Block<'static>
         ));
         spans.push(Span::styled(" · ", text));
     }
+    // Named as the interactions list names it: `[worktree] → target`.
     if let Some(worktree) = &chrome.worktree {
         spans.push(Span::styled(
-            worktree.clone(),
-            Style::default().fg(theme::ACCENT),
+            format!("[{worktree}]"),
+            Style::default().fg(theme::DIRECTORY_NAME),
         ));
+        if let Some(into) = &chrome.into {
+            spans.push(Span::styled(format!(" → {into}"), text));
+        }
         spans.push(Span::styled(" · ", text));
     }
     if let Some(source) = &chrome.source_branch {
@@ -222,6 +226,7 @@ mod tests {
             workspace: workspace.map(str::to_owned),
             session: None,
             worktree: None,
+            into: None,
             source_branch: None,
             parent: None,
             agent: "codex".into(),
@@ -274,6 +279,24 @@ mod tests {
             top.starts_with("┏ payments · Fix retries · ↱ Retry backoff ━"),
             "{top}"
         );
+    }
+
+    /// A linked worktree is named as the interactions list names it, with
+    /// the branch its work goes into.
+    #[test]
+    fn a_worktree_is_named_with_its_target() {
+        let area = Rect::new(0, 0, 80, 3);
+        let mut buffer = Buffer::empty(area);
+        let mut chrome = chrome(Some("payments"));
+        chrome.worktree = Some("fix-retries".into());
+        chrome.into = Some("main".into());
+        focused_interaction_block(&chrome).render(area, &mut buffer);
+        let top: String = (0..area.width).map(|x| buffer[(x, 0)].symbol()).collect();
+        assert!(
+            top.starts_with("┏ payments · [fix-retries] → main ━"),
+            "{top}"
+        );
+        assert_eq!(buffer[(13, 0)].fg, theme::DIRECTORY_NAME);
     }
 
     /// The point of the tones is telling one ending from another, so no two

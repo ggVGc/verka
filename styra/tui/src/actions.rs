@@ -193,6 +193,7 @@ pub(crate) enum Action {
     InteractionsNextWorking,
     InteractionsPrevWorking,
     InteractionsNextIdle,
+    InteractionsNextInWorktree,
     InteractionsScope,
     InteractionsCompleted,
     InteractionsStopped,
@@ -543,6 +544,9 @@ impl Action {
                 "previous interaction actively working, skipping idle ones"
             }
             Self::InteractionsNextIdle => "next interaction that went idle unseen",
+            Self::InteractionsNextInWorktree => {
+                "next listed interaction in the selected one's linked worktree"
+            }
             Self::InteractionsScope => "current Workspace / all Workspaces",
             Self::InteractionsCompleted => "show/hide completed",
             Self::InteractionsStopped => "show/hide stopped",

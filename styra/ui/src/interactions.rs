@@ -49,28 +49,13 @@ pub struct InteractionState {
 
 pub enum InteractionRow<'a> {
     Workspace(Cow<'a, str>),
-    /// A worktree heading the rows of the interactions working in it, which
-    /// follow it one `level` further in, and then the headings of the
-    /// worktrees integrated into it, also one further in.
-    Directory {
-        name: Cow<'a, str>,
-        /// How many headings it sits beneath, as an interaction's `level`.
-        level: usize,
-        /// The branch integrating the worktree's work merges it into.
-        into: Option<Cow<'a, str>>,
-    },
     Interaction {
         name: Cow<'a, str>,
-        /// How many [`InteractionRow::Directory`] headings the row sits
-        /// beneath, each one indenting it a step further. Zero for a row
-        /// directly under its Workspace.
-        level: usize,
         /// How many sources deep this interaction was branched: nested
         /// beneath the entry it came from, as the Session picker nests it.
         depth: usize,
         /// The name of the interaction this one was branched from, when it is
-        /// not nested beneath it: it works in another checkout, or is not
-        /// listed.
+        /// not nested beneath it because that one is not listed.
         branched_from: Option<Cow<'a, str>>,
         /// How many listed interactions name this one as their source with
         /// `branched_from`, rather than being nested beneath it.
@@ -86,6 +71,20 @@ pub enum InteractionRow<'a> {
         branch: Option<&'a str>,
         /// Assigned branch when the checkout has switched away from it.
         expected_branch: Option<&'a str>,
+        /// The linked worktree it works in, drawn ahead of the branch. `None`
+        /// in the Workspace's main checkout.
+        worktree: Option<Cow<'a, str>>,
+        /// The branch integrating that worktree's work merges it into, drawn
+        /// after the branch.
+        into: Option<Cow<'a, str>>,
+        /// It hangs beneath the interaction it was branched from, in the same
+        /// checkout on the same branch, so its branch column only points up
+        /// at that one's rather than repeating it.
+        same_as_source: bool,
+        /// It is not the cursor's interaction, nor in that one's direct line
+        /// of sources or branches, but works in the same linked worktree, so
+        /// the worktree's name is lifted as on the cursor's row.
+        shared_worktree: bool,
         status: InteractionStatus,
         selected: bool,
         newly_idle: bool,

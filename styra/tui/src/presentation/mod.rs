@@ -222,14 +222,17 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         Status::Ended { error: Some(_), .. } => StatusTone::Error,
         Status::Ended { .. } => StatusTone::Ended,
     };
-    let worktree = app
-        .interactions
-        .current(&app.session_id)
+    let current = app.interactions.current(&app.session_id);
+    let worktree = current
         .and_then(|interaction| interaction.checkout.as_ref())
         .filter(|checkout| checkout.linked())
         .and_then(|checkout| checkout.worktree.file_name())
         .and_then(|name| name.to_str())
         .map(str::to_owned);
+    let into = current
+        .and_then(|interaction| interaction.branched_from.as_ref())
+        .and_then(|branch_point| branch_point.branch.clone())
+        .filter(|_| worktree.is_some());
     styra_ui::chrome::PanelChrome {
         focused: if app.navigator_shown() {
             false
@@ -240,6 +243,7 @@ fn panel_chrome(app: &App, suffix: Option<&str>) -> styra_ui::chrome::PanelChrom
         },
         workspace: app.workspace.name.clone(),
         worktree,
+        into,
         source_branch: if app.session_id.is_empty() {
             source_branch(app)
         } else {

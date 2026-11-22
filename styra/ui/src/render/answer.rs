@@ -168,6 +168,7 @@ mod tests {
             focused: true,
             workspace: Some("work".into()),
             worktree: None,
+            into: None,
             source_branch: None,
             parent: None,
             agent: "codex".into(),

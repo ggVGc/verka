@@ -52,6 +52,15 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         .iter()
         .find(|row| app.interactions.items[row.index].id == cursor)
         .and_then(|row| row.branched_from.as_deref());
+    // The cursor's interaction, when it works in a linked worktree, for the
+    // other rows there to be lifted by.
+    let cursor_worktree = ordered
+        .iter()
+        .map(|row| &app.interactions.items[row.index])
+        .find(|interaction| interaction.id == cursor)
+        .filter(|current| {
+            !crate::interactions::in_main_checkout(current, &app.interactions.workspaces)
+        });
     for row in &ordered {
         let index = row.index;
         let interaction = &app.interactions.items[index];
@@ -67,20 +76,6 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             rows.push(InteractionRow::Workspace(Cow::Owned(name)));
         }
         heading = Some(interaction.workspace_id.clone());
-        // The order has put a headed worktree's rows, and then the worktrees
-        // integrated into it, right after its heading — see `DisplayRow`.
-        if let Some(worktree) = &row.heading {
-            let name = interaction
-                .workspace
-                .file_name()
-                .unwrap_or(interaction.workspace.as_os_str())
-                .to_string_lossy();
-            rows.push(InteractionRow::Directory {
-                name,
-                level: row.level.saturating_sub(1),
-                into: worktree.into.clone().map(Cow::Owned),
-            });
-        }
         let name_of = |id: &str| {
             app.interactions
                 .name(id)
@@ -88,6 +83,8 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
                 .to_owned()
         };
         let state = state(interaction);
+        let linked =
+            !crate::interactions::in_main_checkout(interaction, &app.interactions.workspaces);
         let name = app
             .interactions
             .name(&interaction.id)
@@ -95,7 +92,6 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
             .unwrap_or_else(|| Cow::Borrowed(styra_ui::picker::short_id(&interaction.id)));
         rows.push(InteractionRow::Interaction {
             name,
-            level: row.level,
             depth: row.depth,
             branched_from: row
                 .branched_from
@@ -122,6 +118,46 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
                     .checkout
                     .as_ref()
                     .is_some_and(|checkout| checkout.branch.as_deref() != Some(*expected))
+            }),
+            worktree: linked.then(|| worktree_name(interaction)),
+            into: interaction
+                .branched_from
+                .as_ref()
+                .and_then(|branch_point| branch_point.branch.as_deref())
+                .filter(|_| linked)
+                .map(Cow::Borrowed),
+            same_as_source: row.depth > 0
+                && interaction
+                    .origin
+                    .as_ref()
+                    .and_then(|origin| {
+                        app.interactions
+                            .items
+                            .iter()
+                            .find(|source| source.id == origin.session_id)
+                    })
+                    .is_some_and(|source| {
+                        crate::interactions::same_checkout(
+                            interaction,
+                            source,
+                            &app.interactions.workspaces,
+                        ) && source.checkout.as_ref().map(|checkout| &checkout.branch)
+                            == interaction
+                                .checkout
+                                .as_ref()
+                                .map(|checkout| &checkout.branch)
+                    }),
+            // Its own sources and branches are already tied to the cursor's
+            // row by the tree, so only the rest of the worktree is lifted.
+            shared_worktree: cursor_worktree.is_some_and(|current| {
+                interaction.id != current.id
+                    && !app.interactions.descends_from(&interaction.id, &current.id)
+                    && !app.interactions.descends_from(&current.id, &interaction.id)
+                    && crate::interactions::same_checkout(
+                        interaction,
+                        current,
+                        &app.interactions.workspaces,
+                    )
             }),
             status: state.status,
             selected: interaction.id == cursor,
@@ -153,6 +189,15 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         scrolled_away: app.interactions.scrolled_away,
         rows,
     }
+}
+
+/// The worktree `interaction` works in, by its directory's name.
+fn worktree_name(interaction: &InteractionSummary) -> Cow<'_, str> {
+    interaction
+        .workspace
+        .file_name()
+        .unwrap_or(interaction.workspace.as_os_str())
+        .to_string_lossy()
 }
 
 /// What `interaction` is doing, as its navigator row draws it — and anywhere
