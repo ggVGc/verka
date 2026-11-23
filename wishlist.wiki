@@ -1,3 +1,7 @@
+- Situation:
+  - Working on something, and in the process come across a new issue.
+  - Want to take the current context (branch from current interaction), into a new worktree based on `main` branch and do the work there
+  - Styra should do the interaction branching, worktree creation and new git branch, and include information about it in the first message together with the user message
 - Merging a branched interaction back into parent:
   - Brings in the conversation content, but none of the work context
   - Rely on the soon-added pending messages feature
