@@ -29,7 +29,7 @@ mod test_support;
 
 pub use keys::Outcome;
 pub use report::{FileReport, Report, ReportPage, ReportState};
-pub use state::{CheckoutDiff, Commits, DiffTarget, Source, Supplied};
+pub use state::{CheckoutDiff, Commits, DiffTarget, PreviewFile, Source, Supplied};
 #[cfg(feature = "renderer")]
 pub use view::render;
-pub use view::{CheckoutDiffFeedback, CheckoutDiffView, Tint};
+pub use view::{CheckoutDiffFeedback, CheckoutDiffView, FilePreview, Tint};

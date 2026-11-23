@@ -15,7 +15,7 @@ use ratatui::{text::Line, widgets::Block};
 use std::path::Path;
 #[cfg(feature = "renderer")]
 use styra_ui::diff::CONTEXT_FADE;
-use styra_ui::{preview::PreviewFeedback, search::SearchView};
+use styra_ui::{files::FileContent, preview::PreviewFeedback, search::SearchView};
 pub struct CheckoutDiffView<'a> {
     pub commits: Option<&'a crate::state::Commits>,
     /// Prompts attached to files and lines in this session.
@@ -103,8 +103,21 @@ pub struct CheckoutDiffView<'a> {
     /// The line the line cursor is on, among the shown patch's lines; `None`
     /// unless lines are being selected.
     pub line_cursor: Option<usize>,
+    /// The whole file the line cursor is in, drawn beside the diff with the
+    /// cursor's line marked; `None` unless that is asked for.
+    pub file_preview: Option<FilePreview<'a>>,
     /// The text to find in line selection, marked wherever it is drawn.
     pub find: SearchView<'a>,
+}
+
+/// A file shown whole beside the diff.
+pub struct FilePreview<'a> {
+    /// Its path in the diff, which names it.
+    pub path: &'a str,
+    pub content: FileContent<'a>,
+    /// The new file's line the line cursor is on, to mark and keep in view;
+    /// `None` while the cursor is over the file's headers.
+    pub line: Option<u32>,
 }
 
 impl<'a> CheckoutDiffView<'a> {
@@ -173,6 +186,7 @@ impl Default for CheckoutDiffView<'_> {
             #[cfg(feature = "renderer")]
             intro: None,
             line_cursor: None,
+            file_preview: None,
             find: SearchView::default(),
             prompts: Vec::new(),
         }

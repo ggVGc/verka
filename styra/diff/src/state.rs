@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::widgets::Block;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use styra_ui::files::FileContent;
 use styra_ui::query::Edit;
 use styra_ui::scroll::Scroll;
 use styra_ui::search::Search;
@@ -95,6 +96,9 @@ pub(crate) enum Action {
     /// Put a cursor on the line at the top of the patch shown, or take it
     /// away. While it is there, the moving keys move it rather than the view.
     ToggleLines,
+    /// Show the whole file the line cursor is in beside the diff, or put it
+    /// away. Line selection only.
+    TogglePreview,
     /// The next file in the per-file view; otherwise a line down.
     Down,
     /// The previous file in the per-file view; otherwise a line up.
@@ -181,6 +185,12 @@ pub struct CheckoutDiff {
     /// The line the line cursor is on, by its place among the shown patch's
     /// lines; `None` unless lines are being selected.
     pub line_cursor: Option<usize>,
+    /// Whether the whole file the line cursor is in is shown beside the
+    /// diff, its line marked, while lines are selected; kept when they are
+    /// not, for the next time they are.
+    pub file_preview: bool,
+    /// The file that preview shows, read when the cursor comes into it.
+    pub preview_file: Option<PreviewFile>,
     /// Text to find in the shown patch, marked while lines are selected.
     pub find: Search,
     /// Where the line cursor was, and the view scrolled, when the text to
@@ -227,10 +237,21 @@ impl Default for CheckoutDiff {
             report_page: None,
             report_preview: false,
             line_cursor: None,
+            file_preview: false,
+            preview_file: None,
             find: Search::default(),
             find_from: None,
         }
     }
+}
+
+/// A file as the preview shows it whole: its path in the diff, the commit
+/// it was read at — `None` for the working tree — and its text, or why there
+/// is none.
+pub struct PreviewFile {
+    pub path: String,
+    pub commit: Option<String>,
+    pub content: Result<String, String>,
 }
 
 impl CheckoutDiff {
@@ -293,6 +314,7 @@ impl CheckoutDiff {
         // The old viewport's limit belongs to a different patch. Let the
         // next render measure this one before clamping the requested row.
         self.scroll.note_limit(u16::MAX);
+        self.sync_file_preview(false);
         Ok(())
     }
 
@@ -445,7 +467,55 @@ impl CheckoutDiff {
         if self.line_cursor.is_some() {
             self.line_cursor = cursor.and_then(|(path, number)| self.line_at_number(&path, number));
         }
+        // The work that changed the diff may have changed the file too.
+        self.sync_file_preview(true);
         true
+    }
+
+    /// Read the file the preview shows, if it is open and the line cursor
+    /// has gone into a file other than the one read — or into any file, when
+    /// `again` — and drop it once there is nothing to show. A checkout's
+    /// commit is shown as that commit left the file, which is what its
+    /// patch's lines are numbered by; anything else as the working tree has
+    /// it.
+    pub(crate) fn sync_file_preview(&mut self, again: bool) {
+        let shown = self
+            .line_cursor
+            .filter(|_| self.file_preview)
+            .and_then(|line| position(self.shown_text()?, line))
+            .map(|(path, _)| path.to_owned());
+        let Some(path) = shown else {
+            self.preview_file = None;
+            return;
+        };
+        let commit = self
+            .commits
+            .selected
+            .checked_sub(1)
+            .and_then(|index| self.commits.entries.get(index))
+            .map(|commit| commit.id.clone());
+        let read = self
+            .preview_file
+            .as_ref()
+            .is_some_and(|file| file.path == path && file.commit == commit);
+        if read && !again {
+            return;
+        }
+        let content = match (self.root(), &commit) {
+            (None, _) => Err("this diff's files are not on this host".into()),
+            (Some(root), Some(commit)) => crate::git::file_at(root, commit, &path),
+            (Some(root), None) => match std::fs::read_to_string(root.join(&path)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    Err(format!("{path} is deleted in the working tree"))
+                }
+                read => read.map_err(|error| error.to_string()),
+            },
+        };
+        self.preview_file = Some(PreviewFile {
+            path,
+            commit,
+            content,
+        });
     }
 
     /// Where line `number` of `path`'s new file is among the shown patch's
@@ -527,12 +597,30 @@ impl CheckoutDiff {
             report: (self.commits.selected == 0).then_some(&self.report),
             report_page: self.report_page,
             line_cursor: self.line_cursor,
+            file_preview: self.shown_file_preview(),
             find: match self.line_cursor {
                 Some(_) => self.find.view(),
                 None => Default::default(),
             },
             ..CheckoutDiffView::default()
         }
+    }
+
+    /// The file the line cursor is in, whole, with the new file's line there
+    /// to mark, while the preview is open over lines being selected.
+    fn shown_file_preview(&self) -> Option<crate::view::FilePreview<'_>> {
+        let cursor = self.line_cursor.filter(|_| self.file_preview)?;
+        let (path, line) = position(self.shown_text()?, cursor)?;
+        let file = self.preview_file.as_ref().filter(|file| file.path == path)?;
+        Some(crate::view::FilePreview {
+            path: &file.path,
+            content: match &file.content {
+                Ok(content) if content.is_empty() => FileContent::Empty,
+                Ok(content) => FileContent::Ready(content),
+                Err(error) => FileContent::Failed(error),
+            },
+            line,
+        })
     }
 
     /// Keep what drawing the view measured, for the next keys to move by.
@@ -607,6 +695,7 @@ impl CheckoutDiff {
                 // Onto the first change from the top of the view.
                 self.move_cursor(0);
             }
+            Action::TogglePreview if lines => self.file_preview = !self.file_preview,
             Action::Down if lines => self.move_cursor(1),
             Action::Up if lines => self.move_cursor(-1),
             // The arrows go over every line drawn, headers and cuts too.
@@ -717,6 +806,7 @@ impl CheckoutDiff {
             | Action::Find
             | Action::FindNext
             | Action::FindPrevious
+            | Action::TogglePreview
             | Action::FilesDown
             | Action::FilesUp => {}
         }

@@ -184,7 +184,21 @@ fn render_inside(
     view: &CheckoutDiffView<'_>,
     area: Rect,
 ) -> CheckoutDiffFeedback {
-    let mut inner = area;
+    // The file preview takes the right half, or the bottom half where two
+    // columns of code would be too narrow to read; the pages laid over the
+    // view still cover all of it.
+    let (mut inner, preview_area) = match view.file_preview {
+        Some(_) => {
+            let halves = [Constraint::Percentage(50), Constraint::Percentage(50)];
+            let [diff, preview] = if area.width >= PREVIEW_BESIDE_WIDTH {
+                Layout::horizontal(halves).areas(area)
+            } else {
+                Layout::vertical(halves).areas(area)
+            };
+            (diff, Some(preview))
+        }
+        None => (area, None),
+    };
     if let Some(commits) = view.commits.filter(|commits| commits.open) {
         let height = (commits.entries.len().saturating_add(3).min(10) as u16).min(inner.height / 3);
         let [list, rest] =
@@ -869,6 +883,9 @@ fn render_inside(
         };
         render_legend(frame, legend_rows(layers, &focused), column);
     }
+    if let (Some(file), Some(preview_area)) = (&view.file_preview, preview_area) {
+        render_file_preview(frame, file, preview_area);
+    }
     let report_page = view
         .report_page
         .map(|page| render_report_page(frame, view, area, page));
@@ -886,6 +903,42 @@ fn render_inside(
         file_list_offset,
         report_page,
     }
+}
+
+/// The narrowest view the file preview is drawn beside the diff in, rather
+/// than below it.
+const PREVIEW_BESIDE_WIDTH: u16 = 140;
+
+/// The file the line cursor is in, whole, in `area`, drawn as Styra's
+/// preview draws a file a link goes to: the cursor's line marked, and kept
+/// in the middle of the preview as far as the file allows.
+fn render_file_preview(frame: &mut Frame, file: &FilePreview<'_>, area: Rect) {
+    let scroll = match (file.content, file.line) {
+        (styra_ui::files::FileContent::Ready(content), Some(line)) => {
+            // The rows the lines above it wrap onto, numbered as they are
+            // drawn: the marker's column and five digits, then a rule.
+            let above: Vec<Line> = content
+                .replace('\t', "    ")
+                .lines()
+                .take(usize::try_from(line.saturating_sub(1)).unwrap_or(usize::MAX))
+                .map(|text| Line::raw(format!("{:>6} │ {text}", 0)))
+                .collect();
+            let inner = Block::bordered().inner(area);
+            let row = Paragraph::new(above)
+                .wrap(Wrap { trim: false })
+                .line_count(inner.width.max(1));
+            u16::try_from(row.saturating_sub(usize::from(inner.height / 2))).unwrap_or(u16::MAX)
+        }
+        _ => 0,
+    };
+    styra_ui::files::render_content(
+        frame,
+        Some(file.path),
+        file.content,
+        file.line,
+        scroll,
+        area,
+    );
 }
 
 fn render_commits(frame: &mut Frame, commits: &crate::state::Commits, area: Rect) {
@@ -4703,6 +4756,7 @@ mod boundary_tests {
             session: None,
             worktree: None,
             source_branch: None,
+            into: None,
             parent: None,
             agent: "codex".into(),
             model: "model".into(),

@@ -150,6 +150,12 @@ pub fn commit_diff(worktree: &Path, commit: &str) -> Result<String, String> {
     )
 }
 
+/// The text of the file at `path`, relative to the repository's root, as
+/// `commit` left it.
+pub(crate) fn file_at(worktree: &Path, commit: &str, path: &str) -> Result<String, String> {
+    git(worktree, &["show", &format!("{commit}:{path}")])
+}
+
 /// The branches and tags at `commit`, named the way `git log --decorate`
 /// names them: a local branch by its name, a remote one with its remote's,
 /// and a tag as `tag: v1.2`. A remote's `HEAD` only repeats one of its
@@ -267,7 +273,8 @@ fn git_with_index(directory: &Path, args: &[&str], index: Option<&Path>) -> Resu
         return Err(format!("git {command} failed: {}", stderr.trim()));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(if command == "diff" {
+    // A diff, or a file's text, is kept to its first and last whitespace.
+    Ok(if matches!(command, "diff" | "show") {
         stdout.into_owned()
     } else {
         stdout.trim().to_owned()

@@ -102,6 +102,12 @@ pub const BINDINGS: &[Binding] = &[
         Command::View(Action::FindPrevious),
     ),
     bind(
+        &[KeyCode::Char('p')],
+        "p (line selection)",
+        "show / hide the whole file beside the diff, the line cursor's line marked",
+        Command::View(Action::TogglePreview),
+    ),
+    bind(
         &[KeyCode::Char('l')],
         "l",
         "toggle combined / per-file diffs",
@@ -299,8 +305,14 @@ impl CheckoutDiff {
 
     /// Answer one key. The prompts for text to find and for the file-name
     /// filter take every key while they are open; otherwise the key is looked
-    /// up in [`BINDINGS`].
+    /// up in [`BINDINGS`]. The file preview then follows the line cursor.
     pub fn handle_key(&mut self, key: KeyEvent) -> Outcome {
+        let outcome = self.answer_key(key);
+        self.sync_file_preview(false);
+        outcome
+    }
+
+    fn answer_key(&mut self, key: KeyEvent) -> Outcome {
         if self.find.typing() {
             self.find_key(key);
             return Outcome::Handled;
@@ -765,6 +777,64 @@ mod tests {
         keys(KeyCode::Char('k'), 4, "back to +b");
         let control = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
         assert_eq!(diff.handle_key(control), Outcome::Ignored);
+    }
+
+    /// In line selection `p` shows the whole file the cursor is in beside the
+    /// diff, the cursor's line marked, and the preview follows the cursor.
+    /// Out of line selection it is not shown, but stays asked for.
+    #[cfg(feature = "renderer")]
+    #[test]
+    fn p_previews_the_cursors_file_with_its_line_marked() {
+        let directory = tempfile::tempdir().unwrap();
+        let text: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(directory.path().join("a.txt"), text).unwrap();
+        let mut diff = CheckoutDiff::supplied(
+            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n\
+             @@ -20 +20,2 @@\n-old\n+line 20\n+line 21\n"
+                .into(),
+            crate::Supplied {
+                label: "test".into(),
+                root: Some(directory.path().to_owned()),
+            },
+        );
+        let shown = |diff: &CheckoutDiff| {
+            diff.view(ratatui::widgets::Block::bordered())
+                .file_preview
+                .map(|file| (file.path.to_owned(), file.line))
+        };
+        assert_eq!(press(&mut diff, KeyCode::Char('p')), Outcome::Handled);
+        assert!(!diff.file_preview, "line selection only");
+
+        press(&mut diff, KeyCode::Enter);
+        assert_eq!(shown(&diff), None);
+        press(&mut diff, KeyCode::Char('p'));
+        assert_eq!(shown(&diff), Some(("a.txt".into(), Some(20))), "-old");
+        press(&mut diff, KeyCode::Char('j'));
+        press(&mut diff, KeyCode::Char('j'));
+        assert_eq!(shown(&diff), Some(("a.txt".into(), Some(21))), "+line 21");
+
+        let screen = crate::test_support::rows(&crate::test_support::draw(160, 30, |frame| {
+            crate::render(frame, &diff.view(ratatui::widgets::Block::bordered()), frame.area());
+        }));
+        let marked: Vec<_> = screen
+            .iter()
+            .filter_map(|row| row.split_once('▶').map(|(_, marked)| marked))
+            .collect();
+        assert_eq!(marked.len(), 1, "{screen:#?}");
+        assert!(marked[0].starts_with("   21 │ line 21"), "{screen:#?}");
+        let row = screen.iter().position(|row| row.contains('▶')).unwrap();
+        assert!((12..=17).contains(&row), "kept in the middle: {screen:#?}");
+        assert!(
+            !screen.iter().any(|row| row.contains("    1 │ line 1 ")),
+            "scrolled past the file's top: {screen:#?}"
+        );
+
+        press(&mut diff, KeyCode::Esc);
+        assert_eq!(shown(&diff), None);
+        press(&mut diff, KeyCode::Enter);
+        assert_eq!(shown(&diff), Some(("a.txt".into(), Some(20))), "still asked for");
+        press(&mut diff, KeyCode::Char('p'));
+        assert_eq!(shown(&diff), None);
     }
 
     /// A key answers to one command, so the table cannot shadow a row.
