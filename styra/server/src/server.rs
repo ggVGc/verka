@@ -3457,7 +3457,11 @@ impl ServerState {
             crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
         // Checkout policy is independent of the transcript history. Older
         // clients fork managed checkouts and share the ordinary Workspace.
-        let source_checkout = self.inherited_checkout(&summary.workspace_id, Some(id))?;
+        // Clients are refused during an automatic action before reaching
+        // here; the action itself branches to resolve conflicts, but not into
+        // a checkout another interaction's action needs.
+        self.ensure_no_other_automatic_action_needs_checkout(id)?;
+        let source_checkout = self.session_checkout(&summary.path, &summary.workspace_id, id)?;
         let new_worktree = match checkout {
             Some(crate::protocol::BranchCheckout::ShareSource) => false,
             Some(crate::protocol::BranchCheckout::NewWorktree) => true,
@@ -4679,9 +4683,13 @@ impl ServerState {
                 provider,
                 selection,
                 checkout,
-            } => Ok(Response::SessionBranched(self.branch_session(
-                &id, at_ms, history, provider, selection, checkout,
-            )?)),
+            } => {
+                // `branch_session` checks the checkout other actions need.
+                self.inner.automatic.ensure_none(&id)?;
+                Ok(Response::SessionBranched(self.branch_session(
+                    &id, at_ms, history, provider, selection, checkout,
+                )?))
+            }
             Request::RenameSession(request) => {
                 let summary = self.stored_summary(&request.id)?;
                 journal::store_session_name(&summary.path, request.name.as_deref())?;
@@ -5295,8 +5303,7 @@ fn find_native_session_file(
 /// each branched Session's `(id, origin)`. A root is not its own branch, and a
 /// cycle in the origins ends where it comes back round.
 fn branches_of(roots: &[String], origins: &[(String, String)]) -> Vec<String> {
-    let mut reached: std::collections::HashSet<&str> =
-        roots.iter().map(String::as_str).collect();
+    let mut reached: std::collections::HashSet<&str> = roots.iter().map(String::as_str).collect();
     let mut pending: Vec<&str> = roots.iter().map(String::as_str).collect();
     let mut branches = Vec::new();
     while let Some(parent) = pending.pop() {

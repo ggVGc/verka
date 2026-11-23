@@ -192,7 +192,21 @@ impl ServerState {
     /// branch it lands on.
     pub(super) fn ensure_no_automatic_action(&self, id: &str) -> Result<()> {
         self.inner.automatic.ensure_none(id)?;
-        let active = self.inner.automatic.interactions();
+        self.ensure_no_other_automatic_action_needs_checkout(id)
+    }
+
+    /// Refuse to act on `id`'s checkout while another interaction's automatic
+    /// action needs it. An action applied to `id` itself is not refused, so
+    /// that action may act on its own interaction, such as branching it to
+    /// resolve conflicts.
+    pub(super) fn ensure_no_other_automatic_action_needs_checkout(&self, id: &str) -> Result<()> {
+        let active: Vec<_> = self
+            .inner
+            .automatic
+            .interactions()
+            .into_iter()
+            .filter(|automatic| automatic != id)
+            .collect();
         if active.is_empty() {
             return Ok(());
         }
@@ -836,6 +850,265 @@ mod tests {
             .run_integration(&fixture.id, fixture.progress())
             .unwrap();
         assert!(!fixture.path().exists());
+    }
+
+    #[test]
+    fn conflict_resolution_can_branch_while_its_own_automatic_action_is_applied() {
+        use super::super::native_transcripts::MemoryTranscripts;
+        use genta::session::{Message, Role, Session};
+
+        // The resolver branches the interaction on the action's behalf, so the
+        // lock the action holds must not refuse it.
+        for action in [AutomaticAction::Rebase, AutomaticAction::Integration] {
+            // The interaction branch and its source branch both change `file`,
+            // so rebasing onto the source stops on a conflict.
+            let mut fixture = Fixture::new();
+            fixture.conflict();
+            // Keep native transcripts in memory, so branching has a provider
+            // transcript to copy without touching the real provider stores.
+            let transcripts = Arc::new(MemoryTranscripts::default());
+            fixture.state = ServerState::with_backends(
+                SystemGit::shared(),
+                transcripts.clone(),
+                fixture.state.store_root().to_path_buf(),
+                None,
+                None,
+                None,
+            );
+            // Give the interaction a stored provider transcript; the resolver
+            // branches from it.
+            let provider = crate::agent::Provider::Codex;
+            let native = genta::session::serialize(
+                &Session {
+                    id: "original".into(),
+                    cwd: fixture.path().display().to_string(),
+                    timestamp: "2026-11-11T10:00:00Z".into(),
+                    messages: vec![Message {
+                        role: Role::User,
+                        text: "Implement the feature".into(),
+                        timestamp: Some("2026-11-11T10:00:00Z".into()),
+                    }],
+                },
+                native_session_format(provider),
+            );
+            transcripts
+                .write(provider, "original", fixture.path(), &native)
+                .unwrap();
+            journal::store_provider_session_id(&fixture.session, "original").unwrap();
+            // Prepare a rebase onto the source branch's current commit.
+            let source = git(&fixture.host, &["rev-parse", "main"]);
+            let mut status = pending_rebase(source);
+            let record = fixture.session.join("rebase.json");
+            // Hold the action's lock on the interaction, as `start_rebase` and
+            // integration do for as long as they run.
+            fixture
+                .state
+                .inner
+                .automatic
+                .begin(&fixture.id, action)
+                .unwrap();
+            // Rebase while the lock is held. On the conflict, the resolver
+            // branches the interaction, which used to be refused by the lock,
+            // then resolves the conflict in place of an agent turn and
+            // continues the rebase.
+            let result = fixture.state.run_rebase_with_resolver(
+                &fixture.id,
+                fixture.checkout.clone(),
+                &mut status,
+                &record,
+                |id, path, _| {
+                    fixture.state.with_rebase_conversation(id, |_| {
+                        std::fs::write(path.join("file"), "source and feature\n")?;
+                        git(path, &["add", "file"]);
+                        continue_rebase(path)
+                    })
+                },
+            );
+            // Release the lock, then require that the branch was created and
+            // the rebase finished.
+            fixture.state.inner.automatic.finish(&fixture.id);
+            assert!(result.is_ok(), "{action}: {:#}", result.unwrap_err());
+        }
+    }
+
+    #[test]
+    fn conflict_resolution_cannot_branch_into_a_checkout_another_automatic_action_uses() {
+        use super::super::native_transcripts::MemoryTranscripts;
+        use genta::session::{Message, Role, Session};
+
+        // Its own action may not refuse the resolver, but another interaction's
+        // action on the same checkout still must.
+        //
+        // Set up a conflicting rebase, with native transcripts kept in memory.
+        let mut fixture = Fixture::new();
+        fixture.conflict();
+        let transcripts = Arc::new(MemoryTranscripts::default());
+        fixture.state = ServerState::with_backends(
+            SystemGit::shared(),
+            transcripts.clone(),
+            fixture.state.store_root().to_path_buf(),
+            None,
+            None,
+            None,
+        );
+        // Create a second interaction, `other`, in the same Workspace that
+        // shares the fixture interaction's checkout.
+        let session = fixture.state.stored_summary(&fixture.id).unwrap();
+        let (journal, other) = create_session(
+            fixture.state.store_root(),
+            &session.workspace_id,
+            &fixture.host,
+            None,
+        );
+        let other_path = journal.path().parent().unwrap().to_path_buf();
+        drop(journal);
+        journal::store_session_checkout(&other_path, &fixture.checkout).unwrap();
+        // Give `other` a stored provider transcript, so branching it would
+        // succeed if the lock allowed it.
+        let provider = crate::agent::Provider::Codex;
+        let native = genta::session::serialize(
+            &Session {
+                id: "other".into(),
+                cwd: fixture.path().display().to_string(),
+                timestamp: "2026-11-11T10:00:00Z".into(),
+                messages: vec![Message {
+                    role: Role::User,
+                    text: "Implement the feature".into(),
+                    timestamp: Some("2026-11-11T10:00:00Z".into()),
+                }],
+            },
+            native_session_format(provider),
+        );
+        transcripts
+            .write(provider, "other", fixture.path(), &native)
+            .unwrap();
+        journal::store_provider_session_id(&other_path, "other").unwrap();
+        // Apply an integration to the fixture interaction, which needs the
+        // shared checkout, and a rebase to `other`, whose own lock must not
+        // refuse its resolver.
+        fixture
+            .state
+            .inner
+            .automatic
+            .begin(&fixture.id, AutomaticAction::Integration)
+            .unwrap();
+        fixture
+            .state
+            .inner
+            .automatic
+            .begin(&other, AutomaticAction::Rebase)
+            .unwrap();
+        // Branch `other` for conflict resolution, recording whether the
+        // resolver got to run.
+        let mut resolved = false;
+        let result = fixture.state.with_rebase_conversation(&other, |_| {
+            resolved = true;
+            Ok(())
+        });
+        fixture.state.inner.automatic.finish(&other);
+        fixture.state.inner.automatic.finish(&fixture.id);
+        // The integration's use of the checkout refuses the branch before the
+        // resolver runs.
+        assert!(
+            !resolved,
+            "the resolver ran in a checkout another action uses"
+        );
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("this checkout is participating in an automatic action"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn an_action_without_an_integration_checkout_does_not_refuse_unrelated_interactions() {
+        // An action whose interaction has no checkout to integrate, such as
+        // one sealed at the end of integration or one without a recorded source
+        // branch, cannot need an unrelated checkout; its state is not the
+        // unrelated interaction's error.
+        //
+        // The fixture interaction's worktree is removed and the interaction
+        // sealed, as at the end of a successful integration.
+        let sealed_after_integration = |fixture: &Fixture| {
+            SystemGit
+                .remove_worktree(&fixture.host, fixture.path())
+                .unwrap();
+            journal::clear_session_worktree(&fixture.session).unwrap();
+            fixture
+                .state
+                .set_session_completion(&fixture.id, CompletionState::Sealed)
+                .unwrap();
+        };
+        // The fixture interaction's base records a commit but no branch name,
+        // so there is no source branch to integrate onto.
+        let without_source_branch = |fixture: &Fixture| {
+            let mut checkout = fixture.checkout.clone();
+            checkout.branched_from.as_mut().unwrap().branch = None;
+            journal::store_rebased_checkout(&fixture.session, &checkout).unwrap();
+        };
+        let cases: [(&str, AutomaticAction, &dyn Fn(&Fixture)); 2] = [
+            (
+                "sealed after integration",
+                AutomaticAction::Integration,
+                &sealed_after_integration,
+            ),
+            (
+                "without a source branch",
+                AutomaticAction::Retarget,
+                &without_source_branch,
+            ),
+        ];
+        for (case, action, prepare) in cases {
+            // Create an unrelated interaction in the same Workspace, with its
+            // own worktree on its own branch.
+            let fixture = Fixture::new();
+            let session = fixture.state.stored_summary(&fixture.id).unwrap();
+            let (journal, unrelated) = create_session(
+                fixture.state.store_root(),
+                &session.workspace_id,
+                &fixture.host,
+                None,
+            );
+            let unrelated_session = journal.path().parent().unwrap().to_path_buf();
+            drop(journal);
+            let unrelated_path = fixture.host.parent().unwrap().join("unrelated");
+            git(
+                &fixture.host,
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    "unrelated",
+                    unrelated_path.to_str().unwrap(),
+                ],
+            );
+            journal::store_session_checkout(
+                &unrelated_session,
+                &crate::worktree::Checkout {
+                    path: Some(unrelated_path),
+                    branch: "unrelated".into(),
+                    branched_from: None,
+                },
+            )
+            .unwrap();
+            // Put the fixture interaction in the case's state, then apply the
+            // action to it.
+            prepare(&fixture);
+            fixture
+                .state
+                .inner
+                .automatic
+                .begin(&fixture.id, action)
+                .unwrap();
+            // Check whether the unrelated interaction may be acted on. Finding
+            // no integration checkout for the fixture interaction must not
+            // refuse it.
+            let checked = fixture.state.ensure_no_automatic_action(&unrelated);
+            fixture.state.inner.automatic.finish(&fixture.id);
+            if let Err(error) = checked {
+                panic!("{case}: {error:#}");
+            }
+        }
     }
 
     #[test]
@@ -1730,7 +2003,10 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_ne!(history[0].branch, fixture.checkout.branch);
         // The copy keeps the commits the branch had before retargeting.
-        assert_eq!(git(&fixture.host, &["rev-parse", &history[0].branch]), old_head);
+        assert_eq!(
+            git(&fixture.host, &["rev-parse", &history[0].branch]),
+            old_head
+        );
         assert_eq!(
             history[0].branched_from.as_ref().unwrap().branch.as_deref(),
             Some("main")
