@@ -13,5 +13,4 @@ pub enum HelpRow<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/help.rs"]
 mod rendering;

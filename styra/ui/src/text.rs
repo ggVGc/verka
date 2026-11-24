@@ -38,5 +38,4 @@ pub fn suffix(text: &str, columns: usize) -> &str {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/text.rs"]
 mod rendering;

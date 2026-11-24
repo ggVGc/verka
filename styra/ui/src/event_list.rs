@@ -249,5 +249,4 @@ pub enum SummaryContext {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/event_list.rs"]
 mod rendering;

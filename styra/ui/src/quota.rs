@@ -261,5 +261,4 @@ fn local_offset_seconds(at_ms: u64) -> i64 {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/quota.rs"]
 mod rendering;

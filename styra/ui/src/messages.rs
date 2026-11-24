@@ -9,5 +9,4 @@ pub struct MessageView<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/messages.rs"]
 mod rendering;

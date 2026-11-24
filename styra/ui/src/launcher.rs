@@ -32,5 +32,4 @@ pub const NO_ROWS: &str = "no matching choices";
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/launcher.rs"]
 mod rendering;

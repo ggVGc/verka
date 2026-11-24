@@ -34,5 +34,4 @@ pub struct FooterView<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/footer.rs"]
 mod rendering;

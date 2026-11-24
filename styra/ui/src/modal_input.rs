@@ -53,5 +53,4 @@ pub struct ModalInput<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/modal_input.rs"]
 mod rendering;

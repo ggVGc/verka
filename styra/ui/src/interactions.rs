@@ -142,5 +142,4 @@ pub struct InteractionNavigator<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/interactions.rs"]
 mod rendering;

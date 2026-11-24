@@ -68,5 +68,4 @@ pub fn tree(processes: &[SandboxProcess]) -> Vec<TreeRow<'_>> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/processes.rs"]
 mod rendering;

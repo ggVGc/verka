@@ -13,5 +13,4 @@ pub struct LogEntryView<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/log.rs"]
 mod rendering;

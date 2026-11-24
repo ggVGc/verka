@@ -26,5 +26,4 @@ pub struct RawFeedback {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/raw.rs"]
 mod rendering;

@@ -99,5 +99,4 @@ pub fn is_file_reference(code: &str) -> bool {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/markdown.rs"]
 mod rendering;

@@ -71,5 +71,4 @@ pub fn conversation<'a>(
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/picker.rs"]
 mod rendering;

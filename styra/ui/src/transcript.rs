@@ -20,5 +20,4 @@ pub struct TranscriptView<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/transcript.rs"]
 mod rendering;

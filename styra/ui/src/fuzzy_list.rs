@@ -260,5 +260,4 @@ pub struct FuzzyListView<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/fuzzy_list.rs"]
 mod rendering;

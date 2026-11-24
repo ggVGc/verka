@@ -66,5 +66,4 @@ pub enum InsertPromptView<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/overlays.rs"]
 mod rendering;

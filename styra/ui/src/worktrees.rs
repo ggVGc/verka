@@ -26,5 +26,4 @@ pub const NO_ROWS: &str = "no session has a worktree";
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/worktrees.rs"]
 mod rendering;

@@ -377,5 +377,4 @@ impl styra_ui::application::Panel for CheckoutDiffView<'_> {}
 #[cfg(feature = "renderer")]
 pub use rendering::*;
 #[cfg(feature = "renderer")]
-#[path = "view/render.rs"]
 mod rendering;

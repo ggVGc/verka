@@ -31,5 +31,4 @@ pub struct RecordingView {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/recording.rs"]
 mod rendering;

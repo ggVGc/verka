@@ -275,7 +275,7 @@ cargo check -p tui -p styra-diff --bins
 
 `styra/tui/src/main.rs` is a thin binary entry point; application tests live in
 its library. UI model modules remain available without the feature, while widget
-implementations in `styra/ui/src/render/` and terminal ownership in
+implementations in `styra/ui/src/*/rendering.rs` and terminal ownership in
 `styra/ui/src/terminal.rs` require it.
 
 The checkout diff view (`d`, in the diff pane under the interaction log) is its own crate, `styra-diff` in `styra/diff`,

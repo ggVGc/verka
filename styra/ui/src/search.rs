@@ -124,5 +124,4 @@ pub fn term(query: &str) -> Option<&str> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/search.rs"]
 mod rendering;

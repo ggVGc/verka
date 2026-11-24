@@ -1,0 +1,323 @@
+use super::super::{apply_feedback, test_support};
+use super::view;
+use crate::app::App;
+
+use styra_protocol::event::AgentEvent;
+
+/// A marker names the worktree it leads to only when that is not the one
+/// its own interaction works in, and says nothing it does not know.
+#[test]
+fn a_branch_marker_names_the_worktree_only_when_it_differs() {
+    use styra_protocol::event::BranchDirection;
+    use styra_protocol::{CheckoutState, InteractionActivity, InteractionSummary};
+    let checkout = |worktree: &str| CheckoutState {
+        worktree: worktree.into(),
+        repository: "/workspace".into(),
+        branch: None,
+    };
+    let interaction = |id: &str, checkout| InteractionSummary {
+        checkout,
+        ..crate::interactions::tests::interaction(id, InteractionActivity::Running)
+    };
+    let marker = AgentEvent::Branched {
+        direction: BranchDirection::To,
+        session: "child".into(),
+        name: None,
+    };
+    let linked = Some(checkout("/workspace/.worktrees/fix-retries"));
+    let main = Some(checkout("/workspace"));
+    for (here, there, expected) in [
+        (main.clone(), linked.clone(), Some("fix-retries")),
+        (linked.clone(), main.clone(), Some("main checkout")),
+        (linked.clone(), linked.clone(), None),
+        (None, linked.clone(), None),
+        (main.clone(), None, None),
+    ] {
+        let mut app = crate::presentation::test_support::app("parent");
+        app.interactions.items = vec![
+            interaction("parent", here.clone()),
+            interaction("child", there.clone()),
+        ];
+        assert_eq!(
+            super::branch_link(&app, "parent", &marker).worktree,
+            expected,
+            "{here:?} → {there:?}"
+        );
+    }
+}
+
+/// A `branched to` marker brings the branches off where it leads, and
+/// theirs, while a `branched from` marker leaves its source's out.
+#[test]
+fn a_branch_marker_carries_the_branches_off_where_it_leads() {
+    use styra_protocol::event::BranchDirection;
+    use styra_protocol::{InteractionActivity, InteractionSummary};
+    let interaction = |id: &str, from: Option<&str>| InteractionSummary {
+        name: Some(id.to_uppercase()),
+        origin: from.map(|from| styra_protocol::SessionOrigin {
+            session_id: from.into(),
+            provider: styra_protocol::agent::Provider::Codex,
+            at_ms: None,
+            history: Default::default(),
+        }),
+        ..crate::interactions::tests::interaction(id, InteractionActivity::Running)
+    };
+    let marker = |direction, session: &str| AgentEvent::Branched {
+        direction,
+        session: session.into(),
+        name: None,
+    };
+    let mut app = crate::presentation::test_support::app("parent");
+    app.interactions.refresh(vec![
+        interaction("parent", None),
+        interaction("child", Some("parent")),
+        interaction("grandchild", Some("child")),
+        interaction("sibling", Some("child")),
+        interaction("great", Some("grandchild")),
+        interaction("unrelated", None),
+    ]);
+    fn names(link: &styra_ui::event_list::BranchLink<'_>) -> String {
+        let children = link.children.iter().map(names).collect::<Vec<_>>();
+        if children.is_empty() {
+            link.name.unwrap_or("?").to_owned()
+        } else {
+            format!("{}({})", link.name.unwrap_or("?"), children.join(" "))
+        }
+    }
+    let to = super::branch_link(&app, "parent", &marker(BranchDirection::To, "child"));
+    assert_eq!(names(&to), "CHILD(GRANDCHILD(GREAT) SIBLING)");
+    let from = super::branch_link(&app, "child", &marker(BranchDirection::From, "parent"));
+    assert_eq!(names(&from), "PARENT");
+}
+
+/// The `/` prompt is shown along the bottom of the list it is marking, and
+/// holds every printable key while it is open — including the letters that
+/// are commands on the list underneath.
+#[test]
+fn the_search_prompt_shows_what_is_being_typed_into_it() {
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let mut app = test_support::app("s1");
+    app.push_event(AgentEvent::AgentMessage {
+        text: "reworked the retry queue".into(),
+    });
+    app.search.open();
+    for character in "que".chars() {
+        crate::input::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char(character)));
+    }
+
+    assert_eq!(view(&app).search.query, Some("que"));
+    assert!(view(&app).search.typing);
+
+    // `q` quits the list; here it is a letter of the term.
+    crate::input::handle_search_key(&mut app, KeyEvent::from(KeyCode::Char('q')));
+    assert_eq!(app.search.query(), Some("queq"));
+}
+
+#[test]
+fn queued_messages_are_passed_in_send_order() {
+    use styra_protocol::QueuedMessage;
+
+    let mut app = test_support::app("s1");
+    app.push_event(AgentEvent::UserMessage {
+        text: "rename the config loader".into(),
+    });
+    app.outbox.replace_queued(vec![
+        QueuedMessage::new("then run the tests"),
+        QueuedMessage::new("and commit it\nwith a short message"),
+    ]);
+
+    assert_eq!(view(&app).queued, app.outbox.queued());
+    assert_eq!(view(&app).queued.len(), 2);
+}
+
+#[test]
+fn the_entire_queue_is_passed_to_ui() {
+    use styra_protocol::QueuedMessage;
+
+    let mut app = test_support::app("s1");
+    app.push_event(AgentEvent::UserMessage {
+        text: "rename the config loader".into(),
+    });
+    app.outbox.replace_queued(
+        (0..8)
+            .map(|n| QueuedMessage::new(format!("follow-up {n}")))
+            .collect(),
+    );
+
+    assert_eq!(
+        view(&app).queued.len(),
+        8,
+        "all data is passed; UI chooses how much fits"
+    );
+    assert_eq!(view(&app).queued, app.outbox.queued());
+}
+
+#[test]
+fn new_interactions_pass_distinct_entry_identities_and_events() {
+    let mut earlier = test_support::app("s1");
+    earlier.push_event(AgentEvent::UserMessage {
+        text: "rename the config loader".into(),
+    });
+    let mut next = test_support::app("s2");
+    next.push_event(AgentEvent::UserMessage {
+        text: "add retries to the uploader".into(),
+    });
+    let old = view(&earlier);
+    let new = view(&next);
+    assert_ne!(old.entries[0].version.id, new.entries[0].version.id);
+    assert_eq!(new.entries[0].event, next.timeline.entries[0].event());
+}
+
+fn scrolled_conversation() -> App {
+    let mut app = test_support::app("s1");
+    app.timeline.all_events = false;
+    app.push_event(AgentEvent::UserMessage {
+        text: "please refactor the retry backoff logic".into(),
+    });
+    for step in 0..12 {
+        app.push_event(AgentEvent::AgentMessage {
+            text: format!("step {step}: looking at the backoff code in detail"),
+        });
+    }
+    // The UI reports the anchor. Application tests must not calculate it.
+    apply_feedback(
+        &mut app,
+        &styra_ui::RenderFeedback {
+            list_offset: Some(7),
+            list_row_offset: Some(0),
+            ..Default::default()
+        },
+    );
+    app
+}
+
+/// A tool finishing replaces the row that showed it starting, in place.
+/// Under the default conversation-only filter neither row is shown, so
+/// the operator's view of the conversation must not move at all: nothing
+/// they can see has changed, and they did not navigate.
+///
+/// It used to jump to the very top of the log. `ingest`'s replacement
+/// paths follow the tail without checking that the tail is a row the
+/// filters show, which leaves the selection on a hidden entry; the list
+/// then renders with nothing selected, and ratatui's `ListState::select`
+/// documents that selecting `None` also resets the offset to zero. That
+/// zero is what the render reports back as its effective offset, so the
+/// reset is persisted rather than lasting a single frame.
+#[test]
+fn a_hidden_tool_finishing_does_not_scroll_the_conversation() {
+    let mut app = scrolled_conversation();
+    let anchored = app.timeline.list_offset;
+
+    app.push_event(AgentEvent::ToolStarted {
+        id: "x1".into(),
+        name: "Bash".into(),
+        detail: "{\"command\":\"cargo test backoff\"}".into(),
+    });
+    assert_eq!(view(&app).requested_offset, anchored);
+    assert!(view(&app).entries.iter().any(|entry| entry.selected));
+    assert_eq!(
+        app.timeline.list_offset, anchored,
+        "a hidden row arriving is not a reason to scroll"
+    );
+
+    app.push_event(AgentEvent::ToolCompleted {
+        id: "x1".into(),
+        name: "Bash".into(),
+        detail: String::new(),
+        status: "ok".into(),
+        output: "test result: ok\n".into(),
+    });
+    assert_eq!(view(&app).requested_offset, anchored);
+    assert!(view(&app).entries.iter().any(|entry| entry.selected));
+
+    assert_eq!(
+        app.timeline.list_offset, anchored,
+        "the tool completion replaced a hidden row, so the viewport stays"
+    );
+}
+
+/// The same defect through the other replacement path: a shell command
+/// finishing. `CommandCompleted` replaces its `CommandStarted` row, and
+/// both are hidden by the conversation filter.
+#[test]
+fn a_hidden_command_finishing_does_not_scroll_the_conversation() {
+    let mut app = scrolled_conversation();
+    let anchored = app.timeline.list_offset;
+
+    app.push_event(AgentEvent::CommandStarted {
+        command: "cargo test backoff".into(),
+    });
+    app.push_event(AgentEvent::CommandCompleted {
+        command: "cargo test backoff".into(),
+        status: "ok".into(),
+        exit_code: Some(0),
+        output: "test result: ok\n".into(),
+    });
+    assert_eq!(view(&app).requested_offset, anchored);
+    assert!(view(&app).entries.iter().any(|entry| entry.selected));
+
+    assert_eq!(
+        app.timeline.list_offset, anchored,
+        "the command completion replaced a hidden row, so the viewport stays"
+    );
+}
+
+#[test]
+fn navigation_passes_the_existing_viewport_anchor() {
+    let mut app = scrolled_conversation();
+    let anchored = app.timeline.list_offset;
+    app.select_prev_line();
+    assert_eq!(view(&app).requested_offset, anchored);
+    assert!(view(&app).entries.iter().any(|entry| entry.selected));
+    assert!(view(&app).entries.iter().any(|e| e.selected));
+    app.select_next_line();
+    assert_eq!(view(&app).requested_offset, anchored);
+    assert!(view(&app).entries.iter().any(|entry| entry.selected));
+}
+
+#[test]
+fn new_messages_request_anchoring_when_following_the_tail() {
+    let mut app = scrolled_conversation();
+    app.select_prev_line();
+    app.select_next_line();
+    app.push_event(AgentEvent::AgentMessage {
+        text: "step 12: the newest".into(),
+    });
+    let view = view(&app);
+    assert_eq!(view.anchor, styra_ui::event_list::ListAnchor::Selection);
+    assert!(view.entries.last().unwrap().selected);
+    assert!(
+        matches!(view.entries.last().unwrap().event, AgentEvent::AgentMessage { text } if text == "step 12: the newest")
+    );
+}
+
+/// The selection is what the viewport is anchored to, so following the
+/// tail may only land on a row the filters actually show. Landing on a
+/// hidden one is what leaves the list rendering with nothing selected.
+#[test]
+fn following_the_tail_lands_on_a_row_the_filters_show() {
+    let mut app = scrolled_conversation();
+
+    app.push_event(AgentEvent::ToolStarted {
+        id: "x1".into(),
+        name: "Bash".into(),
+        detail: "{\"command\":\"cargo test backoff\"}".into(),
+    });
+    app.push_event(AgentEvent::ToolCompleted {
+        id: "x1".into(),
+        name: "Bash".into(),
+        detail: String::new(),
+        status: "ok".into(),
+        output: "test result: ok\n".into(),
+    });
+
+    assert!(
+        app.timeline.is_visible(app.timeline.selected),
+        "the selection must stay on a visible row"
+    );
+    assert!(
+        view(&app).entries.iter().any(|entry| entry.selected),
+        "some rendered row is the selected one"
+    );
+}

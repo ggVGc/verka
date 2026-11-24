@@ -96,5 +96,4 @@ pub struct MessageView<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/preview.rs"]
 mod rendering;

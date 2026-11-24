@@ -132,5 +132,4 @@ pub struct DrivaFeedback {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/driva.rs"]
 mod rendering;

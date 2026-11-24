@@ -21,5 +21,4 @@ pub enum FileContent<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/files.rs"]
 mod rendering;

@@ -57,5 +57,4 @@ pub struct AnswerView<'a> {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/answer.rs"]
 mod rendering;

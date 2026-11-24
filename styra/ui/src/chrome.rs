@@ -63,5 +63,4 @@ pub struct PanelChrome {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/chrome.rs"]
 mod rendering;

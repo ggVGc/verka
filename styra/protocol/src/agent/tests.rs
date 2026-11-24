@@ -1,0 +1,62 @@
+use super::*;
+
+#[test]
+fn styra_accepts_both_providers() {
+    validate_selection(&Selection::new(Provider::Codex)).unwrap();
+    validate_selection(&Selection::new(Provider::Claude)).unwrap();
+}
+
+/// A rung one model has and another does not is accepted on the first and
+/// refused on the second, under the same provider, and the refusal names
+/// the model.
+#[test]
+fn an_effort_is_judged_against_the_model_not_the_agent() {
+    validate_selection(&Selection::parse("claude:claude-opus-5/xhigh").unwrap()).unwrap();
+    let error =
+        validate_selection(&Selection::parse("claude:claude-opus-4-6/xhigh").unwrap()).unwrap_err();
+    assert!(
+        error.to_string().contains("claude-opus-4-6"),
+        "the error names the model that refused the rung: {error}"
+    );
+
+    validate_selection(&Selection::parse("codex:gpt-5.6-sol/max").unwrap()).unwrap();
+    assert!(validate_selection(&Selection::parse("codex:gpt-5.5/max").unwrap()).is_err());
+}
+
+/// Every model a picker can reach, at every rung of its ladder, validates —
+/// so no reachable row of the picker names a launch Styra would refuse.
+#[test]
+fn every_offered_model_and_rung_is_launchable() {
+    for provider in PROVIDERS {
+        for entry in provider.models() {
+            for effort in entry.efforts {
+                validate_selection(&Selection {
+                    provider,
+                    model: entry.id.to_owned(),
+                    effort: *effort,
+                })
+                .unwrap();
+            }
+        }
+    }
+}
+
+/// A model that takes no effort has nothing to validate, so a selection
+/// carrying the placeholder is not an error.
+#[test]
+fn a_model_without_an_effort_parameter_validates_with_its_placeholder() {
+    for model in ["claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001"] {
+        validate_selection(&Selection {
+            provider: Provider::Claude,
+            model: model.to_owned(),
+            effort: Provider::Claude.default_effort_for(model),
+        })
+        .unwrap();
+    }
+}
+
+/// An id newer than the catalog is under-constrained rather than refused.
+#[test]
+fn an_unknown_model_validates_against_the_widest_ladder() {
+    validate_selection(&Selection::parse("codex:gpt-7-nova/max").unwrap()).unwrap();
+}

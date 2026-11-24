@@ -96,5 +96,4 @@ pub struct OverviewFeedback {
 pub use rendering::*;
 
 #[cfg(feature = "renderer")]
-#[path = "render/overview.rs"]
 mod rendering;

@@ -125,5 +125,4 @@ pub use rendering::*;
 #[cfg(all(test, feature = "renderer"))]
 mod fixture_tests;
 #[cfg(feature = "renderer")]
-#[path = "render/application.rs"]
 mod rendering;
