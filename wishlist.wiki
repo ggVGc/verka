@@ -1,3 +1,13 @@
+- Agent user request:
+  - Enable the interaction to ask the user to perform an action.
+  - The action will run outside of the sandbox, in the user system.
+  - Result of the action told to the agent and interaction continues
+- "Reverse branch" from an earlier point of the interaction:
+  - Basically, moving the interaction back to a previous state
+  - Should cut the current interaction back to the selected entry, but leave a marker there which is the old full history
+  - Same effect as if I have branched at that point and continued the interaction in the branch instead of the top-level.
+  - Question: What happens to branches further down?:
+    - I think they move to the branched off interaction
 - Rich media view in browser associated with an interaction or specific turns:
   - Should follow interaction event selections in styra, synced through server
 - Situation:
