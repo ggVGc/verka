@@ -1,3 +1,5 @@
+- Taking git actions, and maybe other actions, producing information for the current interaction (or all interactions in current worktree):
+  - Could rely on the pending-messages feature which is currently incomplete and unmerged
 - Agent user request:
   - Enable the interaction to ask the user to perform an action.
   - The action will run outside of the sandbox, in the user system.
