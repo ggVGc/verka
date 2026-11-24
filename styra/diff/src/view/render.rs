@@ -42,8 +42,9 @@ struct Directory<'a> {
 
 enum Node<'a> {
     Directory(&'a str, Directory<'a>),
-    /// A changed file: its patch's index, name, and change kind.
-    File(usize, &'a str, FileChange),
+    /// A changed file: its patch's index, name, change kind, and lines
+    /// added and removed.
+    File(usize, &'a str, FileChange, (usize, usize)),
 }
 
 impl<'a> Directory<'a> {
@@ -71,9 +72,12 @@ impl<'a> Directory<'a> {
                 };
                 directory = child;
             }
-            directory
-                .children
-                .push(Node::File(*index, name, file.change()));
+            directory.children.push(Node::File(
+                *index,
+                name,
+                file.change(),
+                line_changes(file.patch),
+            ));
         }
         root
     }
@@ -82,18 +86,22 @@ impl<'a> Directory<'a> {
         let indent = "  ".repeat(depth);
         for child in &self.children {
             match child {
-                Node::File(index, name, change) => {
+                Node::File(index, name, change, (added, removed)) => {
                     // The selection marker takes the indent's last two
                     // columns, so even a file at the top has them.
                     let indent = "  ".repeat(depth.max(1));
-                    rows.push((
-                        Some(*index),
-                        Line::from(vec![
-                            Span::raw(indent),
-                            Span::raw(*name),
-                            change_marker(*change),
-                        ]),
-                    ));
+                    let mut line = Line::from(vec![
+                        Span::raw(indent),
+                        Span::raw(*name),
+                        change_marker(*change),
+                    ]);
+                    // Nothing to count for a file with no hunks, such as a
+                    // binary one or one only moved.
+                    if added + removed > 0 {
+                        line.spans.push(Span::raw(" "));
+                        line.spans.extend(line_counts(*added, *removed));
+                    }
+                    rows.push((Some(*index), line));
                 }
                 Node::Directory(name, directory) => {
                     let mut path = (*name).to_owned();
@@ -2213,13 +2221,16 @@ fn supplied_lines(label: &str, root: &Path, strong: Style) -> Vec<Line<'static>>
     lines
 }
 
-/// Files changed, how many of them were added, removed, moved and modified,
-/// and lines added and removed, counted from the diff itself so the header
-/// costs no second `git` run.
-fn stat_line(text: &str) -> Line<'static> {
-    let (mut added, mut removed) = (0, 0);
+/// Lines added and removed in the hunks of `text`, one file's patch or a
+/// whole diff. Only hunks are counted, so a header's `+++` and `---` are not.
+fn line_changes(text: &str) -> (usize, usize) {
+    let (mut added, mut removed, mut in_hunk) = (0, 0, false);
     for line in text.lines() {
-        if !line.starts_with("+++ ") && !line.starts_with("--- ") {
+        if line.starts_with("diff --git ") {
+            in_hunk = false;
+        } else if line.starts_with("@@") {
+            in_hunk = true;
+        } else if in_hunk {
             match line.as_bytes().first() {
                 Some(b'+') => added += 1,
                 Some(b'-') => removed += 1,
@@ -2227,6 +2238,23 @@ fn stat_line(text: &str) -> Line<'static> {
             }
         }
     }
+    (added, removed)
+}
+
+/// Lines added and removed, as the header and each file in the list show them.
+fn line_counts(added: usize, removed: usize) -> [Span<'static>; 3] {
+    [
+        Span::styled(format!("+{added}"), Style::default().fg(theme::SUCCESS)),
+        Span::raw(" "),
+        Span::styled(format!("-{removed}"), Style::default().fg(theme::ERROR)),
+    ]
+}
+
+/// Files changed, how many of them were added, removed, moved and modified,
+/// and lines added and removed, counted from the diff itself so the header
+/// costs no second `git` run.
+fn stat_line(text: &str) -> Line<'static> {
+    let (added, removed) = line_changes(text);
     // Added, removed, moved and modified files; a copy is a file added.
     let mut kinds = [0; 4];
     let files = crate::files::file_diffs(text);
@@ -2251,12 +2279,9 @@ fn stat_line(text: &str) -> Line<'static> {
     } else {
         format!("{count} {noun}: {}  ", breakdown.join(", "))
     };
-    Line::from(vec![
-        Span::styled(summary, Style::default().fg(theme::TEXT)),
-        Span::styled(format!("+{added}"), Style::default().fg(theme::SUCCESS)),
-        Span::raw(" "),
-        Span::styled(format!("-{removed}"), Style::default().fg(theme::ERROR)),
-    ])
+    let mut line = Line::from(Span::styled(summary, Style::default().fg(theme::TEXT)));
+    line.spans.extend(line_counts(added, removed));
+    line
 }
 
 /// Each layer's colour and the commit it is, a row each, oldest first, as
@@ -3721,7 +3746,7 @@ index 1111111..2222222 100644
         // padding and tree border put the patch at column 30.
         let tree = |row: &&str| row.chars().take(30).collect::<String>();
         let patch = |row: &&str| row.chars().skip(30).collect::<String>();
-        for name in ["▾ src/", "  a.rs [M]", "› b.txt"] {
+        for name in ["▾ src/", "  a.rs [M] +2 -1", "› b.txt [M] +1 -1"] {
             assert!(rows.iter().any(|row| tree(row).contains(name)), "{output}");
         }
         assert!(
