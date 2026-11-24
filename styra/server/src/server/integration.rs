@@ -232,7 +232,9 @@ impl ServerState {
         };
         let branch = self.inner.git.current_branch(&repository.root)?;
         for automatic in active {
-            let (_, checkout, source) = self.integration_checkout(&automatic)?;
+            let Some((checkout, source)) = self.integrable_checkout(&automatic)? else {
+                continue;
+            };
             anyhow::ensure!(
                 checkout.path.as_deref() != Some(&repository.root)
                     && !(branch.as_deref() == Some(&source)
@@ -247,6 +249,20 @@ impl ServerState {
             );
         }
         Ok(())
+    }
+
+    /// The checkout and source branch of an integrable interaction: one
+    /// neither sealed nor missing a checkout or source branch to integrate.
+    fn integrable_checkout(&self, id: &str) -> Result<Option<(crate::worktree::Checkout, String)>> {
+        let session = self.stored_summary(id)?;
+        if session.completed == CompletionState::Sealed {
+            return Ok(None);
+        }
+        let checkout = self.session_checkout(&session.path, &session.workspace_id, id)?;
+        Ok(checkout.and_then(|checkout| {
+            let source = checkout.branched_from.as_ref()?.branch.clone()?;
+            (source != checkout.branch).then_some((checkout, source))
+        }))
     }
 
     pub(super) fn integration_checkout(
