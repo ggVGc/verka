@@ -50,6 +50,15 @@ impl FileChange {
 }
 
 impl FileDiff<'_> {
+    /// The mode Git gives the file when the patch adds it, such as `100755`
+    /// for an executable.
+    pub fn new_mode(&self) -> Option<&str> {
+        self.patch
+            .lines()
+            .take_while(|line| !line.starts_with("@@"))
+            .find_map(|line| line.strip_prefix("new file mode "))
+    }
+
     pub fn change(&self) -> FileChange {
         // Inspect headers only: code in a hunk can resemble Git metadata.
         let headers: Vec<_> = self

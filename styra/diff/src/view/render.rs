@@ -1164,6 +1164,7 @@ fn render_report_preview(
                 .add_modifier(Modifier::BOLD),
         ));
         title.push(change_marker(file.change()));
+        title.extend(mode_note(file));
         title.push(Span::raw(" · "));
     }
     title.push(Span::raw("J/K: scroll · p: hide "));
@@ -1807,9 +1808,20 @@ fn change_marker(change: FileChange) -> Span<'static> {
     )
 }
 
+/// The mode a file the patch adds is given, beside its name in a title, as
+/// the patch's own line for it is not drawn.
+fn mode_note(file: &FileDiff<'_>) -> Option<Span<'static>> {
+    file.new_mode().map(|mode| {
+        Span::styled(
+            format!(" mode {mode}"),
+            Style::default().fg(theme::MUTED_TEXT),
+        )
+    })
+}
+
 /// Keep the selected filename visible while its patch scrolls.
 fn file_info(file: &FileDiff<'_>) -> Line<'static> {
-    Line::from(vec![
+    let mut line = Line::from(vec![
         Span::styled(
             format!(" {}", file.path),
             Style::default()
@@ -1817,7 +1829,9 @@ fn file_info(file: &FileDiff<'_>) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         change_marker(file.change()),
-    ])
+    ]);
+    line.spans.extend(mode_note(file));
+    line
 }
 
 /// The most of the patch's area a file's description may take, so a long one
@@ -1919,6 +1933,7 @@ fn rendered_patch(
                     file.path.to_owned(),
                     Style::default().fg(theme::ACCENT),
                 )];
+                line.spans.extend(mode_note(&file));
             }
         }
     }
@@ -3792,6 +3807,24 @@ index 1111111..2222222 100644
             !rows[..stat].iter().any(|row| row.contains("f18")),
             "{output}"
         );
+    }
+
+    #[test]
+    fn a_new_files_mode_line_is_not_drawn() {
+        let text = "diff --git a/a b/a\nnew file mode 100644\nindex 0000000..e69de29\n\
+            --- /dev/null\n+++ b/a\n@@ -0,0 +1 @@\n+one\n";
+        let drawn: Vec<_> = rows(text, false, false)
+            .into_iter()
+            .filter_map(|row| match row {
+                Row::Line(index) => text.lines().nth(index),
+                Row::RuleAbove | Row::RuleBelow => None,
+            })
+            .collect();
+        assert_eq!(drawn, ["diff --git a/a b/a", "@@ -0,0 +1 @@", "+one"]);
+        let shown = patch_lines(text, false, Tint::Full, true, None, 40, false, None);
+        assert_eq!(shown[0].to_string().trim_end(), "a mode 100644");
+        let file = &crate::files::file_diffs(text)[0];
+        assert_eq!(file_info(file).to_string(), " a [A] mode 100644");
     }
 
     #[test]

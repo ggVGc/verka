@@ -245,7 +245,8 @@ pub(crate) enum Row {
     RuleBelow,
 }
 
-/// The rows `text` is drawn as: Git index and path markers are omitted, as
+/// The rows `text` is drawn as: Git index, new file mode and path markers
+/// are omitted, as
 /// are removed lines when hidden, and each file's header is set between two
 /// rules — the one above only when something is drawn above it.
 pub(crate) fn rows(text: &str, hide_removed: bool, per_file: bool) -> Vec<Row> {
@@ -291,7 +292,7 @@ fn plan(text: &str, removed: &[bool]) -> Vec<Row> {
         } else if is_hunk_header(line) {
             in_hunk = true;
         } else if !in_hunk
-            && ["index ", "--- ", "+++ "]
+            && ["index ", "new file mode ", "--- ", "+++ "]
                 .iter()
                 .any(|prefix| line.starts_with(prefix))
         {
