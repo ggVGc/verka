@@ -1,3 +1,5 @@
+- Rich media view in browser associated with an interaction or specific turns:
+  - Should follow interaction event selections in styra, synced through server
 - Situation:
   - Working on something, and in the process come across a new issue.
   - Want to take the current context (branch from current interaction), into a new worktree based on `main` branch and do the work there
