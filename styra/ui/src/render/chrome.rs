@@ -3,6 +3,8 @@ use crate::theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders};
+use ratatui::Frame;
+use std::ops::Range;
 
 impl StopTone {
     pub fn color(self) -> ratatui::style::Color {
@@ -55,6 +57,18 @@ pub fn uncommitted_title(block: Block<'static>) -> Block<'static> {
             .fg(theme::UNCOMMITTED)
             .add_modifier(Modifier::BOLD),
     )))
+}
+
+/// A heavy bar over a pane's left border at `x`, beside the screen rows
+/// `rows` of the cursor's entry, so the eye finds it from the edge of the pane
+/// without anything in the list moving. Drawn after the border itself.
+pub(crate) fn selected_row_edge(frame: &mut Frame, x: u16, rows: Range<u16>) {
+    let edge = Style::default()
+        .fg(theme::SELECTED_ROW_EDGE)
+        .add_modifier(Modifier::BOLD);
+    for y in rows {
+        frame.buffer_mut()[(x, y)].set_symbol("┃").set_style(edge);
+    }
 }
 
 /// Mark the panel that owns the keyboard with the grid's thick selection border.

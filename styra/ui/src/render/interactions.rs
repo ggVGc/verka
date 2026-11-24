@@ -182,18 +182,16 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
         };
         frame.render_widget(line, line_area);
     }
-    // A heavy bar over the left border beside the cursor's row, so the eye
-    // finds it from the edge of the pane without anything in the list moving.
     if let (Some(selected), true) = (selected, inner.x > area.x) {
         let start = view.rows[..selected].iter().map(row_height).sum::<usize>();
         let end = start + row_height(&view.rows[selected]);
-        let edge = Style::default()
-            .fg(theme::SELECTED_ROW_EDGE)
-            .add_modifier(Modifier::BOLD);
-        for line in start.max(offset)..end.min(offset + viewport) {
-            frame.buffer_mut()[(area.x, inner.y + (line - offset) as u16)]
-                .set_symbol("┃")
-                .set_style(edge);
+        let (start, end) = (start.max(offset), end.min(offset + viewport));
+        if start < end {
+            crate::chrome::selected_row_edge(
+                frame,
+                area.x,
+                inner.y + (start - offset) as u16..inner.y + (end - offset) as u16,
+            );
         }
     }
     offset

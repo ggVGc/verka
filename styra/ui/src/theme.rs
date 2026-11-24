@@ -131,8 +131,8 @@ pub const SELECTED_INTERACTION_TEXT: Color = palette::YELLOW_WHITE;
 /// The name of the file selected in a diff's file tree: white with a slight
 /// pink tint, set apart from the other names without shouting.
 pub const SELECTED_FILE_NAME: Color = palette::PALE_PINK;
-/// The bar drawn over the navigator's left border beside the cursor's row:
-/// the cursor name's own color, so the two read as one mark.
+/// The bar drawn over the navigator's and the event list's left border beside
+/// the cursor's row: the cursor's own text color, so the two read as one mark.
 pub const SELECTED_ROW_EDGE: Color = SELECTED_LIVE_INTERACTION_TEXT;
 /// The block behind the status marker at the head of a navigator row, a
 /// subdued tint of the marker's own hue.

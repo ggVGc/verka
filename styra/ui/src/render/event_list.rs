@@ -372,6 +372,9 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     let visible_selection = anchored_position
         .filter(|position| *position >= offset && *position < offset + items.len())
         .map(|position| position - offset);
+    // Taken before the window is handed to the list, to find the selected
+    // entry's rows once it is drawn.
+    let window_heights = items.iter().map(ListItem::height).collect::<Vec<_>>();
     let list = List::new(items);
     // Both indices are rebased onto the window, which begins at `offset`: to
     // ratatui this is the whole list, seen from the top.
@@ -394,6 +397,31 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
         block = block.title(scrolled_title(above).right_aligned());
     }
     frame.render_widget(block, outer);
+    // The selected entry itself, not the one the view is placed for: with the
+    // pinned marker selected, that is the marker's rows.
+    let edge_rows = if pinned.is_some_and(|marker| marker.selected) {
+        Some(0..usize::from(pinned_rows))
+    } else {
+        // Within the window, whose first `state.offset()` items ratatui may
+        // have scrolled past.
+        let first = state.offset();
+        selected
+            .and_then(|selected| selected.checked_sub(offset))
+            .filter(|index| (first..window_heights.len()).contains(index))
+            .map(|index| {
+                let start = window_heights[first..index].iter().sum::<usize>();
+                let end = start + window_heights[index];
+                let pinned = usize::from(pinned_rows);
+                pinned + start.min(viewport_height)..pinned + end.min(viewport_height)
+            })
+    };
+    if let (Some(rows), true) = (edge_rows, inner.x > outer.x) {
+        crate::chrome::selected_row_edge(
+            frame,
+            outer.x,
+            inner.y + rows.start as u16..inner.y + rows.end as u16,
+        );
+    }
     EventListFeedback {
         // Back into the caller's numbering. Ratatui only ever moves the offset
         // forward from where it was put, so this stays within the window.
@@ -2628,6 +2656,50 @@ mod tests {
             Some(theme::SELECTED_INTERACTION_TEXT)
         );
         assert_ne!(fg(true, "«"), Some(theme::SELECTED_INTERACTION_TEXT));
+    }
+
+    /// A heavy red bar covers the left border beside the selected entry's
+    /// rows, and only there.
+    #[test]
+    fn a_red_bar_marks_the_selected_entry_on_the_left_border() {
+        let events = [
+            AgentEvent::AgentMessage { text: "first".into() },
+            AgentEvent::AgentMessage {
+                text: "second, long enough to wrap onto a row of its own ".repeat(2),
+            },
+            AgentEvent::AgentMessage { text: "third".into() },
+        ];
+        let view = list_view(
+            events
+                .iter()
+                .enumerate()
+                .map(|(index, event)| EventEntry {
+                    expanded: index == 1,
+                    has_detail: false,
+                    selected: index == 1,
+                    ..entry_of(event, version())
+                })
+                .collect(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(frame, &view, frame.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = buffer_rows(&buffer);
+        let marked = (0..buffer.area.height)
+            .filter(|y| buffer.cell((0, *y)).unwrap().fg == theme::SELECTED_ROW_EDGE)
+            .collect::<Vec<_>>();
+        assert!(marked.len() > 1, "{marked:?} {rows:#?}");
+        for y in &marked {
+            assert_eq!(buffer.cell((0, *y)).unwrap().symbol(), "┃");
+        }
+        let text = |y: u16| rows[usize::from(y)].clone();
+        assert!(text(marked[0]).contains("second"), "{rows:#?}");
+        assert!(!marked.iter().any(|y| text(*y).contains("first")), "{rows:#?}");
+        assert!(!marked.iter().any(|y| text(*y).contains("third")), "{rows:#?}");
     }
 
     /// A branch's `branched from` marker heads the pane however far down the
