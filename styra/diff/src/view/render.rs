@@ -2213,14 +2213,13 @@ fn supplied_lines(label: &str, root: &Path, strong: Style) -> Vec<Line<'static>>
     lines
 }
 
-/// Files changed and lines added and removed, counted from the diff itself so
-/// the header costs no second `git` run.
+/// Files changed, how many of them were added, removed, moved and modified,
+/// and lines added and removed, counted from the diff itself so the header
+/// costs no second `git` run.
 fn stat_line(text: &str) -> Line<'static> {
-    let (mut files, mut added, mut removed) = (0, 0, 0);
+    let (mut added, mut removed) = (0, 0);
     for line in text.lines() {
-        if line.starts_with("diff --git ") {
-            files += 1;
-        } else if !line.starts_with("+++ ") && !line.starts_with("--- ") {
+        if !line.starts_with("+++ ") && !line.starts_with("--- ") {
             match line.as_bytes().first() {
                 Some(b'+') => added += 1,
                 Some(b'-') => removed += 1,
@@ -2228,12 +2227,32 @@ fn stat_line(text: &str) -> Line<'static> {
             }
         }
     }
-    let noun = if files == 1 { "file" } else { "files" };
+    // Added, removed, moved and modified files; a copy is a file added.
+    let mut kinds = [0; 4];
+    let files = crate::files::file_diffs(text);
+    for file in &files {
+        kinds[match file.change() {
+            FileChange::Added | FileChange::Copied | FileChange::CopiedEdited => 0,
+            FileChange::Deleted => 1,
+            FileChange::Moved | FileChange::MovedEdited => 2,
+            FileChange::Edited | FileChange::Mode => 3,
+        }] += 1;
+    }
+    let breakdown = kinds
+        .iter()
+        .zip(["added", "removed", "moved", "modified"])
+        .filter(|(count, _)| **count > 0)
+        .map(|(count, kind)| format!("{count} {kind}"))
+        .collect::<Vec<_>>();
+    let count = files.len();
+    let noun = if count == 1 { "file" } else { "files" };
+    let summary = if breakdown.is_empty() {
+        format!("{count} {noun} changed  ")
+    } else {
+        format!("{count} {noun}: {}  ", breakdown.join(", "))
+    };
     Line::from(vec![
-        Span::styled(
-            format!("{files} {noun} changed  "),
-            Style::default().fg(theme::TEXT),
-        ),
+        Span::styled(summary, Style::default().fg(theme::TEXT)),
         Span::styled(format!("+{added}"), Style::default().fg(theme::SUCCESS)),
         Span::raw(" "),
         Span::styled(format!("-{removed}"), Style::default().fg(theme::ERROR)),
@@ -3698,10 +3717,10 @@ index 1111111..2222222 100644
             format!("{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n-old second\n+new second\n");
         let ((output, _), viewport) = file_screen(Ok(&text), Some("main"), 0, true, 1);
         let rows = output.lines().collect::<Vec<_>>();
-        // The panel border, the widest row ("2 files changed  +3 -2", 22),
-        // padding and tree border put the patch at column 26.
-        let tree = |row: &&str| row.chars().take(26).collect::<String>();
-        let patch = |row: &&str| row.chars().skip(26).collect::<String>();
+        // The panel border, the widest row ("2 files: 2 modified  +3 -2", 26),
+        // padding and tree border put the patch at column 30.
+        let tree = |row: &&str| row.chars().take(30).collect::<String>();
+        let patch = |row: &&str| row.chars().skip(30).collect::<String>();
         for name in ["▾ src/", "  a.rs [M]", "› b.txt"] {
             assert!(rows.iter().any(|row| tree(row).contains(name)), "{output}");
         }
@@ -3717,16 +3736,14 @@ index 1111111..2222222 100644
         assert!(!output.contains("fn c()"), "{output}");
         let stat = rows
             .iter()
-            .position(|row| tree(row).contains("2 files changed  +3 -2"))
+            .position(|row| tree(row).contains("2 files: 2 modified  +3 -2"))
             .expect(&output);
         assert!(
             tree(&rows[stat + 1]).contains("› b.txt"),
             "atop the file list: {output}"
         );
         assert_eq!(
-            rows.iter()
-                .filter(|row| row.contains("files changed"))
-                .count(),
+            rows.iter().filter(|row| row.contains("2 files:")).count(),
             1,
             "not in the header too: {output}"
         );
@@ -3751,7 +3768,7 @@ index 1111111..2222222 100644
             let output = rows.join("\n");
             assert!(output.contains("b.txt [M]"), "{output}");
             assert!(output.contains("new second"), "{output}");
-            assert!(!output.contains("files changed"), "{output}");
+            assert!(!output.contains("2 files:"), "{output}");
             assert!(!output.contains("▾ src/"), "{output}");
             assert!(
                 rows.iter().any(|row| row.starts_with("│ b.txt [M]")),
@@ -3781,7 +3798,7 @@ index 1111111..2222222 100644
         let rows = output.lines().collect::<Vec<_>>();
         let stat = rows
             .iter()
-            .position(|row| row.contains("20 files changed"))
+            .position(|row| row.contains("20 files: 20 modified"))
             .expect(&output);
         // The panel's bottom border closes the strip.
         assert_eq!(
@@ -4130,7 +4147,7 @@ index 1111111..2222222 100644
                 &[
                     "styra/rename  against  main at 4bf5c35d01 (no branch tip or tag)  (where",
                     "/state/worktrees/styra-7",
-                    "1 file changed  +2 -1",
+                    "1 file: 1 modified  +2 -1",
                     "fn c() {}",
                 ][..],
                 &[][..],
@@ -4211,7 +4228,7 @@ index 1111111..2222222 100644
             .collect::<String>();
         assert!(output.contains("» rename b to c"), "{output}");
         assert!(!output.contains("against"), "{output}");
-        assert!(!output.contains("file changed"), "{output}");
+        assert!(!output.contains("1 file:"), "{output}");
         assert!(output.contains("fn c() {}"), "{output}");
     }
 
@@ -4243,7 +4260,7 @@ index 1111111..2222222 100644
         assert!(output.contains("turn 3 · snapshot diff"), "{output}");
         assert!(!output.contains("against"), "{output}");
         assert!(!output.contains("working tree"), "{output}");
-        assert!(output.contains("1 file changed"), "{output}");
+        assert!(output.contains("1 file: 1 modified"), "{output}");
         let output = draw(true, DIFF);
         assert!(output.contains("After"), "{output}");
         assert!(output.contains("│ Before"), "{output}");
@@ -4458,6 +4475,39 @@ index 1111111..2222222 100644
     }
 
     #[test]
+    fn stat_line_counts_each_kind_of_file_change() {
+        let text = format!(
+            "{DIFF}\
+diff --git a/new b/new
+new file mode 100644
+--- /dev/null
++++ b/new
+@@ -0,0 +1 @@
++new
+diff --git a/gone b/gone
+deleted file mode 100644
+diff --git a/old b/moved
+similarity index 100%
+rename from old
+rename to moved
+diff --git a/tool b/tool
+old mode 100644
+new mode 100755
+"
+        );
+        let line = stat_line(&text);
+        let shown: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(
+            shown,
+            "5 files: 1 added, 1 removed, 1 moved, 2 modified  +3 -1"
+        );
+    }
+
+    #[test]
     fn no_changes_and_failures_say_so() {
         let (empty, limit) = screen(Ok(""), Some("main"), 0);
         assert_eq!(limit, 0);
@@ -4469,7 +4519,7 @@ index 1111111..2222222 100644
 
         let (failed, _) = screen(Err("git diff failed: bad revision"), Some("main"), 0);
         assert!(failed.contains("git diff failed: bad revision"), "{failed}");
-        assert!(!failed.contains("files changed"), "{failed}");
+        assert!(!failed.contains("0 files"), "{failed}");
     }
 
     #[test]
