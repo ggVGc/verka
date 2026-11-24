@@ -86,28 +86,43 @@ pub fn place(git: &dyn Git, path: &Path, review: Review, target: &Target) -> Res
         Target::Worktree => None,
         Target::Revision(revision) => Some(git.resolve_commit(&repository, revision)?),
     };
-    // Each suggestion's own changes, and the versions every item needs
-    // carrying from, so that each version is diffed against the target once.
+    let (changes, needed) = collect_sources(git, &repository, &review.entries)?;
+    let diffs = diff_sources(git, &repository, to.as_deref(), needed);
+    let entries = review
+        .entries
+        .into_iter()
+        .zip(changes)
+        .map(|(entry, files)| place_entry(entry, files, &diffs))
+        .collect();
+
+    Ok(PlacedReview {
+        branch: review.branch,
+        marker: review.marker,
+        subject: review.subject,
+        at: to.unwrap_or_else(|| "worktree".to_string()),
+        entries,
+    })
+}
+
+/// Paths needed from each source revision, grouped so each is diffed once.
+type SourcePaths = BTreeMap<String, BTreeSet<String>>;
+
+/// `None` for a version Git cannot diff, such as a pruned commit.
+type SourceDiffs = HashMap<String, Option<HashMap<String, Vec<Hunk>>>>;
+
+/// Collect each suggestion's changes and the source versions needed for placement.
+fn collect_sources(
+    git: &dyn Git,
+    repository: &Path,
+    entries: &[ReviewEntry],
+) -> Result<(Vec<Vec<FileDiff>>, SourcePaths)> {
     let mut changes = Vec::new();
     let mut needed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for entry in &review.entries {
+    for entry in entries {
         let files = match entry.kind {
             ReviewEntryKind::Suggestion => {
                 let parent = format!("{}^", entry.commit);
-                let mut hunks: HashMap<_, _> = git
-                    .diff(&repository, &parent, Some(&entry.commit), &entry.paths)?
-                    .into_iter()
-                    .map(|file| (file.path, file.hunks))
-                    .collect();
-                // Git reports no lines for a binary change.
-                let files = entry
-                    .paths
-                    .iter()
-                    .map(|path| FileDiff {
-                        path: path.clone(),
-                        hunks: hunks.remove(path).unwrap_or_default(),
-                    })
-                    .collect::<Vec<_>>();
+                let files = suggestion_changes(git, repository, entry)?;
                 for file in &files {
                     for revision in [&parent, &entry.commit] {
                         needed
@@ -130,11 +145,42 @@ pub fn place(git: &dyn Git, path: &Path, review: Review, target: &Target) -> Res
         };
         changes.push(files);
     }
-    // `None` for a version Git cannot diff, such as a pruned commit.
-    let mut diffs: HashMap<String, Option<HashMap<String, Vec<Hunk>>>> = HashMap::new();
+    Ok((changes, needed))
+}
+
+/// Keep files in entry order, including binary changes Git reports without lines.
+fn suggestion_changes(
+    git: &dyn Git,
+    repository: &Path,
+    entry: &ReviewEntry,
+) -> Result<Vec<FileDiff>> {
+    let parent = format!("{}^", entry.commit);
+    let mut hunks: HashMap<_, _> = git
+        .diff(repository, &parent, Some(&entry.commit), &entry.paths)?
+        .into_iter()
+        .map(|file| (file.path, file.hunks))
+        .collect();
+    let files = entry
+        .paths
+        .iter()
+        .map(|path| FileDiff {
+            path: path.clone(),
+            hunks: hunks.remove(path).unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    Ok(files)
+}
+
+fn diff_sources(
+    git: &dyn Git,
+    repository: &Path,
+    target: Option<&str>,
+    needed: SourcePaths,
+) -> SourceDiffs {
+    let mut diffs = HashMap::new();
     for (revision, paths) in needed {
         let paths = paths.into_iter().collect::<Vec<_>>();
-        let diff = git.diff(&repository, &revision, to.as_deref(), &paths).ok();
+        let diff = git.diff(repository, &revision, target, &paths).ok();
         let files = diff.map(|files| {
             let mut by_path: HashMap<_, _> = paths
                 .iter()
@@ -145,6 +191,10 @@ pub fn place(git: &dyn Git, path: &Path, review: Review, target: &Target) -> Res
         });
         diffs.insert(revision, files);
     }
+    diffs
+}
+
+fn place_entry(entry: ReviewEntry, files: Vec<FileDiff>, diffs: &SourceDiffs) -> PlacedEntry {
     let hunks = |revision: &str, path: &str| {
         diffs
             .get(revision)
@@ -152,40 +202,30 @@ pub fn place(git: &dyn Git, path: &Path, review: Review, target: &Target) -> Res
             .and_then(|files| files.get(path))
     };
 
-    let mut entries = Vec::new();
-    for (entry, files) in review.entries.into_iter().zip(changes) {
-        let mut locations = Vec::new();
-        if let Some(source) = &entry.source {
-            locations.push(match hunks(&source.revision, &source.path) {
-                Some(hunks) => place_note(hunks, source),
-                None => unknown(&source.path),
+    let mut locations = Vec::new();
+    if let Some(source) = &entry.source {
+        locations.push(match hunks(&source.revision, &source.path) {
+            Some(hunks) => place_note(hunks, source),
+            None => unknown(&source.path),
+        });
+    }
+    let parent = format!("{}^", entry.commit);
+    for file in files {
+        if file.hunks.is_empty() {
+            locations.push(unknown(&file.path));
+        }
+        for change in file.hunks {
+            let to_parent = hunks(&parent, &file.path);
+            let to_commit = hunks(&entry.commit, &file.path);
+            locations.push(match (to_parent, to_commit) {
+                (Some(to_parent), Some(to_commit)) => {
+                    place_hunk(to_parent, to_commit, &file.path, change)
+                }
+                _ => unknown(&file.path),
             });
         }
-        let parent = format!("{}^", entry.commit);
-        for file in files {
-            if file.hunks.is_empty() {
-                locations.push(unknown(&file.path));
-            }
-            for change in file.hunks {
-                let to_parent = hunks(&parent, &file.path);
-                let to_commit = hunks(&entry.commit, &file.path);
-                locations.push(match (to_parent, to_commit) {
-                    (Some(to_parent), Some(to_commit)) => {
-                        place_hunk(to_parent, to_commit, &file.path, change)
-                    }
-                    _ => unknown(&file.path),
-                });
-            }
-        }
-        entries.push(PlacedEntry { entry, locations });
     }
-    Ok(PlacedReview {
-        branch: review.branch,
-        marker: review.marker,
-        subject: review.subject,
-        at: to.unwrap_or_else(|| "worktree".to_string()),
-        entries,
-    })
+    PlacedEntry { entry, locations }
 }
 
 fn unknown(path: &str) -> Location {
