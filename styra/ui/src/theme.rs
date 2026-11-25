@@ -35,6 +35,9 @@ pub const RUNNING_STATUS: Color = RUNNING;
 pub const QUOTA_WARNING: Color = palette::TERMINAL_YELLOW;
 /// A workspace heading in the live-interactions navigator.
 pub const WORKSPACE_NAME: Color = palette::GOLD;
+/// Top-level interaction names stand slightly above their nested branches.
+pub const TOP_LEVEL_INTERACTION_NAME: Color = palette::WHITE;
+pub const NESTED_INTERACTION_NAME: Color = palette::SOFT_WHITE;
 /// A worktree named in a navigator row's branch column: a cool hue, so it
 /// stands apart from the warm workspace headings and branch names around it.
 pub const DIRECTORY_NAME: Color = palette::SOFT_CYAN;

@@ -558,8 +558,10 @@ fn interaction_cells(
         Style::default()
             .fg(theme::SELECTED_LIVE_INTERACTION_TEXT)
             .add_modifier(Modifier::BOLD)
+    } else if *depth == 0 {
+        Style::default().fg(theme::TOP_LEVEL_INTERACTION_NAME)
     } else {
-        Style::default().fg(theme::TEXT)
+        Style::default().fg(theme::NESTED_INTERACTION_NAME)
     };
     // The source of the cursor's branch, and the cursor's own branches, are
     // underlined, so a branch drawn under another checkout than its source's
