@@ -1,3 +1,4 @@
+- Should be able to ask in the interaction for specific locations, and mark those locations in the diff
 - Modal key system:
   - gp instead of ctrl-p etc.
 - Taking git actions, and maybe other actions, producing information for the current interaction (or all interactions in current worktree):
