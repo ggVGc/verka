@@ -900,11 +900,13 @@ fn scrolling_keeps_two_rows_of_margin_until_the_list_ends() {
     }
 }
 
-/// Every row but the cursor's is gently faded, with supporting text
-/// further subdued so the cursor's row stays the brightest in the list.
+/// Top-level names stay bright; nested names and supporting text fade.
 #[test]
 fn the_cursor_row_is_lifted_and_the_rest_faded() {
-    let view = many_rows(0);
+    let mut view = many_rows(0);
+    if let InteractionRow::Interaction { depth, .. } = &mut view.rows[2] {
+        *depth = 1;
+    }
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
     terminal
         .draw(|frame| {
@@ -941,7 +943,8 @@ fn the_cursor_row_is_lifted_and_the_rest_faded() {
     assert_eq!(color("o", 1), brightened(theme::INTERACTION_STATUS_INFO));
     assert_eq!(color("d", 2), brightened(theme::SUBORDINATE_TEXT));
     assert_eq!(color("●", 3), unselected(theme::SUCCESS));
-    assert_eq!(color("t", 3), unselected(theme::TEXT));
+    assert_eq!(color("t", 3), theme::TOP_LEVEL_INTERACTION_NAME);
+    assert_eq!(color("t", 5), unselected(theme::NESTED_INTERACTION_NAME));
     assert_eq!(
         color("o", 3),
         unselected(faded(theme::INTERACTION_STATUS_INFO))

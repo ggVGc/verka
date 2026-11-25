@@ -44,7 +44,7 @@ pub(crate) fn running_indicator(events: usize) -> &'static str {
 const SCROLL_MARGIN: usize = 2;
 
 /// How far, in tenths, interactions other than the cursor's fade toward the
-/// background, including names, status markers and message lines.
+/// background, including nested names, status markers and message lines.
 const UNSELECTED_ROW_FADE: u16 = 2;
 
 /// Additional fading for supporting text on rows other than the cursor's.
@@ -106,43 +106,34 @@ pub fn render(frame: &mut Frame, view: &InteractionNavigator<'_>, area: Rect) ->
         .rows
         .iter()
         .position(|row| matches!(row, InteractionRow::Interaction { selected: true, .. }));
-    // Every other interaction under a heading is drawn on a faint stripe, so
-    // the eye can follow a row across the pane and down to its message line.
+    // Top-level interactions have a faint background; branches stay darker.
+    // The background also covers each interaction's message line.
     // The cursor's row is drawn on a slightly lighter tint in its place.
-    let mut striped = false;
     let mut items = view
         .rows
         .iter()
         .map(|row| {
             let mut item = row_item(row, view.all_workspaces, inner.width.into(), &widths);
             match row {
-                InteractionRow::Workspace(_) => striped = false,
+                InteractionRow::Workspace(_) => {}
                 InteractionRow::Interaction {
-                    selected, flashing, ..
+                    selected,
+                    flashing,
+                    depth,
+                    ..
                 } => {
                     let background = if *flashing {
                         Some(theme::FLASHED_ROW_BACKGROUND)
                     } else if *selected {
                         Some(theme::SELECTED_ROW_BACKGROUND)
                     } else {
-                        striped.then_some(theme::ALTERNATE_ROW_BACKGROUND)
+                        (*depth == 0).then_some(theme::ALTERNATE_ROW_BACKGROUND)
                     };
                     if let Some(background) = background {
                         for line in &mut item {
                             line.style = line.style.bg(background);
                         }
                     }
-                    if !*selected {
-                        for line in &mut item {
-                            line.style = faded_style(line.style, UNSELECTED_ROW_FADE);
-                            for span in &mut line.spans {
-                                if span.style != shared_worktree_style() {
-                                    span.style = faded_style(span.style, UNSELECTED_ROW_FADE);
-                                }
-                            }
-                        }
-                    }
-                    striped = !striped;
                 }
             }
             item
@@ -465,8 +456,8 @@ fn row_item(
     }
     // Everything after the name is lifted toward white and bolded on the
     // cursor's row, and faded on the others.
-    // The edges, status marker and name keep their base styles here; render
-    // applies the whole-row fade afterward.
+    // The edges, status marker and name keep their base styles here.
+    // The row fade below keeps top-level names bright.
     let message_style = Style::default().fg(LAST_MESSAGE_COLOR);
     let adjust = |style: Style| {
         if *selected {
@@ -495,6 +486,17 @@ fn row_item(
                 message_style,
             ),
         ]));
+    }
+    if !*selected {
+        for (line_index, line) in lines.iter_mut().enumerate() {
+            line.style = faded_style(line.style, UNSELECTED_ROW_FADE);
+            for (span_index, span) in line.spans.iter_mut().enumerate() {
+                let top_level_name = *depth == 0 && line_index == 0 && span_index == name_index;
+                if !top_level_name && span.style != shared_worktree_style() {
+                    span.style = faded_style(span.style, UNSELECTED_ROW_FADE);
+                }
+            }
+        }
     }
     lines
 }

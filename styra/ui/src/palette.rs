@@ -12,8 +12,6 @@ use ratatui::style::Color;
 
 /// 15, `Normal`.
 pub const WHITE: Color = Color::Rgb(255, 255, 255);
-/// A near-white one step below white, for a subtle text hierarchy.
-pub const SOFT_WHITE: Color = Color::Rgb(230, 230, 230);
 /// 251, `Visual` / `TabLine` text.
 pub const LIGHT_GRAY: Color = Color::Rgb(198, 198, 198);
 /// 180, `Statement`. Shared by every role that wants this soft tan: supporting

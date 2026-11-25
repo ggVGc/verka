@@ -37,7 +37,7 @@ pub const QUOTA_WARNING: Color = palette::TERMINAL_YELLOW;
 pub const WORKSPACE_NAME: Color = palette::GOLD;
 /// Top-level interaction names stand slightly above their nested branches.
 pub const TOP_LEVEL_INTERACTION_NAME: Color = palette::WHITE;
-pub const NESTED_INTERACTION_NAME: Color = palette::SOFT_WHITE;
+pub const NESTED_INTERACTION_NAME: Color = palette::WHITE;
 /// A worktree named in a navigator row's branch column: a cool hue, so it
 /// stands apart from the warm workspace headings and branch names around it.
 pub const DIRECTORY_NAME: Color = palette::SOFT_CYAN;
@@ -118,8 +118,8 @@ pub const STOP_SERVER_RESTARTED_MID_TURN: Color = palette::ROSE;
 /// Stopped without saying why.
 pub const STOP_UNKNOWN: Color = INACTIVE;
 
-/// Behind every other interaction in the navigator, barely off the
-/// terminal's own background.
+/// Behind top-level interactions in the navigator, barely off the
+/// terminal's own background used for nested branches.
 pub const ALTERNATE_ROW_BACKGROUND: Color = palette::FAINT_GRAY;
 /// Behind the navigator's cursor row: a faint warm orange, a step above
 /// [`ALTERNATE_ROW_BACKGROUND`].
