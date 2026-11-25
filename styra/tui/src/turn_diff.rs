@@ -116,6 +116,7 @@ impl App {
                     diff.per_file = full.per_file;
                     diff.side_by_side = full.side_by_side;
                     diff.hide_removed = full.hide_removed;
+                    diff.ultra_compact = full.ultra_compact;
                     diff.compact_dirs = full.compact_dirs;
                     diff.tint = full.tint;
                     diff.word_highlights = full.word_highlights;

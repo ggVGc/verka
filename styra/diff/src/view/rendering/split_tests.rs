@@ -109,6 +109,7 @@ fn split_buffer(
             frame.area(),
             0,
             horizontal_scroll,
+            Hidden::default(),
             false,
             None,
         );
@@ -198,7 +199,16 @@ fn words_work_in_both_layouts_with_tint_and_removals_hidden() {
             }
         }
     }
-    let lines = patch_lines(patch, true, Tint::Half, true, None, 80, false, None);
+    let lines = patch_lines(
+        patch,
+        Hidden::removed(true),
+        Tint::Half,
+        true,
+        None,
+        80,
+        false,
+        None,
+    );
     assert!(lines
         .iter()
         .flat_map(|l| &l.spans)

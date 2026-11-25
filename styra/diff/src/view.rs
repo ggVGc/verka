@@ -64,6 +64,8 @@ pub struct CheckoutDiffView<'a> {
     /// Whether the thumbnail has been put away, where it would be shown.
     pub thumbnail_hidden: bool,
     pub hide_removed: bool,
+    /// Whether only the changed lines are shown, without their context.
+    pub ultra_compact: bool,
     /// Whether the file tree folds directories with no files of their own
     /// and a single subdirectory onto one row.
     pub compact_dirs: bool,
@@ -137,6 +139,14 @@ impl<'a> CheckoutDiffView<'a> {
             ..Self::default()
         }
     }
+
+    /// The lines left out of the patch shown.
+    pub(crate) fn hidden(&self) -> Hidden {
+        Hidden {
+            removed: self.hide_removed,
+            context: self.ultra_compact,
+        }
+    }
 }
 
 /// Nothing read yet, drawn as Styra draws diffs: removed lines shown, words
@@ -169,6 +179,7 @@ impl Default for CheckoutDiffView<'_> {
             thumbnail: false,
             thumbnail_hidden: false,
             hide_removed: false,
+            ultra_compact: false,
             compact_dirs: true,
             files_below: false,
             file_list_hidden: false,
@@ -245,17 +256,70 @@ pub(crate) enum Row {
     RuleBelow,
 }
 
+/// Which of a diff's lines are left out of the view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Hidden {
+    /// Removed lines.
+    pub removed: bool,
+    /// Unchanged context, so only the changed lines are left, under their
+    /// files' headers and hunk cuts: the ultra-compact view.
+    pub context: bool,
+}
+
+#[cfg(test)]
+impl Hidden {
+    /// Removed lines left out when `removed`, and nothing else.
+    pub(crate) fn removed(removed: bool) -> Self {
+        Self {
+            removed,
+            context: false,
+        }
+    }
+}
+
 /// The rows `text` is drawn as: Git index, new file mode and path markers
-/// are omitted, as
-/// are removed lines when hidden, and each file's header is set between two
-/// rules — the one above only when something is drawn above it.
-pub(crate) fn rows(text: &str, hide_removed: bool, per_file: bool) -> Vec<Row> {
-    let removed = if hide_removed {
+/// are omitted, as are the lines `hidden` leaves out, and each file's header
+/// is set between two rules — the one above only when something is drawn
+/// above it.
+pub(crate) fn rows(text: &str, hidden: Hidden, per_file: bool) -> Vec<Row> {
+    file_view_rows(text, plan(text, &hidden_lines(text, hidden)), per_file)
+}
+
+/// For each line of `text`, whether `hidden` leaves it out.
+pub(crate) fn hidden_lines(text: &str, hidden: Hidden) -> Vec<bool> {
+    let mut lines = if hidden.removed {
         removed_rows(text)
     } else {
-        Vec::new()
+        vec![false; text.lines().count()]
     };
-    file_view_rows(text, plan(text, &removed), per_file)
+    if hidden.context {
+        for (line, context) in lines.iter_mut().zip(context_rows(text)) {
+            *line |= context;
+        }
+    }
+    lines
+}
+
+/// For each line of `text`, whether it is unchanged context inside a hunk,
+/// or the note that such a line has no newline at its end.
+pub(crate) fn context_rows(text: &str) -> Vec<bool> {
+    let mut in_hunk = false;
+    let mut previous = false;
+    text.lines()
+        .map(|line| {
+            if is_file_header(line) {
+                in_hunk = false;
+            } else if is_hunk_header(line) {
+                in_hunk = true;
+            }
+            let context = in_hunk
+                && (line.starts_with(' ')
+                    || line.is_empty()
+                    || (line.starts_with('\\') && previous));
+            previous = context;
+            context
+        })
+        .collect()
 }
 
 /// Keep the full patch for highlighting and source positions, but omit its
@@ -282,8 +346,8 @@ fn file_view_rows(text: &str, rows: Vec<Row>, per_file: bool) -> Vec<Row> {
         .collect()
 }
 
-/// [`rows`], given which lines are `removed` and to be left out.
-fn plan(text: &str, removed: &[bool]) -> Vec<Row> {
+/// [`rows`], given which lines are `hidden` and to be left out.
+fn plan(text: &str, hidden: &[bool]) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut in_hunk = false;
     for (index, line) in text.lines().enumerate() {
@@ -298,7 +362,7 @@ fn plan(text: &str, removed: &[bool]) -> Vec<Row> {
         {
             continue;
         }
-        if removed.get(index).copied().unwrap_or(false) {
+        if hidden.get(index).copied().unwrap_or(false) {
             continue;
         }
         let header = is_file_header(line);

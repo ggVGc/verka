@@ -15,7 +15,7 @@ use styra_ui::search::Search;
 use crate::files::{filtered_file_diffs, position, FileDiff};
 use crate::layers::Layers;
 use crate::report::{ReportPage, ReportState};
-use crate::view::{rows, CheckoutDiffFeedback, CheckoutDiffView, Row, Tint};
+use crate::view::{rows, CheckoutDiffFeedback, CheckoutDiffView, Hidden, Row, Tint};
 
 /// What a diff of a checkout compares.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,6 +75,9 @@ pub(crate) enum Action {
     /// Hide or show the per-file view's file list.
     ToggleFileList,
     ToggleRemoved,
+    /// Show only the changed lines, under their files' headers and hunk
+    /// cuts, or their context again.
+    ToggleUltraCompact,
     ToggleLayout,
     PanLeft,
     PanRight,
@@ -152,6 +155,8 @@ pub struct CheckoutDiff {
     pub combined_side: bool,
     pub horizontal_scroll: u16,
     pub hide_removed: bool,
+    /// Whether unchanged context is left out, showing only the changed lines.
+    pub ultra_compact: bool,
     pub compact_dirs: bool,
     pub tint: Tint,
     pub word_highlights: bool,
@@ -221,6 +226,7 @@ impl Default for CheckoutDiff {
             combined_side: false,
             horizontal_scroll: 0,
             hide_removed: false,
+            ultra_compact: false,
             compact_dirs: true,
             tint: Tint::default(),
             word_highlights: true,
@@ -293,11 +299,10 @@ impl CheckoutDiff {
             })?,
             None => 0,
         };
-        let offset =
-            crate::split::source_rows(file.patch, self.hide_removed, self.rendered_side, true)
-                .iter()
-                .position(|shown| matches!(shown, Row::Line(index) if *index == row))
-                .unwrap_or(0);
+        let offset = crate::split::source_rows(file.patch, self.hidden(), self.rendered_side, true)
+            .iter()
+            .position(|shown| matches!(shown, Row::Line(index) if *index == row))
+            .unwrap_or(0);
         if self.per_file {
             self.keep_file_top();
         } else {
@@ -577,6 +582,7 @@ impl CheckoutDiff {
             horizontal_scroll: self.horizontal_scroll,
             thumbnail_hidden: self.thumbnail_hidden,
             hide_removed: self.hide_removed,
+            ultra_compact: self.ultra_compact,
             compact_dirs: self.compact_dirs,
             tint: self.tint,
             word_highlights: self.word_highlights,
@@ -689,7 +695,7 @@ impl CheckoutDiff {
                 self.line_cursor = self.shown_text().and_then(|text| {
                     let rows = crate::split::source_rows(
                         text,
-                        self.hide_removed,
+                        self.hidden(),
                         self.rendered_side,
                         self.per_file,
                     );
@@ -710,48 +716,14 @@ impl CheckoutDiff {
             Action::FilesUp if lines => self.move_to_block(false),
             Action::First if lines => self.move_cursor(isize::MIN),
             Action::Last if lines => self.move_cursor(isize::MAX),
-            Action::ToggleRemoved => {
-                let hidden = self.hide_removed;
-                if let Some(text) = self.shown_text() {
-                    self.scroll.offset = if self.rendered_side {
-                        crate::split::remap(
-                            text,
-                            hidden,
-                            true,
-                            !hidden,
-                            false,
-                            self.scroll.clamped(),
-                            self.per_file,
-                        )
-                    } else {
-                        keep_top(text, hidden, self.scroll.clamped(), self.per_file)
-                    };
-                }
-                self.rendered_side = false;
-                if self.per_file {
-                    if let Ok(text) = &self.diff {
-                        self.combined_scroll.offset = if self.combined_side {
-                            crate::split::remap(
-                                text,
-                                hidden,
-                                true,
-                                !hidden,
-                                false,
-                                self.combined_scroll.clamped(),
-                                false,
-                            )
-                        } else {
-                            keep_top(text, hidden, self.combined_scroll.clamped(), false)
-                        };
-                    }
-                    self.combined_side = false;
-                    self.combined_scroll.note_limit(u16::MAX);
-                }
-                self.hide_removed = !hidden;
-                self.scroll.note_limit(u16::MAX);
-                // Off a removed line that is now hidden.
-                self.move_cursor_over(0, false);
-            }
+            Action::ToggleRemoved => self.set_hidden(Hidden {
+                removed: !self.hide_removed,
+                ..self.hidden()
+            }),
+            Action::ToggleUltraCompact => self.set_hidden(Hidden {
+                context: !self.ultra_compact,
+                ..self.hidden()
+            }),
             Action::ToggleLayout => self.side_by_side = !self.side_by_side,
             Action::ToggleFilesBelow => self.files_below = !self.files_below,
             Action::ToggleFileList if self.per_file => {
@@ -868,7 +840,7 @@ impl CheckoutDiff {
         else {
             return;
         };
-        let (hidden, side, per_file) = (self.hide_removed, self.rendered_side, self.per_file);
+        let (hidden, side, per_file) = (self.hidden(), self.rendered_side, self.per_file);
         let found = crate::find::match_rows(text, term, hidden, side, per_file);
         let at = crate::split::row_of(text, hidden, side, per_file, cursor);
         let target = if down {
@@ -923,7 +895,7 @@ impl CheckoutDiff {
             None => {
                 let rows = crate::split::source_rows(
                     text,
-                    self.hide_removed,
+                    self.hidden(),
                     self.rendered_side,
                     self.per_file,
                 );
@@ -976,7 +948,7 @@ impl CheckoutDiff {
         let (Some(cursor), Some(text)) = (self.line_cursor, self.shown_text()) else {
             return;
         };
-        let (hidden, side, per_file) = (self.hide_removed, self.rendered_side, self.per_file);
+        let (hidden, side, per_file) = (self.hidden(), self.rendered_side, self.per_file);
         let changed = changed_lines(text);
         let drawn: Vec<(usize, usize)> = crate::split::source_rows(text, hidden, side, per_file)
             .into_iter()
@@ -1012,7 +984,7 @@ impl CheckoutDiff {
         let (Some(cursor), Some(text)) = (self.line_cursor, self.shown_text()) else {
             return;
         };
-        let (hidden, side, per_file) = (self.hide_removed, self.rendered_side, self.per_file);
+        let (hidden, side, per_file) = (self.hidden(), self.rendered_side, self.per_file);
         let blocks = change_blocks(text);
         let mut starts: Vec<(usize, usize)> = Vec::new();
         let mut last_block = None;
@@ -1167,12 +1139,8 @@ impl CheckoutDiff {
         let top = self.scroll.clamped();
         let line = (top > 0)
             .then(|| {
-                let rows = crate::split::source_rows(
-                    file.patch,
-                    self.hide_removed,
-                    self.rendered_side,
-                    true,
-                );
+                let rows =
+                    crate::split::source_rows(file.patch, self.hidden(), self.rendered_side, true);
                 line_at(&rows, usize::from(top))
             })
             .flatten();
@@ -1186,7 +1154,7 @@ impl CheckoutDiff {
     fn restore_file_top(&mut self) {
         let offset = self.shown_file().and_then(|(_, file)| {
             let line = *self.file_tops.get(file.path)?;
-            crate::split::source_rows(file.patch, self.hide_removed, self.rendered_side, true)
+            crate::split::source_rows(file.patch, self.hidden(), self.rendered_side, true)
                 .iter()
                 .position(|row| matches!(row, Row::Line(index) if *index >= line))
         });
@@ -1194,14 +1162,71 @@ impl CheckoutDiff {
         // The limit measured belongs to the patch shown before.
         self.scroll.note_limit(u16::MAX);
     }
+
+    /// The lines left out of the patch shown.
+    pub(crate) fn hidden(&self) -> Hidden {
+        Hidden {
+            removed: self.hide_removed,
+            context: self.ultra_compact,
+        }
+    }
+
+    /// Leave out the lines `next` says instead, keeping what is at the top
+    /// of the view there, here and in the combined diff put by, and the line
+    /// cursor on a line still drawn.
+    fn set_hidden(&mut self, next: Hidden) {
+        let hidden = self.hidden();
+        // Removed lines are only ever hidden from the unified layout.
+        let side = |side: bool| side && !next.removed;
+        if let Some(text) = self.shown_text() {
+            self.scroll.offset = if self.rendered_side {
+                crate::split::remap(
+                    text,
+                    hidden,
+                    true,
+                    next,
+                    side(true),
+                    self.scroll.clamped(),
+                    self.per_file,
+                )
+            } else {
+                keep_top(text, hidden, next, self.scroll.clamped(), self.per_file)
+            };
+        }
+        self.rendered_side = side(self.rendered_side);
+        if self.per_file {
+            if let Ok(text) = &self.diff {
+                self.combined_scroll.offset = if self.combined_side {
+                    crate::split::remap(
+                        text,
+                        hidden,
+                        true,
+                        next,
+                        side(true),
+                        self.combined_scroll.clamped(),
+                        false,
+                    )
+                } else {
+                    keep_top(text, hidden, next, self.combined_scroll.clamped(), false)
+                };
+            }
+            self.combined_side = side(self.combined_side);
+            self.combined_scroll.note_limit(u16::MAX);
+        }
+        self.hide_removed = next.removed;
+        self.ultra_compact = next.context;
+        self.scroll.note_limit(u16::MAX);
+        // Off a line that is now hidden.
+        self.move_cursor_over(0, false);
+    }
 }
 
-/// The offset that keeps what is at the top of `text`'s rows there once its
-/// removed lines are shown again, if `hidden`, or hidden: the line at the
-/// top, or the first after it that stays, with a rule above it kept too.
-fn keep_top(text: &str, hidden: bool, top: u16, per_file: bool) -> u16 {
-    let before = rows(text, hidden, per_file);
-    let after = rows(text, !hidden, per_file);
+/// The offset that keeps what is at the top of `text`'s rows there once the
+/// lines `before` hid are hidden as `after` says instead: the line at the top,
+/// or the first after it that stays, with a rule above it kept too.
+fn keep_top(text: &str, before: Hidden, after: Hidden, top: u16, per_file: bool) -> u16 {
+    let before = rows(text, before, per_file);
+    let after = rows(text, after, per_file);
     let top = usize::from(top);
     let offset = match line_at(&before, top) {
         Some(line) => {

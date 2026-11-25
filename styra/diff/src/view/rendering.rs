@@ -678,7 +678,7 @@ fn render_inside(
             Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(body);
         let found = match (find, shown) {
             (Some(term), Ok(text)) => {
-                crate::find::match_rows(text, term, view.hide_removed, side_by_side, view.per_file)
+                crate::find::match_rows(text, term, view.hidden(), side_by_side, view.per_file)
             }
             _ => Vec::new(),
         };
@@ -690,7 +690,7 @@ fn render_inside(
         )];
         let at = match shown {
             Ok(text) => {
-                crate::split::row_of(text, view.hide_removed, side_by_side, view.per_file, cursor)
+                crate::split::row_of(text, view.hidden(), side_by_side, view.per_file, cursor)
             }
             Err(_) => usize::MAX,
         };
@@ -722,9 +722,9 @@ fn render_inside(
         .map(|text| {
             crate::split::remap(
                 text,
-                view.hide_removed,
+                view.hidden(),
                 view.rendered_side,
-                view.hide_removed,
+                view.hidden(),
                 side_by_side,
                 view.requested_scroll,
                 view.per_file,
@@ -736,7 +736,7 @@ fn render_inside(
     let requested = match (view.line_cursor, shown) {
         (Some(cursor), Ok(text)) => {
             let row =
-                crate::split::row_of(text, view.hide_removed, side_by_side, view.per_file, cursor);
+                crate::split::row_of(text, view.hidden(), side_by_side, view.per_file, cursor);
             let bottom = usize::from(requested) + usize::from(body.height.max(1)) - 1;
             match row.checked_sub(bottom) {
                 Some(below) if below > 0 => {
@@ -758,6 +758,7 @@ fn render_inside(
                 body,
                 requested,
                 view.horizontal_scroll,
+                view.hidden(),
                 view.per_file,
                 find,
             )
@@ -772,7 +773,7 @@ fn render_inside(
                 }
                 Ok(text) => patch_lines(
                     text,
-                    view.hide_removed,
+                    view.hidden(),
                     view.tint,
                     view.word_highlights,
                     view.layers.and_then(Result::ok),
@@ -803,12 +804,17 @@ fn render_inside(
     }
     if let Ok(text) = shown {
         let lines: Vec<_> = text.lines().collect();
+        // Side by side shows removed lines whatever is hidden.
+        let hidden = Hidden {
+            removed: view.hide_removed && !side_by_side,
+            ..view.hidden()
+        };
+        let hidden_lines = crate::view::hidden_lines(text, hidden);
         for index in crate::prompt::marked_rows(text, &view.prompts, view.per_file) {
             let line = lines[index];
-            let row =
-                crate::split::row_of(text, view.hide_removed, side_by_side, view.per_file, index);
+            let row = crate::split::row_of(text, view.hidden(), side_by_side, view.per_file, index);
             // Hidden source lines must not put their marker onto a different row.
-            if view.hide_removed && line.starts_with('-') {
+            if hidden_lines.get(index).copied().unwrap_or(false) {
                 continue;
             }
             if let Some(y) = row
@@ -829,8 +835,7 @@ fn render_inside(
         }
     }
     if let (Some(cursor), Ok(text)) = (view.line_cursor, shown) {
-        let row =
-            crate::split::row_of(text, view.hide_removed, side_by_side, view.per_file, cursor);
+        let row = crate::split::row_of(text, view.hidden(), side_by_side, view.per_file, cursor);
         if let Some(y) = row
             .checked_sub(usize::from(effective))
             .filter(|y| *y < usize::from(body.height))
@@ -862,7 +867,7 @@ fn render_inside(
             file.patch,
             file_lines,
             area,
-            view.hide_removed,
+            view.hidden(),
             usize::from(effective),
             usize::from(body.height),
             side_by_side,
@@ -871,7 +876,7 @@ fn render_inside(
     if let Some((layers, column)) = legend_area {
         let focused = match (view.line_cursor, layers, shown) {
             (None, Ok(layers), Ok(text)) => {
-                let rows = crate::split::source_rows(text, view.hide_removed, side_by_side, false);
+                let rows = crate::split::source_rows(text, view.hidden(), side_by_side, false);
                 let path = rows
                     .iter()
                     .skip(usize::from(effective))
@@ -1182,7 +1187,7 @@ fn render_report_preview(
     let mut lines = match file {
         Some(file) => patch_lines(
             file.patch,
-            view.hide_removed,
+            view.hidden(),
             view.tint,
             view.word_highlights,
             view.layers.and_then(Result::ok),
@@ -1352,7 +1357,7 @@ fn highlight_turn(
     };
     if split {
         let left = area.width / 2;
-        for (y, row) in crate::split::aligned(text, view.per_file)
+        for (y, row) in crate::split::aligned(text, view.hidden(), view.per_file)
             .into_iter()
             .skip(usize::from(scroll))
             .take(usize::from(area.height))
@@ -1372,7 +1377,7 @@ fn highlight_turn(
             }
         }
     } else {
-        for (y, row) in rows(text, view.hide_removed, view.per_file)
+        for (y, row) in rows(text, view.hidden(), view.per_file)
             .into_iter()
             .skip(usize::from(scroll))
             .take(usize::from(area.height))
@@ -1398,11 +1403,12 @@ fn render_split(
     area: Rect,
     scroll: u16,
     pan: u16,
+    hidden: Hidden,
     per_file: bool,
     find: Option<&str>,
 ) -> (u16, u16, u16) {
     use crate::split::{aligned, Cell, SplitRow};
-    let plan = aligned(text, per_file);
+    let plan = aligned(text, hidden, per_file);
     let source_lines: Vec<_> = text.lines().collect();
     let mut rendered = rendered_patch(text, tint, word_highlights, find);
     if let Some(layers) = layers {
@@ -1560,7 +1566,7 @@ fn render_thumbnail(
     patch: &str,
     file_lines: Option<usize>,
     area: Rect,
-    hide_removed: bool,
+    hidden: Hidden,
     scroll: usize,
     viewport: usize,
     side_by_side: bool,
@@ -1598,7 +1604,7 @@ fn render_thumbnail(
     let visible = thumbnail_viewport_layout(
         patch,
         file_lines,
-        hide_removed,
+        hidden,
         scroll,
         viewport,
         SECTIONS,
@@ -1763,7 +1769,10 @@ fn thumbnail_viewport(
     thumbnail_viewport_layout(
         patch,
         file_lines,
-        hide_removed,
+        Hidden {
+            removed: hide_removed,
+            context: false,
+        },
         scroll,
         viewport,
         height,
@@ -1775,7 +1784,7 @@ fn thumbnail_viewport(
 fn thumbnail_viewport_layout(
     patch: &str,
     file_lines: Option<usize>,
-    hide_removed: bool,
+    hidden: Hidden,
     scroll: usize,
     viewport: usize,
     height: usize,
@@ -1788,7 +1797,7 @@ fn thumbnail_viewport_layout(
     }
     let (extent, positions) = thumbnail_line_positions(patch);
     let total = file_lines.unwrap_or(extent).max(extent).max(1);
-    for row in crate::split::source_rows(patch, hide_removed, side_by_side, per_file)
+    for row in crate::split::source_rows(patch, hidden, side_by_side, per_file)
         .into_iter()
         .skip(scroll)
         .take(viewport)
@@ -1948,12 +1957,12 @@ fn rendered_patch(
     lines
 }
 
-/// `text` drawn as its [`rows`], `width` wide. Removed lines are left out
+/// `text` drawn as its [`rows`], `width` wide. Hidden lines are left out
 /// after rendering, so line numbers and syntax highlighting still follow the
 /// complete patch.
 fn patch_lines(
     text: &str,
-    hide_removed: bool,
+    hidden: Hidden,
     tint: Tint,
     word_highlights: bool,
     layers: Option<&Layers>,
@@ -1962,11 +1971,18 @@ fn patch_lines(
     find: Option<&str>,
 ) -> Vec<Line<'static>> {
     let mut rendered = rendered_patch(text, tint, word_highlights, find);
-    let removed: Vec<bool> = if hide_removed {
-        rendered.iter().map(is_removed).collect()
+    let context = if hidden.context {
+        crate::view::context_rows(text)
     } else {
         Vec::new()
     };
+    let left_out: Vec<bool> = rendered
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            (hidden.removed && is_removed(line)) || context.get(index).copied().unwrap_or(false)
+        })
+        .collect();
     // Painted once removed rows are known by their own band.
     if let Some(layers) = layers {
         paint_layers(text, &mut rendered, layers);
@@ -1975,7 +1991,7 @@ fn patch_lines(
     let mut rendered: Vec<_> = rendered.into_iter().map(Some).collect();
     let headers: Vec<bool> = text.lines().map(is_file_header).collect();
     let hunks: Vec<bool> = text.lines().map(is_hunk_header).collect();
-    file_view_rows(text, plan(text, &removed), per_file)
+    file_view_rows(text, plan(text, &left_out), per_file)
         .into_iter()
         .filter_map(|row| match row {
             Row::Line(index) => {

@@ -78,7 +78,16 @@ fn file_view_retains_changes_without_hunks() {
         "similarity index 100%\nrename from old\nrename to new",
     ] {
         let text = format!("diff --git a/old b/new\n{detail}\n");
-        let shown = patch_lines(&text, false, Tint::Full, true, None, 80, true, None);
+        let shown = patch_lines(
+            &text,
+            Hidden::default(),
+            Tint::Full,
+            true,
+            None,
+            80,
+            true,
+            None,
+        );
         let shown = shown
             .iter()
             .map(ToString::to_string)
@@ -106,7 +115,7 @@ fn layers_tint_each_change_by_the_commits_that_made_it() {
     let backgrounds = |hide_removed| {
         patch_lines(
             DIFF,
-            hide_removed,
+            Hidden::removed(hide_removed),
             Tint::Full,
             false,
             Some(&layers),
@@ -508,7 +517,16 @@ fn file_focus_highlights_a_move_without_edits() {
 
 #[test]
 fn hiding_removals_keeps_added_indicators_and_original_line_numbers() {
-    let lines = patch_lines(DIFF, true, Tint::Full, true, None, 80, false, None);
+    let lines = patch_lines(
+        DIFF,
+        Hidden::removed(true),
+        Tint::Full,
+        true,
+        None,
+        80,
+        false,
+        None,
+    );
     let text = lines
         .iter()
         .map(|line| {
@@ -532,11 +550,18 @@ fn hiding_removals_keeps_added_indicators_and_original_line_numbers() {
             .count(),
         2
     );
-    assert!(
-        patch_lines(DIFF, false, Tint::Full, true, None, 80, false, None)
-            .iter()
-            .any(|line| line.style.bg == Some(theme::DIFF_REMOVED_BACKGROUND))
-    );
+    assert!(patch_lines(
+        DIFF,
+        Hidden::default(),
+        Tint::Full,
+        true,
+        None,
+        80,
+        false,
+        None
+    )
+    .iter()
+    .any(|line| line.style.bg == Some(theme::DIFF_REMOVED_BACKGROUND)));
 }
 
 /// The per-file view's left pane holds the files, then the layers, then
@@ -658,7 +683,7 @@ fn fifteen_sections_preserve_edits_inside_the_viewport_outline() {
             "@@ -10 +10 @@\n-old\n+new\n@@ -900 +900 @@\n-old\n+new\n",
             Some(1000),
             frame.area(),
-            false,
+            Hidden::default(),
             0,
             100,
             false,
@@ -1405,7 +1430,7 @@ fn files_below_the_patch_fill_a_strip_of_bounded_height() {
 fn a_new_files_mode_line_is_not_drawn() {
     let text = "diff --git a/a b/a\nnew file mode 100644\nindex 0000000..e69de29\n\
             --- /dev/null\n+++ b/a\n@@ -0,0 +1 @@\n+one\n";
-    let drawn: Vec<_> = rows(text, false, false)
+    let drawn: Vec<_> = rows(text, Hidden::default(), false)
         .into_iter()
         .filter_map(|row| match row {
             Row::Line(index) => text.lines().nth(index),
@@ -1413,10 +1438,72 @@ fn a_new_files_mode_line_is_not_drawn() {
         })
         .collect();
     assert_eq!(drawn, ["diff --git a/a b/a", "@@ -0,0 +1 @@", "+one"]);
-    let shown = patch_lines(text, false, Tint::Full, true, None, 40, false, None);
+    let shown = patch_lines(
+        text,
+        Hidden::default(),
+        Tint::Full,
+        true,
+        None,
+        40,
+        false,
+        None,
+    );
     assert_eq!(shown[0].to_string().trim_end(), "a mode 100644");
     let file = &crate::files::file_diffs(text)[0];
     assert_eq!(file_info(file).to_string(), " a [A] mode 100644");
+}
+
+/// Ultra-compact draws only the changed lines, under their file's header
+/// and hunk cuts, numbered as they are with their context.
+#[test]
+fn ultra_compact_draws_only_the_changed_lines() {
+    let text = "diff --git a/a b/a\nindex 1111111..2222222 100644\n--- a/a\n+++ b/a\n\
+            @@ -10,3 +10,3 @@\n keep\n-old\n+new\n after\n\\ No newline at end of file\n\
+            @@ -50 +50 @@\n-last\n+end\n";
+    let hidden = Hidden {
+        removed: false,
+        context: true,
+    };
+    let drawn: Vec<_> = rows(text, hidden, false)
+        .into_iter()
+        .filter_map(|row| match row {
+            Row::Line(index) => text.lines().nth(index),
+            Row::RuleAbove | Row::RuleBelow => None,
+        })
+        .collect();
+    assert_eq!(
+        drawn,
+        [
+            "diff --git a/a b/a",
+            "@@ -10,3 +10,3 @@",
+            "-old",
+            "+new",
+            "@@ -50 +50 @@",
+            "-last",
+            "+end"
+        ]
+    );
+    let shown: Vec<_> = patch_lines(text, hidden, Tint::Full, false, None, 40, false, None)
+        .iter()
+        .map(|line| line.to_string().trim_end().to_owned())
+        .collect();
+    assert!(
+        shown.iter().any(|line| line.starts_with("11 -old")),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|line| line.starts_with("11 +new")),
+        "{shown:?}"
+    );
+    assert!(!shown.iter().any(|line| line.contains("keep")), "{shown:?}");
+    assert!(
+        !shown.iter().any(|line| line.contains("after")),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|line| line.contains("No newline")),
+        "{shown:?}"
+    );
 }
 
 #[test]

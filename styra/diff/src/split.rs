@@ -1,5 +1,5 @@
 //! Alignment and source locations shared by drawing, navigation, and resize handling.
-use crate::view::{rows, Row};
+use crate::view::{context_rows, rows, Hidden, Row};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Cell {
@@ -31,7 +31,10 @@ impl SplitRow {
     }
 }
 
-pub(crate) fn aligned(text: &str, per_file: bool) -> Vec<SplitRow> {
+/// The rows `text` is drawn as side by side. Removed lines are always shown
+/// there; unchanged context is left out when `hidden` says so, still counted
+/// toward the line numbers.
+pub(crate) fn aligned(text: &str, hidden: Hidden, per_file: bool) -> Vec<SplitRow> {
     let mut result = Vec::new();
     let mut old = 0;
     let mut new = 0;
@@ -53,7 +56,13 @@ pub(crate) fn aligned(text: &str, per_file: bool) -> Vec<SplitRow> {
         right.clear();
     }
     let lines: Vec<_> = text.lines().collect();
-    for row in rows(text, false, per_file) {
+    let context = if hidden.context {
+        context_rows(text)
+    } else {
+        Vec::new()
+    };
+    let hidden_context = |index: usize| context.get(index).copied().unwrap_or(false);
+    for row in rows(text, Hidden::default(), per_file) {
         let Row::Line(index) = row else {
             flush(&mut result, &mut left, &mut right);
             result.push(SplitRow::Shared(row));
@@ -92,11 +101,14 @@ pub(crate) fn aligned(text: &str, per_file: bool) -> Vec<SplitRow> {
                 }
                 Some(b' ') | None => {
                     flush(&mut result, &mut left, &mut right);
-                    result.push(SplitRow::Pair(Some(cell(old)), Some(cell(new))));
+                    if !hidden_context(index) {
+                        result.push(SplitRow::Pair(Some(cell(old)), Some(cell(new))));
+                    }
                     old += 1;
                     new += 1;
                     continue;
                 }
+                Some(b'\\') if hidden_context(index) => continue,
                 Some(b'\\') => {
                     // The annotation belongs to the preceding side, and has no line number.
                     let note = Cell {
@@ -123,9 +135,9 @@ pub(crate) fn aligned(text: &str, per_file: bool) -> Vec<SplitRow> {
     result
 }
 
-pub(crate) fn source_rows(text: &str, hidden: bool, split: bool, per_file: bool) -> Vec<Row> {
+pub(crate) fn source_rows(text: &str, hidden: Hidden, split: bool, per_file: bool) -> Vec<Row> {
     if split {
-        aligned(text, per_file)
+        aligned(text, hidden, per_file)
             .into_iter()
             .map(SplitRow::source)
             .collect()
@@ -136,10 +148,16 @@ pub(crate) fn source_rows(text: &str, hidden: bool, split: bool, per_file: bool)
 
 /// The row diff line `line` is drawn on: side by side, the row it shares with
 /// its other half; where it is hidden, the row of the first line after it.
-pub(crate) fn row_of(text: &str, hidden: bool, split: bool, per_file: bool, line: usize) -> usize {
+pub(crate) fn row_of(
+    text: &str,
+    hidden: Hidden,
+    split: bool,
+    per_file: bool,
+    line: usize,
+) -> usize {
     let source = Row::Line(line);
     let exact = if split {
-        aligned(text, per_file)
+        aligned(text, hidden, per_file)
             .iter()
             .position(|row| row.contains(source))
     } else {
@@ -157,9 +175,9 @@ pub(crate) fn row_of(text: &str, hidden: bool, split: bool, per_file: bool, line
 
 pub(crate) fn remap(
     text: &str,
-    hidden: bool,
+    hidden: Hidden,
     before: bool,
-    next_hidden: bool,
+    next_hidden: Hidden,
     after: bool,
     top: u16,
     per_file: bool,
@@ -183,7 +201,7 @@ pub(crate) fn remap(
     }
     let next = source_rows(text, next_hidden, after, per_file);
     let exact = if after {
-        aligned(text, per_file)
+        aligned(text, next_hidden, per_file)
             .iter()
             .position(|row| row.contains(source))
     } else {

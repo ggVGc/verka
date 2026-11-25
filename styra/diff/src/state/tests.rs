@@ -166,7 +166,7 @@ fn layout_changes_and_resizing_preserve_source_locations() {
     let location = |diff: &CheckoutDiff| {
         let text = diff.shown_text().unwrap();
         let plan =
-            crate::split::source_rows(text, diff.hide_removed, diff.rendered_side, diff.per_file);
+            crate::split::source_rows(text, diff.hidden(), diff.rendered_side, diff.per_file);
         position(
             text,
             line_at(&plan, usize::from(diff.scroll.clamped())).unwrap(),
@@ -213,13 +213,13 @@ fn jump_focuses_the_matching_file_and_hunk_line() {
     assert!(diff.per_file);
     assert_eq!(diff.selected_file, 1);
     assert_eq!(diff.combined_scroll.offset, 2);
-    let shown = rows(diff.shown_text().unwrap(), false, true);
+    let shown = rows(diff.shown_text().unwrap(), Hidden::default(), true);
     let row = line_at(&shown, usize::from(diff.scroll.clamped())).unwrap();
     assert_eq!(diff.shown_text().unwrap().lines().nth(row), Some("+end"));
 
     diff.hide_removed = true;
     diff.jump_to(Path::new("/w/b.txt"), Some(11)).unwrap();
-    let shown = rows(diff.shown_text().unwrap(), true, true);
+    let shown = rows(diff.shown_text().unwrap(), Hidden::removed(true), true);
     let row = line_at(&shown, usize::from(diff.scroll.clamped())).unwrap();
     assert_eq!(diff.shown_text().unwrap().lines().nth(row), Some("+new"));
     diff.jump_to(Path::new("/w/b.txt"), Some(10)).unwrap();
@@ -432,6 +432,33 @@ fn toggling_removed_lines_keeps_the_top_row() {
     assert_eq!(toggled(0), (0, 0));
 }
 
+/// Ultra-compact keeps the row at the top in place as removed lines do: a
+/// context row that goes is replaced there by the next change. A line
+/// cursor on context moves onto that change.
+#[test]
+fn toggling_ultra_compact_keeps_the_top_row_and_the_cursor_drawn() {
+    let mut diff = two_files();
+    // Rows: header, its rule, hunk, " a", "-b", "-c", "+B", " d".
+    diff.diff = Ok("diff --git a/f b/f\n@@ -1,4 +1,3 @@\n a\n-b\n-c\n+B\n d\n".into());
+    let mut toggled = |top: u16| {
+        diff.scroll.offset = top;
+        diff.apply(Action::ToggleUltraCompact);
+        let hidden = diff.scroll.offset;
+        diff.apply(Action::ToggleUltraCompact);
+        (hidden, diff.scroll.offset)
+    };
+    assert_eq!(toggled(3), (3, 4), "\" a\" goes; \"-b\" takes the top");
+    assert_eq!(toggled(4), (3, 4));
+    assert_eq!(toggled(6), (5, 6));
+    assert_eq!(toggled(1), (1, 1), "the header's rule");
+
+    diff.scroll.offset = 0;
+    diff.line_cursor = Some(2);
+    diff.apply(Action::ToggleUltraCompact);
+    assert!(diff.ultra_compact);
+    assert_eq!(diff.line_cursor, Some(3), "off \" a\" onto \"-b\"");
+}
+
 /// Going back to the combined diff from the per-file view returns to the
 /// row it was left at, hidden removed lines and all.
 #[test]
@@ -472,7 +499,8 @@ fn each_file_keeps_its_place_in_the_per_file_view() {
     );
     diff.apply(Action::ToggleFiles);
     diff.scroll.note_limit(100);
-    let rows = crate::split::source_rows(diff.shown_text().unwrap(), false, false, true);
+    let rows =
+        crate::split::source_rows(diff.shown_text().unwrap(), Hidden::default(), false, true);
     let plus_e = rows
             .iter()
             .position(|row| matches!(row, Row::Line(index) if diff.shown_text().unwrap().lines().nth(*index) == Some("+e")))
@@ -493,7 +521,7 @@ fn each_file_keeps_its_place_in_the_per_file_view() {
     diff.apply(Action::ToggleRemoved);
     diff.apply(Action::Up);
     let text = diff.shown_text().unwrap();
-    let rows = crate::split::source_rows(text, true, false, true);
+    let rows = crate::split::source_rows(text, Hidden::removed(true), false, true);
     let top = line_at(&rows, usize::from(diff.scroll.offset)).unwrap();
     assert_eq!(text.lines().nth(top), Some("+e"));
 
@@ -510,7 +538,7 @@ fn each_file_keeps_its_place_in_the_per_file_view() {
 
 fn text_at_top(diff: &CheckoutDiff) -> Option<&str> {
     let text = diff.shown_text()?;
-    let rows = crate::split::source_rows(text, diff.hide_removed, diff.rendered_side, true);
+    let rows = crate::split::source_rows(text, diff.hidden(), diff.rendered_side, true);
     text.lines()
         .nth(line_at(&rows, usize::from(diff.scroll.offset))?)
 }

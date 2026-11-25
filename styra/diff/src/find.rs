@@ -153,7 +153,7 @@ pub(crate) fn current_style() -> Style {
 pub(crate) fn match_rows(
     text: &str,
     term: &str,
-    hidden: bool,
+    hidden: crate::view::Hidden,
     split: bool,
     per_file: bool,
 ) -> Vec<(usize, usize)> {
@@ -163,7 +163,7 @@ pub(crate) fn match_rows(
         .collect();
     let found = |line: usize| found.get(line).copied().unwrap_or(false);
     let drawn: Vec<(usize, Vec<usize>)> = if split {
-        aligned(text, per_file)
+        aligned(text, hidden, per_file)
             .into_iter()
             .enumerate()
             .map(|(row, shown)| {

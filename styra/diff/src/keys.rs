@@ -150,6 +150,12 @@ pub const BINDINGS: &[Binding] = &[
         Command::View(Action::ToggleRemoved),
     ),
     bind(
+        &[KeyCode::Char('x')],
+        "x",
+        "toggle ultra-compact: only the changed lines, without their context",
+        Command::View(Action::ToggleUltraCompact),
+    ),
+    bind(
         &[KeyCode::Char('C')],
         "C (per-file view)",
         "fold / unfold directories holding no files of their own",
