@@ -246,7 +246,7 @@ fn row_height(row: &InteractionRow<'_>) -> usize {
 const LEAD_COLUMN_WIDTH: usize = 40;
 
 /// How wide each aligned column of the interaction rows is drawn, so the
-/// branch, the tags, the state labels, and the model each
+/// tags, the branch, the state labels, and the model each
 /// start at the same place down the list. The first column starts at
 /// [`LEAD_COLUMN_WIDTH`] and grows into unused space for longer names. The
 /// branch and tags columns fit their widest entries, though the branch gives
@@ -427,6 +427,9 @@ fn row_item(
     } = cells;
     // The name ends the lead, so it is what a long lead loses.
     fit_cell(&mut main, 0, widths.lead);
+    let start = main.len();
+    main.extend(tags);
+    fit_cell(&mut main, start, widths.tags);
     // A branch's start and end tell branches apart more often than its
     // middle does, so it loses its middle.
     let start = main.len();
@@ -437,11 +440,7 @@ fn row_item(
         widths.branch,
         crate::text::truncate_middle,
     );
-    for (cell, width) in [
-        (tags, widths.tags),
-        (labels, widths.labels),
-        (model, widths.model),
-    ] {
+    for (cell, width) in [(labels, widths.labels), (model, widths.model)] {
         let start = main.len();
         main.extend(cell);
         fit_cell(&mut main, start, width);
@@ -609,7 +608,7 @@ fn interaction_cells(
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect::<String>();
     main.push(Span::styled(name, name_style));
-    // Set off from the branch before them like every other column.
+    // Set off from the name before them like every other column.
     let mut tag_cell = Vec::new();
     if !tags.is_empty() {
         tag_cell.push(Span::styled(

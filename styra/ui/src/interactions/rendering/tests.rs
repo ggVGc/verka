@@ -323,7 +323,7 @@ fn renders_grouping_activity_and_continuation_rows() {
     let screen = rendered_at(&view, 120);
     assert!(screen.contains("Payments"), "{screen}");
     assert!(
-        squeezed(&screen).contains("repair checkout fix #bug #urgent NEWLY IDLE gpt-5"),
+        squeezed(&screen).contains("repair checkout #bug #urgent fix NEWLY IDLE gpt-5"),
         "{screen}"
     );
     assert!(screen.contains("  NEWLY IDLE"), "{screen}");
