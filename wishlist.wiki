@@ -1,3 +1,5 @@
+- Create new branch+worktree from some workspace, but do not set it as the integration target:
+  - For normal PR workflow, where I want to branch from something, but want it to be standalone, but know where we branched from
 - Break out a diff view in a separate terminal:
   - Should be associated and sync with the styra instance which launched it (or attached to any running one)
   - Act in the same way as the full-screen diff, except always open in a separate terminal
