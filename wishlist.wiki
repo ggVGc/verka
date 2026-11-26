@@ -1,3 +1,7 @@
+- One-off:
+  - Runs in separate worktree, always
+  - Automatically integrates upon done
+  - Mainly a way to do implementation work in a new separate context
 - Cleanup of interaction, dropping all events which are not user or agent messages (all edits, command runs etc.):
   - Essentially a new session created from current one
   - Some indication should be given that this happened, and a link kept to the old interaction, in case I want to go back to it later
