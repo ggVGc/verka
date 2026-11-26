@@ -2076,6 +2076,176 @@ fn file_headers_are_bars_between_rules() {
     assert_eq!(hidden[10..13], ["1 +kept", "▁", "[c.txt]"]);
 }
 
+/// Scrolled into a file, the unified combined diff keeps that file's header
+/// bar pinned over its top row, until the rule opening the next file
+/// reaches the top.
+#[test]
+fn the_top_files_header_stays_pinned_while_scrolling() {
+    let text = format!(
+        "{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n+kept\n-gone\n\
+             diff --git a/c.txt b/c.txt\n@@ -1 +1 @@\n-x\n+y\n"
+    );
+    // The first two rows of the patch, a bar in brackets, at `scroll`,
+    // and the row the line cursor is drawn on, if any.
+    let top = |scroll: u16, line_cursor: Option<usize>| {
+        let height = 12;
+        let buffer = draw_frame(80, height, |frame| {
+            render(
+                frame,
+                &CheckoutDiffView {
+                    diff: Ok(&text),
+                    requested_scroll: scroll,
+                    line_cursor,
+                    ..CheckoutDiffView::unread(Block::bordered())
+                },
+                frame.area(),
+            );
+        });
+        let rows: Vec<(String, bool, bool)> = (1..height - 1)
+            .map(|y| {
+                let cells: Vec<_> = (1..60u16).map(|x| &buffer[(x, y)]).collect();
+                let text: String = cells.iter().map(|cell| cell.symbol()).collect();
+                let bar = cells
+                    .iter()
+                    .all(|cell| cell.bg == theme::DIFF_FILE_HEADER_BACKGROUND);
+                let rule = cells.iter().all(|cell| cell.fg == theme::DIFF_FILE_RULE);
+                (text, bar, rule)
+            })
+            .collect();
+        let start = rows
+            .iter()
+            .position(|(text, ..)| text.starts_with("──"))
+            .unwrap();
+        let shown: Vec<String> = rows[start + 1..start + 3]
+            .iter()
+            .map(|(text, bar, rule)| match (bar, rule) {
+                (true, _) => format!("[{}]", text.trim()),
+                (_, true) => text.chars().next().unwrap().to_string(),
+                _ => text.trim().chars().take(12).collect(),
+            })
+            .collect();
+        shown
+    };
+    let cut = "┄".repeat(12);
+    let cut = cut.as_str();
+    assert_eq!(top(0, None), ["[src/a.rs]", "▔"]);
+    assert_eq!(top(1, None), ["[src/a.rs]", cut]);
+    // Under the bar, `fn a() {}` and `-fn b() {}` are out of sight.
+    assert_eq!(top(4, None), ["[src/a.rs  ↑ 2 lines]", "2 +fn c() {}"]);
+    // The next file's opening rule takes the top, then its bar.
+    assert_eq!(top(7, None), ["▁", "[b.txt]"]);
+    assert_eq!(top(8, None), ["[b.txt]", "▔"]);
+    assert_eq!(top(9, None), ["[b.txt]", cut]);
+    // A line cursor on the top row is scrolled out from under the bar.
+    // Line 5 of the diff, `1  fn a() {}`, is drawn on row 3.
+    assert_eq!(top(3, Some(5)), ["[src/a.rs]", "[▌  fn a() {}]"]);
+}
+
+/// Side by side, the combined diff pins the top file's header bar just as
+/// the unified layout does, drawn as the bar it stands in for.
+#[test]
+fn side_by_side_keeps_the_top_files_header_pinned() {
+    let text = format!(
+        "{DIFF}diff --git a/b.txt b/b.txt\n@@ -1 +1 @@\n+kept\n-gone\n\
+             diff --git a/c.txt b/c.txt\n@@ -1 +1 @@\n-x\n+y\n"
+    );
+    // The first two rows of the patch at `scroll`, under the column labels:
+    // each as its text, and the cells left of where a count goes.
+    let top = |scroll: u16| {
+        let height = 12;
+        let buffer = draw_frame(100, height, |frame| {
+            render(
+                frame,
+                &CheckoutDiffView {
+                    diff: Ok(&text),
+                    side_by_side: true,
+                    requested_scroll: scroll,
+                    ..CheckoutDiffView::unread(Block::bordered())
+                },
+                frame.area(),
+            );
+        });
+        let start = (1..height - 1)
+            .find(|&y| buffer[(1, y)].symbol() == "─")
+            .unwrap();
+        (start + 2..start + 4)
+            .map(|y| {
+                let cells: Vec<_> = (1..80u16).map(|x| buffer[(x, y)].clone()).collect();
+                let text: String = cells.iter().map(|cell| cell.symbol()).collect();
+                (text.trim().chars().take(12).collect::<String>(), cells)
+            })
+            .collect::<Vec<_>>()
+    };
+    let texts = |scroll| {
+        top(scroll)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>()
+    };
+    let cut = "┄".repeat(12);
+    assert_eq!(texts(0), ["src/a.rs", "▔".repeat(12).as_str()]);
+    assert_eq!(texts(1), ["src/a.rs", cut.as_str()]);
+    assert_eq!(texts(4)[0], "src/a.rs  ↑ ");
+    // The next file's opening rule takes the top, then its bar.
+    assert_eq!(texts(7), ["▁".repeat(12).as_str(), "b.txt"]);
+    assert_eq!(texts(9), ["b.txt", cut.as_str()]);
+    // Left of its count, the pinned bar is drawn cell for cell as the
+    // header itself.
+    assert_eq!(top(4)[0].1[..8], top(0)[0].1[..8]);
+}
+
+/// Scrolled into a file, how many of its lines are out of sight follows its
+/// name: on the bar pinned over the combined diff, and in the per-file
+/// view's title. Cuts between hunks and rules are not counted.
+#[test]
+fn the_lines_scrolled_past_follow_the_file_name() {
+    let text = format!(
+        "{DIFF}diff --git a/b.txt b/b.txt\n@@ -0,0 +1,30 @@\n{}",
+        "+x\n".repeat(30)
+    );
+    let rows = |scroll: u16, per_file: bool| {
+        let buffer = draw_frame(80, 14, |frame| {
+            render(
+                frame,
+                &CheckoutDiffView {
+                    diff: Ok(&text),
+                    requested_scroll: scroll,
+                    per_file,
+                    selected_file: usize::from(per_file),
+                    ..CheckoutDiffView::unread(Block::bordered())
+                },
+                frame.area(),
+            );
+        });
+        (1..13u16)
+            .map(|y| (1..79u16).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect::<Vec<String>>()
+    };
+    for per_file in [false, true] {
+        let top = rows(0, per_file);
+        assert!(top.iter().all(|row| !row.contains('↑')), "{top:#?}");
+    }
+    // The combined diff's first row of patch is the pinned bar, past the
+    // rule under the view's header. Only its rule under it is out of sight.
+    let pinned = |scroll| {
+        rows(scroll, false)
+            .into_iter()
+            .skip_while(|row| !row.starts_with("──"))
+            .nth(1)
+            .unwrap()
+    };
+    assert_eq!(pinned(1).trim(), "src/a.rs");
+    assert_eq!(pinned(4).trim(), "src/a.rs  ↑ 2 lines");
+    // Past the cut and two lines of `b.txt`.
+    let per_file = rows(3, true);
+    assert!(
+        per_file
+            .iter()
+            .any(|row| row.contains("b.txt [M]  ↑ 2 lines")),
+        "{per_file:#?}"
+    );
+}
+
 /// `t` switches the unchanged rows between faded as everywhere else and
 /// half as faded; the bands stay throughout, and hiding removed lines
 /// does not depend on them.

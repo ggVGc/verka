@@ -575,14 +575,16 @@ fn render_inside(
     } else {
         body
     };
+    let mut title = None;
     let body = if let Some(file) = selected_file {
         let [info, patch] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(body);
-        let mut label = file_info(file);
-        if view.prompts.iter().any(|p| p.path == file.path) {
-            label.spans.push(prompt_marker());
-        }
-        frame.render_widget(Paragraph::new(label), info);
+        // Drawn once the scroll is known, with the lines scrolled past.
+        title = Some((
+            info,
+            file_info(file),
+            view.prompts.iter().any(|p| p.path == file.path),
+        ));
         match view.report.filter(|report| report.shown()) {
             Some(report) => render_description(frame, report, file, patch),
             None => patch,
@@ -731,6 +733,14 @@ fn render_inside(
             )
         })
         .unwrap_or(view.requested_scroll);
+    // The combined diff pins the header of the file its top row is in over
+    // that row; its rows are those `patch_lines` or `render_split` draws.
+    let combined_rows = shown.ok().filter(|_| !view.per_file).map(|text| {
+        (
+            text,
+            crate::split::source_rows(text, view.hidden(), side_by_side, false),
+        )
+    });
     // The strip under the diff follows the line cursor's line and can grow
     // over it: scroll as little as keeps the cursor in sight.
     let requested = match (view.line_cursor, shown) {
@@ -742,14 +752,23 @@ fn render_inside(
                 Some(below) if below > 0 => {
                     requested.saturating_add(u16::try_from(below).unwrap_or(u16::MAX))
                 }
+                // Not under the pinned header: scroll up a row to show it.
+                _ if row == usize::from(requested)
+                    && combined_rows
+                        .as_ref()
+                        .is_some_and(|(text, rows)| pinned_header(text, rows, row).is_some()) =>
+                {
+                    requested.saturating_sub(1)
+                }
                 _ => requested,
             }
         }
         _ => requested,
     };
+    let pinned;
     let (limit, effective, horizontal_scroll) =
         if side_by_side && shown.is_ok_and(|text| !text.trim().is_empty()) {
-            render_split(
+            let drawn = render_split(
                 frame,
                 shown.unwrap(),
                 view.tint,
@@ -761,7 +780,11 @@ fn render_inside(
                 view.hidden(),
                 view.per_file,
                 find,
-            )
+            );
+            pinned = combined_rows
+                .as_ref()
+                .and_then(|(text, rows)| pinned_bar(text, rows, usize::from(drawn.1), width));
+            drawn
         } else {
             let mut lines = match shown {
                 Ok(text) if text.trim().is_empty() => {
@@ -793,6 +816,10 @@ fn render_inside(
             let limit = u16::try_from(lines.len())
                 .unwrap_or(u16::MAX)
                 .saturating_sub(body.height);
+            let top = usize::from(requested.min(limit));
+            pinned = combined_rows
+                .as_ref()
+                .and_then(|(text, rows)| pinned_bar(text, rows, top, width));
             frame.render_widget(
                 Paragraph::new(lines).scroll((requested.min(limit), 0)),
                 body,
@@ -833,6 +860,25 @@ fn render_inside(
                 }
             }
         }
+    }
+    if let Some((info, mut label, prompted)) = title {
+        let above = match shown {
+            Ok(text) => {
+                let rows = crate::split::source_rows(text, view.hidden(), side_by_side, true);
+                lines_above(text, &rows[..usize::from(effective).min(rows.len())])
+            }
+            Err(_) => 0,
+        };
+        label.spans.extend(lines_above_note(above));
+        if prompted {
+            label.spans.push(prompt_marker());
+        }
+        frame.render_widget(Paragraph::new(label), info);
+    }
+    if let Some(header) = pinned.filter(|_| body.height > 1) {
+        let row = Rect::new(body.x, body.y, body.width, 1);
+        frame.render_widget(Clear, row);
+        frame.render_widget(Paragraph::new(header), row);
     }
     if let (Some(cursor), Ok(text)) = (view.line_cursor, shown) {
         let row = crate::split::row_of(text, view.hidden(), side_by_side, view.per_file, cursor);
@@ -1927,6 +1973,17 @@ fn render_description(
     rest
 }
 
+/// A file's header line as the diff draws it: its path, and any change of
+/// mode.
+fn file_title(file: &FileDiff<'_>) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled(
+        file.path.to_owned(),
+        Style::default().fg(theme::ACCENT),
+    )];
+    spans.extend(mode_note(file));
+    spans
+}
+
 fn rendered_patch(
     text: &str,
     tint: Tint,
@@ -1946,11 +2003,7 @@ fn rendered_patch(
     for (index, source) in text.lines().enumerate() {
         if is_file_header(source) {
             if let (Some(file), Some(line)) = (files.next(), lines.get_mut(index)) {
-                line.spans = vec![Span::styled(
-                    file.path.to_owned(),
-                    Style::default().fg(theme::ACCENT),
-                )];
-                line.spans.extend(mode_note(&file));
+                line.spans = file_title(&file);
             }
         }
     }
@@ -2059,6 +2112,57 @@ fn header_bar(mut line: Line<'static>, width: usize) -> Line<'static> {
         line.spans.push(Span::styled(" ".repeat(pad), background));
     }
     line
+}
+
+/// The bar pinned over the top row of the combined diff, `rows` scrolled to
+/// `top`: the header of the file that row is in, with how many of the file's
+/// lines are out of sight, the row under the bar among them.
+fn pinned_bar(text: &str, rows: &[Row], top: usize, width: usize) -> Option<Line<'static>> {
+    let row = pinned_header(text, rows, top)?;
+    let Row::Line(index) = rows[row] else {
+        return None;
+    };
+    // The file is counted by the headers before its own.
+    let nth = text.lines().take(index).filter(|line| is_file_header(line));
+    let file = crate::files::file_diffs(text)
+        .into_iter()
+        .nth(nth.count())?;
+    let mut title = file_title(&file);
+    title.extend(lines_above_note(lines_above(text, &rows[row + 1..=top])));
+    Some(header_bar(Line::from(title), width))
+}
+
+/// How many of `rows` are lines of the diff, rather than the cuts between
+/// its hunks or the rules around its file headers.
+fn lines_above(text: &str, rows: &[Row]) -> usize {
+    let lines: Vec<_> = text.lines().collect();
+    rows.iter()
+        .filter(|row| matches!(row, Row::Line(index) if !is_hunk_header(lines[*index])))
+        .count()
+}
+
+/// How many lines of a file are scrolled out of sight, after its name.
+fn lines_above_note(above: usize) -> Option<Span<'static>> {
+    (above > 0).then(|| {
+        Span::styled(
+            format!("  ↑ {above} {}", if above == 1 { "line" } else { "lines" }),
+            Style::default().fg(theme::MUTED_TEXT),
+        )
+    })
+}
+
+/// The row of the header of the file `rows` show at `top`, when it has
+/// scrolled above `top`: none while the header is itself on top, nor on the
+/// rule that opens the next file.
+fn pinned_header(text: &str, rows: &[Row], top: usize) -> Option<usize> {
+    if matches!(rows.get(top)?, Row::RuleAbove) {
+        return None;
+    }
+    let lines: Vec<_> = text.lines().collect();
+    rows[..=top]
+        .iter()
+        .rposition(|row| matches!(row, Row::Line(index) if is_file_header(lines[*index])))
+        .filter(|&row| row < top)
 }
 
 /// A hunk's cut with its dashes run on to the edge of the panel, so the gap
