@@ -2029,14 +2029,13 @@ fn patch_lines(
     } else {
         Vec::new()
     };
-    let left_out: Vec<bool> = rendered
-        .iter()
-        .enumerate()
-        .map(|(index, line)| {
-            (hidden.removed && is_removed(line)) || context.get(index).copied().unwrap_or(false)
+    let removed = removed_rows(text);
+    let left_out: Vec<bool> = (0..rendered.len())
+        .map(|index| {
+            (hidden.removed && removed.get(index).copied().unwrap_or(false))
+                || context.get(index).copied().unwrap_or(false)
         })
         .collect();
-    // Painted once removed rows are known by their own band.
     if let Some(layers) = layers {
         paint_layers(text, &mut rendered, layers);
     }
@@ -2206,10 +2205,6 @@ fn end_of_file(width: usize) -> Line<'static> {
         ),
         Style::default().fg(theme::MUTED_TEXT),
     )
-}
-
-fn is_removed(line: &Line<'_>) -> bool {
-    line.style.bg == Some(theme::DIFF_REMOVED_BACKGROUND)
 }
 
 /// What is compared with what, where, and how much changed.

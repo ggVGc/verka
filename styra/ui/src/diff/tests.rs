@@ -95,6 +95,63 @@ fn changed_rows_have_a_background_hint_and_context_does_not() {
     }
 }
 
+/// A file added or removed whole is all one kind of change, so its rows go
+/// unbanded and its code plain, still at full brightness, only the signs
+/// colored; a modified file beside it keeps its bands and highlighting.
+#[test]
+fn whole_file_changes_are_plain_but_for_their_signs() {
+    let text = "diff --git a/new.rs b/new.rs\n\
+                new file mode 100644\n\
+                --- /dev/null\n\
+                +++ b/new.rs\n\
+                @@ -0,0 +1 @@\n\
+                +fn new() {}\n\
+                diff --git a/old.rs b/old.rs\n\
+                deleted file mode 100644\n\
+                --- a/old.rs\n\
+                +++ /dev/null\n\
+                @@ -1 +0,0 @@\n\
+                -fn old() {}\n\
+                diff --git a/kept.rs b/kept.rs\n\
+                --- a/kept.rs\n\
+                +++ b/kept.rs\n\
+                @@ -1 +1 @@\n\
+                -fn a() {}\n\
+                +fn b() {}";
+    let lines = diff_body_lines(text, None, false);
+    let row = |code: &str| {
+        lines
+            .iter()
+            .find(|line| self::text(line).ends_with(code))
+            .unwrap()
+    };
+
+    for (code, sign) in [
+        ("+fn new() {}", theme::SUCCESS),
+        ("-fn old() {}", theme::ERROR),
+    ] {
+        let line = row(code);
+        assert_eq!(line.style.bg, None, "{code}");
+        assert!(
+            line.spans.iter().all(|span| span.style.bg.is_none()),
+            "{code}"
+        );
+        // Line number, sign, and the code in one plain span.
+        assert_eq!(line.spans.len(), 3, "{code}: {:?}", line.spans);
+        assert_eq!(line.spans[1].style.fg, Some(sign), "{code}");
+        assert_eq!(line.spans[2].style.fg, Some(theme::TEXT), "{code}");
+    }
+    assert!(row("+fn b() {}").spans.len() > 3, "highlighted");
+    assert_eq!(
+        row("-fn a() {}").style.bg,
+        Some(theme::DIFF_REMOVED_BACKGROUND)
+    );
+    assert_eq!(
+        row("+fn b() {}").style.bg,
+        Some(theme::DIFF_ADDED_BACKGROUND)
+    );
+}
+
 #[test]
 fn elixir_sources_and_scripts_are_highlighted_with_diff_cues() {
     for path in ["lib/example.ex", "test/example_test.exs"] {

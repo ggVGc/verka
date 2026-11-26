@@ -10,7 +10,10 @@ fn navigation_classifies_removed_rows_without_inspecting_rendered_styles() {
         "-old\n+new\n",
     ] {
         let rendered = styra_ui::diff::diff_block_lines(patch, None, false);
-        let expected: Vec<_> = rendered.iter().map(is_removed).collect();
+        let expected: Vec<_> = rendered
+            .iter()
+            .map(|line| line.style.bg == Some(theme::DIFF_REMOVED_BACKGROUND))
+            .collect();
         assert_eq!(removed_rows(patch), expected, "{patch}");
     }
 }

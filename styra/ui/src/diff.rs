@@ -67,21 +67,37 @@ fn diff_body_lines_fading(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut bright_rows = Vec::new();
+    // Added and removed rows, kept bright whether banded or not.
+    let mut changed_rows = Vec::new();
     let mut language = path.and_then(language_of);
     let mut hunk: Vec<(&str, Option<u32>)> = Vec::new();
     let mut in_hunk = false;
     let width = number_width(text);
     // The next old and new line numbers, while inside a hunk that gave them.
     let mut next: Option<(u32, u32)> = None;
-    let flush =
-        |lines: &mut Vec<Line<'static>>,
-         hunk: &mut Vec<(&str, Option<u32>)>,
-         language: &Option<String>| { flush(lines, hunk, language.as_deref(), width) };
+    // Whether the current file is added or removed whole, when every line
+    // is the same kind of change and its colors say nothing the header does
+    // not.
+    let mut whole = false;
+    let mut flush = |lines: &mut Vec<Line<'static>>,
+                     hunk: &mut Vec<(&str, Option<u32>)>,
+                     language: &Option<String>,
+                     whole: bool| {
+        flush(
+            lines,
+            &mut changed_rows,
+            hunk,
+            language.as_deref(),
+            width,
+            whole,
+        )
+    };
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("diff --git ") {
-            flush(&mut lines, &mut hunk, &language);
+            flush(&mut lines, &mut hunk, &language, whole);
             in_hunk = false;
             next = None;
+            whole = false;
             let named = rest
                 .rsplit_once(" b/")
                 .map(|(_, path)| path)
@@ -90,7 +106,7 @@ fn diff_body_lines_fading(
             bright_rows.push(lines.len());
             lines.push(header(if compact { named } else { line }, theme::ACCENT));
         } else if line.starts_with("@@") {
-            flush(&mut lines, &mut hunk, &language);
+            flush(&mut lines, &mut hunk, &language, whole);
             in_hunk = true;
             next = hunk_range(line).map(|(old, _, new, _)| (old, new));
             bright_rows.push(lines.len());
@@ -99,6 +115,9 @@ fn diff_body_lines_fading(
             // Everything between a file header and its first hunk describes
             // the file rather than changing it. A diff with neither header —
             // a bare run of `+`/`-` lines — is all code.
+            if is_whole_file_marker(line) {
+                whole = true;
+            }
             if let Some(named) = line.strip_prefix("+++ ") {
                 let named = named.strip_prefix("b/").unwrap_or(named);
                 language = language_of(named).or(language);
@@ -106,7 +125,7 @@ fn diff_body_lines_fading(
             if is_code(line) && !is_file_marker(line) {
                 hunk.push((line, None));
             } else if !compact {
-                flush(&mut lines, &mut hunk, &language);
+                flush(&mut lines, &mut hunk, &language, whole);
                 if line.starts_with("--- ") || line.starts_with("+++ ") {
                     bright_rows.push(lines.len());
                 }
@@ -135,12 +154,14 @@ fn diff_body_lines_fading(
             }
         }
     }
-    flush(&mut lines, &mut hunk, &language);
-    // Keep additions, file names and hunk cuts at full brightness; subdue
+    flush(&mut lines, &mut hunk, &language, whole);
+    // Keep changes, file names and hunk cuts at full brightness; subdue
     // context and other metadata.
     for (index, line) in lines.iter_mut().enumerate() {
         // Not even dimmed, as a named colour would be, at no fade at all.
-        if context_fade > 0 && line.style.bg.is_none() && bright_rows.binary_search(&index).is_err()
+        if context_fade > 0
+            && changed_rows.binary_search(&index).is_err()
+            && bright_rows.binary_search(&index).is_err()
         {
             for span in &mut line.spans {
                 span.style = faded_style(span.style, context_fade);
@@ -195,6 +216,18 @@ fn is_code(line: &str) -> bool {
     is_change(line) || line.starts_with(' ') || line.is_empty()
 }
 
+/// The headers saying a file is added or removed whole.
+fn is_whole_file_marker(line: &str) -> bool {
+    [
+        "new file mode ",
+        "deleted file mode ",
+        "--- /dev/null",
+        "+++ /dev/null",
+    ]
+    .iter()
+    .any(|marker| line.starts_with(marker))
+}
+
 fn header(line: &str, color: Color) -> Line<'static> {
     Line::from(Span::styled(
         line.replace('\t', "    "),
@@ -226,12 +259,16 @@ fn hunk_separator(line: &str) -> Line<'static> {
     line
 }
 
-/// Render the collected run of code lines and empty it.
+/// Render the collected run of code lines and empty it, noting the rows of
+/// changes in `changed`. The code of a file changed `whole` is plain, only
+/// its signs colored.
 fn flush(
     lines: &mut Vec<Line<'static>>,
+    changed: &mut Vec<usize>,
     hunk: &mut Vec<(&str, Option<u32>)>,
     language: Option<&str>,
     width: usize,
+    whole: bool,
 ) {
     if hunk.is_empty() {
         return;
@@ -250,6 +287,7 @@ fn flush(
         .map(|(line, _)| line.get(1..).unwrap_or_default().replace('\t', "    "))
         .collect();
     let highlighted = language
+        .filter(|_| !whole)
         .and_then(|language| syntax_highlighted_code_lines(&code.join("\n"), Some(language), ""))
         // The highlighter renders one line per line of code; anything else
         // cannot be matched back up with the signs.
@@ -264,12 +302,16 @@ fn flush(
                         .into_iter()
                         .filter(|span| !span.content.is_empty()),
                 );
+                if is_change(line) {
+                    changed.push(lines.len());
+                }
                 lines.push(tinted(Line::from(spans), line));
             }
         }
         None => {
             for (&(line, at), code) in hunk.iter().zip(code) {
                 let color = match line.chars().next() {
+                    _ if whole => theme::TEXT,
                     Some('+') => theme::SUCCESS,
                     Some('-') => theme::ERROR,
                     _ => theme::TEXT,
@@ -277,7 +319,11 @@ fn flush(
                 let mut spans: Vec<Span<'static>> = number(at).into_iter().collect();
                 spans.push(sign(line));
                 spans.push(Span::styled(code, Style::default().fg(color)));
-                lines.push(tinted(Line::from(spans), line));
+                if is_change(line) {
+                    changed.push(lines.len());
+                }
+                let row = Line::from(spans);
+                lines.push(if whole { row } else { tinted(row, line) });
             }
         }
     }
