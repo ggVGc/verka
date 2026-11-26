@@ -1859,16 +1859,19 @@ fn thumbnail_viewport_layout(
 
 /// The same change marker beside a filename in the tree and patch title.
 fn change_marker(change: FileChange) -> Span<'static> {
-    let color = match change {
+    Span::styled(
+        format!(" [{}]", change.marker()),
+        Style::default().fg(change_color(change)),
+    )
+}
+
+fn change_color(change: FileChange) -> Color {
+    match change {
         FileChange::Added | FileChange::Copied => theme::SUCCESS,
         FileChange::Deleted => theme::ERROR,
         FileChange::Moved => theme::DIRECTORY_NAME,
         _ => theme::WARNING,
-    };
-    Span::styled(
-        format!(" [{}]", change.marker()),
-        Style::default().fg(color),
-    )
+    }
 }
 
 /// The mode a file the patch adds is given, beside its name in a title, as
@@ -1973,13 +1976,21 @@ fn render_description(
     rest
 }
 
-/// A file's header line as the diff draws it: its path, and any change of
-/// mode.
+/// A file's header line as the diff draws it: its path, after its change
+/// marker when the whole file is added or removed, and any change of mode.
 fn file_title(file: &FileDiff<'_>) -> Vec<Span<'static>> {
-    let mut spans = vec![Span::styled(
+    let mut spans = Vec::new();
+    let change = file.change();
+    if matches!(change, FileChange::Added | FileChange::Deleted) {
+        spans.push(Span::styled(
+            format!("[{}] ", change.marker()),
+            Style::default().fg(change_color(change)),
+        ));
+    }
+    spans.push(Span::styled(
         file.path.to_owned(),
         Style::default().fg(theme::ACCENT),
-    )];
+    ));
     spans.extend(mode_note(file));
     spans
 }

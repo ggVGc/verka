@@ -1448,7 +1448,7 @@ fn a_new_files_mode_line_is_not_drawn() {
         false,
         None,
     );
-    assert_eq!(shown[0].to_string().trim_end(), "a mode 100644");
+    assert_eq!(shown[0].to_string().trim_end(), "[A] a mode 100644");
     let file = &crate::files::file_diffs(text)[0];
     assert_eq!(file_info(file).to_string(), " a [A] mode 100644");
 }
@@ -2074,6 +2074,42 @@ fn file_headers_are_bars_between_rules() {
     let hidden = body(true);
     assert_eq!(hidden.len(), body(false).len() - 3, "{hidden:?}");
     assert_eq!(hidden[10..13], ["1 +kept", "▁", "[c.txt]"]);
+}
+
+/// A file added or removed whole is marked, in its change's color, to the
+/// left of its name in its header bar, as the file list marks it.
+#[test]
+fn file_headers_mark_files_added_or_removed_whole() {
+    let text = format!(
+        "{DIFF}diff --git a/new.txt b/new.txt\nnew file mode 100644\n\
+             --- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+x\n\
+             diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n\
+             --- a/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n"
+    );
+    let titles: Vec<Vec<(String, Color)>> = text
+        .lines()
+        .zip(rendered_patch(&text, Tint::default(), false, None))
+        .filter(|(source, _)| is_file_header(source))
+        .map(|(_, line)| {
+            line.spans
+                .iter()
+                .map(|span| (span.content.to_string(), span.style.fg.unwrap()))
+                .collect()
+        })
+        .collect();
+    let path = |name: &str| (name.to_owned(), theme::ACCENT);
+    assert_eq!(
+        titles,
+        [
+            vec![path("src/a.rs")],
+            vec![
+                ("[A] ".to_owned(), theme::SUCCESS),
+                path("new.txt"),
+                (" mode 100644".to_owned(), theme::MUTED_TEXT),
+            ],
+            vec![("[D] ".to_owned(), theme::ERROR), path("old.txt")],
+        ]
+    );
 }
 
 /// Scrolled into a file, the unified combined diff keeps that file's header
