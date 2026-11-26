@@ -1,3 +1,4 @@
+- When launching editor from diff inside styra, if there's already an editor instance open associated with the same workspace, jump to file there instead of opening new instance
 - One-off:
   - Runs in separate worktree, always
   - Automatically integrates upon done
