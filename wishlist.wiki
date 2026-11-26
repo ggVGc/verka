@@ -1,3 +1,5 @@
+- Toggle for interaction: Access to git repo or not:
+  - Useful if I want to make sure the work is not influenced by any previous work at all.
 - Bring back adding notes to interactions:
   - Show indication in live interaction list, and in main view
   - Some command to view them
