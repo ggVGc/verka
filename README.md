@@ -16,6 +16,7 @@ Current:
   - Driva
   - Genta
   - Nota
+  - Svara
 
 
 Explain how things fit together
@@ -38,11 +39,13 @@ Background:
     - Overwhelming river of text and diffs flying past with no easy retroactive inspection
     - Manual management of the relationsip between worktrees and agent interactions
     - Lacking view of changes made by agent, in total or per turn
-    - Cumbersome to reference specific changes or prior history in 
+    - Cumbersome to reference specific changes or prior history in new prompt
     - Sanboxing I do not trust
 
 Currently approaching some kind of runtime which could now be used as the execution environment automatic work by LLM tools.
-Still need task/work graph
+Still need task/work graph (linka) and an automatic runner (orka?)
+
+Have started acquiring some IDE features, like "run main binary" etc.. Slippery slope.
 
 
 Future:
@@ -52,6 +55,14 @@ Future:
   - Orka (maybe?)
   - Custom harness for total tool control using API access, for available providers (currently only OpanAI)
 
+
+Reflection:
+  Styra:
+    - Core ideas are working fairly well now
+    - The server part is a mess, with bugs and bad design. Needs severe refactoring, or reimplementation.
+    - TUI is useable, but has a log of weird areas, like shortcut descriptions and settings window, which can be fixed up with some effort:
+      - Generally it is total slop, but that matters less than the server
+    - Svara is a good concept but absolutely horrific UX currently
 
 
 General:
