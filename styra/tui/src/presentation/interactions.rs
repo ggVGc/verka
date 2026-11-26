@@ -61,6 +61,9 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
         .filter(|current| {
             !crate::interactions::in_main_checkout(current, &app.interactions.workspaces)
         });
+    // The top-level interaction the cursor's was branched off, directly or
+    // through branches between, for its row to be lifted too.
+    let cursor_root = Some(app.interactions.branch_root(cursor)).filter(|root| *root != cursor);
     for row in &ordered {
         let index = row.index;
         let interaction = &app.interactions.items[index];
@@ -159,6 +162,7 @@ pub(crate) fn view(app: &App) -> InteractionNavigator<'_> {
                         &app.interactions.workspaces,
                     )
             }),
+            branch_root: cursor_root == Some(interaction.id.as_str()),
             status: state.status,
             selected: interaction.id == cursor,
             newly_idle: state.newly_idle,

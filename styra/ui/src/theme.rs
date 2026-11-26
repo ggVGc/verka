@@ -38,6 +38,8 @@ pub const WORKSPACE_NAME: Color = palette::GOLD;
 /// Top-level interaction names stand slightly above their nested branches.
 pub const TOP_LEVEL_INTERACTION_NAME: Color = palette::WHITE;
 pub const NESTED_INTERACTION_NAME: Color = palette::WHITE;
+/// The hue the top of the cursor's branch line has its name tinted toward.
+pub const BRANCH_ROOT_NAME_TINT: Color = palette::RED_FG;
 /// A worktree named in a navigator row's branch column: a cool hue, so it
 /// stands apart from the warm workspace headings and branch names around it.
 pub const DIRECTORY_NAME: Color = palette::SOFT_CYAN;

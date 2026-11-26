@@ -54,6 +54,10 @@ const UNSELECTED_FADE: u16 = 2;
 /// toward [`theme::TEXT`].
 const SELECTED_BRIGHTEN: u16 = 4;
 
+/// How far, in tenths, the top of the cursor's branch line has its name
+/// tinted toward [`theme::BRANCH_ROOT_NAME_TINT`].
+const BRANCH_ROOT_TINT: u16 = 6;
+
 /// The dropdown always takes half the available height, so it does not jump in
 /// size as filters, scope or new interactions change how many rows it has.
 pub fn height(available: u16) -> u16 {
@@ -519,6 +523,7 @@ fn interaction_cells(
         worktree,
         same_as_source,
         shared_worktree,
+        branch_root,
         into,
         status,
         selected,
@@ -563,6 +568,14 @@ fn interaction_cells(
         Style::default().fg(theme::TOP_LEVEL_INTERACTION_NAME)
     } else {
         Style::default().fg(theme::NESTED_INTERACTION_NAME)
+    };
+    // The top of the cursor's branch line takes a touch of orange, as
+    // top-level names, already at full brightness, cannot be lifted the way
+    // the rest of its row is.
+    let name_style = if *branch_root {
+        blended_style(name_style, theme::BRANCH_ROOT_NAME_TINT, BRANCH_ROOT_TINT)
+    } else {
+        name_style
     };
     // The source of the cursor's branch, and the cursor's own branches, are
     // underlined, so a branch drawn under another checkout than its source's
@@ -636,13 +649,25 @@ fn interaction_cells(
             })
             .map(|branch| Span::styled(branch.to_owned(), Style::default().fg(theme::ACCENT)))
     };
-    // Where a row shares the cursor's worktree, its worktree's name is lifted
-    // as on the cursor's own row, rather than faded with the rest of it.
-    let worktree_style = if *shared_worktree {
+    // Where a row shares the cursor's worktree, or is the top-level
+    // interaction the cursor's was branched off, its worktree's name is
+    // lifted as on the cursor's own row, rather than faded with the rest of
+    // it.
+    let lifted = *shared_worktree || *branch_root;
+    let worktree_style = if lifted {
         shared_worktree_style()
     } else {
         Style::default().fg(theme::DIRECTORY_NAME)
     };
+    // A branch root in the main checkout has no worktree's name to lift, so
+    // its branch is lifted instead.
+    let branch_span = branch_span.map(|span| {
+        if *branch_root && worktree.is_none() && expected_branch.is_none() {
+            span.style(shared_worktree_style())
+        } else {
+            span
+        }
+    });
     // A linked worktree is named ahead of its branch.
     if let Some(worktree) = worktree {
         branch_cell.push(Span::styled(format!("[{worktree}]"), worktree_style));
@@ -663,7 +688,7 @@ fn interaction_cells(
     // the assigned branch is still spelled out.
     if *same_as_source && expected_branch.is_none() && branch_cell.len() > 1 {
         branch_cell.truncate(1);
-        let up_style = if *shared_worktree {
+        let up_style = if lifted {
             worktree_style
         } else {
             Style::default().fg(theme::MUTED_TEXT)
@@ -695,7 +720,7 @@ fn interaction_cells(
 }
 
 /// A worktree's name, or the `↑` standing for it, on a row sharing the
-/// cursor's worktree: lifted as the cursor's own row lifts it, and spared the
+/// cursor's worktree or at the top of its branch line: lifted as the cursor's own row lifts it, and spared the
 /// fading of the rows around it.
 fn shared_worktree_style() -> Style {
     blended_style(

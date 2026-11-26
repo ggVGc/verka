@@ -57,6 +57,7 @@ fn row(
         worktree: None,
         same_as_source: false,
         shared_worktree: false,
+        branch_root: false,
         into: None,
         status: InteractionStatus::Stopped(StopTone::Paused),
         selected: false,
@@ -306,6 +307,7 @@ fn renders_grouping_activity_and_continuation_rows() {
                 worktree: None,
                 same_as_source: false,
                 shared_worktree: false,
+                branch_root: false,
                 into: None,
                 status: InteractionStatus::Running { events: 2 },
                 selected: true,
@@ -354,6 +356,7 @@ fn placed(
         worktree: None,
         same_as_source: false,
         shared_worktree: false,
+        branch_root: false,
         into: None,
         status: InteractionStatus::Idle,
         selected: false,
@@ -541,6 +544,80 @@ fn a_worktree_shared_with_the_cursor_is_highlighted() {
     assert_eq!(worktree_cell(2).fg, lifted);
     assert!(worktree_cell(2).modifier.contains(Modifier::BOLD));
     assert_ne!(worktree_cell(3).fg, lifted);
+}
+
+/// The top-level interaction the cursor's was branched off is lifted as a
+/// shared worktree is: by its worktree's name, or by its branch when it
+/// works in the main checkout.
+#[test]
+fn the_cursors_branch_root_is_highlighted() {
+    let root_row = |name: &'static str, worktree: Option<&'static str>, root: bool| {
+        let mut row = row(name, 0, None);
+        if let InteractionRow::Interaction {
+            branch,
+            worktree: named,
+            branch_root,
+            last_message,
+            ..
+        } = &mut row
+        {
+            *branch = Some("feature");
+            *named = worktree.map(Into::into);
+            *branch_root = root;
+            *last_message = None;
+        }
+        row
+    };
+    let mut rows = vec![
+        root_row("one", Some("auth"), true),
+        root_row("two", None, true),
+        root_row("three", None, false),
+    ];
+    if let InteractionRow::Interaction {
+        selected, depth, ..
+    } = &mut rows[2]
+    {
+        *selected = true;
+        *depth = 1;
+    }
+    let view = InteractionNavigator {
+        rows,
+        ..many_rows(0)
+    };
+    let mut terminal = Terminal::new(TestBackend::new(100, 5)).unwrap();
+    terminal
+        .draw(|frame| {
+            render(frame, &view, frame.area());
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let first_cell = |y: u16, symbol: &str| {
+        let x = (0..100)
+            .find(|&x| buffer[(x, y)].symbol() == symbol)
+            .expect("the row draws it");
+        buffer[(x, y)].clone()
+    };
+    let lifted = shared_worktree_style().fg.unwrap();
+    // The worktree's name, past its `[`.
+    let x = (0..100).find(|&x| buffer[(x, 1)].symbol() == "[").unwrap();
+    assert_eq!(buffer[(x + 1, 1)].fg, lifted);
+    // The branch, in the main checkout.
+    let branch = first_cell(2, "f");
+    assert_eq!(branch.fg, lifted);
+    assert!(branch.modifier.contains(Modifier::BOLD));
+    // Its name is tinted, unlike another top-level row's.
+    let name = |y: u16, initial: &str| {
+        let x = (0..100)
+            .find(|&x| buffer[(x, y)].symbol() == initial)
+            .unwrap();
+        buffer[(x, y)].fg
+    };
+    let plain = Style::default().fg(theme::TOP_LEVEL_INTERACTION_NAME);
+    let tinted = blended_style(plain, theme::BRANCH_ROOT_NAME_TINT, BRANCH_ROOT_TINT)
+        .fg
+        .unwrap();
+    assert_eq!(name(1, "o"), tinted);
+    assert_ne!(tinted, plain.fg.unwrap());
 }
 
 /// Long branch names remain whole, and every row reserves the same
@@ -769,6 +846,7 @@ fn many_rows(selected: usize) -> InteractionNavigator<'static> {
                 worktree: None,
                 same_as_source: false,
                 shared_worktree: false,
+                branch_root: false,
                 into: None,
                 status: InteractionStatus::Idle,
                 selected: index == selected,

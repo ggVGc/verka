@@ -85,6 +85,11 @@ pub enum InteractionRow<'a> {
         /// of sources or branches, but works in the same linked worktree, so
         /// the worktree's name is lifted as on the cursor's row.
         shared_worktree: bool,
+        /// The cursor's interaction was branched, directly or through
+        /// branches between, off this top-level one, so its worktree's name
+        /// — or its branch, in the main checkout — is lifted as a shared
+        /// worktree's is, for the line's start to be found.
+        branch_root: bool,
         status: InteractionStatus,
         selected: bool,
         newly_idle: bool,
