@@ -13,6 +13,8 @@ pub struct TranscriptView<'a> {
     pub show_minor: bool,
     /// See [`crate::chrome::uncommitted_title`].
     pub uncommitted_changes: bool,
+    /// See [`crate::chrome::read_only_title`].
+    pub read_only: bool,
     pub requested_scroll: u16,
 }
 

@@ -156,6 +156,9 @@ pub struct EventListView<'a> {
     /// The interaction being shown has stopped working and left uncommitted
     /// changes in its repository — see [`crate::chrome::uncommitted_title`].
     pub uncommitted_changes: bool,
+    /// The interaction's workspace is mounted read-only — see
+    /// [`crate::chrome::read_only_title`].
+    pub read_only: bool,
     pub usage: Option<(u64, u64, u64)>,
     pub can_configure_launch: bool,
     pub selection_name: String,

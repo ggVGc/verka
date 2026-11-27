@@ -64,6 +64,7 @@ fn list(events: &[AgentEvent]) -> EventListView<'_> {
         all_events: false,
         show_minor: false,
         uncommitted_changes: false,
+        read_only: false,
         usage: None,
         can_configure_launch: false,
         selection_name: "codex".into(),

@@ -29,6 +29,23 @@ fn screen(
     uncommitted_changes: bool,
     requested_scroll: u16,
 ) -> (String, u16) {
+    screen_with(
+        text,
+        has_entries,
+        all_events,
+        uncommitted_changes,
+        false,
+        requested_scroll,
+    )
+}
+fn screen_with(
+    text: &str,
+    has_entries: bool,
+    all_events: bool,
+    uncommitted_changes: bool,
+    read_only: bool,
+    requested_scroll: u16,
+) -> (String, u16) {
     let mut terminal = Terminal::new(TestBackend::new(50, 8)).unwrap();
     let mut limit = 0;
     terminal
@@ -42,6 +59,7 @@ fn screen(
                     all_events,
                     show_minor: false,
                     uncommitted_changes,
+                    read_only,
                     requested_scroll,
                 },
                 frame.area(),
@@ -70,6 +88,14 @@ fn uncommitted_work_is_marked_beside_the_filter() {
     assert!(clean.contains("all events · minor hidden"));
     assert!(clean.contains("user: hello"));
     assert!(!clean.contains("uncommitted"));
+}
+#[test]
+fn a_read_only_workspace_is_marked() {
+    let (output, _) = screen_with("user: hello", true, false, false, true, 0);
+    let bottom = output.lines().last().unwrap().to_owned();
+    assert!(bottom.contains("read-only workspace"), "{bottom}");
+    let (writable, _) = screen("user: hello", true, false, false, 0);
+    assert!(!writable.contains("read-only"));
 }
 #[test]
 fn scroll_is_measured_and_clamped() {

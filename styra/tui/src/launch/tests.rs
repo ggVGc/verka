@@ -1,6 +1,7 @@
 use super::*;
 use crate::activity::{IdleReason, StopReason};
 use std::path::PathBuf;
+use styra_protocol::AttributedMount;
 
 fn workspace_policy() -> LaunchPolicy {
     LaunchPolicy {
@@ -714,4 +715,34 @@ fn another_launch_edit_waits_for_the_workspace_snapshot_being_saved() {
         .notices
         .iter()
         .all(|message| message.text == "the Workspace launch policy is still saving"));
+}
+
+#[test]
+fn the_workspace_reads_read_only_from_the_resolved_mount() {
+    let bind = |origin, access| AttributedMount {
+        origin,
+        mount: Mount::Bind {
+            source: PathBuf::from("/tmp/styra/workspace"),
+            destination: PathBuf::from("/tmp/styra/workspace"),
+            access,
+        },
+    };
+    let mut app = running();
+    assert!(!app.launch.workspace_read_only(), "no policy known yet");
+    app.launch.record(DrivaOptions {
+        mounts: vec![
+            bind(MountOrigin::Workspace, MountAccess::ReadOnly),
+            bind(MountOrigin::Operator, MountAccess::ReadWrite),
+        ],
+        ..options("bubblewrap")
+    });
+    assert!(app.launch.workspace_read_only());
+    app.launch.record(DrivaOptions {
+        mounts: vec![
+            bind(MountOrigin::Workspace, MountAccess::ReadWrite),
+            bind(MountOrigin::GitRepository, MountAccess::ReadOnly),
+        ],
+        ..options("bubblewrap")
+    });
+    assert!(!app.launch.workspace_read_only());
 }

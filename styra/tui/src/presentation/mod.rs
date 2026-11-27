@@ -627,6 +627,7 @@ pub(crate) fn draw_application(ui: &mut dyn Ui, app: &App) -> UiResult<styra_ui:
                 all_events: app.timeline.all_events,
                 show_minor: app.timeline.show_minor,
                 uncommitted_changes: uncommitted_changes(app),
+                read_only: app.launch.workspace_read_only(),
                 requested_scroll: app.transcript.offset,
             };
             draw_main(ui, app, MainView::Transcript(&transcript))

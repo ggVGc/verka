@@ -232,6 +232,7 @@ pub(crate) fn view(app: &App) -> styra_ui::event_list::EventListView<'_> {
         all_events: app.timeline.all_events,
         show_minor: app.timeline.show_minor,
         uncommitted_changes: super::uncommitted_changes(app),
+        read_only: app.launch.workspace_read_only(),
         usage,
         can_configure_launch: app.can_configure_launch(),
         selection_name: app.selection.name(),

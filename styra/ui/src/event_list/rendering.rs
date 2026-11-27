@@ -160,6 +160,9 @@ pub fn render(frame: &mut Frame, view: &EventListView<'_>, area: Rect) -> EventL
     if view.uncommitted_changes {
         block = crate::chrome::uncommitted_title(block);
     }
+    if view.read_only {
+        block = crate::chrome::read_only_title(block);
+    }
     if let Some(search) = search::prompt(&view.search) {
         block = block.title_bottom(search);
     }

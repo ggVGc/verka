@@ -1,5 +1,5 @@
 use super::*;
-use crate::chrome::{all_events_title, panel_block, uncommitted_title};
+use crate::chrome::{all_events_title, panel_block, read_only_title, uncommitted_title};
 use crate::theme;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -14,6 +14,9 @@ pub fn render(frame: &mut Frame, view: &TranscriptView<'_>, area: Rect) -> u16 {
     }
     if view.uncommitted_changes {
         block = uncommitted_title(block);
+    }
+    if view.read_only {
+        block = read_only_title(block);
     }
     if !view.has_entries {
         frame.render_widget(Paragraph::new("  nothing to render yet").block(block), area);

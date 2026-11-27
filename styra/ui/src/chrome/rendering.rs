@@ -59,6 +59,20 @@ pub fn uncommitted_title(block: Block<'static>) -> Block<'static> {
     )))
 }
 
+/// Mark a panel as showing an interaction whose workspace is mounted
+/// read-only — as a launch in its repository's main worktree is unless a
+/// policy layer grants it. The agent can read the project but every edit it
+/// tries fails, which reads as the agent misbehaving unless the pane it is
+/// watched in says why.
+pub fn read_only_title(block: Block<'static>) -> Block<'static> {
+    block.title_bottom(Line::from(Span::styled(
+        " read-only workspace ",
+        Style::default()
+            .fg(theme::WARNING)
+            .add_modifier(Modifier::BOLD),
+    )))
+}
+
 /// A heavy bar over a pane's left border at `x`, beside the screen rows
 /// `rows` of the cursor's entry, so the eye finds it from the edge of the pane
 /// without anything in the list moving. Drawn after the border itself.

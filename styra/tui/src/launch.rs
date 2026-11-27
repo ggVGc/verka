@@ -26,7 +26,8 @@ use crate::app::{App, Request};
 use crate::mount::{self, PathList};
 use styra_protocol::agent::Selection;
 use styra_protocol::{
-    DrivaOptions, LaunchMount, LaunchPolicy, ProjectAction, WorkspaceLaunchChange,
+    DrivaOptions, LaunchMount, LaunchPolicy, Mount, MountAccess, MountOrigin, ProjectAction,
+    WorkspaceLaunchChange,
 };
 use styra_ui::fuzzy_list::FuzzyList;
 
@@ -138,6 +139,26 @@ impl Launch {
             .driva
             .as_ref()
             .is_some_and(|options| options.workspace_read_only_by_default)
+    }
+
+    /// Whether the sandbox `driva` describes binds the workspace read-only.
+    /// Read from the resolved mount list rather than from the policy layers,
+    /// since that is what the agent actually runs (or, while `planned`, would
+    /// run) under; a repository mount over the same directory may have widened
+    /// it. `false` while no policy is known.
+    pub fn workspace_read_only(&self) -> bool {
+        self.driva.as_ref().is_some_and(|options| {
+            options.mounts.iter().any(|attributed| {
+                attributed.origin == MountOrigin::Workspace
+                    && matches!(
+                        attributed.mount,
+                        Mount::Bind {
+                            access: MountAccess::ReadOnly,
+                            ..
+                        }
+                    )
+            })
+        })
     }
 
     /// Which mount of `scope`'s layer the cursor is on, clamped to the list as
