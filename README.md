@@ -1,4 +1,4 @@
-dual purpose
+Dual motivation
   - platform for experimenation around LLM-assisted development
   - experiment in vibe-slopping while trying to create something:
     - constraints, isolation, modularization
@@ -23,8 +23,9 @@ Explain how things fit together
 
 Styra plans:
   - DSL:
-    - 
-
+    - All actions suported by styra-server in a well-designed manner
+    - Make styra thinner and make reimplement functionality based on DSL. Trigger from styra. No difference between bundled and user-defined actions (similar to vim)
+  - Proper modal shortcut system with externally defined mappings
 
 Background:
 
